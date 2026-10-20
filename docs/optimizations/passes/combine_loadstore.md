@@ -1,10 +1,14 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:ed2a99468242f56127cc66b0c1ce922ec8e57cd58288ef1b50ebf3aacf14d92a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:3bf1e87113e1326dd771115f0ad861f56548c04519e425472e1c0f248d4344a4 -->
 
 # combine_loadstore
 
-InstCombine's stores: the store that cannot matter is erased, the one that
-cannot execute stores poison. Translated from `visitStoreInst`
+InstCombine's stores and allocas: the store that cannot matter is erased,
+the one that cannot execute stores poison; an alloca's count is an array
+type and a zero-size alloca is one at the top of the entry block. Translated
+from `visitAllocaInst`
+([:509](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L509)),
+`simplifyAllocaArraySize` (:182) and `visitStoreInst`
 ([InstCombineLoadStoreAlloca.cpp:1473](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L1473))
 with `equivalentAddressValues` (:1452) and `canSimplifyNullStoreOrGEP`
 (:1022).
@@ -44,6 +48,11 @@ protected-field rewrites are not made (MIR has no byte type or
 DEVIATE 5: what ends the scan of 6 is a load, a store, a call, an invoke or
 a resume: MIR has no other instruction that reads memory, writes it or
 throws.
+
+DEVIATE 6: an alloca only copied from constant memory
+(`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) and `visitAllocSite`
+(InstructionCombining.cpp) are not translated here. MIR's scalar alloca has
+no count operand, so a count of 1 is dropping the operand.
 
 ## Used by
 `combine` (its `visit`).

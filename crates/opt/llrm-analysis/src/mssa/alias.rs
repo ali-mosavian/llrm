@@ -119,7 +119,9 @@ impl<'a> AliasQuery<'a> {
             cache: Default::default(),
             asked: Default::default(),
             cache_steps: Default::default(),
-            basic: Default::default(),
+            basic: RefCell::new(crate::aa::AAQueryInfo::with_capture(Box::<
+                crate::captureanalysis::EarliestEscapeAnalysis,
+            >::default())),
             bases: Default::default(),
             bases_walked: Default::default(),
         }

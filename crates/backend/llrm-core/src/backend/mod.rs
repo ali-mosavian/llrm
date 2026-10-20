@@ -133,6 +133,7 @@ pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
 pub mod assemble;
+pub mod bitcounts;
 pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
@@ -157,6 +158,8 @@ pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
 pub mod fpconvert;
+pub mod fpcopyprop;
+pub mod fpregs;
 pub mod fpstack;
 pub mod frame;
 pub mod framefree;
@@ -176,6 +179,7 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod edges;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
@@ -194,6 +198,7 @@ pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
 pub mod machinedce;
+pub mod machinesink;
 pub mod masm;
 pub mod nativeframe;
 pub mod nearcode;
@@ -209,6 +214,7 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
 pub mod regthrash;
@@ -216,6 +222,7 @@ pub mod relayout;
 pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
+pub mod selectconstants;
 pub mod selects;
 pub mod shrinkwrap;
 pub mod slots;

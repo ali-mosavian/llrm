@@ -178,11 +178,11 @@ thread_local! {
     pub(crate) static OF_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-// `over_counting` runs, and blocks `carried` asks about, for tests that a
-// carried table is not worked out again and is filled in linearly.
 #[cfg(test)]
 thread_local! {
-    pub(crate) static WORKED_OUT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Frequencies worked out from the odds, not answered from a body's facts.
+    pub(crate) static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Blocks `carried` asks about, for a test that it fills them in linearly.
     pub(crate) static FILLED_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -350,7 +350,7 @@ impl Frequency {
         counting: bool,
     ) -> Self {
         #[cfg(test)]
-        WORKED_OUT.with(|one| one.set(one.get() + 1));
+        WORKED.with(|one| one.set(one.get() + 1));
         let mut taken = IndexMap::default();
         for block in blocks {
             for (to, chance) in body.odds.chances(block.at, &block.succ) {
@@ -837,9 +837,9 @@ mod tests {
     #[test]
     fn test_a_carried_table_is_not_worked_out_again() {
         let body = carried_chain(3);
-        let before = super::WORKED_OUT.with(|one| one.get());
+        let before = super::WORKED.with(|one| one.get());
         let carried = Frequency::of(&body);
-        assert_eq!(super::WORKED_OUT.with(|one| one.get()), before, "the function was worked out again");
+        assert_eq!(super::WORKED.with(|one| one.get()), before, "the function was worked out again");
         assert!((2..=4).all(|at| (carried.block(at) - 1.0).abs() < 1e-12), "{carried:?}");
     }
 

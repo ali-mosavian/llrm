@@ -95,7 +95,7 @@ const fn partial(
     Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
-use Phase::{Backend, Cleanup, Early, Late, Simplify};
+use Phase::{Backend, Cleanup, Early, Late, Module, Simplify};
 use SlotKind::{Missing, Old, Partial, Translated};
 
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
@@ -111,9 +111,20 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
     entry("promote@1241", Cleanup, "mem2reg", Translated, "mem2reg.rs"),
+    partial(
+        "combine@1242",
+        Cleanup,
+        "instcombine",
+        "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); on by default, LLRM_NO_COMBINE turns it off",
+    ),
     entry("fold@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
-    entry("decide@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@1244",
+        Cleanup,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1244) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@1244", Cleanup, "simplifycfg", Old, "simplifycfg-port"),
     entry("sroa@646", Simplify, "sroa", Translated, "sroa.rs"),
     entry("earlycse@649", Simplify, "early-cse<memssa>", Translated, ""),
@@ -124,22 +135,50 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the S1-S3 shapes of docs/architecture/jumpthreading-translation.md thread as tools/difftest/difftest.py (opt -passes=jump-threading) does; exit: the old threading of decide@675 deleted (vt-constantfolding, after the flip), stage S4 (load PRE, guards, profile) open; on by default, LLRM_NO_JUMPTHREADING turns it off",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
-    entry("decide@675", Simplify, "simplifycfg, jump-threading, correlated-propagation", Old, "simplifycfg-port"),
+    partial(
+        "decide@675",
+        Simplify,
+        "simplifycfg, jump-threading, correlated-propagation",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not (the jump threading and CVP before it have their own slots; what Decide decided here by value facts they do not is now lost until rows say it matters); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@675) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@675", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "combine@677",
+        Simplify,
+        "instcombine",
+        "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); on by default, LLRM_NO_COMBINE turns it off",
+    ),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
-    entry("tailrec@688", Simplify, "tailcallelim", Old, "tailcallelim-port"),
-    entry("decide@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    entry("tailrec@688", Simplify, "tailcallelim", Translated, ""),
+    partial(
+        "decide@690",
+        Simplify,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@690) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@690", Simplify, "simplifycfg", Old, "simplifycfg-port"),
-    entry("algebraic@696", Simplify, "reassociate", Old, "reassociate-port"),
+    entry("reassociate@696", Simplify, "reassociate", Translated, ""),
+    entry("algebraic@696", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial>", Translated, ""),
-    entry("decide@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@766",
+        Simplify,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options (convertSwitchRangeToICmp is read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@766) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@766", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "combine@768",
+        Simplify,
+        "instcombine",
+        "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); on by default, LLRM_NO_COMBINE turns it off",
+    ),
     entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
@@ -159,8 +198,15 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("gvn@787", Simplify, "gvn", Translated, ""),
     entry("sccp@792", Simplify, "sccp", Translated, ""),
     entry("bdce@797", Simplify, "bdce", Translated, ""),
+    partial(
+        "combine@801",
+        Simplify,
+        "instcombine",
+        "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); on by default, LLRM_NO_COMBINE turns it off",
+    ),
     entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
+    entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     partial(
         "jumpthreading@809",
         Simplify,
@@ -186,31 +232,71 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
-    entry("decide@832", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "decide@832",
+        Simplify,
+        "simplifycfg",
+        "translated SimplifyCfg at the option set of that slot (hoist and sink common code on; convertSwitchToArithmetic and convertSwitchRangeToICmp are read by simplifySwitch, untranslated) runs here and Decide does not; untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@832) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("phiopt@832", Simplify, "simplifycfg", Old, "simplifycfg-port"),
+    partial(
+        "combine@837",
+        Simplify,
+        "instcombine",
+        "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); on by default, LLRM_NO_COMBINE turns it off",
+    ),
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
+    partial(
+        "simplifycfg@1438",
+        Late,
+        "simplifycfg",
+        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    partial(
+        "simplifycfg@2376",
+        Late,
+        "simplifycfg",
+        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
-    // l.874), after this pipeline; the translated pieces (stage 1-3: Formula,
-    // LSRUse, IVUsers and fixups) are called by no pass yet, so the old `lsr`
-    // is the slot.
-    entry("lsr", Late, "loop-reduce (LoopStrengthReduce.cpp)", Old, "loop-passes-port"),
+    // l.874), after this pipeline, so a Module slot (it follows the
+    // interprocedural step):
+    // `lsr_pass::LoopStrengthReduce`.
+    entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, "parity-pipeline"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
+    partial(
+        "machinecse@4",
+        Backend,
+        "machine-cse",
+        "criterion: a repeated pure computation before phi elimination is made once, rows identical or better and the post-RA machinecse step deletable; exit: PerformSimplePRE and the invariant-load candidate",
+    ),
+    partial(
+        "machinesink@4",
+        Backend,
+        "machine-sink",
+        "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
+    ),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
-    entry("pressuresink@5", Backend, "machine-sink", Old, "lir-cleanup-poc"),
+    entry(
+        "pressuresink@5",
+        Backend,
+        "none (in-block pressure sink; LLVM orders by the scheduler)",
+        Old,
+        "lir-cleanup-poc",
+    ),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
@@ -489,12 +575,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "vt-constantfolding (floating-point InstSimplify) and mssa",
     ),
     old_analysis("table-loads", "TableLoads", "none", "none: DEVIATE or delete candidate (consts::is_table_load)"),
-    old_analysis(
-        "terminal-sites",
-        "TerminalSites",
-        "none",
-        "none: DEVIATE or delete candidate (noreturn::terminal_sites)",
-    ),
     old_analysis("published", "Published", "none", "none: DEVIATE or delete candidate (observers.rs)"),
     old_analysis(
         "loop-products",
@@ -523,7 +603,7 @@ pub const TODO: &[&str] = &[
 /// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
 /// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
 /// -O2 for its 11 functions). The slot name is as in `llvm_order`.
-pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1])];
+pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1]), ("dfajumpthreading@806", [0, 1, 1, 1])];
 
 /// The level a list is built for: the pin's `default<O1>`, `default<O2>`,
 /// `default<O3>`; -Os is the -O2 list on optsize IR (`opt` rejects `-Os`).
@@ -541,10 +621,11 @@ impl Level {
     }
 }
 
-/// Registry slots the pin's `default<O1>` does not have (no GVN or
-/// JumpThreading at -O1: `buildO1FunctionSimplificationPipeline`), so a
+/// Registry slots the pin's `default<O1>` does not have (no GVN, JumpThreading
+/// or TailCallElim at -O1: `buildO1FunctionSimplificationPipeline`), so a
 /// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] = &["gvn@787", "jumpthreading@668", "jumpthreading@809"];
+pub const ABSENT_AT_O1: &[&str] =
+    &["gvn@787", "jumpthreading@668", "jumpthreading@809", "dfajumpthreading@806", "tailrec@688"];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
@@ -683,13 +764,14 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[])
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot, &[], &[])
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
 /// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
-/// with `rotate` false (the default) the rotate slot is not run.
+/// with `rotate` false (the default) the rotate slot is not run. `off` are
+/// the slots an option switches off, which are not required.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
@@ -697,9 +779,11 @@ pub(crate) fn check_phase_with(
     sroa: bool,
     mem2reg: bool,
     rotate: bool,
+    off: &[&str],
     held: &[(&str, Vec<&'static str>)],
 ) -> Result<(), String> {
-    let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    let absent: Vec<&str> =
+        if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
     // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
@@ -710,7 +794,7 @@ pub(crate) fn check_phase_with(
             Entry { kind: if off { Old } else { one.kind }, ..*one }
         })
         .collect();
-    check_without(&registry, phase, built, absent)?;
+    check_without(&registry, phase, built, &absent)?;
     check_old_slots(&registry, held)?;
     llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())

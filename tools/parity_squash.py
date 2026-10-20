@@ -24,6 +24,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +37,10 @@ FIXES_RED = re.compile(r"(?im)^\s*fixes\s+(?:a\s+)?red\b")
 LAND_LOCK = "/tmp/land.lock"  # the coordinator's land.sh holds the same file: one landing at a time, whoever lands
 TEST_RUST = re.compile(r"^-\s*#\[test\]")
 TEST_PY = re.compile(r"^-\s*def (test_\w+)")
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stages import PREFIX, stage  # noqa: E402
 
 
 def git(*args: str, cwd: Path = ROOT) -> str:
@@ -76,13 +82,22 @@ def outside_files(base: str, head: str, cwd: Path = ROOT) -> list[str]:
     return sorted(net - own)
 
 
+DOCS_PAGE = re.compile(r"^> Generated from the `//!` headers? of ")
+
+
+def is_generated(base: str, path: str, cwd: Path = ROOT) -> bool:
+    """Whether `path` at `base` is a docsbuild page: the docs check regenerates it on the merged tree, so a rewrite of its source is not a deletion."""
+    done = subprocess.run(["git", "show", f"{base}:{path}"], cwd=cwd, capture_output=True, text=True)
+    return done.returncode == 0 and bool(DOCS_PAGE.match(done.stdout.split("\n", 1)[0]))
+
+
 def losses(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, int, int, bool]]:
     """(path, deleted lines, test functions removed, whole file gone) for each file of the net diff base..head that loses more than LIMIT lines, loses a test or goes.
     Own commits or not: #2443's own commit deleted scev/expand_iv.rs (855 lines) from a stale tree, and 'outside its own commits' let it through."""
     out = []
     for line in git("diff", "--numstat", base, head, cwd=cwd).splitlines():
         added, gone, path = line.split("\t", 2)
-        if gone == "-":
+        if gone == "-" or is_generated(base, path, cwd):
             continue
         diff = git("diff", base, head, "--", path, cwd=cwd)
         tests = len(removed_tests(diff))
@@ -119,6 +134,19 @@ PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/preche
 PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
 
 
+def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
+    """The `.rs` files of `files` that `tools/fmt.sh --stdin` would change: --check on only the PR's own files, ~1 s where the whole tree takes ~13."""
+
+    def one(path: str) -> str | None:
+        text = (root / path).read_text()
+        done = run(["tools/fmt.sh", "--stdin", path], cwd=root, input=text, capture_output=True, text=True)
+        return path if done.returncode or done.stdout != text else None
+
+    rust = [f for f in files if f.endswith(".rs") and (root / f).is_file()]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {path for path in pool.map(one, rust) if path}
+
+
 def precheck_checks(dev: Path, target: Path):
     """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
     dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
@@ -132,7 +160,10 @@ def precheck_checks(dev: Path, target: Path):
         failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True))
         return {name: {name} for name in failed}
 
-    def fmt(root: Path) -> dict[str, set[str]]:
+    def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
+        if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
+            files = fmt_differs(root, only)
+            return {"fmt": files} if files else {}
         done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True)
         files = {line.strip() for line in done.stdout.splitlines() if re.fullmatch(r"\S+\.(rs|py|toml)", line.strip())}
         return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
@@ -144,15 +175,20 @@ def precheck_checks(dev: Path, target: Path):
         out = (done.stdout + done.stderr).splitlines()
         return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
 
+    fmt.takes_only = True
     return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
 
 
-def precheck_items(dev: Path, checks, deletions_of=None) -> dict[str, set[str]]:
-    """Every check's failing items on the checkout in `dev`, merged by check name."""
+def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
+    """Every check's failing items on the checkout in `dev`, merged by check name; `seconds` collects each check's wall time; `only` (the PR's changed
+    files) goes to the checks that can use it (`takes_only`)."""
     found: dict[str, set[str]] = {}
-    for _, check in checks:
-        for name, items in check(dev).items():
+    for label, check in checks:
+        started = time.monotonic()
+        for name, items in (check(dev, only=only) if only is not None and getattr(check, "takes_only", False) else check(dev)).items():
             found.setdefault(name, set()).update(items)
+        if seconds is not None:
+            seconds[label] = round(time.monotonic() - started, 1)
     return found
 
 
@@ -196,10 +232,15 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
     git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
     checks = list(checks) if checks is not None else precheck_checks(dev, target)
     before = precheck_baseline(dev, checks, base_sha, cache)
+    seconds: dict[str, float] = {}
+    started = time.monotonic()
     sha, why = (merge or merged_result)(info["headRefOid"], BASE, dev)
+    seconds["merge"] = round(time.monotonic() - started, 1)
     if sha is None:
         return f"{number}: REFUSED: {why}"
-    after = precheck_items(dev, checks)
+    after = precheck_items(dev, checks, seconds=seconds, only=git("diff", "--name-only", base_sha, sha, cwd=dev).split())
+    with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
+        log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
     new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
@@ -256,6 +297,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     import llrmbin  # noqa: PLC0415
     from buildslot import slotted  # noqa: PLC0415
 
+    stage("build")
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
@@ -342,6 +384,7 @@ def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | 
     contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
     compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
     files is resolved by regenerating them (`regenerate`)."""
+    stage("merge")
     git("checkout", "-q", "--detach", head, cwd=cwd)
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         merged = subprocess.run(["git", "merge", "--no-edit", "-q", base], cwd=cwd, capture_output=True, text=True)
@@ -386,7 +429,8 @@ def run_smoke(known: dict[str, str] | None = None) -> tuple[bool, str]:
     return smoke.returncode == 0, (smoke.stdout.strip().splitlines() or [""])[-1]
 
 
-MAX_BATCH = 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+FAST = os.environ.get("LAND_FAST") == "1"  # the user's call (2026-10-19): no smoke, no tests, no precheck; each PR is merged in order and squashed; only a build of the combined tree can halve a batch
+MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse) -> None:
@@ -406,6 +450,27 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
+    """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
+    it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
+    git("reset", "-q", "--hard", cwd=cwd)
+    git("clean", "-fdq", cwd=cwd)
+    git("checkout", "-q", "--detach", ref, cwd=cwd)
+
+
+def fast_merge(numbers: list[str], merge_one) -> tuple[list[str], dict[str, str]]:
+    """The PRs of a fast batch, in order: `merge_one(number)` merges one into the checkout and returns `""` or why it cannot join (a conflict with an earlier one, a deletion it
+    does not name). A PR that cannot join is left out, with its reason, and never fails the others."""
+    kept, left_out = [], {}
+    for number in numbers:
+        why = merge_one(number)
+        if why:
+            left_out[number] = why
+        else:
+            kept.append(number)
+    return kept, left_out
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -419,7 +484,40 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         infos[number] = info
     landed, refused = [], []
 
+    left_out: dict[str, str] = {}
+
+    def passes_fast(group: list[str]) -> bool:
+        git("fetch", "-q", "origin", "feat/parity")
+        clean_checkout(BASE)
+
+        def merge_one(number: str) -> str:
+            before = git("rev-parse", "HEAD").strip()
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            merge = subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True, text=True)
+            if merge.returncode and (conflicts := git("diff", "--name-only", "--diff-filter=U").split()) and not regenerate(conflicts):
+                merge = subprocess.CompletedProcess([], 0)  # only generated docs conflicted: regenerated and committed
+            if merge.returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                return "conflicts with an earlier PR of the batch or with feat/parity: its owner merges fresh feat/parity"
+            if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before):
+                git("reset", "-q", "--hard", before)
+                return "; ".join(why)
+            return ""
+
+        kept, out = fast_merge(group, merge_one)
+        left_out.update(out)
+        for number, why in out.items():
+            print(f"#{number}: left out: {why}")
+        if not kept:
+            return True
+        if broken := _workspace_check(ROOT):
+            print(f"REFUSED: the batch does not build: {broken[:300]}")
+            return False
+        return True
+
     def passes(group: list[str]) -> bool:
+        if FAST:
+            return passes_fast(group)
         git("fetch", "-q", "origin", "feat/parity")
         head_failed = head_failures(git("rev-parse", BASE).strip(), lambda: compute_head_failures(known))
         git("checkout", "-q", "--detach", BASE)
@@ -447,6 +545,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         return not why
 
     def land(number: str) -> None:
+        if number in left_out:
+            refused.append(number)
+            return
+        stage(f"squash #{number}")
         done = subprocess.run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", infos[number]["headRefOid"], "--subject", infos[number]["title"], "--body", known_red_line(known)])
         (landed if done.returncode == 0 else refused).append(number)
         if done.returncode == 0:
@@ -506,13 +608,29 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
+def run_streaming(command: list[str], cwd: Path):
+    """The finished process (.returncode, .stdout, .stderr) with the stage lines of its stdout echoed as they arrive, so the squash's log has the smoke's step times."""
+    import tempfile
+    import types
+
+    with tempfile.TemporaryFile("w+") as err:
+        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=err, text=True)
+        out = []
+        for line in process.stdout:
+            out.append(line)
+            if f" {PREFIX} " in line:
+                print(line.rstrip(), flush=True)
+        process.wait()
+        err.seek(0)
+        return types.SimpleNamespace(returncode=process.returncode, stdout="".join(out), stderr=err.read())
+
+
 def smoke_failures(known: dict[str, str] | None = None) -> tuple[set[str], str]:
     """(the failing checks, the smoke's last line) of parity_smoke on this checkout: its `FAILING:` line."""
-    smoke = subprocess.run(
+    stage("smoke")
+    smoke = run_streaming(
         ["uv", "run", "-q", "--project", "tools", "python", "tools/parity_smoke.py", "--bin", smoke_bins(), "--base", BASE, *[a for step in (known or {}) for a in ("--skip", step)]],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+        ROOT,
     )
     lines = smoke.stdout.strip().splitlines()
     if smoke.returncode and not any(line.startswith("FAILING:") for line in lines):
@@ -545,6 +663,7 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
 
 def log_landed(sha: str, number: str, result: str, path: Path | None = None) -> None:
     """One line per landed squash for the coordinator's log: `<sha> <PR> <gate result> <date>`."""
+    stage(f"log #{number}")
     path = path or LANDED_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as log:
@@ -562,6 +681,7 @@ def unlogged(log: Path, commits: list[str]) -> list[str]:
 
 def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
     """The failing checks on the head itself: check origin/feat/parity out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
+    stage("head-failures")
     git("checkout", "-q", "--detach", BASE)
     if stale := ensure_bins():
         raise SystemExit(f"the head's own binaries: {stale}")

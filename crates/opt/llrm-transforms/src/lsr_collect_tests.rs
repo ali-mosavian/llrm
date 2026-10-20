@@ -55,13 +55,17 @@ fn collected(
     let header = loops.top_level_loops().next().expect("a loop").get_header();
     let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
+    let latch_terminator = {
+        let lp = loops.get_loop_for(header).expect("a loop");
+        function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator")
+    };
     let tti = X86::of_cpu("core2").unwrap();
     let asked = Cell::new(0);
     let safe = |_: &mut ScalarEvolution, _: Scev| {
         asked.set(asked.get() + 1);
         true
     };
-    let mut lsr = Collection::new(&cx, &tti, header, &safe, false);
+    let mut lsr = Collection::new(&cx, &tti, header, &safe, false, latch_terminator);
     lsr.collect_interesting_types_and_factors(&mut se, &users);
     lsr.collect_fixups_and_initial_formulae(&mut se, &users);
     lsr.collect_loop_invariant_fixups_and_formulae(&mut se);

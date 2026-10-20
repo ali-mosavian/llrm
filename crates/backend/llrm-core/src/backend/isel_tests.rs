@@ -179,15 +179,15 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov cx, word ptr [bp+6]",
             "xor ax, ax",
-            "xor cx, cx",
-            "cmp cx, bx",
+            "xor dx, dx",
+            "cmp dx, cx",
             "jge L0_8",
             "L0_5:",
-            "add ax, cx",
-            "inc cx",
-            "cmp cx, bx",
+            "add ax, dx",
+            "inc dx",
+            "cmp dx, cx",
             "jl L0_5",
             "L0_8:",
             "pop bp",
@@ -307,6 +307,59 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
              define i16 @f(i16 %a) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16(i16 %a{arguments})\n  ret i16 %r\n}}\n"
         );
         assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16"))), "{name}");
+    }
+}
+
+/// A variadic function that starts a list, copies it and ends both: the copy
+/// is the pointer the first list holds, moved to the second.
+#[test]
+fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
+    let text = "declare void @llvm.va_start.p0(ptr)\n\
+                declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
+                declare void @llvm.va_end.p0(ptr)\n\
+                define i16 @f(i16 %n, ...) addrspace(1) {\n  %a = alloca ptr\n  %b = alloca ptr\n  \
+                call void @llvm.va_start.p0(ptr %a)\n  call void @llvm.va_copy.p0.p0(ptr %b, ptr %a)\n  \
+                call void @llvm.va_end.p0(ptr %a)\n  call void @llvm.va_end.p0(ptr %b)\n  ret i16 %n\n}\n";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            // va_start: the first list holds the address of the variadic
+            // arguments.
+            "lea ax, [bp+8]",
+            "mov word ptr [bp-2], ax",
+            // va_copy: the second list holds the same pointer; va_end is no
+            // code.
+            "mov word ptr [bp-4], ax",
+            "mov ax, word ptr [bp+6]",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// `llvm.bswap` verifies but has no lowering yet: a program that calls it
+/// stops with a named refusal, not a wrong result.
+#[test]
+fn a_bswap_is_refused_until_it_is_lowered() {
+    let text = "declare i16 @llvm.bswap.i16(i16)\n\
+                define i16 @f(i16 %a) addrspace(1) {\n  %r = call i16 @llvm.bswap.i16(i16 %a)\n  ret i16 %r\n}\n";
+    assert_eq!(selected(text, "f").err(), Some(Unselected("@llvm.bswap.i16".to_owned())));
+}
+
+/// `llvm.scmp` and `llvm.ucmp` verify but have no lowering yet: a program that
+/// calls one stops with a named refusal, not a wrong result.
+#[test]
+fn a_compare_intrinsic_is_refused_until_it_is_lowered() {
+    for name in ["scmp", "ucmp"] {
+        let text = format!(
+            "declare i16 @llvm.{name}.i16.i16(i16, i16)\n\
+             define i16 @f(i16 %a, i16 %b) addrspace(1) {{\n  %r = call i16 @llvm.{name}.i16.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n"
+        );
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(format!("@llvm.{name}.i16.i16"))), "{name}");
     }
 }
 
@@ -646,18 +699,18 @@ no:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "cmp bx, word ptr [bp+8]",
-            "setl cl",
-            "movzx ax, cl",
+            "mov cx, word ptr [bp+6]",
+            "cmp cx, word ptr [bp+8]",
+            "setl dl",
+            "movzx ax, dl",
             "neg ax",
-            "cmp bx, 3",
-            "sete dl",
-            "movzx bx, dl",
-            "and cl, dl",
+            "cmp cx, 3",
+            "sete bl",
+            "movzx cx, bl",
+            "and dl, bl",
             "je L0_8",
             "L0_6:",
-            "add ax, bx",
+            "add ax, cx",
             "pop bp",
             "retf",
             "L0_8:",
@@ -875,6 +928,34 @@ define i16 @f() addrspace(1) {
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
 }
 
+/// A fill or copy through a huge pointer is the inline routine that ends each
+/// run where the offset wraps (`isel/huge.rs`), not one `rep` through es:di,
+/// which wraps at 64K: an 80000-byte fill of a huge array was `rep stosd` of
+/// 20000 dwords from offset 0. A near operand beside a huge one is its offset
+/// and DGROUP.
+#[test]
+fn test_a_fill_or_copy_through_a_huge_pointer_is_the_run_splitting_routine() {
+    let fill = "declare void @llvm.memset.p3.i32(ptr addrspace(3), i8, i32, i1)
+define void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 80000, i1 false)
+  call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 7, i32 %n, i1 false)
+  ret void
+}
+";
+    let copy = "declare void @llvm.memcpy.p3.p0.i32(ptr addrspace(3), ptr, i32, i1)
+define void @f(ptr addrspace(3) %p) addrspace(1) {
+  %a = alloca [64 x i8]
+  call void @llvm.memcpy.p3.p0.i32(ptr addrspace(3) %p, ptr %a, i32 70000, i1 false)
+  ret void
+}
+";
+    for text in [fill, copy] {
+        let lines = listing(text, "f");
+        assert!(lines.iter().any(|one| one.starts_with("db ")), "the routine's bytes: {lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep")), "no rep through es:di: {lines:?}");
+    }
+}
+
 /// A pattern fill of a word or dword is `rep stosw` or `rep stosd` of its
 /// cells; two cells are stores. Its count in cells is never doubled.
 #[test]
@@ -1051,11 +1132,12 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
+            // The segment is loaded from `ss` itself (MachineCopyPropagation):
+            // the same 16 instructions, the selector in a segment register from
+            // the start.
+            "mov es, ss",
             "mov eax, 16843009",
             "mov cx, 1",
-            // The segment is loaded from `ss` itself (MachineCopyPropagation),
-            // after the counts: the same 16 instructions as before.
-            "mov es, ss",
             "rep stosd",
             "stosw",
             "stosb",
@@ -1101,29 +1183,29 @@ b1:
             "push di",
             "L0_0:",
             "mov eax, dword ptr [bp+6]",
-            "mov ecx, dword ptr [bp+10]",
-            "imul ecx",
-            "mov ebx, eax",
-            "shrd ebx, edx, 16",
-            "mov eax, ebx",
+            "mov ebx, dword ptr [bp+10]",
+            "imul ebx",
+            "mov ecx, eax",
+            "shrd ecx, edx, 16",
+            "mov eax, ecx",
             "cdq",
             "mov ax, dx",
-            "shld eax, ebx, 16",
-            "shl ebx, 16",
+            "shld eax, ecx, 16",
+            "shl ecx, 16",
             "mov esi, eax",
             "sar esi, 31",
-            "xor ebx, esi",
+            "xor ecx, esi",
             "xor eax, esi",
-            "sub ebx, esi",
+            "sub ecx, esi",
             "sbb eax, esi",
-            "mov edi, ecx",
+            "mov edi, ebx",
             "sar edi, 31",
-            "xor ecx, edi",
-            "sub ecx, edi",
+            "xor ebx, edi",
+            "sub ebx, edi",
             "xor edx, edx",
-            "div ecx",
-            "mov eax, ebx",
-            "div ecx",
+            "div ebx",
+            "mov eax, ecx",
+            "div ebx",
             "xor esi, edi",
             "xor eax, esi",
             "sub eax, esi",
@@ -1161,6 +1243,7 @@ define i16 @f() addrspace(1) {
 /// from the pool in its narrowest exact format, as LLVM's does.
 #[test]
 fn test_a_constant_condition_and_a_float_constant_select() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f() addrspace(1) {
 b1:
   br i1 true, label %b2, label %b3
@@ -1296,6 +1379,7 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
 /// through memory, and an ordered compare is fcom, sahf and ja.
 #[test]
 fn test_floats_are_x87_values() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@k = internal global double 1.5
 @out = internal global float 0.0
 declare cc1000 void @show(float) addrspace(1)
@@ -1417,6 +1501,7 @@ define double @f(double %x) addrspace(1) {
 /// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
 #[test]
 fn test_a_float_to_an_integer_is_stored_toward_zero() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f(double %x) addrspace(1) {
   %s = fptosi double %x to i16
   %u = fptoui double %x to i16
@@ -1440,8 +1525,8 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "fist word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
-            "mov bx, word ptr [bp-4]",
-            "add ax, bx",
+            "mov cx, word ptr [bp-4]",
+            "add ax, cx",
             "fldcw word ptr [bp-6]",
             "leave",
             "retf"
@@ -1477,20 +1562,20 @@ b1:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ebx, dword ptr [bp+6]",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+6]",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
-            "shl ebx, 16",
+            "shld edx, ecx, 16",
+            "shl ecx, 16",
             "mov eax, edx",
             "sar eax, 31",
             "shr eax, 22",
-            "xor ecx, ecx",
-            "add ebx, eax",
-            "adc edx, ecx",
-            "shrd ebx, edx, 10",
-            "shld edx, ebx, 16",
-            "mov ax, bx",
+            "xor ebx, ebx",
+            "add ecx, eax",
+            "adc edx, ebx",
+            "shrd ecx, edx, 10",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -1501,18 +1586,18 @@ b1:
             "push bp",
             "mov bp, sp",
             "L1_0:",
-            "mov ebx, dword ptr [bp+6]",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+6]",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
-            "shl ebx, 16",
+            "shld edx, ecx, 16",
+            "shl ecx, 16",
             "sar edx, 31",
             "shr edx, 22",
-            "add edx, ebx",
+            "add edx, ecx",
             "and edx, 4294966272",
-            "sub ebx, edx",
-            "shld edx, ebx, 16",
-            "mov ax, bx",
+            "sub ecx, edx",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -1522,6 +1607,8 @@ b1:
 /// A float phi's constant input is loaded as any float constant is: taken
 /// for an address, it refused `an address of no global` and left deedlines'
 /// CREATEOBJECT and qbdemo's FRACLINE unselected.
+// The constant is made on the edge that reads it (MachineSink): no `fstp st(0)`
+// to drop the other path's.
 #[test]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
@@ -1541,13 +1628,14 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "fldz",
             "cmp word ptr [bp+6], 0",
-            "jle L0_3",
+            "jle L0_4294967297",
             "L0_2:",
-            "fstp st(0)",
             "fld1",
-            "L0_3:",
+            "pop bp",
+            "retf",
+            "L0_4294967297:",
+            "fldz",
             "pop bp",
             "retf"
         ]
@@ -1571,6 +1659,7 @@ fn test_a_far_pointer_as_a_word_is_its_offset() {
 /// equal with PF set, so oeq is `sete` and `setnp`, une `setne` or `setp`.
 #[test]
 fn test_float_equality_is_equal_and_ordered() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @eq(double %a, double %b) addrspace(1) {
   %c = fcmp oeq double %a, %b
   ret i1 %c
@@ -1587,8 +1676,8 @@ define i1 @ne(double %a, double %b) addrspace(1) {
             .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':'))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("eq"), ["sete al", "setnp bl", "and al, bl", "pop bp", "retf"]);
-    assert_eq!(answered("ne"), ["setne al", "setp bl", "or al, bl", "pop bp", "retf"]);
+    assert_eq!(answered("eq"), ["sete al", "setnp cl", "and al, cl", "pop bp", "retf"]);
+    assert_eq!(answered("ne"), ["setne al", "setp cl", "or al, cl", "pop bp", "retf"]);
 }
 
 /// An unordered predicate is the carry or zero unordered also sets: ult is
@@ -1596,6 +1685,7 @@ define i1 @ne(double %a, double %b) addrspace(1) {
 /// was refused.
 #[test]
 fn test_float_unordered_predicates_are_below() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @ult(double %a, double %b) addrspace(1) {
   %c = fcmp ult double %a, %b
   ret i1 %c
@@ -1634,11 +1724,11 @@ define void @f(i16 %port) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov cx, word ptr [bp+6]",
             "in al, 96",
             "mov dx, 968",
             "out dx, al",
-            "mov dx, bx",
+            "mov dx, cx",
             "out dx, al",
             "pop bp",
             "retf"
@@ -1895,6 +1985,7 @@ fn test_a_volatile_load_is_not_an_x87_operand() {
 /// fptosi, lrint and fptrunc each went through a frame temporary.
 #[test]
 fn test_a_conversion_only_a_store_reads_is_stored_by_x87() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@b = internal global i16 0
 @o = internal global float 0.0
 declare i16 @llvm.lrint.i16.f64(double)
@@ -2314,7 +2405,7 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
 fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
-    assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
+    assert!(inner_on("P5", word).contains(&"idiv cx".to_owned()), "{:?}", inner_on("P5", word));
     assert!(
         inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul "))
             && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")),
@@ -2338,11 +2429,11 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     let by = |factor: i16| {
         inner(&format!("define i16 @f(i16 %x) addrspace(1) {{\n  %q = mul i16 %x, {factor}\n  ret i16 %q\n}}\n"))
     };
-    assert_eq!(by(10), ["mov bx, word ptr [bp+6]", "lea ax, [ebx+ebx*4]", "add ax, ax"]);
+    assert_eq!(by(10), ["mov cx, word ptr [bp+6]", "lea ax, [ecx+ecx*4]", "add ax, ax"]);
     // Greedy (#2312) leaves 8x - x in ax, the result's register: the old
     // pin's fifth instruction, a move into ax, is gone.
     let seven = by(7);
-    assert_eq!(seven, ["mov bx, word ptr [bp+6]", "mov ax, bx", "shl ax, 3", "sub ax, bx"]);
+    assert_eq!(seven, ["mov cx, word ptr [bp+6]", "mov ax, cx", "shl ax, 3", "sub ax, cx"]);
     assert_eq!(counts(&seven), (4, 1));
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
     assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "imul ax, word ptr [bp+8]"]);
@@ -2588,7 +2679,7 @@ fn test_an_and_only_compared_with_zero_is_test() {
     };
     assert_eq!(
         tested("%m", "0")[..4],
-        ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]
+        ["mov ax, word ptr [bp+6]", "mov cx, word ptr [bp+8]", "test ax, cx", "je L0_3"]
     );
     // Read again, the AND is computed; a constant mask is the instruction's
     // immediate (`test ax, 12`), not a copy `and`ed: collatz's `n & 1` was
@@ -2739,10 +2830,10 @@ done:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers.
     let read = element(&sum("inbounds"));
-    assert_eq!(read, "add ax, word ptr a[ebx+ebx]");
+    assert_eq!(read, "add ax, word ptr a[ecx+ecx]");
     assert_eq!(counts(&[&read]), (1, 1));
     // Without `inbounds` nothing places the start: the offset may wrap.
-    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+    assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
 
 /// A word product only cells read is the 67h form's scaled index on the
@@ -2776,10 +2867,10 @@ no:
     // first.
     assert!(
         got.iter().any(|line| line.starts_with("movzx eax, word ptr ["))
-            && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")),
+            && got.iter().any(|line| line.starts_with("movzx ecx, word ptr [")),
         "{got:?}"
     );
-    assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [ecx+eax*2]".to_owned()), "{got:?}");
     // A negative index names another byte 32 bits wide; the 486 prices
     // the form above a spill.
     for (cpu, guard) in [("386", "ne"), ("486", "sge")] {
@@ -3046,16 +3137,16 @@ define void @f(i16 %n) addrspace(1) {
     assert_eq!(
         got[from..from + 11],
         [
-            "mov bx, word ptr [bp+6]",
-            "mov cx, bx",
+            "mov dx, word ptr [bp+6]",
+            "mov cx, dx",
             "shr cx, 2",
-            "and bx, 3",
+            "and dx, 3",
             "mov di, offset g",
             "pushw seg g",
             "pop es",
             "xor eax, eax",
             "rep stosd",
-            "mov cx, bx",
+            "mov cx, dx",
             "rep stosb",
         ]
     );
@@ -3091,8 +3182,8 @@ define i16 @f(i16 %i) addrspace(1) {
 
 /// An i64 is a pair of dwords wherever it goes: a parameter's two cells,
 /// a phi per dword, edx:eax out of a call and a return, and a comparison's
-/// halves or-ed. isel refused "a i64 value"; C's fib64 kept both
-/// Fibonacci terms in registers as the old route did.
+/// halves or-ed. isel refused "a i64 value". The loop spills a dword on the
+/// 386 in 16-bit code: a register per phi, LLVM's lowering of the swap.
 #[test]
 fn test_an_i64_is_a_dword_pair_through_phis_calls_and_returns() {
     let text = "define i64 @f(i64 %x, i16 %n) addrspace(1) {
@@ -3119,7 +3210,7 @@ define i16 @g() addrspace(1) {
 ";
     let f = listing(text, "f");
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
-    assert!(f[add + 1].starts_with("adc e") && !f.iter().any(|line| line.contains("[bp-")), "{f:?}");
+    assert!(f[add + 1].starts_with("adc e"), "{f:?}");
     let g = listing(text, "g");
     for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
@@ -3289,16 +3380,16 @@ b1:
             "mov bp, sp",
             "L0_0:",
             "mov eax, dword ptr [bp+6]",
-            "mov ebx, dword ptr [bp+10]",
-            "imul ebx",
-            "mov ebx, eax",
-            "shrd ebx, edx, 16",
-            "mov ecx, 196608",
-            "mov eax, ebx",
+            "mov ecx, dword ptr [bp+10]",
+            "imul ecx",
+            "mov ecx, eax",
+            "shrd ecx, edx, 16",
+            "mov ebx, 196608",
+            "mov eax, ecx",
             "cdq",
-            "shld edx, ebx, 16",
+            "shld edx, ecx, 16",
             "shl eax, 16",
-            "idiv ecx",
+            "idiv ebx",
             "shld edx, eax, 16",
             "pop bp",
             "retf",
@@ -3340,6 +3431,7 @@ fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
 /// isel's calls listed nothing, and floatassign read the cell again.
 #[test]
 fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@out = internal global double 0.0
 declare void @g(ptr) addrspace(1)
 define void @f(double %a) addrspace(1) {
@@ -3636,6 +3728,48 @@ no:
         let branches: Vec<&String> =
             got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
         assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
+
+/// The tree of a merged condition is any depth: `d == 0 || d == k || d == -k`
+/// (queens' `safe`) was `sete; test; jne; ...` chains, one branch per compare
+/// in the pin's FindMergedConditions. Both kinds, nested either way, and the
+/// `select` forms.
+#[test]
+fn test_a_branch_on_a_tree_of_compares_branches_on_each() {
+    for (joins, leaves) in [
+        ("  %u = or i1 %x, %y\n  %c = or i1 %u, %z\n", 3),
+        ("  %u = or i1 %y, %z\n  %c = or i1 %x, %u\n", 3),
+        ("  %u = and i1 %x, %y\n  %c = and i1 %u, %z\n", 3),
+        ("  %u = select i1 %x, i1 true, i1 %y\n  %c = select i1 %u, i1 true, i1 %z\n", 3),
+        ("  %u = or i1 %x, %y\n  %v = or i1 %z, %w\n  %c = or i1 %u, %v\n", 4),
+        ("  %u = and i1 %x, %y\n  %v = and i1 %z, %w\n  %c = and i1 %u, %v\n", 4),
+    ] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b, i16 %d) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %z = icmp ne i16 %d, 7
+  %w = icmp ugt i16 %a, %b
+{joins}  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(
+            !got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")),
+            "{joins}: {got:?}"
+        );
+        let branches: Vec<&String> =
+            got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), leaves, "{joins}: {got:?}");
     }
 }
 
@@ -3988,6 +4122,7 @@ b2:
 /// frame where one cell served them all.
 #[test]
 fn test_stack_temporaries_share_one_cell() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let text = "declare void @g(double) addrspace(1)
 define void @f(double %a, double %b) addrspace(1) {
   %x = fadd double %a, %b
@@ -4254,9 +4389,9 @@ fn test_far_pointers_compare_by_words() {
             "L0_0:",
             "mov ax, word ptr [bp+6]",
             "xor ax, word ptr [bp+10]",
-            "mov bx, word ptr [bp+8]",
-            "xor bx, word ptr [bp+12]",
-            "or ax, bx",
+            "mov cx, word ptr [bp+8]",
+            "xor cx, word ptr [bp+12]",
+            "or ax, cx",
             "sete al",
             "movzx ax, al",
             "pop bp",
@@ -4451,8 +4586,8 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov ax, word ptr [bp+6]",
             "sub ax, word ptr [bp+10]",
             "mov ax, word ptr [bp+12]",
-            "mov bx, word ptr [bp+8]",
-            "sbb bx, ax",
+            "mov cx, word ptr [bp+8]",
+            "sbb cx, ax",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4478,14 +4613,14 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
             "mov bp, sp",
             "L0_0:",
             "movzx eax, word ptr [bp+6]",
-            "movzx ebx, word ptr [bp+10]",
-            "sub eax, ebx",
-            "movzx ebx, word ptr [bp+8]",
-            "movzx ecx, word ptr [bp+12]",
-            "sub ebx, ecx",
-            "sar ebx, 12",
-            "shl ebx, 16",
-            "add eax, ebx",
+            "movzx ecx, word ptr [bp+10]",
+            "sub eax, ecx",
+            "movzx ecx, word ptr [bp+8]",
+            "movzx edx, word ptr [bp+12]",
+            "sub ecx, edx",
+            "sar ecx, 12",
+            "shl ecx, 16",
+            "add eax, ecx",
             "shld edx, eax, 16",
             "pop bp",
             "retf"
@@ -4506,7 +4641,7 @@ define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ebx, 16".to_owned()), "{got:?}");
+    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ecx, 16".to_owned()), "{got:?}");
     assert_eq!(
         listing(text, "g"),
         ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]
@@ -5272,14 +5407,14 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
         "f",
     );
-    assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
-    assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"lea eax, [ecx+ecx*2]".to_owned()), "{arithmetic:?}");
 
     let extends = listing(
         "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
         "f",
     );
-    for want in ["movsx eax, byte ptr [bp+6]", "movzx ebx, word ptr [bp+8]", "add eax, ebx"] {
+    for want in ["movsx eax, byte ptr [bp+6]", "movzx ecx, word ptr [bp+8]", "add eax, ecx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
 
@@ -5296,7 +5431,7 @@ fn test_m16_emits_386_forms() {
             "f",
         )
     };
-    assert!(scaled("386").contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{:?}", scaled("386"));
+    assert!(scaled("386").contains(&"mov ax, word ptr [ecx+eax*2]".to_owned()), "{:?}", scaled("386"));
     assert!(!scaled("486").iter().any(|one| one.contains("*2")), "{:?}", scaled("486"));
 }
 
@@ -5918,7 +6053,7 @@ define i16 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"sub bx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
+    assert!(got.contains(&"sub cx, offset g".to_owned()) && got.contains(&"mov ax, offset g+6".to_owned()), "{got:?}");
 }
 
 #[test]
@@ -5932,7 +6067,22 @@ define i16 @f() addrspace(1) {
 ";
     let got = listing(text, "f");
     // 1342177280 is 0x5000:0000 stored, 1358954496 is 0x5100:0000 read through.
-    assert!(got.contains(&"mov bx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov cx, 20480".to_owned()) && got.contains(&"pushw 20736".to_owned()), "{got:?}");
+}
+
+/// `ptrtoint` of a far global's GEP to a word is its offset: `at < messages +
+/// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
+/// global".
+#[test]
+fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
+    let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
+define i1 @f(i16 %x) addrspace(1) {
+  %c = icmp ult i16 %x, ptrtoint (ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @messages, i16 8) to i16)
+  ret i1 %c
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, offset messages".to_owned()) && got.contains(&"add ax, 8".to_owned()), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -5945,7 +6095,7 @@ fn test_a_gep_off_a_segment_constant_is_a_far_number() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov bx, 1".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov al, byte ptr es:[1]".to_owned()) && got.contains(&"pushw 40960".to_owned()), "{got:?}");
 }
 
 /// More constant-expression operands (alias/farstruct.c, textfill): the dword
@@ -5968,7 +6118,7 @@ define i16 @f(i16 %i) addrspace(1) {
     // DGROUP:offset joined into the dword; -18432 is the selector 0xB800 in
     // `pushw`.
     let has = |text: &str| got.iter().any(|one| one == text);
-    assert!(has("mov ax, DGROUP") && has("mov bx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
+    assert!(has("mov ax, DGROUP") && has("mov cx, offset g") && has("shl eax, 16") && has("pushw 47104"), "{got:?}");
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
@@ -5984,4 +6134,146 @@ fn test_a_branchs_odds_are_llvms_branch_probabilities() {
     let mut taken: Vec<u32> = body.odds.taken.values().copied().collect();
     taken.sort();
     assert_eq!(taken, vec![0x3000_0000, 0x5000_0000], "{:?}", body.odds.taken);
+}
+
+/// A constant a phi reads from a block that branches (`return n ? g(n) : 0`
+/// once the empty block is gone): the zero was made in the branching block,
+/// before the test, so the path through the call ran it too. LLVM's
+/// MachineSink breaks the edge and makes it there (hanoi, x_switch_*, mandel
+/// with jump threading on).
+#[test]
+fn test_a_phi_constant_is_made_on_its_edge_not_before_the_test() {
+    let text = "declare i16 @g(i16) addrspace(1)
+define i16 @f(i16 %n) addrspace(1) {
+b1:
+  %c = icmp eq i16 %n, 0
+  br i1 %c, label %b4, label %b2
+b2:
+  %r = call addrspace(1) i16 @g(i16 %n)
+  br label %b4
+b4:
+  %p = phi i16 [ %r, %b2 ], [ 0, %b1 ]
+  ret i16 %p
+}
+";
+    let got = listing(text, "f");
+    let test =
+        got.iter().position(|line| line.starts_with("test ") || line.starts_with("cmp ")).expect("the premise: a test");
+    let zero = got
+        .iter()
+        .position(|line| line.starts_with("xor ") || line.ends_with(", 0"))
+        .expect("the premise: the zero is made");
+    assert!(zero > test, "the zero is made before the test: {got:?}");
+}
+
+/// A store through a far constant whose offset half is zero (`POKE` into
+/// segment `&HA000`): the address is `es:[index]`. The offset was a register
+/// loaded with 0 (`xor bx, bx` every trip of qbdemo's loop) used as the base,
+/// which LLVM's `matchAddress` folds into the displacement.
+#[test]
+fn test_a_far_constant_with_a_zero_offset_is_no_base_register() {
+    let text = "define void @f(i16 %i) addrspace(1) {
+  %p = getelementptr i8, ptr addrspace(1) inttoptr (i32 -1610612736 to ptr addrspace(1)), i16 %i
+  store i8 1, ptr addrspace(1) %p
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("40960")), "the premise: the selector is set: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("xor ") || line.ends_with(", 0")), "{got:?}");
+}
+
+/// A dword constant returned in a word pair: DX is its high word as a
+/// constant. It was a shift of the register that holds the whole
+/// (`mov edx, 42; shr edx, 16` for a high word of 0).
+#[test]
+fn test_a_dword_constant_returned_in_a_word_pair_is_a_word_each() {
+    let text = "define cc1000 i32 @f() addrspace(1) {
+  ret i32 70000
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "mov ax, 4464"), "the premise: the low word: {got:?}");
+    assert!(got.iter().any(|line| line == "mov dx, 1"), "the high word is its own constant: {got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shr ")), "{got:?}");
+}
+
+/// IndVars' closed form of a sum over an early-exit loop is built one bit wider
+/// than its counter (`n(n-1)/2` in i33, as the pin builds it): lcexit.bas at
+/// -O2 stopped with "@__main: a i33 value" once SimplifyCFG's slots ran.
+/// The odd width, and the `llvm.umin` call on it, are legalized in the pin.
+#[test]
+fn test_a_closed_form_sum_in_an_odd_width_assembles() {
+    let text =
+        "declare i33 @llvm.umin.i33(i33, i33) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+define i32 @f(i16 %n) addrspace(1) {
+entry:
+  %a = zext i16 %n to i33
+  %m = call i33 @llvm.umin.i33(i33 %a, i33 9)
+  %d = add nsw i16 %n, -1
+  %e = zext i16 %d to i33
+  %p = mul i33 %m, %e
+  %h = lshr i33 %p, 1
+  %r = trunc i33 %h to i32
+  ret i32 %r
+}
+";
+    // The driver legalizes and lowers selects before selection, as the pin's
+    // DAG does.
+    let mut module = llrm_mir::parse::module(text).expect("parses");
+    crate::backend::legalize::legalized(&mut module).expect("legalizes");
+    let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
+        .expect("a datalayout");
+    let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
+    crate::backend::selects::lowered(&mut module, &pricing).expect("lowers selects");
+    let got = listing_on("486", &llrm_mir::print::module(&module), "f");
+    assert!(!got.is_empty(), "{got:?}");
+}
+
+/// An address with no register operand is made where it is read, not shared:
+/// the add after the call wrote over the shared `lea`, a two-def value the
+/// allocator could not remake, and grep -O2 -m32 ran 21.9% more instructions.
+#[test]
+fn test_an_address_is_made_again_after_a_call() {
+    let text = "declare void @use(ptr) addrspace(1)
+@h = global ptr null
+define void @f(i32 %n) addrspace(1) {
+entry:
+  %buf = alloca [64 x i8]
+  call addrspace(1) void @use(ptr %buf)
+  %p = getelementptr i8, ptr %buf, i32 %n
+  store ptr %p, ptr @h
+  ret void
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let addresses = |body: &crate::model::lir::LirBody| {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Address))
+            .count()
+    };
+    assert_eq!(addresses(&body), 2, "the premise: the frame address is made twice");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(addresses(&shared), 2);
+}
+
+/// A float argument read after a call is read from its cell there, as the
+/// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
+/// reader, so both arguments were loaded first and spilled across the call.
+#[test]
+fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "declare void @g() addrspace(1)
+define float @f(float %x, float %y) addrspace(1) {
+  call addrspace(1) void @g()
+  %s = fadd float %x, %y
+  ret float %s
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }

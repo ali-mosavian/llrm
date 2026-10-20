@@ -49,7 +49,8 @@
 //! - D2: `TargetTransformInfo`: `getInstructionCost`, `isLoweredToCall`,
 //!   `getFPOpCost`, `getEstimatedNumberOfCaseClusters` are the generic
 //!   (BasicTTIImpl) answers with the x86 legal addressing modes, in
-//!   `free_instruction`, `lowered_to_call` and `case_clusters`.
+//!   `free_instruction`, `lowered_to_call` and `basic_case_clusters`
+//!   (`tti.rs`).
 //! - D3: constant folding is integer, float and `select`; vectors and constant
 //!   expressions are not folded.
 //! - D4: no PGO, ThinLTO, ML advisor, `optnone`, `flatten`, coroutines, strict
@@ -1496,7 +1497,11 @@ impl<'a> Analyzer<'a> {
         let (clusters, table) = if self.params.tti == Tti::Generic {
             (cases.len() as u64, 0)
         } else {
-            case_clusters(&cases, self.site.layout.pointer(0).bits, self.site.caller_size != CallerSize::Speed)
+            llrm_mir::tti::basic_case_clusters(
+                &cases,
+                self.site.layout.pointer(0).bits,
+                self.site.caller_size != CallerSize::Speed,
+            )
         };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
@@ -2036,33 +2041,6 @@ fn lowered_to_call(
 
 fn only_reads_memory(info: &CallInfo) -> bool {
     !llrm_mir::memory::stated(&info.attrs).writes
-}
-
-/// `getEstimatedNumberOfCaseClusters` (BasicTTIImpl.h:584), D2: the clusters a
-/// switch is estimated to lower to and the size of its jump table, if one.
-fn case_clusters(
-    cases: &[i128],
-    index_bits: u32,
-    for_size: bool,
-) -> (u64, u64) {
-    let count = cases.len() as u64;
-    if count < 1 {
-        return (count, 0);
-    }
-    // Bit tests (`isSuitableForBitTests`) are not translated; a jump table is
-    // allowed with `getMinimumJumpTableEntries()` = 4.
-    let _ = index_bits;
-    if count < 2 || count < 4 {
-        return (count, 0);
-    }
-    let (low, high) = (cases.iter().min().copied().unwrap_or(0), cases.iter().max().copied().unwrap_or(0));
-    let range = (high - low) as u64 + 1;
-    // isSuitableForJumpTable: density 10% (40% for size), at most 64K entries.
-    let density = if for_size { 40 } else { 10 };
-    if range <= 1 << 16 && count * 100 >= range * density {
-        return (1, range);
-    }
-    (count, 0)
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).

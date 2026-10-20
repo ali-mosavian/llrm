@@ -2,21 +2,24 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
 | access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and | [access](access.md) |
+| aggregate | `AAResults::addAAResult` of `AliasAnalysis.cpp` at d1106deb71cc: several alias analyses asked as one. | `AggregateAA`. | [aggregate](aggregate.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
 | aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
+| attrsummary | `Summary` for each defined function, derived from its attributes alone. |  | [attrsummary](attrsummary.md) |
 | avail | Dead stores, and the cells loads and stores name, as LLVM's DSE finds them. | `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`, | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
-| blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `branchprob`'s edge probabilities, as `BlockFrequencyInfoWrapperPass` runs it over `BranchProbabilityInfo`. | `inlinecost` (cold and hot call sites, D1). | [blockfreq](blockfreq.md) |
+| blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `BranchProbabilityInfo` (`crate::bpi`), as `BlockFrequencyInfoWrapperPass` runs it. | `inlinecost` (cold and hot call sites, D1), `profit`. | [blockfreq](blockfreq.md) |
 | bpi | `BranchProbabilityInfo` of a MIR function: LLVM's static branch probabilities, translated from llvm/lib/Analysis/BranchProbabilityInfo.cpp at d1106deb71cc. | `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers | [bpi](bpi.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
+| captureanalysis | `CaptureAnalysis` of `AliasAnalysis.h` at d1106deb71cc: how an object may be captured before an instruction, with the two providers `BasicAliasAnalysis.cpp` has. | `CaptureAnalysis`, `SimpleCaptureAnalysis`, `EarliestEscapeAnalysis`. | [captureanalysis](captureanalysis.md) |
 | capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | The check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
 | capturetracking | `CaptureTracking.cpp` at d1106deb71cc: which components of a pointer a use of it keeps (`DetermineUseCaptureKind`), and the walk over the uses of a value that asks a tracker about each (`PointerMayBeCaptured`). | `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`, | [capturetracking](capturetracking.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
@@ -41,6 +44,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undoc
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
+| loads | The value a load can reuse from an access before it in its block. | InstCombine's `visitLoadInst`, JumpThreading's load PRE, Promote. | [loads](loads.md) |
 | loadstorepromoter | `LoadAndStorePromoter`: the loads and stores of one memory slot, rewritten so each load reads the value that reaches it. |  | [loadstorepromoter](loadstorepromoter.md) |
 | loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
 | loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
@@ -50,7 +54,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undoc
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
 | mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |
 | nearest | The items placed in blocks that dominate a given block, nearest first. | The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`](avail.md) and | [nearest](nearest.md) |
-| noreturn | Finds the bodies and blocks that cannot reach a normal return, and cuts a block after a call that cannot return, so the code after it and the paths into it fold away. | `TerminalSites` (analysis of the function with no body proven noreturn), | [noreturn](noreturn.md) |
+| noreturn | Finds the bodies and blocks that cannot reach a normal return, and cuts a block after a call that cannot return, so the code after it and the paths into it fold away. | `terminal_sites`, `inferred`, `inferred_in`, `cold`, `stranded`, | [noreturn](noreturn.md) |
 | num | An integer that is a machine word until it must not be. | `Num`, for [`crate::ranges`](ranges.md) and [`crate::induction`](induction.md). | [num](num.md) |
 | observers | Finds the memory cells nothing outside a function can read, so dead store elimination can drop a store that no later code observes. | `private` and `private_of` (the same test with `Published`, the manager's | [observers](observers.md) |
 | occurrence | Walks a function's instructions as occurrences, operations and phis apart, so an analysis can key by identity and keep two equal instructions distinct. | The three walks. Consumers: [`crate::induction`](induction.md), [`crate::ssa`](ssa.md), and the | [occurrence](occurrence.md) |
@@ -59,9 +63,12 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 59 documented, 0 undoc
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`, `LoopView::at`. | [ranger](ranger.md) |
 | ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block and the counted loops that hold it. | The interval facts above. In the manager they are `DominatedEdges` and | [ranges](ranges.md) |
+| reachability | `isPotentiallyReachable` of `CFG.cpp` at d1106deb71cc: whether a path may lead from one instruction or block to another. | `is_potentially_reachable`, `is_potentially_reachable_blocks`, | [reachability](reachability.md) |
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
 | ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. |  | [ssaupdater](ssaupdater.md) |
+| ssaupdaterbulk | `SSAUpdaterBulk`: values defined in several blocks, rewritten for all their uses at once, with a phi where definitions meet. |  | [ssaupdaterbulk](ssaupdaterbulk.md) |
+| typebasedaa | `TypeBasedAliasAnalysis.cpp` at d1106deb71cc: two accesses whose `!tbaa` types are unrelated cannot alias. | `TypeBasedAA`, `aliases`. | [typebasedaa](typebasedaa.md) |

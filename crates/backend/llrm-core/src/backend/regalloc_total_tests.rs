@@ -64,7 +64,7 @@ fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
             CONC7,
             "Core",
             "RegAlloc",
-            &["SsaSpill", "Coalescer"],
+            &["SsaSpill", "Coalescer", "MachineSink"],
         )
     });
     let longest = longest_copy(&body);
