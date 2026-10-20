@@ -297,3 +297,47 @@ exit:
     let top = top.split("define").find(|one| one.contains("@top")).expect("@top");
     assert!(!top.contains("@ins("), "{top}");
 }
+
+/// An internal function inlined at its one call is deleted by the walk, as
+/// the inliner's `removeDeadFunctions` does; it stood until globaldce, and
+/// the walk priced and simplified it (d_faces -O2: 11 defines after the walk,
+/// the pin's 6).
+#[test]
+fn test_a_callee_inlined_at_its_only_call_is_deleted_by_the_walk() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal i32 @leaf(i32 %x) {
+b0:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+
+define internal i32 @mid(i32 %x) {
+b0:
+  %y = call i32 @leaf(i32 %x)
+  ret i32 %y
+}
+
+define i32 @top(i32 %x) {
+b0:
+  %y = call i32 @mid(i32 %x)
+  ret i32 %y
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    let text = llrm_mir::print::module(&module);
+    for name in ["@leaf", "@mid"] {
+        let body = text.split("define").find(|one| one.contains(&format!("{name}("))).expect(name);
+        assert!(!body.contains("add") && !body.contains("call"), "{name} stands:\n{text}");
+    }
+}

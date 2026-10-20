@@ -642,6 +642,18 @@ pub trait Tti {
         matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer)
     }
 
+    /// `shouldBuildLookupTables`: whether the target jumps through a table
+    /// (X86 and AArch64: `BRIND` is legal).
+    fn should_build_lookup_tables(&self) -> bool {
+        true
+    }
+
+    /// `getMinimumLookupTableEntryBitWidth`: the narrowest cell of a lookup
+    /// table, so that a load of it is a native one.
+    fn minimum_lookup_table_entry_bit_width(&self) -> u32 {
+        8
+    }
+
     /// `getEstimatedNumberOfCaseClusters`
     /// ([BasicTTIImpl.h:584](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L584)):
     /// the clusters a switch on `cases` (sign-extended values, `index_bits`
