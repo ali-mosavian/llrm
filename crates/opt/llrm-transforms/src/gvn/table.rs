@@ -144,7 +144,7 @@ impl Env<'_> {
         call: InstId,
     ) -> Option<Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, call)?;
-        self.outer.globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named)
+        self.outer.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     /// `C->isConvergent()`.

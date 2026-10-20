@@ -44,7 +44,7 @@ pub fn globals(
     for global in &module.globals {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
         let Some(initializer) = variable.initializer else { continue };
-        let name = global.name.clone().ok_or("an unnamed variable")?;
+        let name = global.name.owned().ok_or("an unnamed variable")?;
         let size = layout.alloc_size(types, variable.ty) as usize;
         let mut bytes = vec![0u8; size];
         let mut relocs = Vec::new();
@@ -119,7 +119,7 @@ impl Writer<'_> {
                 Ok(())
             }
             (ConstantKind::Global(global), Type::Pointer(_)) => {
-                let name = self.module.global(*global).name.clone().ok_or("an unnamed global")?;
+                let name = self.module.global(*global).name.owned().ok_or("an unnamed global")?;
                 relocs.push(DataReloc { at, symbol: symbol_name(self.platform, &name), addend: 0 });
                 Ok(())
             }
@@ -143,7 +143,7 @@ impl Writer<'_> {
                 if !variable.is_empty() {
                     return Err("a constant gep with a variable index".into());
                 }
-                let name = self.module.global(global).name.clone().ok_or("an unnamed global")?;
+                let name = self.module.global(global).name.owned().ok_or("an unnamed global")?;
                 relocs.push(DataReloc { at, symbol: symbol_name(self.platform, &name), addend: offset as i64 });
                 Ok(())
             }

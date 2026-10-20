@@ -287,7 +287,7 @@ fn global_names(module: &Module) -> Vec<String> {
     module
         .globals
         .iter()
-        .map(|one| match &one.name {
+        .map(|one| match one.name.as_deref() {
             Some(name) => format!("@{}", quoted(name)),
             None => {
                 next += 1;

@@ -97,7 +97,7 @@ impl<'a> Verify<'a> {
         index: usize,
     ) -> Result<(), Unproven> {
         let global = self.module.globals.get(callee.0 as usize).ok_or(Unproven::Undefined)?;
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         let top = self.stack.borrow().is_empty();
         let found = (|| {
             let function = global.function().filter(|one| !one.is_declaration()).ok_or(Unproven::Undefined)?;
@@ -155,7 +155,7 @@ pub fn check_module(
         if let Err(why) = result {
             misses += 1;
             let text = why.downcast_ref::<String>().cloned().unwrap_or_default();
-            eprintln!("CAPTURES-MODULE-MISS {}: {}", global.name.clone().unwrap_or_default(), text);
+            eprintln!("CAPTURES-MODULE-MISS {}: {}", global.name.owned().unwrap_or_default(), text);
         }
     }
     let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
@@ -407,7 +407,7 @@ pub fn check_with(
                     "{:?} {:?}",
                     function.instruction(by).opcode,
                     llrm_mir::memory::callee(unit.context, function, by)
-                        .and_then(|one| unit.globals.get(one.0 as usize).and_then(|global| global.name.clone()))
+                        .and_then(|one| unit.globals.get(one.0 as usize).and_then(|global| global.name.owned()))
                 ),
             ));
         }

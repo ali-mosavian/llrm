@@ -557,7 +557,7 @@ fn a_noipa_routine_round_trips_through_text() {
     let opaque: Vec<_> = module
         .functions()
         .filter(|(_, _, function)| crate::facts::opaque(function))
-        .map(|(_, global, _)| global.name.clone().unwrap_or_default())
+        .map(|(_, global, _)| global.name.owned().unwrap_or_default())
         .collect();
     assert_eq!(opaque, vec!["f".to_owned()]);
 }
@@ -1139,4 +1139,23 @@ fn undef_is_a_constant_that_round_trips_apart_from_poison() {
     let once = round(&text);
     assert!(once.contains("ret i16 undef"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// A global's cached intrinsic followed neither a rename nor a copy would
+/// leave `intrinsic()` naming the old callee: a `memset` read as a plain call.
+#[test]
+fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
+    use crate::{intrinsics::Intrinsic, module::GlobalName};
+    let mut module = parse::module("declare void @f(ptr, i8, i16, i1)\n").unwrap();
+    let id = module.named("f").expect("declared");
+    let intrinsic = |module: &crate::module::Module| module.global(id).intrinsic();
+    assert_eq!(intrinsic(&module), None);
+    module.globals[id.0 as usize].name = GlobalName::from("llvm.memset.p0.i16".to_owned());
+    assert_eq!(intrinsic(&module), Some(Intrinsic::MemSet));
+    assert_eq!(module.global(id).declaration().intrinsic(), Some(Intrinsic::MemSet));
+    assert_eq!(module.clone().global(id).intrinsic(), Some(Intrinsic::MemSet));
+    module.globals[id.0 as usize].name = GlobalName::from("f".to_owned());
+    assert_eq!(intrinsic(&module), None);
+    module.globals[id.0 as usize].name = GlobalName::default();
+    assert_eq!(intrinsic(&module), None);
 }

@@ -724,7 +724,7 @@ pub fn compiled(
 ) -> Result<masm::Module, String> {
     let (mut mir, data) = super::emitted(program, options)?;
     let [(module, data)] = [(&mir.modules[0], &data[0])];
-    let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
+    let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.owned());
     let mut resolved = Object {
         segments: Vec::new(),
         symbols: object.symbols.clone(),

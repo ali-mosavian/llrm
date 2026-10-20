@@ -1566,7 +1566,7 @@ impl<'a> Solver<'a> {
         let named =
             memory_callee(self.context, self.function, call).and_then(|global| outer.globals.get(global.0 as usize));
         let Some((callee, name)) = named
-            .and_then(|global| Some((global.function()?, global.name.clone().unwrap_or_default())))
+            .and_then(|global| Some((global.function()?, global.name.owned().unwrap_or_default())))
             .filter(|(callee, _)| callee.is_declaration())
         else {
             let from_metadata = self.get_value_from_metadata(call);
