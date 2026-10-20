@@ -1,3 +1,7 @@
+//! The expected text is the whole pass's result: the switch folds that landed
+//! after these were written (select, range) run on what the step under test
+//! leaves, as in the pin.
+
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_mir::datalayout::DataLayout;
