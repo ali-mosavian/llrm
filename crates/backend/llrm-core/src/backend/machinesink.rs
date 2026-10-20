@@ -359,29 +359,13 @@ impl Sinker {
         true
     }
 
-    /// Whether `one` reads or writes a register that is not virtual or a flag
-    /// it does not overwrite, so that it cannot move (the physical register
-    /// cases of `FindSuccToSinkTo`).
+    /// The physical-register cases of `FindSuccToSinkTo` for the instruction at
+    /// `index` of `block`: it stays if it reads a physical register (the flags
+    /// included), or defines one that is not dead. A flag it sets is dead when
+    /// no later instruction of its block reads it before another sets it
+    /// (nothing reads flags across blocks); any other physical def counts as
+    /// live (DEVIATE M6). An unknown effect reads and writes them all.
     fn touches_machine_state(
-        &self,
-        one: &Insn,
-    ) -> bool {
-        let Some(effect) = liveness::effect(self.regs, self.bits, one) else { return true };
-        let physical = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
-        };
-        // A flag it writes is dead past its block (nothing reads flags across
-        // blocks; `flags_read_after` covers the rest of its own); one it reads
-        // is set by an instruction it must stay behind.
-        let reads_flags = effect.all_reads().iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
-        physical(&effect.all_reads()) || physical(&effect.writes) || reads_flags
-    }
-
-    /// Whether a flag the instruction at `index` writes is read by a later one
-    /// of its block before another writes it: `FindSuccToSinkTo` moves an
-    /// instruction whose physical defs are dead only. An unknown effect reads
-    /// them.
-    fn flags_read_after(
         &self,
         block: usize,
         index: usize,
@@ -389,7 +373,13 @@ impl Sinker {
         let flags = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
         };
+        let physical = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
+        };
         let Some(effect) = liveness::effect(self.regs, self.bits, &self.insns[block][index]) else { return true };
+        if physical(&effect.all_reads()) || physical(&effect.writes) || flags(&effect.all_reads()) {
+            return true;
+        }
         if !flags(&effect.writes) {
             return false;
         }
@@ -457,9 +447,6 @@ impl Sinker {
         block: usize,
         break_phi_edge: &mut bool,
     ) -> Option<usize> {
-        if self.touches_machine_state(one) {
-            return None;
-        }
         let mut sink_to: Option<usize> = None;
         for &value in &one.defines {
             if let Some(chosen) = sink_to {
@@ -641,7 +628,7 @@ impl Sinker {
         if !safe_to_move(&one, saw_store) {
             return false;
         }
-        if self.flags_read_after(block, index) {
+        if self.touches_machine_state(block, index) {
             return false;
         }
         let mut break_phi_edge = false;
