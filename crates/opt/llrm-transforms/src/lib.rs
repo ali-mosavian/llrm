@@ -116,6 +116,7 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_select_bools;
+pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_shifts;
