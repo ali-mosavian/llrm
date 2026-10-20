@@ -393,6 +393,95 @@ impl LoopInfo {
         self.get_loop_for(block).map_or(0, |one| one.get_loop_depth())
     }
 
+    /// `Loop::addBasicBlockToLoop`
+    /// ([L283](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L283)),
+    /// for `new_blocks` at once: each is a new member of `loop_id`, and so of
+    /// every loop around it; `getLoopFor` names `loop_id`. A block already in a
+    /// loop, or the header, is not valid here.
+    ///
+    /// The blocks go at the end of the slice of `loop_id` in the block layout,
+    /// which lies inside the slices of its parents. The pin pushes onto each
+    /// parent's block vector (O(depth)); a slice of one flat layout needs a
+    /// splice, so the cost is the layout plus the loops, once per call, not per
+    /// block: pass all the blocks of one loop together.
+    pub fn add_basic_blocks_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_blocks: &[BlockId],
+    ) {
+        if new_blocks.is_empty() {
+            return;
+        }
+        let count = new_blocks.len() as u32;
+        let highest = new_blocks.iter().map(|one| one.0 as usize).max().expect("a block");
+        if highest >= self.bb_map.len() {
+            self.bb_map.resize(highest + 1, NONE);
+        }
+        for block in new_blocks {
+            debug_assert_eq!(self.bb_map[block.0 as usize], NONE, "a block already in a loop");
+            self.bb_map[block.0 as usize] = loop_id.0;
+        }
+        let data = &self.loops[loop_id.0 as usize];
+        let at = data.start + data.len;
+        self.layout.splice(at as usize..at as usize, new_blocks.iter().copied());
+        // The loops that hold `at` are `loop_id` and its parents, which grow;
+        // a loop that starts at or after it moves. Sub-loops of `loop_id` end
+        // at or before `at` and keep their slice.
+        let mut around = vec![false; self.loops.len()];
+        let mut walk = Some(loop_id);
+        while let Some(one) = walk {
+            around[one.0 as usize] = true;
+            self.loops[one.0 as usize].len += count;
+            walk = self.loops[one.0 as usize].parent;
+        }
+        for (index, one) in self.loops.iter_mut().enumerate() {
+            if !around[index] && one.start >= at {
+                one.start += count;
+            }
+        }
+    }
+
+    /// `Loop::addBasicBlockToLoop` for one block.
+    pub fn add_basic_block_to_loop(
+        &mut self,
+        loop_id: LoopId,
+        new_block: BlockId,
+    ) {
+        self.add_basic_blocks_to_loop(loop_id, &[new_block]);
+    }
+
+    /// Whether `self` and `other` hold the same loops of `function`: the same
+    /// innermost loop per block, and per loop the same header, blocks, parent
+    /// and sub-loops. The order of the blocks in a loop is not compared: an
+    /// update appends, an analysis orders by postorder. For a check of an
+    /// updated `LoopInfo` against one made afresh (`LoopInfoBase::verify`).
+    pub fn equivalent(
+        &self,
+        other: &LoopInfo,
+        function: &Function,
+    ) -> bool {
+        let header_of = |info: &LoopInfo, block| info.get_loop_for(block).map(|one| one.get_header());
+        if function.layout().iter().any(|&block| header_of(self, block) != header_of(other, block)) {
+            return false;
+        }
+        let summary = |info: &LoopInfo| {
+            let mut loops: Vec<_> = info
+                .get_loops_in_preorder()
+                .iter()
+                .map(|one| {
+                    let mut blocks = one.get_blocks().to_vec();
+                    blocks.sort();
+                    let mut subs: Vec<_> = one.get_sub_loops().map(|sub| sub.get_header()).collect();
+                    subs.sort();
+                    (one.get_header(), blocks, one.get_parent_loop().map(|parent| parent.get_header()), subs)
+                })
+                .collect();
+            loops.sort();
+            loops
+        };
+        summary(self) == summary(other)
+    }
+
     /// `isLoopHeader`.
     pub fn is_loop_header(
         &self,

@@ -56,7 +56,8 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
         // Whichever entry it is, it builds the frame: a shell `push bp` before
         // it made the first argument read as garbage (29281 for 5)
         // under the checking B$ENRD, and a run past it.
-        assert!(!entered.contains("push bp") && !entered.contains("push si"), "{runtime}: {entered}");
+        let before = &entered[..entered.find("call far ptr BAZ").expect("the entry")];
+        assert!(!before.contains("push bp") && !before.contains("push si"), "{runtime}: {entered}");
     }
 }
 

@@ -26,7 +26,7 @@
 //!       br i1 %c, t, e
 //! ```
 //!
-//! DEVIATE (J1..J11; stage S4 is not ported yet, which is not a deviation of
+//! DEVIATE (J1..J14; stage S4 is not ported yet, which is not a deviation of
 //! the finished pass):
 //! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
 //!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
@@ -38,9 +38,9 @@
 //! - J4. `DomTreeUpdater` is not used: the pass returns `none()` when it
 //!   changed anything and the manager rebuilds the dominator tree. The
 //!   reachable set at the start is a walk from the entry.
-//! - J5. The sweep visits the blocks of the layout as it stood when the sweep
-//!   began; a block made during it is met by the next sweep (LLVM's list
-//!   iterator meets one placed after the current block in the same sweep).
+//! - J5. The sweep walks the live layout as LLVM walks its block list: a block
+//!   placed after the current one is met in the same sweep, and the walk finds
+//!   its place again by position (`next_in_layout`) when a block is removed.
 //! - J6. `fcmp` is not looked through (`CmpInst` is integer compares only); MIR
 //!   has no vectors.
 //! - J7. Debug records are not retargeted (`DbgVariableRecord`s in `updateSSA`
@@ -56,6 +56,35 @@
 //! - J11. `LVI->getConstantOnEdge` answers that are not integers are dropped
 //!   (`known_from_lattice`), where `evaluateOnPredecessorEdge` would pass a
 //!   pointer constant on to `ConstantFoldCompareInstOperands`.
+//! - J12. Switched on, `recpow.c` m16 -O2 compiles 89.26 -> 105.41 M
+//!   instructions:u (+18.1%, A/A repeatable): the pass is about 1 M of the
+//!   extra work, the rest is a bigger body the old clocks inliner
+//!   (`ipa-recursive.`, `ipa-peel.`) chooses to inline. Exit: W2's
+//!   `inlinecost::decide` lands.
+//! - J13. `queens` -O3 runs 96949 -> 123141 clocks (+27%; instructions 78977 ->
+//!   106279, memory ops 12911 -> 25877). Our output equals `opt`'s. A/B on the
+//!   #2828 head, queens -O3 m32: forcing every ipa-cp candidate to clone (a
+//!   throwaway switch skipping the verdict test in `ipacp.rs`) with it on gives
+//!   93729 clocks / 80393 instructions, below the off figure: the clone
+//!   decision is the lever. `_place` is 24 (on) vs 26 (off) in size; the
+//!   call-site frequency per clone level is 9920, 36448, 337548, 3254456,
+//!   31512005 off (about x10 each) and 12124, 13976, 6377, 481, 8 on; the test
+//!   `benefit * 1000 >= EVAL_THRESHOLD (500) * size` fails at the sixth clone
+//!   (benefit 2, 12 needed), so `.6`..`.8` are never made. Our block
+//!   frequencies equal `opt`'s `print<block-freq>` on the same IR, on and off
+//!   (stage 11 and the stage-12 clones): the estimator is not at fault, the
+//!   threaded bodies make the call sites cold. Owner: cycles-queue (ipa-cp
+//!   clone verdict). Exit: W2's `inlinecost::decide` lands.
+//! - J14. `hanoi` -O2 runs 109 -> 114 clocks. Our output equals `opt`. With it
+//!   on, `_hanoi` does `push ecx; mov ecx, eax` before the `n == 0` test, so
+//!   the early return pays frame setup (shrink-wrap) and the constant copy sits
+//!   before the test (pre-RA MachineSink). Exit: the ShrinkWrap port
+//!   (backend-two) and the MachineSink translation (lir-cleanup-port).
+//!
+//! Rows pair, one binary, on against off (feat/parity 846c0c0c6): clocks
+//! geomean llrm/min(gcc,clang) O2 .9149 -> .9161 (+0.1%), O3 .8851 -> .8889
+//! (+0.4%), Os .9280 -> .9333 (+0.6%); 13 rows worse, 16 better. Code bytes m16
+//! -184/-286/-401 (O2/O3/Os), m32 -470/-890/-152.
 //! - Not yet ported (later stage): `simplifyPartiallyRedundantLoad`.
 //!
 //! # Example
@@ -100,41 +129,74 @@ use llrm_mir::valuetracking::{AssumptionCache, Query};
 use crate::lcssa::{arms, from_arms};
 use crate::local::{is_instruction_trivially_dead, may_have_side_effects};
 
-/// `DefaultBBDupThreshold`, the size gate of a copied block.
-///
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L88>
-const DEFAULT_BB_DUP_THRESHOLD: u32 = 6;
+/// The `cl::opt` limits of the pass, so a level or a target can set them
+/// without editing it; `Default` is the pin's values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JumpThreadingOptions {
+    /// `DefaultBBDupThreshold` (`jump-threading-threshold`), the size gate of
+    /// a copied block
+    /// ([L88](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L88)).
+    pub bb_dup_threshold: u32,
+    /// `BBDuplicateThreshold` of a function with `minsize`
+    /// ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)).
+    pub min_size_bb_dup_threshold: u32,
+    /// `PhiDuplicateThreshold` (`jump-threading-phi-threshold`): a block with
+    /// more phis is not copied
+    /// ([L99](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99)).
+    pub phi_duplicate_threshold: u32,
+    /// `ImplicationSearchThreshold`
+    /// (`jump-threading-implication-search-threshold`): how many single
+    /// predecessors up `processImpliedCondition` looks for a branch that
+    /// implies the test
+    /// ([L93](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L93)).
+    pub implication_search_threshold: u32,
+}
 
-/// `BBDuplicateThreshold` of a function with `minsize`
-/// ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)).
-const MIN_SIZE_BB_DUP_THRESHOLD: u32 = 3;
+impl Default for JumpThreadingOptions {
+    fn default() -> Self {
+        Self {
+            bb_dup_threshold: 6,
+            min_size_bb_dup_threshold: 3,
+            phi_duplicate_threshold: 76,
+            implication_search_threshold: 3,
+        }
+    }
+}
 
-/// `PhiDuplicateThreshold`: a block with more phis is not copied.
-///
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99>
-const PHI_DUPLICATE_THRESHOLD: u32 = 76;
+/// `Bonus` of a block that ends in a switch: its cost is lowered by this much
+/// ([L458](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L458)).
+const SWITCH_THREADING_BONUS: u32 = 6;
 
-/// `ImplicationSearchThreshold`: how many single predecessors up
-/// `processImpliedCondition` looks for a branch that implies the test.
-///
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L93>
-const IMPLICATION_SEARCH_THRESHOLD: u32 = 3;
+/// Extra size of a call that is not an intrinsic, on top of the one every
+/// instruction counts
+/// ([L503](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L503)).
+const CALL_EXTRA_SIZE: u32 = 3;
+
+/// Extra size of a non-vector intrinsic call
+/// ([L505](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L505)).
+const INTRINSIC_CALL_EXTRA_SIZE: u32 = 1;
 
 /// Off by default since it runs away on `runtime/qb/datetime.c` -Os (the peel
-/// loop never settles); `LLRM_JUMPTHREADING` turns it on.
+/// loop never settles, #2739); on by default again, `LLRM_NO_JUMPTHREADING`
+/// (set) turns it off.
 pub struct JumpThreading {
     pub enabled: bool,
+    pub options: JumpThreadingOptions,
 }
 
 impl JumpThreading {
     pub fn from_env() -> Self {
-        Self { enabled: llrm_support::env_flag!("LLRM_JUMPTHREADING") }
+        Self { enabled: !llrm_support::env_flag!("LLRM_NO_JUMPTHREADING"), options: JumpThreadingOptions::default() }
     }
 }
 
 impl FunctionPass for JumpThreading {
     fn name(&self) -> &'static str {
         "jumpthreading"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("jump-threading")
     }
 
     /// `JumpThreadingPass::run`
@@ -160,9 +222,38 @@ impl FunctionPass for JumpThreading {
             lvi: LazyValueInfo::new(),
             loop_headers: IdSet::new(),
             unreachable: IdSet::new(),
-            bb_dup_threshold: DEFAULT_BB_DUP_THRESHOLD,
+            options: self.options,
+            bb_dup_threshold: self.options.bb_dup_threshold,
         };
         if pass.run_impl() { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// Where the walk goes after `block`, which stood at `at` (or near it: the
+/// pass may have placed or removed blocks before `at`). A block that is no
+/// longer placed is not searched for, and neither is a gone `after`: the
+/// search runs outward from `at`, so it costs the distance the target moved,
+/// not the length of the layout. `probe` is called once per position looked
+/// at, so a test can count the work.
+pub(crate) fn layout_step(
+    layout: &[BlockId],
+    is_placed: impl Fn(BlockId) -> bool,
+    block: BlockId,
+    at: usize,
+    after: Option<BlockId>,
+    mut probe: impl FnMut(),
+) -> usize {
+    let mut near = |wanted: BlockId| {
+        (0..layout.len())
+            .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
+            .flatten()
+            .inspect(|_| probe())
+            .find(|&index| layout.get(index) == Some(&wanted))
+    };
+    if is_placed(block) {
+        near(block).map_or(layout.len(), |index| index + 1)
+    } else {
+        after.filter(|&after| is_placed(after)).and_then(near).unwrap_or(layout.len())
     }
 }
 
@@ -180,6 +271,7 @@ struct State<'a, 'u> {
     lvi: LazyValueInfo,
     loop_headers: IdSet<BlockId>,
     unreachable: IdSet<BlockId>,
+    options: JumpThreadingOptions,
     bb_dup_threshold: u32,
 }
 
@@ -307,14 +399,17 @@ impl State<'_, '_> {
             .collect()
     }
 
-    /// `getSinglePredecessor`.
+    /// `getSinglePredecessor`: the block of the one edge into `block`. Two
+    /// edges from one block (`br %c, %t, %t`) are not a single predecessor;
+    /// that is `getUniquePredecessor`.
     fn single_predecessor(
         &self,
         block: BlockId,
     ) -> Option<BlockId> {
-        let edges = self.pred_edges(block);
-        let first = *edges.first()?;
-        edges.iter().all(|&one| one == first).then_some(first)
+        match self.pred_edges(block).as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
     }
 
     /// `successors(BB)`: one per edge, in operand order.
@@ -500,9 +595,9 @@ impl State<'_, '_> {
     fn run_impl(&mut self) -> bool {
         self.bb_dup_threshold =
             if self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize")) {
-                MIN_SIZE_BB_DUP_THRESHOLD
+                self.options.min_size_bb_dup_threshold
             } else {
-                DEFAULT_BB_DUP_THRESHOLD
+                self.options.bb_dup_threshold
             };
         let Some(entry) = self.function().entry() else { return false };
 
@@ -595,18 +690,8 @@ impl State<'_, '_> {
         at: usize,
         after: Option<BlockId>,
     ) -> usize {
-        let layout = self.function().layout();
-        let near = |wanted: BlockId| {
-            (0..layout.len())
-                .flat_map(|distance| [at.checked_sub(distance), Some(at + distance)])
-                .flatten()
-                .find(|&index| layout.get(index) == Some(&wanted))
-        };
-        match (near(block), after) {
-            (Some(index), _) => index + 1,
-            (None, Some(after)) => near(after).unwrap_or(layout.len()),
-            (None, None) => layout.len(),
-        }
+        let function = self.function();
+        layout_step(function.layout(), |one| function.is_placed(one), block, at, after, || {})
     }
 
     /// The blocks reachable from `entry`.
@@ -720,7 +805,7 @@ impl State<'_, '_> {
                 break;
             }
             phi_count += 1;
-            if phi_count > PHI_DUPLICATE_THRESHOLD {
+            if phi_count > self.options.phi_duplicate_threshold {
                 return u32::MAX;
             }
         }
@@ -731,7 +816,7 @@ impl State<'_, '_> {
             // Threading through a switch statement is particularly
             // profitable.
             if function.instruction(stop_at).opcode == Opcode::Switch {
-                bonus = 6;
+                bonus = SWITCH_THREADING_BONUS;
             }
         }
         let threshold = threshold + bonus;
@@ -774,9 +859,9 @@ impl State<'_, '_> {
             // Calls are more expensive.
             if let Opcode::Call(_) = function.instruction(inst).opcode {
                 if self.is_intrinsic_call(inst) {
-                    size += 1;
+                    size += INTRINSIC_CALL_EXTRA_SIZE;
                 } else {
-                    size += 3;
+                    size += CALL_EXTRA_SIZE;
                 }
             }
         }
@@ -1642,11 +1727,7 @@ impl State<'_, '_> {
         &self,
         bb: BlockId,
     ) -> bool {
-        let function = self.function();
-        function
-            .iter_block(bb)
-            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
-            .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+        crate::edges::starts_with_landing_pad(self.function(), bb)
     }
 
     /// `threadEdge`
@@ -2883,7 +2964,7 @@ impl State<'_, '_> {
     /// `processImpliedCondition`
     /// ([L1144](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L1144)):
     /// the branch of `bb` is folded when the branch of a block that leads to
-    /// it alone, at most `IMPLICATION_SEARCH_THRESHOLD` blocks up, implies it.
+    /// it alone, at most `implication_search_threshold` blocks up, implies it.
     fn process_implied_condition(
         &mut self,
         bb: BlockId,
@@ -2910,7 +2991,7 @@ impl State<'_, '_> {
         let mut current_pred = self.single_predecessor(bb);
         let mut iter = 0;
         while let Some(pred) = current_pred {
-            if iter >= IMPLICATION_SEARCH_THRESHOLD {
+            if iter >= self.options.implication_search_threshold {
                 break;
             }
             iter += 1;

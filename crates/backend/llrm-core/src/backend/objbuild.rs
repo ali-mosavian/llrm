@@ -797,6 +797,10 @@ pub fn _part(
 ) -> Result<Piece, Unencodable> {
     match part {
         masm::InlinePart::Bytes(part) => Ok(Piece::new(part.clone())),
+        masm::InlinePart::Near(opcode, name) => Ok(Piece {
+            code: [&[*opcode][..], &vec![0; bits as usize / 8][..]].concat(),
+            fixups: vec![Fixup::new(1, relative(bits as usize / 8), name.clone())],
+        }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" && bits == 32 => Ok(Piece {
             code: (*offset as u32).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],

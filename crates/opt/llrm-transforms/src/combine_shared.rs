@@ -49,10 +49,12 @@
 //! ```
 
 use llrm_mir::constantfolding;
-use llrm_mir::context::{ConstantId, ConstantKind};
+use llrm_mir::context::{Constant, ConstantId, ConstantKind};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_binop_at;
+use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::{Combiner, handle_use_count_decrement};
@@ -190,14 +192,97 @@ fn binary_operator(
     Some((inst, op, [a, b], instruction.flags))
 }
 
+/// `InstCombinerImpl::isDesirableIntType`
+/// ([:310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L310)):
+/// i8, i16 and i32, and the native widths.
+fn is_desirable_int_type(
+    layout: &DataLayout,
+    bits: u32,
+) -> bool {
+    matches!(bits, 8 | 16 | 32) || layout.legal_integer(bits)
+}
+
+/// `InstCombinerImpl::shouldChangeType(FromWidth, ToWidth)`
+/// ([:329](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L329)):
+/// whether to compute in `to` bits what is computed in `from`.
+pub fn should_change_type(
+    layout: &DataLayout,
+    from: u32,
+    to: u32,
+) -> bool {
+    let from_legal = from == 1 || layout.legal_integer(from);
+    let to_legal = to == 1 || layout.legal_integer(to);
+    // Only shrink to a desirable width, to prevent infinite loops.
+    if to < from && is_desirable_int_type(layout, to) {
+        return true;
+    }
+    // Do not go from a legal or desirable type to an illegal one.
+    if (from_legal || is_desirable_int_type(layout, from)) && !to_legal {
+        return false;
+    }
+    // Both illegal: do not grow.
+    if !from_legal && !to_legal && to > from {
+        return false;
+    }
+    true
+}
+
 /// `m_OneUse` of a value.
-fn has_one_use(
+pub fn has_one_use(
     c: &Combiner,
     v: Operand,
 ) -> bool {
     match v {
         Operand::Value(value) => c.function.users(value).has_one_use(),
         _ => false,
+    }
+}
+
+impl Combiner<'_> {
+    /// `Value::hasOneUse`.
+    pub(crate) fn has_one_use(
+        &self,
+        v: Operand,
+    ) -> bool {
+        has_one_use(self, v)
+    }
+
+    /// `isa<UndefValue>`: `undef` or `poison`.
+    pub fn is_undef_value(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| matches!(
+            self.context.get(id).kind,
+            ConstantKind::Undef | ConstantKind::Poison
+        ))
+    }
+
+    /// `isa<PoisonValue>`.
+    pub fn is_poison_value(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| self.context.get(id).kind == ConstantKind::Poison)
+    }
+
+    /// `isa<ConstantPointerNull>`.
+    pub fn is_null_pointer(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| matches!(
+            self.context.get(id).kind,
+            ConstantKind::Null | ConstantKind::Zero
+        ))
+    }
+
+    /// `PoisonValue::get(ty)`.
+    pub fn poison(
+        &mut self,
+        ty: TypeId,
+    ) -> Operand {
+        Operand::Constant(self.context.constant(Constant { ty, kind: ConstantKind::Poison }))
     }
 }
 
