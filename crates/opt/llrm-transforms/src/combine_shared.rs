@@ -53,11 +53,11 @@ use llrm_mir::context::{Constant, ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::simplify::simplify_binop_at;
+use llrm_mir::simplify::{simplify_binop_at, simplify_instruction_in};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{Query, pattern};
 
-use crate::combine::{Combiner, handle_use_count_decrement};
+use crate::combine::{Combiner, Visit, handle_use_count_decrement};
 
 /// A ValueTracking query over the body being combined, asked at `cxt`
 /// (`SQ.getWithInstruction`).
@@ -82,16 +82,24 @@ pub fn get_complexity(
     v: Operand,
 ) -> u32 {
     if let Operand::Constant(id) = v {
-        return if matches!(
-            q.context().get(id).kind,
-            ConstantKind::Undef | ConstantKind::Poison
-        ) { 0 } else { 1 };
+        return if matches!(q.context().get(id).kind, ConstantKind::Undef | ConstantKind::Poison) { 0 } else { 1 };
     }
     let is_cast = q.instruction_of(v).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Cast(_)));
     if is_cast || pattern::neg(q, v).is_some() || pattern::not(q, v).is_some() || pattern::fneg(q, v).is_some() {
         return 2;
     }
     3
+}
+
+/// `simplify*Inst(..., SQ.getWithInstruction(&I))` at the head of a `visit*`:
+/// what the instruction simplifies to, as `replaceInstUsesWith`.
+pub fn simplify_visited(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let env = c.env;
+    let found = simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)?;
+    (Some(found) != c.function.instruction(inst).result.map(Operand::Value)).then_some(Visit::Replace(found))
 }
 
 /// `replaceOperand`: operand `index` of `inst` reads `with`, and what it read
@@ -158,7 +166,7 @@ fn min_max(
 }
 
 /// `Instruction::isCommutative`.
-fn is_commutative(op: BinaryOp) -> bool {
+pub fn is_commutative(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul
@@ -167,10 +175,7 @@ fn is_commutative(op: BinaryOp) -> bool {
 
 /// `Instruction::isAssociative`, DEVIATE 2: the integer operations.
 fn is_associative(op: BinaryOp) -> bool {
-    matches!(
-        op,
-        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
-    )
+    matches!(op, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
 }
 
 /// `isBitwiseLogicOp`.
@@ -369,7 +374,7 @@ fn simplify_assoc_cast_assoc(
 }
 
 /// `Instruction::dropPoisonGeneratingFlags`.
-fn drop_poison_generating_flags(
+pub fn drop_poison_generating_flags(
     c: &mut Combiner,
     inst: InstId,
 ) {
@@ -537,6 +542,95 @@ pub fn simplify_associative_or_commutative(
         }
         // No further simplifications.
         return changed;
+    }
+}
+
+/// `m_BinOp(op, a, b)`: the operands and flags of `v` if it is that operation.
+pub fn binop(
+    q: &Query,
+    v: Operand,
+    op: BinaryOp,
+) -> Option<(Operand, Operand, Flags)> {
+    pattern::binary(q, v, op).map(|(_, instruction, a, b)| (a, b, instruction.flags))
+}
+
+/// `m_c_BinOp(op, P, m_Value(Other))`: `v` is `op a, b` where `a` or `b`
+/// satisfies `first`; the one that does, and the other. `a` is tried first.
+pub fn commutative(
+    q: &Query,
+    v: Operand,
+    op: BinaryOp,
+    first: impl Fn(Operand) -> bool,
+) -> Option<(Operand, Operand)> {
+    let (a, b, _) = binop(q, v, op)?;
+    if first(a) {
+        Some((a, b))
+    } else if first(b) {
+        Some((b, a))
+    } else {
+        None
+    }
+}
+
+/// `m_SpecificInt(n)`: an integer constant equal to `n`.
+pub fn specific_int(
+    q: &Query,
+    v: Operand,
+    n: u128,
+) -> bool {
+    pattern::apint(q, v).is_some_and(|(bits, _)| bits == n)
+}
+
+/// The visited instruction's operands, flags and result width.
+pub fn parts(
+    c: &Combiner,
+    inst: InstId,
+) -> (Operand, Operand, Flags) {
+    let instruction = c.function.instruction(inst);
+    (instruction.operands[0], instruction.operands[1], instruction.flags)
+}
+
+/// The width of the integer `v` (a scalar: MIR has no vectors).
+pub fn width(
+    c: &Combiner,
+    v: Operand,
+) -> u32 {
+    c.context.types.int_bits(c.type_of(v)).expect("an integer")
+}
+
+/// `ConstantExpr::getAdd` and the like of two constants: the folded constant
+/// (DEVIATE 4: none where it would stay an expression).
+pub fn fold_constants(
+    c: &Combiner,
+    op: BinaryOp,
+    a: Operand,
+    b: Operand,
+) -> Option<Operand> {
+    let (Operand::Constant(x), Operand::Constant(y)) = (a, b) else { return None };
+    let env = constantfolding::Env { globals: c.env.globals, layout: c.env.layout };
+    constantfolding::constant_fold_binary_op_operands(c.context, env, op, x, y).map(Operand::Constant)
+}
+
+/// The `nsw` and `nuw` of `flags`.
+pub fn wrap_of(flags: Flags) -> Flags {
+    let mut wrap = Flags::default();
+    for flag in [Flags::NSW, Flags::NUW] {
+        if flags.contains(flag) {
+            wrap.insert(flag);
+        }
+    }
+    wrap
+}
+
+/// The instruction that defines the value `v`.
+pub fn inst_def(
+    c: &Combiner,
+    v: Operand,
+) -> Option<InstId> {
+    let Operand::Value(value) = v else { return None };
+    match c.function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
+        _ => None,
     }
 }
 

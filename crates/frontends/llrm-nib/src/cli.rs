@@ -320,6 +320,25 @@ mod tests {
         fn callee_saved(&self) -> Vec<(RegId, RegId)> {
             self.0.callee_saved()
         }
+        fn register_named(
+            &self,
+            name: &str,
+        ) -> RegId {
+            self.0.register_named(name)
+        }
+        fn convention_results(
+            &self,
+            convention: &llrm_target::calling::Convention,
+            width: u32,
+        ) -> Vec<RegId> {
+            self.0.convention_results(convention, width)
+        }
+        fn convention_callee_saved(
+            &self,
+            convention: &llrm_target::calling::Convention,
+        ) -> Vec<(RegId, RegId)> {
+            self.0.convention_callee_saved(convention)
+        }
         fn cpu_table(
             &self,
             name: &str,

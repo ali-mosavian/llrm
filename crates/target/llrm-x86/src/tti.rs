@@ -59,7 +59,9 @@ pub struct X86 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealMode {
     /// What an address `base + scale * index` costs above the native form,
-    /// for each scale some address form holds.
+    /// for each scale a primary address form holds: the legal scales. A
+    /// secondary form (the address-size prefix) is the backend's fallback, not
+    /// an address LSR may form.
     pub scale_costs: Vec<(i64, i64)>,
     /// General registers a value may sit in.
     pub registers: u32,
@@ -616,6 +618,11 @@ impl Tti for X86 {
     ) -> bool {
         // A displacement is a signed 32-bit immediate, below 16 MB beside a
         // symbol.
+        if let Some(real) = &self.real_mode {
+            // 16-bit addresses: a 16-bit displacement and a scale a primary
+            // form holds (0 is no index).
+            return i16::try_from(base_offset).is_ok() && (scale == 0 || real.scale_cost(scale).is_some());
+        }
         if i32::try_from(base_offset).is_err() || (base_gv && base_offset >= 16 * 1024 * 1024) {
             return false;
         }

@@ -10,6 +10,8 @@
 //! a body only where one is read whole. Over block addresses (`i64`), so a CFG
 //! of any kind is one.
 
+use crate::loopinfo::{BlockNumber, Dominance, LoopGraph, LoopInfo};
+
 /// One loop of a [`Forest`].
 #[derive(Debug)]
 pub struct TreeLoop {
@@ -286,216 +288,209 @@ impl<'a> IntoIterator for &'a Body {
     }
 }
 
+/// A CFG given as addresses and successors, for [`LoopInfo`]: block `n` is the
+/// `n`th of `nodes`, edges to an address no node has are dropped.
+struct AddressGraph {
+    ats: Vec<i64>,
+    succs: Vec<Vec<u32>>,
+    preds: Vec<Vec<u32>>,
+    entry: Option<u32>,
+}
+
+/// A block of an [`AddressGraph`]: its place among the nodes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Slot(u32);
+
+impl BlockNumber for Slot {
+    fn number(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl AddressGraph {
+    fn new(
+        nodes: &[(i64, &[i64])],
+        entry: Option<i64>,
+    ) -> Self {
+        let ats: Vec<i64> = nodes.iter().map(|(at, _)| *at).collect();
+        let mut sorted: Vec<(i64, u32)> = ats.iter().enumerate().map(|(slot, &at)| (at, slot as u32)).collect();
+        sorted.sort_unstable();
+        let slot = |at: i64| sorted.binary_search_by_key(&at, |one| one.0).ok().map(|found| sorted[found].1);
+        let succs: Vec<Vec<u32>> =
+            nodes.iter().map(|(_, succ)| succ.iter().filter_map(|&to| slot(to)).collect()).collect();
+        let mut preds: Vec<Vec<u32>> = vec![Vec::new(); ats.len()];
+        for (from, to) in succs.iter().enumerate() {
+            for &to in to {
+                preds[to as usize].push(from as u32);
+            }
+        }
+        let entry = entry.and_then(slot).or_else(|| (!ats.is_empty()).then_some(0));
+        Self { ats, succs, preds, entry }
+    }
+}
+
+impl LoopGraph for AddressGraph {
+    type Block = Slot;
+
+    fn entry(&self) -> Option<Slot> {
+        self.entry.map(Slot)
+    }
+
+    fn max_number(&self) -> usize {
+        self.ats.len()
+    }
+
+    fn child(
+        &self,
+        block: Slot,
+        cursor: &mut usize,
+    ) -> Option<Slot> {
+        let found = self.succs[block.0 as usize].get(*cursor).copied();
+        *cursor += 1;
+        found.map(Slot)
+    }
+
+    fn inverse_children(
+        &self,
+        block: Slot,
+    ) -> impl Iterator<Item = Slot> {
+        self.preds[block.0 as usize].iter().map(|&from| Slot(from))
+    }
+}
+
+/// What the caller says of reachability and dominance, by address.
+struct Asked<'a> {
+    ats: &'a [i64],
+    reachable: &'a dyn Fn(i64) -> bool,
+    dominates: &'a dyn Fn(i64, i64) -> bool,
+}
+
+impl Dominance<Slot> for Asked<'_> {
+    fn is_reachable(
+        &self,
+        block: Slot,
+    ) -> bool {
+        (self.reachable)(self.ats[block.0 as usize])
+    }
+
+    fn dominates(
+        &self,
+        dominator: Slot,
+        block: Slot,
+    ) -> bool {
+        (self.dominates)(self.ats[dominator.0 as usize], self.ats[block.0 as usize])
+    }
+}
+
 /// The [`Forest`] of the blocks `nodes` name, each an address and its
 /// successors, from `entry` (the first block where none is given). `reachable`
 /// says whether the entry reaches a block and `dominates` whether one block
-/// dominates another; a back edge is an edge from a reachable block to one
-/// that dominates it.
+/// dominates another; they are asked only for a cycle entered other than
+/// through its header.
 pub fn forest(
     nodes: &[(i64, &[i64])],
     entry: Option<i64>,
     reachable: &dyn Fn(i64) -> bool,
     dominates: &dyn Fn(i64, i64) -> bool,
 ) -> Forest {
-    crate::counts::bump(crate::counts::Event::Forests);
-    let mut ats: Vec<i64> = nodes.iter().map(|(at, _)| *at).collect();
-    ats.sort_unstable();
-    ats.dedup();
-    let count = ats.len();
-    let slot = |at: i64| ats.binary_search(&at).ok();
-    let mut succs: Vec<Vec<u32>> = vec![Vec::new(); count];
-    for (at, succ) in nodes {
-        let from = slot(*at).expect("a block address");
-        succs[from] = succ.iter().filter_map(|to| slot(*to)).map(|to| to as u32).collect();
-    }
-    let up: Vec<bool> = ats.iter().map(|&at| reachable(at)).collect();
-    let mut preds: Vec<Vec<u32>> = vec![Vec::new(); count];
-    for from in 0..count {
-        if up[from] {
-            for &to in &succs[from] {
-                preds[to as usize].push(from as u32);
-            }
-        }
-    }
-    // The back edges, in the order the blocks and their edges come.
-    let mut headers: Vec<(u32, Vec<u32>)> = Vec::new();
-    let mut header_of: Vec<u32> = vec![NONE; count];
-    for (at, _) in nodes {
-        let from = slot(*at).expect("a block address");
-        if !up[from] {
-            continue;
-        }
-        for &to in &succs[from] {
-            if dominates(ats[to as usize], ats[from]) {
-                let index = if header_of[to as usize] == NONE {
-                    header_of[to as usize] = headers.len() as u32;
-                    headers.push((to, Vec::new()));
-                    headers.len() - 1
-                } else {
-                    header_of[to as usize] as usize
-                };
-                if !headers[index].1.contains(&(from as u32)) {
-                    headers[index].1.push(from as u32);
-                }
-            }
-        }
-    }
-    let mut loops: Vec<TreeLoop> = headers
-        .iter()
-        .map(|(header, latches)| TreeLoop {
-            header: ats[*header as usize],
-            latches: latches.iter().map(|&one| ats[one as usize]).collect(),
-            parent: None,
-            children: Vec::new(),
-            own: Vec::new(),
-            size: 0,
-            depth: 0,
-            enter: 0,
-            last: 0,
-        })
-        .collect();
-    // The outer loop's header dominates the inner's, so it comes first in a
-    // reverse postorder: the later header is walked first.
-    let place = {
-        let mut place = vec![NONE; count];
-        let mut post = Vec::new();
-        let start = entry.or_else(|| nodes.first().map(|(at, _)| *at)).and_then(slot);
-        if let Some(start) = start {
-            let mut seen = vec![false; count];
-            seen[start] = true;
-            let mut stack = vec![(start, 0_usize)];
-            while let Some(&(at, next)) = stack.last() {
-                if let Some(&to) = succs[at].get(next) {
-                    stack.last_mut().expect("nonempty").1 += 1;
-                    if !seen[to as usize] {
-                        seen[to as usize] = true;
-                        stack.push((to as usize, 0));
-                    }
-                } else {
-                    post.push(at);
-                    stack.pop();
-                }
-            }
-        }
-        for (index, &at) in post.iter().enumerate() {
-            place[at] = (post.len() - index) as u32;
-        }
-        place
-    };
-    let mut order: Vec<usize> = (0..loops.len()).collect();
-    order.sort_by_key(|&index| std::cmp::Reverse(place[headers[index].0 as usize]));
-    let mut innermost: Vec<u32> = vec![NONE; count];
-    for &index in &order {
-        let header = headers[index].0;
-        innermost[header as usize] = index as u32;
-        loops[index].own.push(ats[header as usize]);
-        let mut pending: Vec<u32> = headers[index].1.clone();
-        while let Some(at) = pending.pop() {
-            FOREST_VISITS.with(|visits| visits.set(visits.get() + 1));
-            match innermost[at as usize] {
-                NONE => {
-                    innermost[at as usize] = index as u32;
-                    loops[index].own.push(ats[at as usize]);
-                    pending.extend(preds[at as usize].iter().copied());
-                }
-                inside => {
-                    let mut top = inside as usize;
-                    while let Some(parent) = loops[top].parent {
-                        top = parent;
-                    }
-                    if top == index {
-                        continue;
-                    }
-                    loops[top].parent = Some(index);
-                    let entry = headers[top].0 as usize;
-                    pending.extend(preds[entry].iter().copied().filter(|&from| innermost[from as usize] != top as u32));
-                }
-            }
-        }
-    }
-    // Each loop's size, from the inside out; then the numbers a subtree holds,
-    // and the depths, from the outside in.
-    for &index in &order {
-        loops[index].size += loops[index].own.len();
-        if let Some(parent) = loops[index].parent {
-            loops[parent].size += loops[index].size;
-            loops[parent].children.push(index);
-        }
-    }
-    let mut number = 0;
-    let mut pending: Vec<(usize, bool)> =
-        (0..loops.len()).rev().filter(|&index| loops[index].parent.is_none()).map(|index| (index, false)).collect();
-    while let Some((index, done)) = pending.pop() {
-        if done {
-            loops[index].last = number - 1;
-            continue;
-        }
-        loops[index].enter = number;
-        number += 1;
-        loops[index].depth = loops[index].parent.map_or(1, |parent| loops[parent].depth + 1);
-        pending.push((index, true));
-        let children = loops[index].children.clone();
-        pending.extend(children.into_iter().rev().map(|child| (child, false)));
-    }
-    let table = lookup(&ats);
-    Forest { loops, ats, innermost, table }
+    let graph = AddressGraph::new(nodes, entry);
+    let info = LoopInfo::analyze(&graph, || Asked { ats: &graph.ats, reachable, dominates });
+    Forest::of_graph(&graph, &info, (0..nodes.len() as u32).map(Slot), |block| graph.ats[block.0 as usize])
 }
 
 impl Forest {
-    /// The forest of the loops `info` found in `function`, loop `n` of `info`
-    /// being loop `n` of the forest: the form the graph walks and `Body` read,
-    /// until they read `LoopInfo`. DEVIATE (temporary): an adapter, not in
-    /// LLVM; it goes with `forest::forest` in #2197. Not counted as a forest
-    /// built: `LoopInfo::analyze` is the finder.
-    pub fn of_loop_info(
-        function: &crate::module::Function,
-        info: &crate::loopinfo::LoopInfo,
+    /// The forest of the loops `info` found in `graph`: the form the graph
+    /// walks and `Body` read, until they read `LoopInfo`. DEVIATE (temporary):
+    /// an adapter, not in LLVM; it goes with the flat `Loop` in #2197.
+    /// `order` names every block once, `address` gives the number a block goes
+    /// by. Loops are numbered in the order their first back edge comes in
+    /// `order`, a loop's latches likewise, as the finder this replaces
+    /// numbered them.
+    pub fn of_graph<G: LoopGraph>(
+        graph: &G,
+        info: &LoopInfo<G::Block>,
+        order: impl Iterator<Item = G::Block>,
+        address: impl Fn(G::Block) -> i64,
     ) -> Self {
-        let all = info.get_loops_in_preorder();
-        let mut loops: Vec<TreeLoop> = Vec::new();
-        loops.resize_with(all.len(), || TreeLoop {
-            header: 0,
-            latches: Vec::new(),
-            parent: None,
-            children: Vec::new(),
-            own: Vec::new(),
-            size: 0,
-            depth: 0,
-            enter: 0,
-            last: 0,
-        });
-        let mut ats: Vec<i64> = Vec::new();
-        for (number, one) in all.iter().enumerate() {
-            let at = one.id().0 as usize;
-            debug_assert!(at < loops.len());
-            loops[at] = TreeLoop {
-                header: i64::from(one.get_header().0),
-                latches: one.get_loop_latches(function).iter().map(|block| i64::from(block.0)).collect(),
-                parent: one.get_parent_loop().map(|parent| parent.id().0 as usize),
-                children: one.get_sub_loops().map(|child| child.id().0 as usize).collect(),
+        let preorder = info.get_loops_in_preorder();
+        // Where each block comes in `order`, by number.
+        let mut position = vec![u32::MAX; graph.max_number()];
+        for (at, block) in order.enumerate() {
+            position[block.number()] = at as u32;
+        }
+        let at_block = |block: G::Block| position[block.number()];
+        // A loop's first back edge in `order`: the earliest latch, and among
+        // its edges the one to the header.
+        let mut first: Vec<usize> = (0..preorder.len()).collect();
+        let key = |one: &crate::loopinfo::Loop<'_, G::Block>| {
+            one.get_loop_latches(graph)
+                .into_iter()
+                .map(|latch| {
+                    let edge = graph.children(latch).position(|child| child == one.get_header()).unwrap_or(0);
+                    (at_block(latch), edge)
+                })
+                .min()
+        };
+        let keys: Vec<_> = preorder.iter().map(key).collect();
+        first.sort_by_key(|&one| keys[one]);
+        debug_assert!(keys.iter().all(Option::is_some), "every loop has a latch among the blocks");
+        let mut place: Vec<u32> = vec![NONE; preorder.len()];
+        for (index, &one) in first.iter().enumerate() {
+            place[preorder[one].id().0 as usize] = index as u32;
+        }
+        let mut loops: Vec<TreeLoop> = Vec::with_capacity(first.len());
+        for (preorder_number, one) in preorder.iter().enumerate() {
+            let mut latches = one.get_loop_latches(graph);
+            latches.sort_by_key(|&latch| at_block(latch));
+            latches.dedup();
+            let index = place[one.id().0 as usize] as usize;
+            if loops.len() <= index {
+                loops.resize_with(first.len(), || TreeLoop {
+                    header: 0,
+                    latches: Vec::new(),
+                    parent: None,
+                    children: Vec::new(),
+                    own: Vec::new(),
+                    size: 0,
+                    depth: 0,
+                    enter: 0,
+                    last: 0,
+                });
+            }
+            loops[index] = TreeLoop {
+                header: address(one.get_header()),
+                latches: latches.into_iter().map(&address).collect(),
+                parent: one.get_parent_loop().map(|parent| place[parent.id().0 as usize] as usize),
+                children: one.get_sub_loops().map(|child| place[child.id().0 as usize] as usize).collect(),
                 own: Vec::new(),
                 size: one.get_num_blocks(),
                 depth: one.get_loop_depth(),
-                enter: number as u32,
+                enter: preorder_number as u32,
                 last: 0,
             };
-            ats.extend(one.get_blocks().iter().map(|block| i64::from(block.0)));
+        }
+        let mut ats: Vec<(i64, usize)> = Vec::new();
+        for top in info.top_level_loops() {
+            for &block in top.get_blocks() {
+                let inner = info.get_loop_for(block).expect("a block of a loop");
+                ats.push((address(block), place[inner.id().0 as usize] as usize));
+            }
         }
         ats.sort_unstable();
-        ats.dedup();
+        ats.dedup_by_key(|one| one.0);
         let mut innermost = vec![NONE; ats.len()];
-        for (place, &at) in ats.iter().enumerate() {
-            if let Some(one) = info.get_loop_for(crate::module::BlockId(at as u32)) {
-                innermost[place] = one.id().0;
-                loops[one.id().0 as usize].own.push(at);
-            }
+        for (slot, &(at, index)) in ats.iter().enumerate() {
+            innermost[slot] = index as u32;
+            loops[index].own.push(at);
         }
         // `enter` numbers loops in preorder, so a subtree's last number is the
         // largest of its children's, itself if none.
-        for one in all.iter().rev() {
-            let at = one.id().0 as usize;
-            loops[at].last = loops[at].children.iter().map(|&child| loops[child].last).max().unwrap_or(loops[at].enter);
+        for one in preorder.iter().rev() {
+            let index = place[one.id().0 as usize] as usize;
+            loops[index].last =
+                loops[index].children.iter().map(|&child| loops[child].last).max().unwrap_or(loops[index].enter);
         }
+        let ats: Vec<i64> = ats.into_iter().map(|one| one.0).collect();
         let table = lookup(&ats);
         Forest { loops, ats, innermost, table }
     }
@@ -514,14 +509,4 @@ fn lookup(ats: &[i64]) -> Vec<u32> {
         table[(at - first) as usize] = place as u32;
     }
     table
-}
-
-thread_local! {
-    static FOREST_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Blocks `forest`'s walks have taken up on this thread, for a test of how
-/// they grow with the nesting.
-pub fn forest_visits() -> usize {
-    FOREST_VISITS.with(std::cell::Cell::get)
 }

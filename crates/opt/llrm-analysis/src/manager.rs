@@ -306,11 +306,11 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
-        if llrm_support::env_flag!("LLRM_ATTR_SUMMARIES") {
-            return Ok(crate::attrsummary::summaries(module));
-        }
         let globals_held = analyses.get::<GlobalsAA>(module);
         let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
+        if llrm_support::env_flag!("LLRM_ATTR_SUMMARIES") {
+            return Ok(crate::attrsummary::summaries(module, &analyses.program().layout, globals.tracked_globals()));
+        }
         let program = Rc::clone(analyses.program());
         let known = match program.cached::<ProgramSummaries>() {
             Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),
