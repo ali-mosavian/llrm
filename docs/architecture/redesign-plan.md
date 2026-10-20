@@ -335,7 +335,7 @@ State: **translated** = the pass at the pin exists in llrm (a switch-gated or sh
 | 37 | dse | O2 | `dse` | old | memoryssa-port |
 | 38 | instsimplify | all | `fold` (InstSimplify translation in progress) | old | fold-poc |
 | 39 | deadargelim, globaldce, elim-avail-extern, constmerge | all | `deadargs`, `globaldce`, `availableexternally`; constmerge none | old; constmerge missing | cgscc-poc |
-| 40 | float2int, lower-constant-intrinsics | all | none | missing | scalar-cleanup-port |
+| 40 | float2int, lower-constant-intrinsics | all | `float2int` (lower-constant-intrinsics none) | float2int translated; the other missing | gvn-ci-2160-2172 |
 | 41 | loop-interchange, loop-distribute | O2 | `loopinterchange`, `loopdistribute` at -O3 only | old, wrong level | loop-passes-port |
 | 42 | infer-alignment, alignment-from-assumptions, loop-load-elim | all (loop-load-elim O2) | none | missing | scalar-cleanup-port |
 | 43 | loop-sink, div-rem-pairs, mergeicmps, expand-memcmp | O2 | LIR `sink`, `addresssink`, `window` stand in | old | scalar-cleanup-port |

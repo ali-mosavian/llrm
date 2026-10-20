@@ -7,7 +7,9 @@ fn of(
     text: &str,
     name: &str,
 ) -> Summary {
-    summaries(&parsed(text)).get(name).expect("a defined function").clone()
+    let module = parsed(text);
+    let tracked = std::collections::BTreeSet::new();
+    summaries(&module, &crate::testing::layout(&module), &tracked).get(name).expect("a defined function").clone()
 }
 
 fn parameters(slices: &crate::sliceset::SliceSet) -> Vec<i64> {

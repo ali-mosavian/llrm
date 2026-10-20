@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:27c8b4bb92a3b884b809da1d292af3e2131545e69955d81d0d92f39920955af9 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:83b996a65217254f69a11a488bc0fe3036b43ca03a09420c46b2caeb0d03c47c -->
 
 # simplifycfg
 
@@ -170,7 +170,7 @@ facts of the body. Nothing runs at -O0.
 The C corpus (`identical.py`: 395 sources, -O1/-O2/-Os/-Omax, 1,580
 compiles): `decide` decides 646 branches instead of 3,002; the ones on a
 literal or a constant `switch` go from 2,464 to 153 (the rest are made by
-`jumpthread`'s own cleanup, after this pass), and it runs 32,640 times
+the old `jumpthread`'s own cleanup, after this pass), and it runs 32,640 times
 instead of 33,932. Of the 1,583 objects 40 differ in bytes, 36 only in label
 numbers; of the rest, `bintree` -O3 is 7 instructions longer (twice) and
 `switch_empty_cases` 2 shorter (twice). The 140 bench rows at -O2 and -Os of

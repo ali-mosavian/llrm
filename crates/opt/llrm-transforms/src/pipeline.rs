@@ -36,7 +36,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>jumpthread hoist gepoffset<br/>addresssink sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -122,10 +122,8 @@
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
-//! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
-//! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
-//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+//! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! `lsr`, `window` and `calleepop` in bytes; `loop_intervals`
 //! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
 //!
@@ -156,7 +154,7 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, jumpthread, lcssa,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa,
     loopdeletion, loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit,
     loopunrollpass, loopversion, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, sccp, simpleloopunswitch,
     simplifycfg, switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
@@ -783,7 +781,7 @@ pub(crate) fn llvm_order(
             phiopt("phiopt@1244"),
         ],
         // The Late stage follows the Simplify list and its unroll-and-jam:
-        // L1438, InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
+        // L1438, Float2IntPass (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
         // function pass of `OptimizePM`, after LoopSink) and L2376.
         // DEVIATE LS1: the jam is not in the pin's default pipeline
         // (`enable-unroll-and-jam` is false, L222); at the pin, if enabled,
@@ -798,6 +796,7 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
@@ -1031,8 +1030,27 @@ pub fn recorded(
     if applied.options.llvm_order {
         manager.hold::<GlobalsAA>();
     }
+    let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
-        manager.add(stage);
+        // The walk simplifies each body: not a module-wide stage.
+        if at != 2 || !applied.options.llvm_order {
+            manager.add(stage);
+        }
+        // LLVM's CGSCC walk: each body inlined into, then simplified, callees
+        // first. `Phase::Simplify` runs there and not module-wide.
+        if at == 1 && applied.options.llvm_order {
+            let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
+            manager.add_program(crate::walk::Walk {
+                inline: applied.options.inline,
+                simplify: Box::new(move |module, analyses, id, stage| {
+                    TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                    rerun(module, analyses, id, &mut simplify, true)
+                        .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                    TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+                }),
+            });
+            manager.hold::<GlobalsAA>();
+        }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 && applied.options.llvm_order {
@@ -1060,7 +1078,8 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
-            let done = rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"));
+            let done =
+                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1139,15 +1158,6 @@ pub fn recorded(
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate { proven: true, copy: false });
-    // After the loop passes: the cycles it makes between the cases are no
-    // natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
-    if applied.options.wanted("jumpthread") {
-        manager.add(jumpthread::JumpThread {
-            size: applied.options.prefers_size(),
-            correlated: applied.options.copy_headers,
-            states: applied.options.expensive,
-        });
-    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
@@ -1231,6 +1241,7 @@ fn rerun(
     analyses: &mut ModuleAnalyses,
     id: GlobalId,
     fixed: &mut Fixed,
+    globals_aa_held: bool,
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
@@ -1241,10 +1252,17 @@ fn rerun(
         return Err(format!("@{}: not a function", id.0));
     };
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
-    let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    let mut preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    if globals_aa_held {
+        preserved = preserved.preserve_module::<GlobalsAA>();
+    }
     analyses.body_edited(id, &preserved);
     if declared.place(module)? > 0 {
-        analyses.invalidate(&PreservedAnalyses::none());
+        let mut dropped = PreservedAnalyses::none();
+        if globals_aa_held {
+            dropped = dropped.preserve_module::<GlobalsAA>();
+        }
+        analyses.invalidate(&dropped);
     }
     Ok(())
 }

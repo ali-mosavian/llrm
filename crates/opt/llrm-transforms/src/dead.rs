@@ -53,8 +53,8 @@
 //!
 //! # Runs
 //! Once per pass of the function fixed point, after `algebraic`, and again
-//! after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-//! `jumpthread` call it on the code they leave. `markers_dropped` runs once
+//! after the loop-header copy (`-ftree-ch`). `lsr`, `window` and `indvars`
+//! call it on the code they leave. `markers_dropped` runs once
 //! after the whole pipeline, before exception-handling preparation and
 //! selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 //! off the pass only, not those calls; nothing runs at -O0.

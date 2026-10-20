@@ -38,14 +38,14 @@
 //! instruction inside a cycle; no instruction here sinks on that ground.
 //! Exit: the target description's pressure limits.
 //!
-//! DEVIATE M4 (#2903): only an instruction that reads no value moves (a
-//! constant). LLVM moves any, and its allocator splits the operands' ranges
-//! around the stretch; ours spills. Rows with every instruction movable and
-//! each operand read again below the destination: `bench/grep` -O2 m16 +718
-//! executed instructions and 601 spill stores (two sunk `movzx`),
-//! `bench/quicksort` -Os m16 +22 bytes. Exit: the greedy allocator with
-//! SplitKit as the default allocator and the `grep` m16 `movzx` case fixed
-//! (target 2026-11-05).
+//! DEVIATE M4 (#2903): in a build for size only an instruction that reads no
+//! value moves (a constant). LLVM moves any, and its allocator splits the
+//! operands' ranges around the stretch. Rows with every instruction movable
+//! at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
+//! +29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
+//! Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
+//! -O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
+//! greedy allocator with SplitKit as the default allocator (target 2026-11-05).
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split) and nothing
@@ -405,29 +405,6 @@ impl Sinker {
         sink_to.filter(|&chosen| chosen != block)
     }
 
-    /// Whether every value `one` reads is read again at or below `block`, so
-    /// that moving it there makes no value live longer (DEVIATE M4).
-    fn keeps_operands_short(
-        &self,
-        one: &Insn,
-        block: usize,
-    ) -> bool {
-        one.uses
-            .iter()
-            .all(
-                |value| self.uses
-                    .get(value)
-                    .into_iter()
-                    .flatten()
-                    .any(
-                        |&used| {
-                            let reader = self.use_block(used);
-                            !matches!(used, Use::Insn(id) if id == one.id()) && self.dom.dominates(block, reader)
-                        },
-                    ),
-            )
-    }
-
     /// `isProfitableToSinkTo`.
     fn profitable_to_sink_to(
         &self,
@@ -582,7 +559,7 @@ impl Sinker {
         }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
-        if !self.keeps_operands_short(&one, sink_to) || !one.uses.is_empty() {
+        if self.size && !one.uses.is_empty() {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break

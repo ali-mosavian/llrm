@@ -654,6 +654,9 @@ pub struct Summary {
     /// type cannot land on a load of a type apart from it, however unplaced
     /// its pointer. None: some has none.
     pub unknown_write_types: Option<BTreeSet<Access>>,
+    /// The tracked globals `reads` and `writes` name are all the unknown
+    /// access reaches of them (`GlobalsModRef` found them per global).
+    pub globals_listed: bool,
 }
 
 /// An access type: its name and its ancestors', as `MemRef::typed` and
@@ -765,6 +768,7 @@ impl Summary {
             unknown_read: self.unknown_read,
             unknown_write: self.unknown_write,
             unknown_write_types: self.unknown_write_types.clone(),
+            globals_listed: self.globals_listed,
         }
     }
 }
@@ -1460,6 +1464,7 @@ fn _direct_summary_with(unit: &Unit) -> Result<(Summary, Rc<PointsTo>), String> 
         unknown_read,
         unknown_write,
         unknown_write_types: types,
+        globals_listed: false,
     };
     Ok((summary, facts))
 }
@@ -2243,6 +2248,7 @@ fn _summarized(
         unknown_read,
         unknown_write,
         unknown_write_types: types,
+        globals_listed: false,
     })
 }
 
@@ -2426,7 +2432,9 @@ pub fn calls_annotated(
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
             effect.reads.extend(NONLOCAL.slices.to_set());
-            effect.reads.extend(_tracked(&procedure.unit));
+            if !effect.globals_listed {
+                effect.reads.extend(_tracked(&procedure.unit));
+            }
         }
         // What an unplaced write may reach: each of its types' stores, not an
         // untyped one.
@@ -2449,7 +2457,9 @@ pub fn calls_annotated(
                 }
                 _ => {
                     effect.writes.extend(reached);
-                    effect.writes.extend(_tracked(&procedure.unit));
+                    if !effect.globals_listed {
+                        effect.writes.extend(_tracked(&procedure.unit));
+                    }
                 }
             }
         }
