@@ -7315,7 +7315,10 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Held, Unselected> {
         let id = match operand {
-            Operand::Value(value) => return Ok(Held { value: self.value(value), width: FLOAT }),
+            Operand::Value(value) => {
+                let bytes = self.size(self.type_of(operand))?;
+                return Ok(Held { value: self.value(value), width: self.arch.float_width(bytes) });
+            }
             Operand::Constant(id) => id,
             Operand::Block(_) => unreachable!("a float is no block"),
         };

@@ -17,6 +17,10 @@ mod tti_tests;
 
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.
+/// The width an x87 stack value is held at: every float is the register's ten
+/// bytes.
+pub const X87_WIDTH: u32 = 10;
+
 pub mod calling {
     use llrm_lir::registers::RegId;
     use llrm_target::calling::Convention;

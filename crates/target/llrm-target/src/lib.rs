@@ -445,6 +445,13 @@ pub trait Target {
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
 
+    /// The width a float value of `bytes` bytes is held at: x87 holds every one
+    /// as its stack register, a vector file as its own size.
+    fn float_width(
+        &self,
+        bytes: u32,
+    ) -> u32;
+
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(
         &self,
