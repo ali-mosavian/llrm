@@ -315,23 +315,18 @@ impl Options {
         Self { optimize: false, ..Self::default() }
     }
 
-    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a
-    /// loop is copied out completely only where the code does not grow;
-    /// nothing is inlined but the last call of a function (gcc has no
-    /// `-finline-small-functions` below -O2), no allocation search or second
-    /// route (gcc has neither: compile -34% on d_faces), value numbering that
-    /// inserts nothing (`-ftree-fre`; no `-ftree-pre`), and no sibling
-    /// calls, peeling or unswitching. Pattern fill is on
-    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
-    /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
-    /// here, the user's decision of 2026-10-10 (docs/reference/levels.md).
+    /// -O1: the scalar passes, a loop copied out completely only where the
+    /// code does not grow, the pin's inliner (`getInlineParamsFromOptLevel`:
+    /// 225 as -O2, PassBuilderPipelines.cpp L968), no allocation search or
+    /// second route (compile -34% on d_faces), value numbering that inserts
+    /// nothing, and no sibling calls, peeling or unswitching. Pattern fill is
+    /// on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// PassBuilderPipelines.cpp L562), the user's decision of 2026-10-10
+    /// (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
-            // gcc's -O1 has `-finline-functions-called-once` and no
-            // `-finline-small-functions`, and no allocation search or second
-            // route: with them off compile is 34% less on d_faces.
-            inline: inline::Threshold::new(0),
+            inline: inline::Threshold::default(),
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             rounds: 2,
