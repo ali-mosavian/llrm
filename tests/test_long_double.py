@@ -20,7 +20,7 @@ from tools.e2e.configs import QB45
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
-from tools import llrmbin  # noqa: E402
+from tools import envflag, llrmbin  # noqa: E402
 BIN = llrmbin.bin_dir()
 SOURCE = ROOT / "tests" / "fixtures" / "c" / "longdouble.c"
 
@@ -38,7 +38,7 @@ def test_a_long_double_program_prints_on_dos_what_it_prints_on_the_host(tmp_path
     why = _unusable()
     if why:
         message = f"NOT RUN: {why}"
-        if os.environ.get("LLRM_REQUIRE_BINARIES"):
+        if envflag.flag("LLRM_REQUIRE_BINARIES"):
             pytest.fail(message)
         warnings.warn(message, stacklevel=1)
         pytest.skip(message)

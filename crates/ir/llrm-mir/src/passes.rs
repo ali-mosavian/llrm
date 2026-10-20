@@ -1102,7 +1102,7 @@ pub fn note_pass(name: &'static str) {
 /// nothing.
 fn why() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 /// Starts or stops counting recomputations on this thread (the test form of
@@ -1136,12 +1136,12 @@ fn record(
 
 fn why_printed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
 fn check_captures() -> bool {
@@ -1151,7 +1151,7 @@ fn check_captures() -> bool {
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -1566,7 +1566,7 @@ impl Analyses {
         function: &Function,
     ) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_PRESERVED").is_some()) {
+        if *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_PRESERVED")) {
             let stale = self.stale(context, layout, function);
             assert!(stale.is_empty(), "{pass} left {} held but stale", stale.join(", "));
         }
@@ -1796,7 +1796,7 @@ impl Analyses {
 /// was not reported fails, where otherwise it is brought up to date.
 fn unreported_fails() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_UNREPORTED").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_UNREPORTED"))
 }
 
 /// A module analysis: how to compute it, and whether two results agree.
@@ -2789,8 +2789,7 @@ fn checked_stale(
     pass: &str,
 ) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let on =
-        CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some());
+    let on = CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_STALE"));
     if frozen.is_empty() || !on {
         return;
     }

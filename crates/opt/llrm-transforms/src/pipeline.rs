@@ -2044,8 +2044,12 @@ impl Run {
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
 
-/// The seed of `LLRM_CHECK_ORDER`, where it is a number.
+/// The seed of `LLRM_CHECK_ORDER`, where it is on and a number.
 fn order_seed() -> Option<u64> {
     static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *SEED.get_or_init(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+    *SEED.get_or_init(|| {
+        llrm_support::env_set("LLRM_CHECK_ORDER")
+            .then(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+            .flatten()
+    })
 }
