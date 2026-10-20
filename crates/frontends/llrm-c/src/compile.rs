@@ -2868,6 +2868,8 @@ mod tests {
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         assert!(lines.iter().any(|line| matches!(*line, "imul eax" | "imul edx" | "imul ecx" | "imul ebx")), "{asm}");
         assert!(!lines.iter().any(|line| line.starts_with("mul ")), "{asm}");
+    }
+
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
     /// qword, so a float reloaded from it kept double precision and nbody_single
     /// printed 86015, the pin 86016. The cell is the float's own dword, as the
