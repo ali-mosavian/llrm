@@ -5,6 +5,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | Doc | Holds |
 |---|---|
 | [testing](testing.md) | Running the tests |
+| [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
 | [ci](ci.md) | CI as the gate: parity with `gate.py run`, private tools, instruction counters |
 | [pgo](pgo.md) | the profile-guided llrm-c: how it is built, when its profile is renewed, how to measure with it |

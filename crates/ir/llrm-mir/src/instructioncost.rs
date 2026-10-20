@@ -125,10 +125,9 @@ fn gep_cost(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
-    inst: InstId,
+    operands: &[Operand],
     source: TypeId,
 ) -> Cost {
-    let operands = &function.instruction(inst).operands;
     let base_global = matches!(
         operands[0],
         Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
@@ -184,8 +183,24 @@ pub fn instruction_cost(
     inst: InstId,
     kind: CostKind,
 ) -> Cost {
+    instruction_cost_with(tti, context, layout, globals, function, inst, &function.instruction(inst).operands, kind)
+}
+
+/// `getInstructionCost(inst, Operands, kind)`: the cost of `inst` as if its
+/// operands were `operands`, which a caller that has simplified some of them
+/// to constants asks (`LoopUnrollPass`'s `analyzeLoopUnrollCost`).
+#[allow(clippy::too_many_arguments)]
+pub fn instruction_cost_with(
+    tti: &dyn Tti,
+    context: &Context,
+    layout: &DataLayout,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+    operands: &[Operand],
+    kind: CostKind,
+) -> Cost {
     let operation = function.instruction(inst);
-    let operands = &operation.operands;
     let modelled =
         |operand: Operand| operand_type(context, function, operand).and_then(|ty| Ty::of(&context.types, ty));
     let result = Ty::of(&context.types, operation.ty);
@@ -232,7 +247,7 @@ pub fn instruction_cost(
                 Cost::BASIC
             }
         }
-        Opcode::GetElementPtr { source } => gep_cost(tti, context, layout, function, inst, *source),
+        Opcode::GetElementPtr { source } => gep_cost(tti, context, layout, function, operands, *source),
         Opcode::Binary(op) => match result {
             Some(ty) => tti.arithmetic_cost(arith_of(*op), ty, kind, info(0), info(1)),
             None => Cost::INVALID,
