@@ -116,7 +116,7 @@ def acknowledged(description: str, path: str) -> bool:
 
 
 # The user's rule: nothing in the repository, its PRs or its history names the assistant that wrote it. Spelled in two halves so this file does not match itself.
-ASSISTANT_NAME = re.compile("clau" + "de|anthro" + "pic", re.I)
+ASSISTANT_NAME = re.compile(r"\b(?:clau" + "de|anthro" + r"pic)\b", re.I)
 
 
 def assistant_mentions(title: str, description: str, base: str, head: str, cwd: Path = ROOT) -> list[str]:
