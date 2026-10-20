@@ -11,7 +11,7 @@ set -u
 cd "$(dirname "$0")/.."
 llrm_c=${1:-${CARGO_TARGET_DIR:-target}/release/llrm-c}
 [ $# -gt 0 ] && shift
-kernels=crates/target/llrm-x86-m32/vsgcc/kernels
+kernels=$(printf "%s\n" crates/target/*/vsgcc/kernels | head -1)  # the target that ships the kernels
 sources=()
 for name in x_switch x_switch_dense x_switch_ranges x_switch_sparse x_hanoi2 x_life x_dct x_crc32 x_gcd x_heapsort x_mergesort x_nbody_f x_matmul_f x_cordic x_fir x_histo2; do
     sources+=("$kernels/$name/$name.c")
