@@ -252,7 +252,7 @@ fn test_negating_a_single_use_difference_reverses_it() {
     let pairs: Vec<Vec<i128>> = values.iter().flat_map(|&a| values.iter().map(move |&b| vec![a, b])).collect();
     assert_eq!(checked(text, &pairs), "define i32 @f(i32 %a, i32 %b) {\nb0:\n  %0 = sub i32 %b, %a\n  ret i32 %0\n}\n");
     unchanged(
-        "define i32 @f(i32 %a, i32 %b) {\nb0:\n  %d = sub i32 %a, %b\n  %n = sub i32 0, %d\n  %s = xor i32 %d, %n\n  ret i32 %s\n}\n",
+        "define i32 @f(i32 %a, i32 %b) {\nb0:\n  %d = sub i32 %a, %b\n  %n = sub i32 0, %d\n  %s = add i32 %d, %n\n  ret i32 %s\n}\n",
     );
 }
 
@@ -1536,15 +1536,4 @@ fn test_the_llvm_order_keeps_a_shared_shl_in_the_chain() {
     let text = unary(32, "  %a = shl i32 %x, 2\n  %b = mul i32 %a, 4\n  %s = add i32 %a, %b\n  ret i32 %s\n");
     let (before, _) = simplified(&text);
     assert_eq!(llvm_simplified(&text), bare(&before));
-}
-
-/// Reassociate breaks `a - b` into `a + (0 - b)`; `A + -B` is `A - B` again,
-/// InstCombine's `visitAdd`, or a Watcom `six(a, b, ...)` listing had `neg dx;
-/// add ax, dx` where `sub ax, dx` is (llrm-c test_m16_watcom_words).
-#[test]
-fn test_an_add_of_a_negate_is_a_subtract() {
-    let text = binary(16, "  %n = sub i16 0, %a\n  %r = add i16 %x, %n\n  ret i16 %r\n");
-    assert_eq!(checked(&text, &pairs()), binary(16, "  %0 = sub i16 %x, %a\n  ret i16 %0\n"));
-    let swapped = binary(16, "  %n = sub i16 0, %a\n  %r = add i16 %n, %x\n  ret i16 %r\n");
-    assert_eq!(checked(&swapped, &pairs()), binary(16, "  %0 = sub i16 %x, %a\n  ret i16 %0\n"));
 }

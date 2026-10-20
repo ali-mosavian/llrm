@@ -303,7 +303,6 @@ fn _rewritten(
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
         || _negated_difference(context, function, inst)
-        || _negated_addend(context, function, inst)
         || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst, llvm)
@@ -1421,35 +1420,6 @@ fn _negated_difference(
     let Some((BinaryOp::Sub, left, right, _)) = _binary(context, function, made) else { return false };
     _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![right, left]);
     true
-}
-
-/// `A + -B` is `A - B`, and `-A + B` is `B - A`: InstCombine's `visitAdd`
-/// ([:1666](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L1666)).
-/// Reassociate breaks a subtract into an add of a negate; this puts it back
-/// where the negate has no other use to share. Exit: the `visitAdd` of
-/// `combine_addsub` once dispatched.
-fn _negated_addend(
-    context: &Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((BinaryOp::Add, left, right, _)) = _binary(context, function, inst) else { return false };
-    let negated = |operand: Operand| {
-        let made = _definition(function, operand)?;
-        match _binary(context, function, made)? {
-            (BinaryOp::Sub, zero, value, _) if _integer(context, zero) == Some(0) => Some(value),
-            _ => None,
-        }
-    };
-    if let Some(value) = negated(right) {
-        _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![left, value]);
-        return true;
-    }
-    if let Some(value) = negated(left) {
-        _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![right, value]);
-        return true;
-    }
-    false
 }
 
 /// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's
