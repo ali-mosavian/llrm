@@ -141,8 +141,8 @@ use crate::counting;
 #[derive(Default)]
 pub struct Algebraic {
     pub size: bool,
-    /// The LLVM order's pass: where LLVM's InstCombine has no condition llrm's
-    /// stand-in rule adds, the rule has none (`_scaled_chain`).
+    /// The LLVM order's pass (kept for the pipeline's slots; no rule reads it
+    /// since `_scaled_chain` went).
     pub llvm: bool,
 }
 
@@ -161,7 +161,7 @@ impl FunctionPass for Algebraic {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified_in(unit.context, unit.layout, unit.function, analyses, self.size, self.llvm) {
+        if simplified_in(unit.context, unit.layout, unit.function, analyses, self.size) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -218,17 +218,16 @@ pub fn simplified(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
-    simplified_in(context, layout, function, analyses, size, false)
+    simplified_in(context, layout, function, analyses, size)
 }
 
-/// [`simplified`], for the LLVM order's pass when `llvm`.
+/// [`simplified`].
 pub fn simplified_in(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
     size: bool,
-    llvm: bool,
 ) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
@@ -257,10 +256,9 @@ pub fn simplified_in(
         let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst, size, llvm);
+                round |= _rewritten(context, layout, function, &recurrences, inst, size);
             }
         }
-        round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
         // Last, when no other rule has anything to do: a repeat may be a
         // difference the other rules cancel (`x - (x + 5 + x)`).
@@ -286,7 +284,6 @@ fn _rewritten(
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
     size: bool,
-    llvm: bool,
 ) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
@@ -305,9 +302,6 @@ fn _rewritten(
         || _negated_difference(context, function, inst)
         || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
-        || _scaled_chain(context, function, inst, llvm)
-        || _offset_chain(context, function, inst)
-        || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
         || _decided(context, function, inst)
         || _selected(context, function, inst)
@@ -1479,53 +1473,6 @@ fn _shift_chain(
     true
 }
 
-/// Two single-use scales are one `mul` at an unchanged modular width. Under the
-/// LLVM order two `mul`s by constants are one whatever else reads the first, as
-/// `SimplifyAssociativeOrCommutative` has no single-use condition: `I` becomes
-/// `A op (B op C)` and the inner one stays for its other readers. MIRROR of
-/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L524
-/// for `mul`; DEVIATE: a `shl` in the chain keeps the guard (LLVM folds those
-/// in `visitMul` / `visitShl`, not here), and the flags are dropped (LLVM keeps
-/// `nuw`/`nsw` when both have them).
-fn _scaled_chain(
-    context: &Context,
-    function: &mut Function,
-    inst: InstId,
-    llvm: bool,
-) -> bool {
-    let Some(last) = _scale(context, function, inst) else { return false };
-    let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else {
-        return false;
-    };
-    let both_mul = last.op == BinaryOp::Mul && first.op == BinaryOp::Mul;
-    if !(llvm && both_mul) && !_single_use(function, last.source) {
-        return false;
-    }
-    let width = _width(context, function, inst).expect("an integer");
-    let factor = _constant(context, function, inst, first.factor.wrapping_mul(last.factor) & mask(width));
-    _replace(function, inst, Opcode::Binary(BinaryOp::Mul), vec![first.source, factor]);
-    true
-}
-
-/// Two single-use offsets are one `add` at an unchanged modular width.
-fn _offset_chain(
-    context: &Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((middle, last)) = _offset(context, function, inst) else { return false };
-    if !_single_use(function, middle) {
-        return false;
-    }
-    let Some((source, first)) = _definition(function, middle).and_then(|made| _offset(context, function, made)) else {
-        return false;
-    };
-    let width = _width(context, function, inst).expect("an integer");
-    let amount = _constant(context, function, inst, first.wrapping_add(last) & mask(width));
-    _replace(function, inst, Opcode::Binary(BinaryOp::Add), vec![source, amount]);
-    true
-}
-
 /// The operands of the tree of single-use `add`s `inst` roots:
 /// `((x + a) + b) + a` is `x`, `a`, `b`, `a`.
 fn _addends(
@@ -1591,34 +1538,6 @@ fn _doubled_addend(
         sum = _before(function, inst, Opcode::Binary(BinaryOp::Add), vec![operand, sum]);
     }
     _forward(function, inst, sum);
-    true
-}
-
-/// Two single-use `and`s, `or`s or `xor`s of constants are one.
-fn _bitwise_chain(
-    context: &Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((op, middle, last)) = _bitwise(context, function, inst) else { return false };
-    if !_single_use(function, middle) {
-        return false;
-    }
-    let Some((first_op, source, first)) =
-        _definition(function, middle).and_then(|made| _bitwise(context, function, made))
-    else {
-        return false;
-    };
-    if first_op != op {
-        return false;
-    }
-    let combined = match op {
-        BinaryOp::And => first & last,
-        BinaryOp::Or => first | last,
-        _ => first ^ last,
-    };
-    let combined = _constant(context, function, inst, combined);
-    _replace(function, inst, Opcode::Binary(op), vec![source, combined]);
     true
 }
 
@@ -1723,68 +1642,6 @@ fn _selected(
     let chosen = instruction.operands[if bits & 1 == 1 { 1 } else { 2 }];
     _forward(function, inst, chosen);
     true
-}
-
-/// Put a loop-carried operand at the root of an integer `add` tree:
-/// `(phi + a) + b` is `phi + (a + b)`, whose inner sum may be invariant.
-///
-/// Only a two-level tree in one block, its inner `add` read only by the
-/// outer, whose value is what a latch carries into that phi.
-fn _reassociated_recurrences(function: &mut Function) -> bool {
-    let mut updates = BTreeMap::<ValueId, ValueId>::new();
-    for one in cfg::Shape::of(function).loops {
-        for phi in function.iter_block(cfg::block(one.header)) {
-            let instruction = function.instruction(phi);
-            if instruction.opcode != Opcode::Phi {
-                break;
-            }
-            for pair in instruction.operands.chunks(2) {
-                if let (Operand::Value(value), Operand::Block(from)) = (pair[0], pair[1])
-                    && one.latches.contains(&cfg::id(from))
-                {
-                    updates.insert(value, instruction.result.expect("a phi's value"));
-                }
-            }
-        }
-    }
-    let mut changed = false;
-    for (value, recurrence) in updates {
-        let ValueDef::Instruction(outer) = function.value(value).def else { continue };
-        let plain =
-            |function: &Function, inst: InstId| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Add);
-        let recurrence = Operand::Value(recurrence);
-        if function.is_erased(outer)
-            || !plain(function, outer)
-            || function.instruction(outer).operands.contains(&recurrence)
-        {
-            continue;
-        }
-        for position in 0..2 {
-            let candidate = function.instruction(outer).operands[position];
-            let Some(inner) = _definition(function, candidate) else { continue };
-            if !plain(function, inner)
-                || function.parent(inner) != function.parent(outer)
-                || !_single_use(function, candidate)
-            {
-                continue;
-            }
-            let operands = function.instruction(inner).operands.clone();
-            if operands.iter().filter(|one| **one == recurrence).count() != 1 {
-                continue;
-            }
-            let leaf = if operands[0] == recurrence { operands[1] } else { operands[0] };
-            let other = function.instruction(outer).operands[1 - position];
-            function.set_operands(inner, vec![leaf, other]);
-            function.set_flags(inner, Flags::default());
-            // `other` may be defined between the two.
-            function.move_to(inner, Position::Before(outer)).expect("a placed instruction");
-            function.set_operands(outer, vec![recurrence, candidate]);
-            function.set_flags(outer, Flags::default());
-            changed = true;
-            break;
-        }
-    }
-    changed
 }
 
 /// Reuse a smaller shift of the same value, read elsewhere, in the same
