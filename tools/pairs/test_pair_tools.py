@@ -88,3 +88,9 @@ def test_rundiff_sets_aside_unbuilt_programs_and_names_a_new_failure():
     added, fixed, census = rundiff.compare(base, new)
     assert added == ["NEW FAIL c/y.c [-O2]: wrong output"] and fixed == ["c/x.c [-O2]"]
     assert "not built (V:\\LINK etc.): base 1, new 1" in census
+
+
+def test_bisect_stops_when_the_command_cannot_run(tmp_path):
+    """A runner that refused stale binaries exited 1 like a failing test; every later probe read as bad and 40bc8dd60 was named the culprit of stft_single."""
+    source = (HERE / "firstbad.py").read_text()
+    assert "not 0 or 1" in source and "dist.glob(\"llrm-*\")" in source
