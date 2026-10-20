@@ -126,7 +126,9 @@ impl LiveIntervalUnion {
     }
 
     /// `IntervalMap::insert(start, stop, reg)`: adjacent entries of the same
-    /// register become one.
+    /// register become one. `unify` goes through `IntervalMap::insert_run`
+    /// now; this is the segment-at-a-time form it replaced, the tests' model.
+    #[cfg(test)]
     fn insert(
         &mut self,
         mut start: SlotIndex,
@@ -164,9 +166,7 @@ impl LiveIntervalUnion {
         }
         self.tag += 1;
         // Insert each of the virtual register's live segments into the map.
-        for s in &range.segments {
-            self.insert(s.start.clone(), s.end.clone(), virt_reg);
-        }
+        self.segments.insert_run(range.segments.iter().map(|s| (s.start, s.end)), virt_reg);
     }
 
     /// `extract` (LiveIntervalUnion.cpp#L53): removes a live virtual
@@ -470,6 +470,73 @@ mod tests {
             p += len + random.next(8);
         }
         if out.is_empty() { vec![(1, 2)] } else { out }
+    }
+
+    /// What `unify` made of `spec` one segment at a time: three searches of the
+    /// map for each (the entry before, the entry after, the place).
+    fn unified_one_by_one(
+        union: &mut LiveIntervalUnion,
+        reg: VReg,
+        range: &LiveRange,
+    ) {
+        for s in &range.segments {
+            union.insert(s.start.clone(), s.end.clone(), reg);
+        }
+    }
+
+    fn entries(union: &LiveIntervalUnion) -> Vec<(SlotIndex, SlotIndex, VReg)> {
+        union.segments.iter().map(|e| (e.start, e.stop, e.value)).collect()
+    }
+
+    /// `unify` made one search per segment, three for most: d_faces -O2's
+    /// 2,541 calls cost 6.06 M instructions against the pin's 2.08 M for 2,241.
+    /// The entries are those of the segment-at-a-time insertion, whatever the
+    /// registers' segments, adjacent ones of one register included.
+    #[test]
+    fn test_unify_walks_the_map_once_and_makes_what_inserting_each_segment_makes() {
+        let at = indexes();
+        let mut random = Random(11);
+        for round in 0..400 {
+            let (mut run, mut one) = (LiveIntervalUnion::new(), LiveIntervalUnion::new());
+            let mut taken: Vec<bool> = vec![false; 300];
+            for reg in 0..(random.next(6) + 1) as u32 {
+                let s = spec(&mut random, 280);
+                if s.iter().any(|&(a, b)| (a..b).any(|p| taken[p])) {
+                    continue;
+                }
+                for &(a, b) in &s {
+                    (a..b).for_each(|p| taken[p] = true);
+                }
+                // Two calls, the second beginning where the first ended when it
+                // can: the map joins what touches.
+                let cut = random.next(s.len() + 1);
+                let (head, tail) = s.split_at(cut);
+                for part in [head, tail] {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    let lr = range(part, &at);
+                    run.unify(reg, &lr);
+                    unified_one_by_one(&mut one, reg, &lr);
+                }
+            }
+            let (got, want) = (entries(&run), entries(&one));
+            assert!(
+                got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| g.0 == w.0 && g.1 == w.1 && g.2 == w.2),
+                "round {round}"
+            );
+        }
+        // One register with 40 segments into a map that holds 3 others: a
+        // handful of searches, not 40 x 3.
+        let mut union = LiveIntervalUnion::new();
+        for (reg, s) in [(0u32, vec![(1usize, 2usize)]), (1, vec![(100, 101)]), (2, vec![(250, 251)])] {
+            union.unify(reg, &range(&s, &at));
+        }
+        let many: Vec<(usize, usize)> = (0..40).map(|k| (3 + 2 * k, 4 + 2 * k)).collect();
+        let before = crate::liveness::intervalmap::searches();
+        union.unify(9, &range(&many, &at));
+        let searches = crate::liveness::intervalmap::searches() - before;
+        assert!(searches <= 8, "{searches} searches for 40 segments");
     }
 
     /// The registers a range interferes with, against the pairwise answer, for
