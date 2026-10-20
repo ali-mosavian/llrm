@@ -71,7 +71,6 @@
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
 //!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
-//!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
 //! Module entries read the program through `ModuleAnalyses` and are dropped
@@ -142,8 +141,7 @@
 //! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
-//! `Accesses` and [`crate::observers`]'s `Published` are entries defined
-//! beside their analyses.
+//! `Accesses` is an entry defined beside its analysis.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],

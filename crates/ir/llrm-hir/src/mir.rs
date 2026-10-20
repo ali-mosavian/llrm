@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
 use llrm_mir::datalayout::{DataLayout, float_bits};
-use llrm_mir::facts::Fact;
+use llrm_mir::facts::{Fact, Inlining};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, Flags, FloatKind,
     FloatPredicate, Function, GlobalId, GlobalVariable, IntPredicate, Linkage, MetadataId, MetadataNode,
@@ -758,6 +758,15 @@ fn emit_module<'h>(
     for one in &hir.facts {
         if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
+        }
+    }
+    // The runtime's frame has an exit (B$EXSA frees the temporaries the
+    // procedure made, polls events, restores registers) that a copy of the
+    // body inlined into another procedure would not run.
+    for (function, global) in &functions {
+        let Some(global) = global.filter(|_| tables.zeroed.contains(&function.id)) else { continue };
+        if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
+            placed.attrs.push(Fact::Inline(Inlining::Never).carrier());
         }
     }
     // What changes what the code after a call means is not a fact a pass may
