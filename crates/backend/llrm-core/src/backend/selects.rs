@@ -85,13 +85,8 @@
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-<<<<<<< HEAD
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-=======
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
->>>>>>> origin/feat/parity
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
