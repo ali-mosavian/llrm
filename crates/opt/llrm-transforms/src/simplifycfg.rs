@@ -418,6 +418,8 @@ fn block_simplified(
         return true;
     }
     if function.is_placed(block) && cond_to_cond_simplified(context, spec, function, block) {
+        // The block it left with one predecessor holds phis of one input (D5).
+        *folded = true;
         return true;
     }
     if function.is_placed(block) && stores_merged(context, spec, function, block) {
