@@ -103,6 +103,8 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+#[cfg(test)]
+mod combine_semantics_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_index;
