@@ -96,12 +96,16 @@ fn fold_and_to_xor(
             xor.map(|(a, b)| (a, b, false))
         } else if has_one_use(c, op0) || has_one_use(c, op1) {
             // (A | ~B) & (~A | B) --> ~(A ^ B)
-            or_with_not(&q, op0).into_iter().find_map(|(a, b)| {
-                let matches = binop(&q, op1, BinaryOp::Or).is_some_and(|(x, y, _)| {
-                    (not_of(&q, x) == Some(a) && y == b) || (not_of(&q, y) == Some(a) && x == b)
-                });
-                matches.then_some((a, b, true))
-            })
+            or_with_not(&q, op0)
+                .into_iter()
+                .find_map(
+                    |(a, b)| {
+                        let matches = binop(&q, op1, BinaryOp::Or).is_some_and(|(x, y, _)| {
+                            (not_of(&q, x) == Some(a) && y == b) || (not_of(&q, y) == Some(a) && x == b)
+                        });
+                        matches.then_some((a, b, true))
+                    },
+                )
         } else {
             None
         }
@@ -277,7 +281,10 @@ fn fold_narrowed_binop(
     let (op, a, b) = {
         let instruction = c.function.instruction(inst_def(c, op0)?);
         let Opcode::Binary(op) = instruction.opcode else { return None };
-        if !matches!(op, BinaryOp::Xor | BinaryOp::Or | BinaryOp::Mul | BinaryOp::Add | BinaryOp::Sub) {
+        if !matches!(
+            op,
+            BinaryOp::Xor | BinaryOp::Or | BinaryOp::Mul | BinaryOp::Add | BinaryOp::Sub
+        ) {
             return None;
         }
         (op, instruction.operands[0], instruction.operands[1])
@@ -373,10 +380,14 @@ fn fold_shifted_power_of_two(
     }
     let (shift_c, x, left) = {
         let q = query(c, Some(inst));
-        [BinaryOp::Shl, BinaryOp::LShr].into_iter().find_map(|op| {
-            let (base, x, _) = binop(&q, op0, op)?;
-            pattern::power2_constant(&q, base).map(|base| (base, x, op == BinaryOp::Shl))
-        })?
+        [BinaryOp::Shl, BinaryOp::LShr]
+            .into_iter()
+            .find_map(
+                |op| {
+                    let (base, x, _) = binop(&q, op0, op)?;
+                    pattern::power2_constant(&q, base).map(|base| (base, x, op == BinaryOp::Shl))
+                },
+            )?
     };
     let (log_shift, log_c) = (shift_c.trailing_zeros() as i64, k.trailing_zeros() as i64);
     let bit = if left { log_c - log_shift } else { log_shift - log_c };
