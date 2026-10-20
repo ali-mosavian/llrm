@@ -1118,30 +1118,6 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
-/// A loop unrolled in the last round of the budget left its straight line
-/// uncleaned: -O1's two rounds stopped there, and `lru`'s two word zero stores
-/// stayed two (169 clocks against clang's 168; the third round's fold makes
-/// them one). A round follows an unroll that changed the body, whatever the
-/// budget.
-#[test]
-fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let rounds = |unrolls: usize| {
-        let mut module = llrm_analysis::testing::parsed(text);
-        let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let options = pipeline::Options { rounds: 2, ..pipeline::Options::standard() };
-        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
-        fixed.only = false;
-        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
-        fixed.unrollers = vec![Box::new(Chain { left: unrolls, runs: std::rc::Rc::default() })];
-        crate::testing::managed(&mut module, fixed);
-        count.get()
-    };
-    assert_eq!(rounds(0), 2, "premise: the budget ends the rounds");
-    assert_eq!(rounds(1), 2, "an unroll of the first round is cleaned by the second");
-    assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
-}
-
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {

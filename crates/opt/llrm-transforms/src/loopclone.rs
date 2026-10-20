@@ -132,7 +132,7 @@
 //! peeled once where the test peels twice.
 //!
 //! # Runs
-//! Called by [`crate::peel`] (`peeled`); not a pass.
+//! Called by [`crate::loopunrollpass`] (`peeled_any_latch`); not a pass.
 //!
 //! # Needs
 //! LCSSA ([`crate::lcssa`]) and a simplified loop ([`crate::loopsimplify`]).
