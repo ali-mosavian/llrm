@@ -259,6 +259,18 @@ impl Options {
     };
 
     /// The slot at
+    /// [L1682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1682),
+    /// after LoopSink: the pin sets the switch options,
+    /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`,
+    /// none translated, so these are the defaults.
+    pub const L1682: Options = Options {
+        need_canonical_loop: true,
+        speculate_blocks: true,
+        hoist_common_insts: false,
+        sink_common_insts: false,
+    };
+
+    /// The slot at
     /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
     pub const L2376: Options = Options {
         need_canonical_loop: true,

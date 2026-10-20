@@ -184,7 +184,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "indvars@738",
         Simplify,
         "indvars",
-        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; exitfold and the old widen path are deleted",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitsink deleted or DEVIATE-numbered; congruent/twin_phis, rewound, exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
@@ -250,6 +250,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    partial(
+        "simplifycfg@1682",
+        Late,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options runs here; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
     partial(
         "simplifycfg@2376",
         Late,
@@ -782,7 +788,7 @@ pub(crate) fn check_phase_with(
 ) -> Result<(), String> {
     let absent: Vec<&str> =
         if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
-    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
+    // The translated `loop-rotate` is in the order unless `LLRM_NO_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {
