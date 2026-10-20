@@ -19,6 +19,7 @@ mod context_tests;
 pub mod fp;
 #[cfg(test)]
 mod fp_tests;
+pub mod fpredicate;
 pub mod guarantee;
 #[cfg(test)]
 mod guarantee_tests;
