@@ -36,6 +36,9 @@ const NAMED: &[(&str, &str)] = &[
     // The error codes are a table the interface maps over, whatever their
     // names.
     ("interface.toml", "errors.*"),
+    // A dialect's flags are a table the instruction reader and the rule
+    // generator map over by the names rows and rules give.
+    ("dialect.toml", "flags.*"),
 ];
 
 /// The files git tracks under `directories` of `root`: what the repository
