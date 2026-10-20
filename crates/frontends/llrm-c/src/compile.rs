@@ -2845,6 +2845,31 @@ mod tests {
         assert!(asm.contains("mov eax, 200012"), "{asm}");
     }
 
+    /// `(long long)a * (65500 + (i & 31))` is a dword times a dword: one `imul`
+    /// into EDX:EAX. The old sign-bit count did not see that the divisor's
+    /// range fits an i32, so x_fixmul widened both and multiplied in halves
+    /// (`mul` plus two `imul` and an `add`; +111% clocks at -O1..-O3).
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_a_product_of_two_i32_ranges_is_one_widening_imul() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("fm.c");
+        std::fs::write(
+            &source,
+            "long fm(long a, int i) { return (long)(((long long)a * (65500 + (i & 31))) >> 16); }\n",
+        )
+        .unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+            .expect("wccq records fm.c");
+        let argv: Vec<String> = ["-m32", "-O2", "-march=i486", "x.c"].map(str::to_owned).to_vec();
+        let built = super::selected(&text, "fm", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        assert!(lines.iter().any(|line| matches!(*line, "imul eax" | "imul edx" | "imul ecx" | "imul ebx")), "{asm}");
+        assert!(!lines.iter().any(|line| line.starts_with("mul ")), "{asm}");
+    }
+
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
     /// qword, so a float reloaded from it kept double precision and nbody_single
     /// printed 86015, the pin 86016. The cell is the float's own dword, as the
