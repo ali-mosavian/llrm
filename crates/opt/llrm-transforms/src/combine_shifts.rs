@@ -1814,6 +1814,15 @@ fn lshr_by_constant(
         return Some(c.replace_with_binop(inst, BinaryOp::And, new_add, mask_c, Flags::default()));
     }
 
+    // DEVIATE 2: LLVM asserts C < M for the fold below, as
+    // SimplifyDemandedInstructionBits has already made a bigger shift zero.
+    let src_width = {
+        let q = query(c, Some(inst));
+        pattern::cast(&q, op0, CastOp::ZExt).map(|(_, _, x)| width(&q, x))
+    };
+    if src_width.is_some_and(|m| amount >= m) {
+        return Some(Visit::Replace(c.int(ty, 0)));
+    }
     let zext = {
         let q = query(c, Some(inst));
         pattern::cast(&q, op0, CastOp::ZExt)

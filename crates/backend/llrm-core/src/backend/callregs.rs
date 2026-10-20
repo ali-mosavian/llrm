@@ -40,14 +40,16 @@
 //! `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call
 //! they select) and `abi/qb.rs` (how many registers a call keeps).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 
 use super::target::Segments;
 use crate::abi::runtime;
 use crate::model::ir;
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, IndexMap};
 
 /// The registers a call under `contract` destroys.
 pub fn call_clobbers(
@@ -126,20 +128,58 @@ pub fn call_clobbered_high(
     general.iter().copied().filter(|register| !whole.contains(&ir::root(*register))).collect()
 }
 
-/// Each allocatable register by the names runtime.py's own Reg enum uses.
-fn _names(general: &[RegId]) -> IndexMap<RegId, BTreeSet<String>> {
-    general
-        .iter()
-        .copied()
-        .chain([RegId::ES, ir::STACK])
-        .map(|register| {
-            (
-                register,
-                BTreeSet::from([
-                    format!("{:?}", llrm_x86::registers::word_of(register).unwrap_or(register)).to_lowercase(),
-                    format!("{register:?}").to_lowercase(),
-                ]),
-            )
-        })
-        .collect()
+type Names = IndexMap<RegId, BTreeSet<String>>;
+
+thread_local! {
+    /// `_names` by the `general` set it was built for: every call of a body asks
+    /// for the same one.
+    static NAMES: RefCell<HashMap<Vec<RegId>, Rc<Names>>> = RefCell::default();
+    #[cfg(test)]
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Each allocatable register by the names runtime.py's own Reg enum uses,
+/// built once per `general` set.
+fn _names(general: &[RegId]) -> Rc<Names> {
+    if let Some(found) = NAMES.with(|cache| cache.borrow().get(general).cloned()) {
+        return found;
+    }
+    #[cfg(test)]
+    BUILT.with(|one| one.set(one.get() + 1));
+    let built: Rc<Names> = Rc::new(
+        general
+            .iter()
+            .copied()
+            .chain([RegId::ES, ir::STACK])
+            .map(|register| {
+                (
+                    register,
+                    BTreeSet::from([
+                        format!("{:?}", llrm_x86::registers::word_of(register).unwrap_or(register)).to_lowercase(),
+                        format!("{register:?}").to_lowercase(),
+                    ]),
+                )
+            })
+            .collect(),
+    );
+    NAMES.with(|cache| cache.borrow_mut().insert(general.to_vec(), Rc::clone(&built)));
+    built
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every call of a body asked for the table of register names and built
+    /// it again: three string allocations a register a call. One per set.
+    #[test]
+    fn test_the_register_names_are_built_once_per_set() {
+        let (small, large) = ([RegId::AX, RegId::BX], [RegId::AX, RegId::BX, RegId::CX]);
+        let before = BUILT.with(std::cell::Cell::get);
+        for _ in 0..5 {
+            _names(&small);
+            _names(&large);
+        }
+        assert_eq!(BUILT.with(std::cell::Cell::get) - before, 2);
+    }
 }

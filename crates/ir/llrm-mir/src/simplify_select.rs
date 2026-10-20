@@ -24,30 +24,9 @@
 //! Used by `simplify_select`.
 
 use super::*;
+use crate::valuetracking::bittest::{BitTestOptions, decompose_bit_test};
 use crate::valuetracking::pattern::IntrinsicId;
 use crate::valuetracking::range::{SelectOperand, SelectPatternFlavor, get_inverse_min_max_flavor, get_min_max_pred};
-
-/// `DecomposedBitTest`: `(X & Mask) Pred C`.
-pub(super) struct DecomposedBitTest {
-    x: Operand,
-    mask: u128,
-    pred: IntPredicate,
-}
-
-fn neg(
-    value: u128,
-    width: u32,
-) -> u128 {
-    value.wrapping_neg() & mask(width)
-}
-
-/// `APInt::isNegatedPowerOf2`.
-fn is_negated_power_of_two(
-    value: u128,
-    width: u32,
-) -> bool {
-    neg(value, width).is_power_of_two()
-}
 
 /// `CmpInst::getStrictPredicate`.
 fn strict(pred: IntPredicate) -> IntPredicate {
@@ -58,103 +37,6 @@ fn strict(pred: IntPredicate) -> IntPredicate {
         IntPredicate::Ule => IntPredicate::Ult,
         other => other,
     }
-}
-
-/// `decomposeBitTestICmp` with `LookThroughTrunc`, no `AllowNonZeroC` and no
-/// `DecomposeAnd`: the defaults `simplifySelectWithBitTest` asks for.
-fn decompose_bit_test_icmp(
-    q: &Query,
-    lhs: Operand,
-    rhs: Operand,
-    mut pred: IntPredicate,
-) -> Option<DecomposedBitTest> {
-    if is_equality(pred) {
-        return None;
-    }
-    let (orig_c, width) = q.number(rhs)?;
-    let mut inverted = false;
-    if matches!(
-        pred,
-        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Sgt | IntPredicate::Sge
-    ) {
-        inverted = true;
-        pred = inverse(pred);
-    }
-    let mut c = orig_c;
-    if matches!(pred, IntPredicate::Ule | IntPredicate::Sle) {
-        let max = if pred == IntPredicate::Sle { mask(width) >> 1 } else { mask(width) };
-        if c == max {
-            return None;
-        }
-        c = c.wrapping_add(1) & mask(width);
-        pred = strict(pred);
-    }
-    let sign = 1u128 << (width - 1);
-    let (bit_mask, bit_c, bit_pred) = match pred {
-        IntPredicate::Slt => {
-            // X < 0 is equivalent to (X & SignMask) != 0.
-            if c == 0 {
-                (sign, 0, IntPredicate::Ne)
-            } else {
-                let flipped = c ^ sign;
-                if flipped.is_power_of_two() {
-                    // X s< 10000100 is equivalent to (X & 11111100 == 10000000)
-                    (neg(flipped, width), sign, IntPredicate::Eq)
-                } else if is_negated_power_of_two(flipped, width) {
-                    // X s< 01111100 is equivalent to (X & 11111100 != 01111100)
-                    (flipped, c, IntPredicate::Ne)
-                } else {
-                    return None;
-                }
-            }
-        }
-        IntPredicate::Ult => {
-            if c.is_power_of_two() {
-                // X <u 2^n is equivalent to (X & ~(2^n-1)) == 0.
-                (neg(c, width), 0, IntPredicate::Eq)
-            } else if is_negated_power_of_two(c, width) {
-                // X u< 11111100 is equivalent to (X & 11111100 != 11111100)
-                (c, c, IntPredicate::Ne)
-            } else {
-                return None;
-            }
-        }
-        _ => return None,
-    };
-    if bit_c != 0 {
-        return None;
-    }
-    let bit_pred = if inverted { inverse(bit_pred) } else { bit_pred };
-    if let Some((CastOp::Trunc, x, _)) = q.cast(lhs) {
-        let wide = q.width(x)?;
-        return Some(DecomposedBitTest { x, mask: bit_mask & mask(wide), pred: bit_pred });
-    }
-    Some(DecomposedBitTest { x: lhs, mask: bit_mask, pred: bit_pred })
-}
-
-/// `decomposeBitTest`.
-pub(super) fn decompose_bit_test(
-    q: &Query,
-    cond: Operand,
-) -> Option<DecomposedBitTest> {
-    let inst = q.definition(cond)?;
-    let instruction = q.function.instruction(inst);
-    if let (Opcode::ICmp(pred), [lhs, rhs]) = (&instruction.opcode, &instruction.operands[..]) {
-        // Don't allow pointers.
-        q.width(*lhs)?;
-        return decompose_bit_test_icmp(q, *lhs, *rhs, *pred);
-    }
-    if q.width(cond) == Some(1) {
-        if let Some((CastOp::Trunc, x, _)) = q.cast(cond) {
-            return Some(DecomposedBitTest { x, mask: 1, pred: IntPredicate::Ne });
-        }
-        if let Some(inner) = q.not_of(cond)
-            && let Some((CastOp::Trunc, x, _)) = q.cast(inner)
-        {
-            return Some(DecomposedBitTest { x, mask: 1, pred: IntPredicate::Eq });
-        }
-    }
-    None
 }
 
 /// `simplifySelectBitTest`.
@@ -222,7 +104,7 @@ pub(super) fn simplify_select_with_bit_test(
     true_val: Operand,
     false_val: Operand,
 ) -> Option<Operand> {
-    let decomposed = decompose_bit_test(q, cond)?;
+    let decomposed = decompose_bit_test(&q.tracking(), cond, BitTestOptions::DEFAULT)?;
     simplify_select_bit_test(q, true_val, false_val, decomposed.x, decomposed.mask, decomposed.pred == IntPredicate::Eq)
 }
 

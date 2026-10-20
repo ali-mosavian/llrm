@@ -1388,7 +1388,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        ["loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
@@ -2161,7 +2161,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        ["loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
     );
 }
 
@@ -2280,8 +2280,10 @@ out:
 }
 
 /// Drops one of the two inputs of the phi that two edges feed (#3016).
+#[cfg(debug_assertions)]
 struct ShortPhi;
 
+#[cfg(debug_assertions)]
 impl llrm_mir::passes::FunctionPass for ShortPhi {
     fn name(&self) -> &'static str {
         "short-phi"

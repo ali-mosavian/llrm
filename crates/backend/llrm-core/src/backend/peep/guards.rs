@@ -266,6 +266,12 @@ pub fn clears_before_byte_load(cx: &Cx) -> bool {
     cx.cpu().clears_before_byte_load().unwrap_or(false)
 }
 
+/// The target prices the `movzx` of a low byte or word at or below `and` with
+/// the mask, or the code is for size.
+pub fn masks_by_extension(cx: &Cx) -> bool {
+    cx.cpu().masks_by_extension().unwrap_or(false)
+}
+
 /// `d` has a byte view and the address of `src` reads none of its register.
 pub fn byte_loadable(
     cx: &Cx,

@@ -288,6 +288,14 @@ pub trait Tti {
         true
     }
 
+    /// The most an `optsize` caller's inline may add over the call it removes,
+    /// in inline-cost units, where the target prices it apart from LLVM's
+    /// `OptSizeThreshold` (SZ1); none: the pin's 50. X86: 0, a callee that
+    /// stays is not copied into a caller that is built for size.
+    fn opt_size_inline_threshold(&self) -> Option<i64> {
+        None
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
@@ -630,6 +638,31 @@ pub trait Tti {
         const SMALLER: &[&str] = &["exp2l", "exp2f", "floor", "floorf", "ceil", "round", "ffs", "ffsl"];
         const MORE: &[&str] = &["abs", "labs", "llabs"];
         !(ONE_NODE.contains(&name) || SMALLER.contains(&name) || MORE.contains(&name))
+    }
+
+    /// `isTypeLegal`: whether the target holds a value of `ty` in a register
+    /// (`TargetLowering::isTypeLegal`). The default is a 32-bit target
+    /// with no wider integer.
+    fn is_type_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
+        )
+    }
+
+    /// `shouldBuildLookupTables`: whether the target jumps through a table
+    /// (X86 and AArch64: `BRIND` is legal).
+    fn should_build_lookup_tables(&self) -> bool {
+        true
+    }
+
+    /// `getMinimumLookupTableEntryBitWidth`: the narrowest cell of a lookup
+    /// table, so that a load of it is a native one.
+    fn minimum_lookup_table_entry_bit_width(&self) -> u32 {
+        8
     }
 
     /// `getEstimatedNumberOfCaseClusters`

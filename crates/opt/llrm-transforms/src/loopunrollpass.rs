@@ -1163,6 +1163,14 @@ fn try_to_unroll_loop(
         return Unrolled::Unmodified;
     }
 
+    // DEVIATE: a loop with a landing pad is not cloned. `ehprepare` takes one
+    // pad and one module handler per function, which a copy of the pad breaks
+    // (as in `jumpthreading` J10 and `dfajumpthreading` DF3).
+    if lp.get_blocks().iter().any(|&block| crate::edges::starts_with_landing_pad(run.function, block)) {
+        why(run, lp, "contains a landing pad");
+        return Unrolled::Unmodified;
+    }
+
     // When automatic unrolling is disabled, do not unroll unless overridden for
     // this loop.
     if run.options.only_when_forced && tm != Mode::ForcedByUser {

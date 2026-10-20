@@ -229,6 +229,50 @@ impl Expander {
             && function.instruction(orig_inc).opcode == function.instruction(wide_inc).opcode
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L174
+    /// `eraseDeadInstructions(Root)`: every instruction the expander made that
+    /// is trivially dead, but `root`, is erased, with the operands that die
+    /// with it. `is_dead` is `isInstructionTriviallyDead`, which lives with
+    /// the transforms.
+    pub fn erase_dead_instructions(
+        &mut self,
+        function: &mut Function,
+        root: Option<Operand>,
+        is_dead: &dyn Fn(&Function, InstId) -> bool,
+    ) {
+        let def = |function: &Function, operand: Operand| match operand {
+            Operand::Value(value) => match function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
+                _ => None,
+            },
+            _ => None,
+        };
+        let root = root.and_then(|root| def(function, root));
+        let mut work = self.inserted_instructions();
+        let mut deleted = llrm_mir::dense::IdSet::<InstId>::new();
+        while let Some(inst) = work.pop() {
+            if deleted.contains(&inst)
+                || Some(inst) == root
+                || !self.inserted_set.contains(&inst)
+                || function.is_erased(inst)
+                || !is_dead(function, inst)
+            {
+                continue;
+            }
+            let operands = function.instruction(inst).operands.clone();
+            work.extend(operands.iter().filter_map(|&operand| def(function, operand)));
+            deleted.insert(inst);
+            self.inserted_set.remove(&inst);
+            function.set_operands(inst, Vec::new());
+            function.erase(inst).expect("a dead instruction");
+        }
+        self.inserted.retain(|inst| !deleted.contains(inst));
+        self.expressions.retain(|_, value| !matches!(value, Operand::Value(v) if match function.value(*v).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => deleted.contains(&inst),
+            _ => false,
+        }));
+    }
+
     /// `getAllInsertedInstructions`: what the expander made, in order, less
     /// what it reused.
     pub fn inserted_instructions(&self) -> Vec<InstId> {

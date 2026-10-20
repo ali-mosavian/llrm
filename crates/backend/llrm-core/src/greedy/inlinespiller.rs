@@ -60,6 +60,8 @@ use crate::support::hash::HashMap;
 pub struct Tables {
     pub orders: RefCell<HashMap<u32, Vec<RegId>>>,
     pub widths: RefCell<HashMap<u32, u32>>,
+    /// The bytes of each x87 value's float type: its spill cell's width.
+    pub float_bytes: RefCell<HashMap<u32, u32>>,
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
     pub remat: RefCell<crate::support::hash::HashSet<u32>>,
@@ -450,9 +452,12 @@ impl<'a> InlineSpiller<'a> {
 impl InlineSpiller<'_> {
     /// `spill_unit` for an x87 value: a register made from `reg`, an `fld`
     /// of its cell before where the unit reads it and an `fstp` after where it
-    /// writes it. DEVIATE D-RFP1: the cell is a qword, floatassign's spill
-    /// format, not the class width (`RFP80` would be m80). Exit: the class
-    /// width once floatassign is gone and the rows are compared.
+    /// writes it. DEVIATE D-RFP1: the cell is the value's float type
+    /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
+    /// spill rounds, not one class width, where the language follows the pin
+    /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
+    /// as only a store the program writes rounds there (stft_single). Exit: the class width once the
+    /// classes are split.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
     /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
@@ -468,7 +473,8 @@ impl InlineSpiller<'_> {
         members: &[InstrKey],
         old: &[Arc<Insn>],
     ) -> Option<Vec<u32>> {
-        let cell = self.frame.cell(reg, 8).ok()?;
+        let bytes = self.tables.float_bytes.borrow().get(&reg).copied().unwrap_or(8);
+        let cell = self.frame.cell(reg, bytes).ok()?;
         if let [one] = old
             && one.group.is_none()
             && !one.defines.contains(&reg)
@@ -507,9 +513,122 @@ impl InlineSpiller<'_> {
         }
         self.tables.orders.borrow_mut().insert(new, crate::backend::allocate::RFP.to_vec());
         self.tables.widths.borrow_mut().insert(new, 10);
+        self.tables.float_bytes.borrow_mut().insert(new, bytes);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
         Some(vec![new])
     }
+}
+
+/// The bytes of the float type of every x87 value of `body` that selection's
+/// numbering, or a copy or phi of such a value, gives: the type's own where
+/// a value is the program's, else that of the values it is copied from or
+/// to. A web joined to values of two types has the wider.
+pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
+    // No width table: the target does not round a spill (`rounds_float_spills`).
+    if body.float_bytes.is_empty() {
+        return HashMap::default();
+    }
+    fn root(
+        parent: &mut HashMap<u32, u32>,
+        value: u32,
+    ) -> u32 {
+        let mut at = value;
+        while let Some(&up) = parent.get(&at) {
+            if up == at {
+                break;
+            }
+            at = up;
+        }
+        let top = at;
+        let mut at = value;
+        while let Some(&up) = parent.get(&at) {
+            if up == at {
+                break;
+            }
+            parent.insert(at, top);
+            at = up;
+        }
+        parent.entry(top).or_insert(top);
+        top
+    }
+    let mut parent: HashMap<u32, u32> = HashMap::default();
+    let join = |parent: &mut HashMap<u32, u32>, one: u32, other: u32| {
+        let (one, other) = (root(parent, one), root(parent, other));
+        parent.insert(one, other);
+    };
+    let floating = |loc: &Loc| match loc {
+        Loc::Held(held) if held.width == 10 => Some(held.value),
+        _ => None,
+    };
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (_, value) in &phi.incoming {
+                join(&mut parent, phi.result, *value);
+            }
+        }
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            if what.op == Operation::Move
+                && let ([dest], [source]) = (what.dests.as_slice(), what.sources.as_slice())
+                && let (Some(dest), Some(source)) = (floating(dest), floating(source))
+            {
+                join(&mut parent, dest, source);
+            }
+        }
+    }
+    let mut bytes: HashMap<u32, u32> = HashMap::default();
+    for (&value, &size) in body.float_bytes.iter() {
+        let top = root(&mut parent, value);
+        let widest = bytes.entry(top).or_insert(0);
+        *widest = (*widest).max(size);
+    }
+    // A value a pass made after selection is in no table: it is as wide as
+    // what it is computed from, down to the memory a `fld` reads.
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            for one in &block.insns {
+                let Some(what) = &one.what else { continue };
+                // `fild` reads an integer: its width says nothing of the float.
+                if what.name.as_deref().is_some_and(|name| name.starts_with("fild"))
+                    || !matches!(what.op, Operation::FloatLoad | Operation::FloatArith | Operation::FloatUnary)
+                {
+                    continue;
+                }
+                let Some(Loc::Held(dest)) = what.dests.first().filter(|dest| floating(dest).is_some()) else {
+                    continue;
+                };
+                let mut known = 0;
+                for source in &what.sources {
+                    known = known.max(match source {
+                        Loc::Held(held) if held.width == 10 => {
+                            let top = root(&mut parent, held.value);
+                            bytes.get(&top).copied().unwrap_or(0)
+                        }
+                        Loc::Mem(cell) if matches!(cell.width, 4 | 8 | 10) => cell.width,
+                        _ => 0,
+                    });
+                }
+                let top = root(&mut parent, dest.value);
+                let widest = bytes.entry(top).or_insert(0);
+                if known > *widest {
+                    *widest = known;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let members: Vec<u32> = parent.keys().copied().collect();
+    members
+        .into_iter()
+        .filter_map(|value| {
+            let top = root(&mut parent, value);
+            bytes.get(&top).filter(|&&size| size > 0).map(|&size| (value, size))
+        })
+        .collect()
 }
 
 /// The widest operand naming `reg` in `unit`.

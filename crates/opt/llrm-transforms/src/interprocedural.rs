@@ -259,6 +259,9 @@ pub struct Interprocedural {
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
+    /// The copies of a tree recursion in itself and its tail-call
+    /// elimination, once the clones are made (D10).
+    pub late: Option<crate::walk::SelfInline>,
 }
 
 thread_local! {
@@ -298,6 +301,9 @@ impl ProgramPass for Interprocedural {
             },
         )?;
         self.proved = Some(proved);
+        if let Some(late) = &mut self.late {
+            late.apply(program, &mut modules)?;
+        }
         for (at, one) in modules.into_iter().enumerate() {
             analyses.carry(at, one.carried());
         }
@@ -375,11 +381,107 @@ pub(crate) fn procedures(
     defined(program).filter(|&(one, _)| one == at).map(|(_, id)| id).collect()
 }
 
-/// The functions nothing reaches any more (private, not addressed, not a root,
-/// called by neither call nor invoke) lose their bodies, and with them the
-/// functions only they called: gcc removes an unreachable node from
-/// the call graph at once, and what its body said (what it writes, whom it
-/// calls) stands for nothing.
+/// The direct calls to each function of a module as bodies change, and the
+/// private functions nothing reaches any more: they lose their bodies and
+/// with them the functions only they called (the pin's CGSCC inliner deletes
+/// a callee at its last call, `removeDeadFunctions`; gcc removes an
+/// unreachable node at once). What a deleted body said (what it writes, whom
+/// it calls) stands for nothing.
+pub(crate) struct Liveness {
+    references: llrm_support::hash::IndexMap<GlobalId, i64>,
+    held: BTreeSet<GlobalId>,
+    private: BTreeSet<GlobalId>,
+}
+
+impl Liveness {
+    /// A private function is held when its address is taken, a root names it
+    /// or metadata lists it.
+    pub(crate) fn new(
+        module: &Module,
+        private: BTreeSet<GlobalId>,
+        addressed: &BTreeSet<GlobalId>,
+        roots: &BTreeSet<GlobalId>,
+    ) -> Self {
+        let held = addressed.union(roots).chain(&listed(module)).copied().collect();
+        Self { references: reference_counts(module), held, private }
+    }
+
+    /// The direct calls to each function now.
+    pub(crate) fn references(&self) -> &llrm_support::hash::IndexMap<GlobalId, i64> {
+        &self.references
+    }
+
+    fn unreached(
+        &self,
+        id: &GlobalId,
+    ) -> bool {
+        self.private.contains(id) && !self.held.contains(id) && self.references.get(id).copied().unwrap_or(0) == 0
+    }
+
+    /// The calls of `function` were `was` and are `now` (a splice): the
+    /// callees left with no call lose their bodies. Whether any did.
+    pub(crate) fn spliced(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+        was: Vec<(GlobalId, i64)>,
+        now: Vec<(GlobalId, i64)>,
+    ) -> bool {
+        let mut dead = Vec::new();
+        for (callee, count) in now {
+            *self.references.entry(callee).or_insert(0) += count;
+        }
+        for (callee, count) in was {
+            *self.references.entry(callee).or_insert(0) -= count;
+            dead.push(callee);
+        }
+        self.bare(module, analyses, dead)
+    }
+
+    /// Every function nothing reaches, and those only they called.
+    pub(crate) fn bare_all(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+    ) {
+        let dead: Vec<GlobalId> = module
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration() && !stub(function))
+            .map(|(id, _, _)| id)
+            .collect();
+        self.bare(module, analyses, dead);
+    }
+
+    fn bare(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+        candidates: Vec<GlobalId>,
+    ) -> bool {
+        let mut dead: Vec<GlobalId> = candidates.into_iter().filter(|id| self.unreached(id)).collect();
+        let mut bared = false;
+        while let Some(id) = dead.pop() {
+            let Some(function) = module.global(id).function().filter(|one| !one.is_declaration() && !stub(one)) else {
+                continue;
+            };
+            let called = calls_of(&module.context, function);
+            bare(module, analyses, id);
+            bared = true;
+            for (callee, count) in called {
+                let left = self.references.entry(callee).or_insert(0);
+                *left -= count;
+                if *left == 0 && self.unreached(&callee) {
+                    dead.push(callee);
+                }
+            }
+        }
+        if bared {
+            analyses.invalidate_bodies(&PreservedAnalyses::none());
+        }
+        bared
+    }
+}
+
 fn bare_the_unreached(
     module: &mut Module,
     analyses: &mut ModuleAnalyses,
@@ -387,36 +489,7 @@ fn bare_the_unreached(
     addressed: &BTreeSet<GlobalId>,
     roots: &BTreeSet<GlobalId>,
 ) {
-    let held: BTreeSet<GlobalId> = addressed.union(roots).chain(&listed(module)).copied().collect();
-    let mut references = reference_counts(module);
-    let unreached = |id: &GlobalId, references: &llrm_support::hash::IndexMap<GlobalId, i64>| {
-        private.contains(id) && !held.contains(id) && references.get(id).copied().unwrap_or(0) == 0
-    };
-    let mut dead: Vec<GlobalId> = module
-        .functions()
-        .filter(|(_, _, function)| !function.is_declaration() && !stub(function))
-        .map(|(id, _, _)| id)
-        .filter(|id| unreached(id, &references))
-        .collect();
-    let mut bared = false;
-    while let Some(id) = dead.pop() {
-        let Some(function) = module.global(id).function().filter(|one| !one.is_declaration() && !stub(one)) else {
-            continue;
-        };
-        let called = calls_of(&module.context, function);
-        bare(module, analyses, id);
-        bared = true;
-        for (callee, count) in called {
-            let left = references.entry(callee).or_insert(0);
-            *left -= count;
-            if *left == 0 && unreached(&callee, &references) {
-                dead.push(callee);
-            }
-        }
-    }
-    if bared {
-        analyses.invalidate_bodies(&PreservedAnalyses::none());
-    }
+    Liveness::new(module, private.clone(), addressed, roots).bare_all(module, analyses);
 }
 
 /// Whether `function` is what `bare` leaves.
@@ -450,7 +523,7 @@ fn bare(
 }
 
 /// The roots in module `at`.
-fn roots_here(
+pub(crate) fn roots_here(
     roots: &BTreeSet<Defined>,
     at: usize,
 ) -> BTreeSet<GlobalId> {
@@ -486,7 +559,7 @@ fn listed(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// How often `function` calls each function directly.
-fn calls_of(
+pub(crate) fn calls_of(
     context: &llrm_mir::context::Context,
     function: &llrm_mir::module::Function,
 ) -> Vec<(GlobalId, i64)> {

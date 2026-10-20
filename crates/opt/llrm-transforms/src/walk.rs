@@ -71,7 +71,8 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    declared, function_mut, managers, private, procedures, reporting_marked, unexported, vouched,
+    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
+    unexported, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -185,6 +186,7 @@ impl ProgramPass for Walk {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
+        let roots = roots(program);
         let params = crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 });
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
@@ -193,10 +195,15 @@ impl ProgramPass for Walk {
         };
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
+            let private = private(program, at);
             let module = &mut program.modules[at];
             let mut recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
-            let mut counts = crate::inline::call_counts(module);
+            // The calls to each function as the splices leave them, as LLVM's
+            // use lists do (`isSoleCallToLocalFunction`), and a callee with
+            // none left is deleted there, as `removeDeadFunctions` does after
+            // the inliner.
+            let mut live = Liveness::new(module, private, &addressed, &roots_here(&roots, at));
             let components: Vec<Vec<GlobalId>> = llrm_mir::callgraph::CallGraph::new(module)
                 .bottom_up_components()
                 .into_iter()
@@ -225,7 +232,7 @@ impl ProgramPass for Walk {
                             module,
                             &program.layout,
                             id,
-                            &counts,
+                            live.references(),
                             &addressed,
                             &recursive,
                             params,
@@ -237,15 +244,37 @@ impl ProgramPass for Walk {
                     };
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
-                    let by = crate::inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                    let was = calls_of(context, function);
+                    // DEVIATE (recursion): a recursive callee inlined here has its
+                    // own calls peeled in the copy (gcc's peeling, not at -Os).
+                    let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
+                        .values()
+                        .filter(|one| one.self_calls.is_some() && !self.inline.single)
+                        .filter_map(|one| Some((one.callee?, one.clone())))
+                        .collect();
+                    let by = crate::inline::Caller {
+                        layout: &program.layout,
+                        recursive: recursive.contains(&id),
+                        self_inlining: None,
+                        peeling: !self.inline.single,
+                    };
                     let spliced = crate::inline::expanded_all(
                         context,
                         function,
                         &by,
-                        &Default::default(),
+                        &peeled,
                         Some(&constant),
                         &mut declared,
                     )? > 0;
+                    // DEVIATE (recursion): a tree-recursive function waits for
+                    // its tail-call elimination until its copies are made
+                    // (`SelfInline`, after ipa-cp has seen it whole).
+                    if self_calls(module, &program.layout, id, self.inline.single).is_some() {
+                        function_mut(module, id)
+                            .1
+                            .attrs
+                            .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
+                    }
                     for (call, callee, cost) in decided.iter().flatten() {
                         let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
                         let gone = module.global(id).function().is_some_and(|one| one.parent(*call).is_none());
@@ -259,13 +288,13 @@ impl ProgramPass for Walk {
                         modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                     (self.simplify)(module, &mut modules[at], id, "walk.");
-                    // Tail-call elimination makes a recursive body a loop: the
-                    // callers after it see a callee that no longer calls
-                    // itself, and with one call fewer
-                    // (CGSCC updates its call graph).
+                    // The calls left after the splices and the simplification
+                    // (tail-call elimination makes a recursive body a loop), as
+                    // CGSCC updates its call graph.
+                    let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                    live.spliced(module, &mut modules[at], was, now);
                     if recursive.contains(&id) {
                         recursive = crate::inline::recursive(module);
-                        counts = crate::inline::call_counts(module);
                     }
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
@@ -286,6 +315,120 @@ impl ProgramPass for Walk {
             analyses.carry(at, one.carried());
         }
         analyses.invalidate();
+        Ok(())
+    }
+}
+
+/// DEVIATE (recursion): the frequency of each call in `id`, if it is to be
+/// given copies of its own body at its calls of itself, as gcc's
+/// `recursive_inlining` does, to the limits of [`crate::inline`]. None where
+/// it is not: it calls itself in fewer than two distinct ways (calls of a
+/// function that reads and writes nothing, with the same arguments, are one
+/// call: `hanoi(n-1, a, c, b) + hanoi(n-1, a, c, b)` is a loop once the
+/// simplifier has merged them, 188 clocks, and 185482 copied before), the
+/// calls it makes of itself are fewer than one per call (below), or the body
+/// is sized for bytes (gcc does not inline recursively at -Os).
+fn self_calls(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    id: GlobalId,
+    for_size: bool,
+) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
+    let function = module.global(id).function()?;
+    let pure = {
+        let effects = llrm_mir::memory::stated(&function.attrs);
+        !effects.reads && !effects.writes
+    };
+    let mut distinct: Vec<(Vec<llrm_mir::module::Operand>, llrm_mir::module::InstId)> = Vec::new();
+    for (_, inst) in function.walk() {
+        if llrm_mir::memory::callee(&module.context, function, inst) != Some(id) {
+            continue;
+        }
+        let operands = function.instruction(inst).operands.clone();
+        if !(pure && distinct.iter().any(|(seen, _)| *seen == operands)) {
+            distinct.push((operands, inst));
+        }
+    }
+    if for_size || distinct.len() < 2 {
+        return None;
+    }
+    let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
+    // A tree: each call of the function makes one or more calls of itself
+    // (the frequencies of its distinct self-calls over the entry's sum to 1
+    // or more). Fewer, as in recpow's two calls in exclusive branches (0.625),
+    // is a linear recursion, which tail-call elimination turns into a loop:
+    // copying it peels it (+3.7% clocks at -O2).
+    let calls: f64 = distinct.iter().map(|(_, inst)| frequencies.get(inst).copied().unwrap_or(0.0)).sum();
+    if calls < 1.0 - 1e-9 {
+        return None;
+    }
+    Some(frequencies)
+}
+
+/// DEVIATE (recursion): the copies of a tree-recursive function in itself, as
+/// gcc's `recursive_inlining` makes them, to the limits of [`crate::inline`],
+/// then its tail-call elimination, which the walk left out
+/// (`tailcallelim::DEFERRED`). After both ipa-cp rounds, as gcc runs ipa-cp
+/// before its inliner and `pass_tail_recursion` after it: the specializer
+/// prices the callee whole (copies first made recchop -O3 decline its clones:
+/// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
+/// clocks, 294986 copied after tail-call elimination made it a loop).
+pub struct SelfInline {
+    /// The Simplify list over one body.
+    pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
+    /// Sized for bytes: gcc does not inline recursively there.
+    pub for_size: bool,
+}
+
+impl SelfInline {
+    /// The marked functions of `program`, over `modules`' analyses.
+    pub(crate) fn apply(
+        &mut self,
+        program: &mut Program,
+        modules: &mut [ModuleAnalyses],
+    ) -> Result<(), String> {
+        let waiting = |function: &llrm_mir::module::Function| {
+            function.attrs.iter().any(
+                |one| matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
+            )
+        };
+        for at in 0..program.modules.len() {
+            let module = &mut program.modules[at];
+            let marked: Vec<GlobalId> =
+                module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
+            for id in marked {
+                let frequencies = self_calls(module, &program.layout, id, self.for_size);
+                if let Some(frequencies) = frequencies {
+                    let mut declared = declared(&mut modules[at], module);
+                    let (context, function) = function_mut(module, id);
+                    let itself = crate::inline::Candidate {
+                        body: std::rc::Rc::new(function.clone()),
+                        frame: crate::inline::grown(context, &program.layout, function),
+                        moved: false,
+                        callee: None,
+                        self_calls: None,
+                    self_sites: 0,
+                    };
+                    let available = [(id, itself)].into_iter().collect();
+                    let by = crate::inline::Caller {
+                        layout: &program.layout,
+                        recursive: true,
+                        self_inlining: Some(&frequencies),
+                        peeling: false,
+                    };
+                    crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    if declared.place(module)? > 0 {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                    }
+                }
+                function_mut(module, id).1.attrs.retain(
+                    |one| !matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
+                );
+                modules[at].changed(id);
+                modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                (self.simplify)(module, &mut modules[at], id, "self-inline.");
+            }
+        }
         Ok(())
     }
 }

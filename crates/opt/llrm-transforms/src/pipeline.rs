@@ -725,6 +725,9 @@ pub(crate) fn llvm_order(
         // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
         // function pass of `OptimizePM`, after LoopSink) and L2376.
         Phase::Late => vec![
+            // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
+            // L1438; llrm's targets have no vector registers.
+            slot("loop-load-elim@1400", Box::new(crate::looploadelim::LoopLoadElim::default())),
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
@@ -838,11 +841,15 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic
-                // (read by `simplifySwitch`, untranslated).
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
                 simplify_cfg_with(
                     "decide@832",
-                    simplifycfg::Options { hoist_common_insts: true, sink_common_insts: true, ..Default::default() },
+                    simplifycfg::Options {
+                        hoist_common_insts: true,
+                        sink_common_insts: true,
+                        convert_switch_to_arithmetic: true,
+                        ..Default::default()
+                    },
                 ),
                 combine("combine@837"),
                 fold("fold@837"),
@@ -1010,7 +1017,21 @@ pub fn recorded(
     } else {
         Fixed::new(&again_applied)
     };
+    // The copies of a tree recursion in itself and then its tail-call
+    // elimination, after the clones ipa-cp made (D10).
+    let late = applied.options.llvm_order.then(|| {
+        let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
+        crate::walk::SelfInline {
+            simplify: Box::new(move |module, analyses, id, stage| {
+                TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            }),
+            for_size: applied.options.prefers_size(),
+        }
+    });
     manager.add_program(Interprocedural {
+        late,
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =

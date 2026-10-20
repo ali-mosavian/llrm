@@ -53,7 +53,8 @@
 //! `trivialunswitch`, `unswitch`,
 //! `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
-//! `loopidioms`, `floatloop`, `tailcallelim`.
+//! `loopidioms`, `floatloop`, `tailcallelim`, `loopversioning` (with
+//! `runtimechecks`, the memory checks it branches on).
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -103,8 +104,12 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+#[cfg(test)]
+mod combine_semantics_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_icmp_const;
+pub mod combine_icmp_logic;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
@@ -204,9 +209,12 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod runtimechecks;
 pub mod loopdeletion;
 pub mod loopidiom;
 pub mod loopidioms;
+pub mod loopversioning;
+pub mod looploadelim;
 pub mod loopinterchange;
 pub mod loopnest;
 pub mod looppeel;
@@ -274,8 +282,18 @@ pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
+pub mod switcharms;
 pub mod switchcg;
+pub mod switchdead;
+pub mod switchlookup;
 pub mod switchlower;
+pub mod switchopt;
+pub mod switchphi;
+pub mod switchpow2;
+pub mod switchrange;
+pub mod switchreduce;
+pub mod switchselect;
+pub mod switchvalue;
 pub mod tailcallelim;
 pub mod tailmerge;
 #[cfg(test)]

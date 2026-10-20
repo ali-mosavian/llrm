@@ -186,11 +186,13 @@ fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
     assert!(multiplies == 30 && !top.contains("@eq"), "top has {multiplies} multiplies:\n{top}");
 }
 
-/// fib at -O2 was inlined into itself eight levels deep (802 bytes of text
-/// against clang's 100, tests/llc/fib.c): LLVM never inlines a recursive
-/// callee into itself.
+/// fib was never copied into itself (LLVM refuses a recursive callee): 334157
+/// clocks at -O2 against main's 227171, whose gcc-style recursion inlined it
+/// eight levels deep. The walk copies it as gcc's `recursive_inlining` does,
+/// to gcc's depth and size limits (DEVIATE recursion; tests/llc/fib.c is 802
+/// bytes of text against clang's 100).
 #[test]
-fn test_a_directly_recursive_function_is_not_inlined_into_itself() {
+fn test_a_directly_recursive_function_is_copied_into_itself_to_gcc_limits() {
     let mut module = parsed(
         "define i32 @fib(i32 %n) {
 b0:
@@ -227,7 +229,8 @@ b0:
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
     let calls = text.matches("call i32 @fib").count();
-    assert!(calls <= 3, "fib was copied into itself, {calls} calls of it:\n{text}");
+    assert!(calls > 3, "fib was not copied into itself, {calls} calls of it:\n{text}");
+    assert!(calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize, "fib was copied past gcc's limit, {calls} calls of it");
 }
 
 /// A tail-recursive function called once: tail-call elimination makes its
@@ -296,4 +299,459 @@ exit:
     let top = llrm_mir::print::module(&module);
     let top = top.split("define").find(|one| one.contains("@top")).expect("@top");
     assert!(!top.contains("@ins("), "{top}");
+}
+
+/// An internal function inlined at its one call is deleted by the walk, as
+/// the inliner's `removeDeadFunctions` does; it stood until globaldce, and
+/// the walk priced and simplified it (d_faces -O2: 11 defines after the walk,
+/// the pin's 6).
+#[test]
+fn test_a_callee_inlined_at_its_only_call_is_deleted_by_the_walk() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal i32 @leaf(i32 %x) {
+b0:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+
+define internal i32 @mid(i32 %x) {
+b0:
+  %y = call i32 @leaf(i32 %x)
+  ret i32 %y
+}
+
+define i32 @top(i32 %x) {
+b0:
+  %y = call i32 @mid(i32 %x)
+  ret i32 %y
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    let text = llrm_mir::print::module(&module);
+    for name in ["@leaf", "@mid"] {
+        let body = text.split("define").find(|one| one.contains(&format!("{name}("))).expect(name);
+        assert!(!body.contains("add") && !body.contains("call"), "{name} stands:\n{text}");
+    }
+}
+
+/// Two calls of a function that reads and writes nothing, with the same
+/// arguments, are one call. hanoi's merge in the simplifier makes it a loop
+/// (188 clocks); copies made before it (two calls in the body) peeled it
+/// four levels deep (185482 clocks).
+#[test]
+fn test_calls_the_simplifier_merges_are_not_two_recursive_calls_to_copy() {
+    let mut module = parsed(
+        "define internal i32 @hanoi(i32 %n) {
+b0:
+  %zero = icmp eq i32 %n, 0
+  br i1 %zero, label %out, label %rec
+
+rec:
+  %m = sub i32 %n, 1
+  %x = call i32 @hanoi(i32 %m)
+  %p = add i32 %x, 1
+  %y = call i32 @hanoi(i32 %m)
+  %s = add i32 %p, %y
+  ret i32 %s
+
+out:
+  ret i32 0
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @hanoi(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let hanoi = text.split("define").find(|one| one.contains("@hanoi(i32 %n)")).expect("@hanoi");
+    let peeled = hanoi.matches("icmp eq i32 %n,").count();
+    assert_eq!(peeled, 1, "hanoi was copied into itself before its two calls were merged, {peeled} levels:\n{hanoi}");
+}
+
+/// gcc does not inline recursively at -Os. fib was copied into itself there
+/// as at -O2 (17 calls of it standing).
+#[test]
+fn test_a_recursive_function_is_not_copied_into_itself_when_sized_for_bytes() {
+    let mut module = parsed(
+        "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+    );
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let calls = text.matches("call i32 @fib").count();
+    assert!(calls <= 3, "fib was copied into itself at -Os, {calls} calls of it:\n{text}");
+}
+
+/// Two calls of itself in exclusive branches (recpow: `b * power(b, e - 1)`
+/// when the exponent is odd, `power(b * b, e >> 1)` when even) are less than
+/// one call per call: a linear recursion, which is a loop. Copied, it was
+/// peeled three levels: +3.7% clocks at -O2 against the base.
+#[test]
+fn test_two_calls_in_exclusive_branches_are_not_a_tree_to_copy() {
+    let mut module = parsed(
+        "define internal i32 @power(i32 %b, i32 %e) {
+b0:
+  %zero = icmp eq i32 %e, 0
+  br i1 %zero, label %one, label %more
+
+one:
+  ret i32 1
+
+more:
+  %bit = and i32 %e, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %mul, label %square
+
+mul:
+  %e1 = sub i32 %e, 1
+  %p = call i32 @power(i32 %b, i32 %e1)
+  %m = mul i32 %b, %p
+  %r = urem i32 %m, 30011
+  ret i32 %r
+
+square:
+  %bb = mul i32 %b, %b
+  %sq = urem i32 %bb, 30011
+  %h = lshr i32 %e, 1
+  %q = call i32 @power(i32 %sq, i32 %h)
+  ret i32 %q
+}
+
+define i32 @top(i32 %b, i32 %e) {
+b0:
+  %r = call i32 @power(i32 %b, i32 %e)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let power = text.split("define").find(|one| one.contains("@power(")).expect("@power");
+    let peeled = power.matches("urem i32").count();
+    assert!(peeled <= 2, "power was copied into itself, {peeled} remainders:\n{power}");
+}
+
+const CHOP: &str = "@values = internal global [64 x i32] zeroinitializer
+
+define internal i32 @chop(i32 %lo, i32 %hi) {
+b0:
+  %d = sub i32 %hi, %lo
+  %small = icmp slt i32 %d, 2
+  br i1 %small, label %out, label %rec
+
+out:
+  ret i32 0
+
+rec:
+  %s = add i32 %lo, %hi
+  %mid = sdiv i32 %s, 2
+  br label %head
+
+head:
+  %i = phi i32 [ %lo, %rec ], [ %next, %body ]
+  %sum = phi i32 [ 0, %rec ], [ %sum2, %body ]
+  %c = icmp slt i32 %i, %hi
+  br i1 %c, label %body, label %done
+
+body:
+  %p = getelementptr inbounds i32, ptr @values, i32 %i
+  %v = load i32, ptr %p
+  %m = and i32 %v, %mid
+  %sum2 = add i32 %sum, %m
+  %next = add nsw i32 %i, 1
+  br label %head
+
+done:
+  %a = call i32 @chop(i32 %lo, i32 %mid)
+  %b = call i32 @chop(i32 %mid, i32 %hi)
+  %t = add i32 %sum, %a
+  %r = add i32 %t, %b
+  ret i32 %r
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @chop(i32 0, i32 64)
+  ret i32 %r
+}
+";
+
+/// A tree recursion waits for its tail-call elimination until its copies are
+/// made, and a linear one does not: the mark is on `fib`'s shape after the
+/// walk and not on a tail-recursive count-down.
+#[test]
+fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
+    use llrm_mir::program::ProgramPass;
+    let marked = |text: &str, name: &str| {
+        let mut module = parsed(text);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        let text = llrm_mir::print::module(&module);
+        let body = text.split("define").find(|one| one.contains(&format!("@{name}("))).expect(name).to_owned();
+        body.lines().next().unwrap_or_default().contains(crate::tailcallelim::DEFERRED)
+    };
+    let tree = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+    let linear = "define internal i32 @down(i32 %n, i32 %acc) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 %acc
+
+again:
+  %m = sub i32 %n, 1
+  %a = add i32 %acc, %n
+  %r = call i32 @down(i32 %m, i32 %a)
+  ret i32 %r
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n, i32 0)
+  ret i32 %r
+}
+";
+    assert!(marked(tree, "fib"), "fib waits for tail-call elimination");
+    assert!(!marked(linear, "down"), "a count-down does not");
+}
+
+/// ipa-cp prices the callee whole: copies made in the walk first left
+/// recchop -O3 with no clone (4 defines after the interprocedural step against
+/// the base's 12) and 6368 clocks against 6209.
+#[test]
+fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
+    let mut module = parsed(CHOP);
+    let options = crate::pipeline::Options::speed();
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("chop.constprop"), "no clone of chop for its constants:\n{text}");
+    assert!(!text.contains(crate::tailcallelim::DEFERRED), "a function still waits:\n{text}");
+}
+
+/// The module `text` after the walk alone (no simplifier), `top`'s body.
+fn walked_top(text: &str) -> String {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(text);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    let text = llrm_mir::print::module(&module);
+    text.split("define").find(|one| one.contains("@top(")).expect("@top").to_owned()
+}
+
+const LINEAR: &str = "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 0
+
+again:
+  %m = sub i32 %n, 1
+  %r = call i32 @down(i32 %m)
+  %s = mul i32 %r, 7919
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+";
+
+/// A recursive callee inlined into a caller has its own call inlined in the
+/// copy, to gcc's peeling depth: the probability of reaching the copy (the
+/// calls to itself per call, 0.5 here, to the power of the copies deep) below
+/// 1 - 1/8, squared per copy only where the body has more than one call
+/// (their copies grow as sites to the power of the depth; one call grows them
+/// by one a level). Eight copies after the one the cost allowed (hanoi: 180
+/// clocks with one copy, 163 with three, 133 with six squared, 103 now).
+#[test]
+fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
+    let top = walked_top(LINEAR);
+    let copies = top.matches("mul i32 %").count();
+    assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
+}
+
+/// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
+/// clocks, 988 to 1276 bytes, with the peeling of an edge at a time).
+#[test]
+fn test_a_tree_recursive_callee_is_inlined_once_in_its_caller() {
+    let top = walked_top(
+        "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp slt i32 %n, 2
+  br i1 %done, label %out, label %again
+
+out:
+  ret i32 %n
+
+again:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @down(i32 %a)
+  %y = call i32 @down(i32 %b)
+  %s = mul i32 %x, 7919
+  %t = add i32 %s, %y
+  ret i32 %t
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    let copies = top.matches("mul i32 %x").count();
+    assert_eq!(copies, 1, "{copies} copies of down in top:\n{top}");
+}
+
+/// What the copies a call peels add is capped at gcc's recursive growth
+/// limit: two calls in exclusive branches (recpow's shape) double the copies
+/// at each level, 32 copies and 8203 bytes at -O1 before the cap, 20 after.
+#[test]
+fn test_the_copies_a_call_peels_add_at_most_a_functions_growth() {
+    let top = walked_top(
+        "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %more
+
+out:
+  ret i32 1
+
+more:
+  %bit = and i32 %n, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %odd.arm, label %even.arm
+
+odd.arm:
+  %a = sub i32 %n, 1
+  %x = call i32 @down(i32 %a)
+  %r = urem i32 %x, 30011
+  ret i32 %r
+
+even.arm:
+  %h = lshr i32 %n, 1
+  %y = call i32 @down(i32 %h)
+  %q = urem i32 %y, 30013
+  ret i32 %q
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    let copies = top.matches("urem i32 %x").count();
+    assert!(copies <= 24, "{copies} copies of down in top:\n{top}");
 }

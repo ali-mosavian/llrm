@@ -128,7 +128,7 @@ impl<'a> Cx<'a> {
 /// The key `UniqueSCEVs` finds a node by (`FoldingSetNodeID`): the kind, the
 /// operands as pointers with their use bits, the type, and what else the kind
 /// holds.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Key {
     pub(super) tag: Type,
     pub(super) ops: Vec<Use>,
@@ -136,6 +136,35 @@ pub(super) struct Key {
     pub(super) constant: Option<Ap>,
     pub(super) value: Option<Operand>,
     pub(super) header: Option<BlockId>,
+}
+
+/// What `FoldingSetNodeID` does: the key goes into the hasher as a few words,
+/// the operands one word each, not the fields one write at a time.
+impl std::hash::Hash for Key {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        let ty = match self.ty {
+            None => 0,
+            Some(Ty::Int(bits)) => 1 | u64::from(bits) << 2,
+            Some(Ty::Ptr(space)) => 2 | u64::from(space) << 2,
+        };
+        state.write_u64(self.tag as u64 | (self.ops.len() as u64) << 8 | ty << 32);
+        for op in &self.ops {
+            state.write_u64(u64::from(op.scev.0) | u64::from(op.bits) << 32);
+        }
+        if let Some(constant) = self.constant {
+            state.write_u64(constant.bits as u64);
+            state.write_u64((constant.bits >> 64) as u64);
+        }
+        if let Some(value) = self.value {
+            std::hash::Hash::hash(&value, state);
+        }
+        if let Some(header) = self.header {
+            state.write_u32(header.0);
+        }
+    }
 }
 
 /// `SCEVFlags`: the no-wrap flags of an expression and of its use.
@@ -167,10 +196,11 @@ pub struct ScalarEvolution {
     pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
-    /// `LoopDispositions`.
-    pub(super) loop_dispositions: HashMap<(Scev, Option<BlockId>), disposition::LoopDisposition>,
+    /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
+    /// does not scan them all.
+    pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
     /// `BlockDispositions`.
-    pub(super) block_dispositions: HashMap<(Scev, BlockId), disposition::BlockDisposition>,
+    pub(super) block_dispositions: HashMap<Scev, Vec<(BlockId, disposition::BlockDisposition)>>,
     /// `ValueExprMap`: the SCEV of each value that has one. Constants are not
     /// held: their SCEV is a constant node, made again for the price of a
     /// lookup.
@@ -213,7 +243,7 @@ impl ScalarEvolution {
     pub fn new() -> Self {
         let mut se = Self {
             nodes: Vec::new(),
-            unique: HashMap::default(),
+            unique: HashMap::with_capacity_and_hasher(256, Default::default()),
             fold_cache: HashMap::default(),
             proving_split_predicate: false,
             unsigned_ranges: HashMap::default(),
@@ -457,12 +487,13 @@ impl ScalarEvolution {
         ty: Option<Ty>,
         size: u16,
     ) -> Scev {
-        if let Some(&found) = self.unique.get(&key) {
-            return found;
-        }
         let at = Scev(self.nodes.len() as u32);
+        // One hash of the key for the find and the insert.
+        match self.unique.entry(key) {
+            std::collections::hash_map::Entry::Occupied(found) => return *found.get(),
+            std::collections::hash_map::Entry::Vacant(slot) => slot.insert(at),
+        };
         self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
-        self.unique.insert(key, at);
         // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
         // each constructor makes a node.
         if let Kind::AddRec(_, header) = self.nodes[at.0 as usize].kind {

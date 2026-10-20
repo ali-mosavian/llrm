@@ -2208,6 +2208,9 @@ struct Body<'b, 'm, 'h> {
     /// lives with them.
     passed: Option<Value>,
     objects: Vec<Value>,
+    /// Of those, the ones a place of the program lives in, not a statement's
+    /// own argument box (`$arg`): what a handler can read.
+    variables: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
     /// The addresses of the variables `-g` declares.
@@ -2255,6 +2258,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             frame: HashMap::default(),
             passed: None,
             objects: Vec::new(),
+            variables: Vec::new(),
             addresses: HashMap::default(),
             declared_addresses: HashSet::default(),
             declared_offsets: HashMap::default(),
@@ -2290,7 +2294,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.blocks.insert(block.id, id);
         }
         self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
-        self.allocate()?;
+        self.allocate(handled.map(|one| one.frame))?;
         self.declare_variables();
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
@@ -2429,13 +2433,26 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// An alloca for each group of local places that overlap, each zeroed
     /// as HIR's frame starts: a scalar by a store, an aggregate by memset,
     /// as clang zeroes one.
-    fn allocate(&mut self) -> Emit<()> {
+    fn allocate(
+        &mut self,
+        frame: Option<(ConstantId, TypeId)>,
+    ) -> Emit<()> {
         let groups = frame_groups(&mut self.b.context.types, self.tables, self.function)?;
         for group in &groups {
             for place in &group.places {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
-            self.objects.push(self.b.alloca(group.ty, ""));
+            let object = self.b.alloca(group.ty, "");
+            if group.places.iter().any(|one| !one.name.starts_with("$arg")) {
+                self.variables.push(object);
+            }
+            self.objects.push(object);
+        }
+        // The handler reads the variables whenever a call raises.
+        if let Some((routine, ty)) = frame {
+            for object in self.variables.clone() {
+                self.b.call(ty, Value::Constant(routine), &[object], "");
+            }
         }
         if interrupted(self.function) {
             self.passed = Some(self.b.parameter(0));

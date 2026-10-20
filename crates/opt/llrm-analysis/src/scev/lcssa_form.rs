@@ -97,7 +97,7 @@ pub fn form_lcssa_for_instructions(
             let first = function.block(exit_bb).first().expect("a terminator");
             function.insert(phi, Position::Before(first)).expect("a placed block");
             formed.inserted.push(phi);
-            let preds = function.predecessors(exit_bb);
+            let preds = function.edge_predecessors(exit_bb);
             function
                 .set_operands(phi, from_arms(&preds.iter().map(|&p| (Operand::Value(value), p)).collect::<Vec<_>>()));
             for (n, &pred) in preds.iter().enumerate() {
@@ -163,3 +163,7 @@ fn incoming_or_parent(
     }
     function.parent(one.user).expect("a placed user")
 }
+
+#[cfg(test)]
+#[path = "lcssa_form_tests.rs"]
+mod tests;

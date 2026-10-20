@@ -20,6 +20,26 @@
 //!     ... uses %x (made in entry)    ... uses reload of %x's slot
 //! ```
 //!
+//! The frontend passes each of a handled function's variables to `FRAME`
+//! (`llrm.qb.frame`) in its entry, so every pass sees it captured and keeps its
+//! loads and stores: the handler reads the variables whenever a call raises, as
+//! an SEH funclet reads its parent's frame (`llvm.localescape`). A statement's
+//! own argument boxes (`$arg`) are not passed. Without it GVN forwarded the
+//! variables into 2,638 phis in GORILLA's MAKECITYSCAPE and the demotion below
+//! stored them all back: 189,936 bytes at m32 -Os where main's is 47,769.
+//! D-EH1 (DEVIATE): MIR has no variadic intrinsic, so one call per variable
+//! stands for `localescape`; exit: the intrinsic in `llrm-mir` (owner
+//! splitkit-port, 2026-11-06).
+//!
+//! Row D-EH2 (open): GORILLA m32 is 3.5%, 4.6%, 5.4% and 4.4% over main at
+//! -O1, -O2, -O3 and -Os (50,709 against 48,994; 51,219 against 48,976; 51,609
+//! against 48,976; 49,860 against 47,769), m16 1.8%, 2.7%, 3.3% and 2.3%
+//! (42,540 against 41,768; 42,890 against 41,758; 43,130 against 41,758; 41,528
+//! against 40,602). DRAWGORILLA (+187 instructions at m32 -Os), PLOTSHOT
+//! (+117), DOSUN (+65) and MAKECITYSCAPE (+53) carry it. Owner splitkit-port,
+//! by 2026-10-27, closed by the per-function listing diff against main; closes
+//! when all eight are at or under main.
+//!
 //! [`prepared`] works on each function with the QB personality, in order:
 //!
 //! - Checks. A function that registers a handler without the personality, a
@@ -36,6 +56,7 @@
 //!   calls `B$OEGP` with the landing's offset, or 0.
 //! - Replaces the pad's selector (the landing pad's second member) with a load
 //!   of `$QB$LANDED`.
+//! - Erases the `FRAME` calls.
 //! - Demotes to the stack every phi of the pad and every value live into it
 //!   (`demote_phis`, `demote_live`, after LLVM's DemotePHIToStack and
 //!   DemoteRegToStack). The pad is entered with nothing the function left in a
@@ -114,7 +135,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_hir::onerror::ERR;
-pub use llrm_hir::onerror::{ONERROR, ONLOCALERROR, PERSONALITY};
+pub use llrm_hir::onerror::{FRAME, ONERROR, ONLOCALERROR, PERSONALITY};
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalVariable, InstId, Linkage, Operand, ValueDef, ValueId};
@@ -152,6 +173,18 @@ pub fn prepared(
         module.functions().filter(|(_, _, function)| personality(module, function)).map(|(id, _, _)| id).collect();
     let registrations: Vec<GlobalId> =
         [ONERROR, ONLOCALERROR].into_iter().filter_map(|one| module.named(one)).collect();
+    if let Some(marker) = module.named(FRAME) {
+        for &id in &handled {
+            let name = module.global(id).name.owned().unwrap_or_default();
+            let (context, function) = module.function_mut(&name).expect("a handled function");
+            let sites: Vec<InstId> = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| callee(context, function, inst) == Some(marker))
+                .collect();
+            sites.into_iter().try_for_each(|inst| function.erase(inst))?;
+        }
+    }
     let registers = |function: &Function| {
         function
             .walk()

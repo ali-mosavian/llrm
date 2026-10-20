@@ -256,6 +256,8 @@ pub fn reduced_with(
         ScevSession::within(context, &outer.globals, &outer.metadata, function)
     };
     let mut session = new_session(context, function);
+    // Where the function stood when the expressions were last made current.
+    let mut mark = function.mark();
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -268,8 +270,10 @@ pub fn reduced_with(
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
         for _ in 0..6 {
-            // The expressions of the loop as it was are not those of now.
-            session.forget_expressions();
+            // What the edits since changed is no longer what the expressions say;
+            // the rest of them stay, as they do in LLVM.
+            session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+            mark = function.mark();
             let split;
             {
                 let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
@@ -353,6 +357,7 @@ pub fn reduced_with(
             }
             if split {
                 session = new_session(context, function);
+                mark = function.mark();
             }
         }
     }
