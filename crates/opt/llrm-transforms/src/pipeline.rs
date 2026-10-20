@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit, loopunrollpass,
-    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
+    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower,
+    tailcallelim, trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -800,10 +800,13 @@ pub(crate) fn llvm_order(
         // L1438 form, no date.
         Phase::Late => vec![
             // The slots' options, with the pin's lines,
-            // are `simplifycfg::Options::{L1438, L2376}`.
+            // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
+            // the pin, are not slots.
+            simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
