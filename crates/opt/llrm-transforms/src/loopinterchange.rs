@@ -1626,9 +1626,21 @@ impl FunctionPass for Interchange {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        // D5: the loop pass manager's canonical form.
-        let mut changed = crate::loopsimplify::simplified(unit.function);
-        changed |= crate::lcssa::formed(unit.function).unwrap_or(false);
+        // Only a function with a nest of two loops that are each the only child
+        // of its parent is looked at.
+        let has_nest = {
+            let tree = llrm_mir::domtree::DomTree::of(unit.function);
+            let loops = llrm_mir::loopinfo::LoopInfo::analyze(unit.function, || &tree);
+            loops.top_level_loops().any(|top| !collect_perfect_nests(top).is_empty())
+        };
+        if !has_nest {
+            return PreservedAnalyses::all();
+        }
+        // D5: the loop pass manager's canonical form, on the function as it is
+        // kept if no loops are interchanged.
+        let saved = unit.function.clone();
+        crate::loopsimplify::simplified(unit.function);
+        let _ = crate::lcssa::formed(unit.function);
 
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         let tops: Vec<BlockId> = {
@@ -1636,37 +1648,44 @@ impl FunctionPass for Interchange {
             env.loops.top_level_loops().map(|one| one.get_header()).collect()
         };
         let options = self.options.clone();
-        let mut run = Run { unit, outer: std::rc::Rc::clone(&outer), options: &options, session };
+        let mut changed = false;
+        {
+            let mut run = Run { unit: &mut *unit, outer: std::rc::Rc::clone(&outer), options: &options, session };
 
-        // The loop nests, last first: the pass manager's worklist is popped
-        // from the back.
-        for top in tops.into_iter().rev() {
-            let lists = {
-                let (_, env) = run.session.split(run.unit.layout, &outer.globals, &outer.metadata);
-                match env.loops.get_loop_for(top) {
-                    Some(found) => collect_perfect_nests(found),
-                    None => continue,
-                }
-            };
-            for mut list in lists {
-                // The depth of the nest.
-                let depth = list.len() as u32;
-                if depth < options.min_loop_nest_depth || depth > options.max_loop_nest_depth {
-                    continue;
-                }
-                // A computable loop nest.
-                let computable = {
-                    let (se, env) = run.session.split(run.unit.layout, &outer.globals, &outer.metadata);
-                    let cx = env.cx(&*run.unit.context, &*run.unit.function);
-                    is_computable_loop_nest(se, &cx, &list)
+            // The loop nests, last first: the pass manager's worklist is popped
+            // from the back.
+            for top in tops.into_iter().rev() {
+                let lists = {
+                    let (_, env) = run.session.split(run.unit.layout, &outer.globals, &outer.metadata);
+                    match env.loops.get_loop_for(top) {
+                        Some(found) => collect_perfect_nests(found),
+                        None => continue,
+                    }
                 };
-                if !computable {
-                    continue;
+                for mut list in lists {
+                    // The depth of the nest.
+                    let depth = list.len() as u32;
+                    if depth < options.min_loop_nest_depth || depth > options.max_loop_nest_depth {
+                        continue;
+                    }
+                    // A computable loop nest.
+                    let computable = {
+                        let (se, env) = run.session.split(run.unit.layout, &outer.globals, &outer.metadata);
+                        let cx = env.cx(&*run.unit.context, &*run.unit.function);
+                        is_computable_loop_nest(se, &cx, &list)
+                    };
+                    if !computable {
+                        continue;
+                    }
+                    changed |= run.process_loop_list(&mut list);
                 }
-                changed |= run.process_loop_list(&mut list);
             }
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if !changed {
+            *unit.function = saved;
+            return PreservedAnalyses::all();
+        }
+        PreservedAnalyses::none()
     }
 }
 
