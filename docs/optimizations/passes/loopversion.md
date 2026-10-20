@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopversion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopversion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:ccc4fd62693b2826ef954bdc1f2e4dbb3cd5ffaf2e1c6bd878b8b807412e69dc -->
+<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:d9002d740a23d1b52cf967b21e209b8d060a7b6619d34332d8e338cb63373c7b -->
 
 # loopversion
 
@@ -30,15 +30,15 @@ take the copy's values.
                                    else:      for i: a[i * s] = 0
 ```
 
-The copy is a candidate, as in [`crate::loopfuse`](loopfuse.md): [`crate::candidate`](candidate.md)
-runs the pipeline over it, with the loop's header copied and what it loads
-unchanged hoisted ([`crate::pipeline::header_copied`](pipeline.md)) and the same done to
-the loop it is judged against, so what the assumption allows is done by
-then (a fill, one counter, a load read once). It is kept only when its
-price, spills included, is 5 percent smaller (`MIN_PERCENT`): the loop twice
-and the test are code for what they save. At most `MAX_TRIALS` loop is tried
-per body, of at most `MAX_LOOP_OPS` operations in a body of at most
-`MAX_BODY_OPS`.
+The copy is a candidate, as in [`crate::loopdistribute`](loopdistribute.md):
+[`crate::candidate`](candidate.md) runs the pipeline over it, with the loop's header
+copied and what it loads unchanged hoisted
+([`crate::pipeline::header_copied`](pipeline.md)) and the same done to the loop it is
+judged against, so what the assumption allows is done by then (a fill, one
+counter, a load read once). It is kept only when its price, spills included,
+is 5 percent smaller (`MIN_PERCENT`): the loop twice and the test are code
+for what they save. At most `MAX_TRIALS` loop is tried per body, of at most
+`MAX_LOOP_OPS` operations in a body of at most `MAX_BODY_OPS`.
 
 `LLRM_DEBUG=version` prints each loop versioned and why each other was not.
 
@@ -66,7 +66,7 @@ From unit test `a_loop_that_steps_by_a_stride_is_copied_for_one` in
 `loopversion_tests.rs`.
 
 ## Runs
-Once per body, after `unswitch`, `split`, `fuse` and `distribute` and
+Once per body, after `unswitch`, `split` and `distribute` and
 before unroll-jam, at -O3 and -Omax (`-fversion-loops`, both
 reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 pass is selected by name. The module declares `llrm.noalias.p0` first

@@ -227,6 +227,24 @@ b0:
     );
 }
 
+/// `int f(void) { for (;;) ; }` is an entry that jumps to a block that jumps
+/// to itself. simplifycfg never finished with it: the compile hung at -O1 and
+/// above.
+#[test]
+fn test_an_empty_infinite_loop_is_left_as_it_is() {
+    let text = "define void @f() {
+b0:
+  br label %b1
+
+b1:
+  br label %b1
+}
+";
+    for options in [super::Options::L1438, super::Options::L1682, super::Options::L2376] {
+        check_with(&options, text, text, &[]);
+    }
+}
+
 /// The two returns are one (`tailMergeBlocksWithSimilarFunctionTerminators`),
 /// and the two-entry phi of constants it makes a select.
 #[test]
