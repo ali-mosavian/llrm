@@ -1107,6 +1107,14 @@ thread_local! {
     pub(crate) static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// `succ`'s blocks, each once, in ascending order.
+pub fn distinct(succ: &[i64]) -> Vec<i64> {
+    let mut out = succ.to_vec();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 impl BlockOdds {
     pub const CERTAIN: f64 = 2147483648.0;
 
@@ -1129,7 +1137,7 @@ impl BlockOdds {
         succ: &[i64],
         to: i64,
     ) -> f64 {
-        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        let succ = distinct(succ);
         if !succ.contains(&to) {
             return 0.0;
         }
@@ -1152,9 +1160,9 @@ impl BlockOdds {
         from: i64,
         succ: &[i64],
     ) -> Vec<(i64, f64)> {
-        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        let succ = distinct(succ);
         if succ.len() == 1 {
-            return succ.into_iter().map(|to| (to, 1.0)).collect();
+            return vec![(succ[0], 1.0)];
         }
         let stated: Vec<(i64, Option<f64>)> = succ.iter().map(|&to| (to, self.probability(from, to))).collect();
         let known: f64 = stated.iter().filter_map(|(_, one)| *one).sum();

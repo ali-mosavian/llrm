@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import llrmbin
+from tools import envflag, llrmbin
 
 BIN = Path(os.environ["LLRM_QB"]) if os.environ.get("LLRM_QB") else llrmbin.bin_dir() / "llrm-qb"
 
@@ -23,7 +23,7 @@ BIN = Path(os.environ["LLRM_QB"]) if os.environ.get("LLRM_QB") else llrmbin.bin_
 def test_a_copied_llrm_qb_compiles_with_no_cargo_and_no_tree(tmp_path):
     if not BIN.exists():
         message = f"NOT RUN: {BIN} is missing"
-        if os.environ.get("LLRM_REQUIRE_BINARIES"):
+        if envflag.flag("LLRM_REQUIRE_BINARIES"):
             pytest.fail(message)
         warnings.warn(message, stacklevel=1)
         pytest.skip(message)

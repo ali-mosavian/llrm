@@ -201,6 +201,10 @@ impl llrm_target::Target for M32 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         4
     }
@@ -258,7 +262,10 @@ impl llrm_target::Target for M32 {
                 Some(OPCOSTS.size_costs()),
                 // Every CPU the target accepts (i486, pentium) prices alike:
                 // the x87 tables.
-                llrm_x86::tti::X86::of_cpu("i486")
+                layout()
+                    .tti
+                    .zip(layout().llvm_cpu)
+                    .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
             )

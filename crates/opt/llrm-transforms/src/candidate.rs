@@ -20,7 +20,7 @@
 //! ```
 //!
 //! # Example
-//! None: a library. [`crate::unswitch`] judges a specialised loop by work
+//! None: a library. [`crate::loopversion`] judges a specialised loop by work
 //! alone, [`crate::loopfuse`] a fused one with the spills, and
 //! [`crate::loopdistribute`] a split one by its price alone.
 //!

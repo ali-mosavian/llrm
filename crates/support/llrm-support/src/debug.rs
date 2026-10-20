@@ -23,7 +23,7 @@ pub fn require_verification() {
 /// every gate run.
 pub fn verifying() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
+    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| crate::env_set("LLRM_VERIFY"))
 }
 
 /// Whether `channel` is on.

@@ -197,6 +197,12 @@ def test_a_tool_the_caller_requires_is_never_skipped(tmp_path):
     assert "turbo" not in gate.missing_capabilities(env)
 
 
+def test_a_require_variable_set_to_zero_does_not_require_the_tool(tmp_path):
+    """LLRM_REQUIRE_TURBO=0 counted as set (a truthy string), so a host without Turbo failed instead of skipping; the compilers read `0` as off (#2279)."""
+    env = {"HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "0", "GATE_ALLOW_MISSING": "1"}
+    assert "turbo" in gate.missing_capabilities(env)
+
+
 def test_a_tool_that_is_present_is_not_missing(tmp_path):
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin/TCC.EXE").touch()

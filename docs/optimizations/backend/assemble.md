@@ -56,8 +56,8 @@ Below -Omax `directed` runs the allocator alone first and runs the spiller
 route only if at least 0.5% of the weighted instructions are spill or
 frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route,
 `measure` runs both whatever the traffic and `LLRM_DEBUG=routes` says what
-the allocator alone left. With `-fallocation-routes` off (the default below -Omax) the allocator
-runs alone.
+the allocator alone left. With `-fallocation-routes` off the allocator runs
+alone.
 
 When all functions are done the module's constants are added to the data,
 stack checks the program proves unneeded are elided, undefined names

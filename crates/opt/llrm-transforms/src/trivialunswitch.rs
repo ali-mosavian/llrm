@@ -53,8 +53,8 @@
 //!
 //! Tail recursion makes such loops: `paths(n, m)` tests `n == 0` on every trip
 //! of the loop that tests `m == 0`. A condition inside the body, or a branch
-//! that stays in the loop on both sides, is [`crate::unswitch`]'s, which
-//! copies the loop.
+//! that stays in the loop on both sides, is [`crate::simpleloopunswitch`]'s,
+//! which copies the loop.
 //!
 //! A rotated loop, one whose header jumps back to itself, is left alone (TU1).
 //!

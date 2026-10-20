@@ -16,6 +16,7 @@
 //! `fptosi`, `fptoui`, `sitofp`, `uitofp`) are folded at the nearest-even
 //! rounding `APFloat` uses; an `x86_fp80` constant is held as the nearest
 //! double, so its folds are the double's (DEVIATE: the 64-bit significand).
+//! The comparison of two floating constants is `compare_float`.
 //! DEVIATE: no vectors, no floating-point arithmetic
 //! (`FAdd`...: `ConstantFoldBinaryInstruction`'s FP cases), no constant
 //! expressions; an operation with `nuw`/`nsw`/`exact` is not folded
@@ -23,11 +24,12 @@
 //! the builder makes the instruction and a later pass decides).
 //!
 //! # Used by
-//! `build::Builder::{binary, icmp, cast, select}`.
+//! `build::Builder::{binary, icmp, fcmp, cast, select}`; `constantfolding` for
+//! `FCmp`.
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
-use crate::opcode::{BinaryOp, CastOp, IntPredicate};
+use crate::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
 /// A number and its width: `ConstantInt`, and the zero a `Null` or `Zero` is.
@@ -395,6 +397,35 @@ pub fn compare(
     compare_in(context, &[], predicate, c1, c2)
 }
 
+/// `ConstantFoldCompareInstruction`'s floating-point cases: `FCMP_FALSE` and
+/// `FCMP_TRUE` first, poison, an undef operand (a NaN is chosen for it, which
+/// makes an unordered predicate pass and an ordered one fail), then
+/// `FCmpInst::compare` of two numbers. DEVIATE: an `x86_fp80` constant is held
+/// as the nearest double, so a compare of two is not folded.
+pub fn compare_float(
+    context: &Context,
+    predicate: FloatPredicate,
+    c1: ConstantId,
+    c2: ConstantId,
+) -> Option<ConstantId> {
+    let i1 = context.types.int(1);
+    let result = |held: bool| context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) });
+    if matches!(predicate, FloatPredicate::False | FloatPredicate::True) {
+        return Some(result(predicate == FloatPredicate::True));
+    }
+    if is_poison(context, c1) || is_poison(context, c2) {
+        return Some(poison(context, i1));
+    }
+    if is_undef(context, c1) || is_undef(context, c2) {
+        return Some(result(predicate.holds(None)));
+    }
+    let ((kind, x), (_, y)) = (float_number(context, c1)?, float_number(context, c2)?);
+    if kind == FloatKind::X86Fp80 {
+        return None;
+    }
+    Some(result(predicate.holds(x.partial_cmp(&y))))
+}
+
 /// What `evaluateICmpRelation` finds of two pointer constants (an
 /// `ICmpInst::Predicate`; the others it names cannot come out of its cases).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -537,8 +568,8 @@ fn evaluate_icmp_relation(
 /// `ConstantFoldCompareInstruction`
 /// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
 /// of the module whose `globals` the constants name. DEVIATE: no
-/// vectors, floating point (`FCmpInst::compare`), and `i1` equality, which
-/// the C++ makes an `xor` expression (#2252).
+/// vectors, and `i1` equality, which the C++ makes an `xor` expression
+/// (#2252); the floating-point cases are [`compare_float`].
 pub fn compare_in(
     context: &Context,
     globals: &[GlobalValue],

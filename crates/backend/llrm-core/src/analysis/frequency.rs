@@ -14,7 +14,6 @@
 //! pair measured nothing for them, #2731). Exit: remove when `_emitted`'s use
 //! is replaced by a concept of the pin.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_mir::blockfrequency::{BlockFrequencyInfo, BranchProbability, EdgeProbabilities, FlowGraph};
@@ -164,10 +163,6 @@ impl Fact for Carried {
 pub struct Frequency {
     block: IndexMap<i64, f64>,
     taken: IndexMap<(i64, i64), f64>,
-    /// Each edge's probability as the loops' trip counts left it, for the edges
-    /// of blocks that are no bridge: a loop of 10 trips leaves by one edge in
-    /// ten, not by the one in 32 the odds say.
-    flow: IndexMap<(i64, i64), f64>,
 }
 
 // Blocks looked at to find what enters a bridge, for a test that the search
@@ -181,6 +176,14 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     pub(crate) static OF_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Frequencies worked out from the odds, not answered from a body's facts.
+    pub(crate) static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Blocks `carried` asks about, for a test that it fills them in linearly.
+    pub(crate) static FILLED_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn tick() {
@@ -214,66 +217,66 @@ impl Frequency {
     ) -> Option<Self> {
         let mut taken = IndexMap::default();
         let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
+        let mut successors: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for block in &body.blocks {
             for (to, chance) in body.odds.chances(block.at, &block.succ) {
                 taken.insert((block.at, to), chance);
                 predecessors.entry(to).or_default().push(block.at);
+                successors.entry(block.at).or_default().push(to);
             }
         }
         let mut block: IndexMap<i64, f64> =
             body.blocks.iter().filter_map(|one| table.get(&one.at).map(|runs| (one.at, *runs))).collect();
-        let mut missing: Vec<i64> = body.blocks.iter().map(|one| one.at).filter(|at| !block.contains_key(at)).collect();
-        let mut flow: Option<IndexMap<(i64, i64), f64>> = None;
-        while !missing.is_empty() {
-            let before = missing.len();
-            missing.retain(|at| {
-                let Some(from) = predecessors.get(at) else { return true };
-                if from.iter().any(|one| !block.contains_key(one)) {
-                    return true;
-                }
-                // A block put on the edge of a loop with a proven count runs as
-                // often as the trips say the edge is taken, not as the odds.
-                let whole = flow.get_or_insert_with(|| {
-                    // The blocks made since as the bridges they are: with
-                    // work in them they would read as a loop's body.
-                    let shadow: Vec<Block> = body
-                        .blocks
-                        .iter()
-                        .map(|one| {
-                            if table.contains_key(&one.at) {
-                                one.clone()
-                            } else {
-                                LirBlock { succ: one.succ.clone(), ..LirBlock::new(one.at, Vec::new()) }.into()
-                            }
-                        })
-                        .collect();
-                    Self::over(body, &shadow).flow
-                });
-                let runs = from
-                    .iter()
-                    .map(|one| block[one] * whole.get(&(*one, *at)).copied().unwrap_or(taken[&(*one, *at)]))
-                    .sum();
-                block.insert(*at, runs);
-                false
-            });
-            if missing.len() == before {
-                // A loop made since: its shape is worked out alone and scaled
-                // to the flow the table sends into it.
-                let whole = Self::over(body, &body.blocks);
-                let region: std::collections::BTreeSet<i64> = missing.iter().copied().collect();
-                let (mut sent, mut guessed) = (0.0, 0.0);
-                for (from, to) in taken.keys().filter(|(from, to)| region.contains(to) && !region.contains(from)) {
-                    sent += block.get(from).copied().unwrap_or(0.0) * taken[&(*from, *to)];
-                    guessed += whole.block(*from) * taken[&(*from, *to)];
-                }
-                let scale = if guessed > 0.0 { sent / guessed } else { 1.0 };
-                for at in region {
-                    block.insert(at, whole.block(at) * scale);
-                }
-                break;
+        // A block made since is filled in once all its predecessors are, from
+        // the edges into it (a worklist: passes over the rest were quadratic
+        // in a chain laid out last first).
+        let mut unknown: IndexMap<i64, usize> = IndexMap::default();
+        let mut ready: Vec<i64> = Vec::new();
+        for at in body.blocks.iter().map(|one| one.at).filter(|at| !block.contains_key(at)) {
+            #[cfg(test)]
+            FILLED_ASKED.with(|one| one.set(one.get() + 1));
+            let Some(from) = predecessors.get(&at) else {
+                unknown.insert(at, usize::MAX);
+                continue;
+            };
+            let count = from.iter().filter(|one| !block.contains_key(*one)).count();
+            unknown.insert(at, count);
+            if count == 0 {
+                ready.push(at);
             }
         }
-        Some(Self { block, taken, flow: IndexMap::default() })
+        while let Some(at) = ready.pop() {
+            let runs = predecessors[&at].iter().map(|one| block[one] * taken[&(*one, at)]).sum();
+            block.insert(at, runs);
+            unknown.swap_remove(&at);
+            for to in successors.get(&at).into_iter().flatten() {
+                #[cfg(test)]
+                FILLED_ASKED.with(|one| one.set(one.get() + 1));
+                if let Some(count) = unknown.get_mut(to) {
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.push(*to);
+                    }
+                }
+            }
+        }
+        let missing: Vec<i64> = unknown.keys().copied().collect();
+        if !missing.is_empty() {
+            // A loop made since: its shape is worked out alone and scaled
+            // to the flow the table sends into it.
+            let whole = Self::over(body, &body.blocks);
+            let region: std::collections::BTreeSet<i64> = missing.iter().copied().collect();
+            let (mut sent, mut guessed) = (0.0, 0.0);
+            for (from, to) in taken.keys().filter(|(from, to)| region.contains(to) && !region.contains(from)) {
+                sent += block.get(from).copied().unwrap_or(0.0) * taken[&(*from, *to)];
+                guessed += whole.block(*from) * taken[&(*from, *to)];
+            }
+            let scale = if guessed > 0.0 { sent / guessed } else { 1.0 };
+            for at in region {
+                block.insert(at, whole.block(at) * scale);
+            }
+        }
+        Some(Self { block, taken })
     }
 
     /// What no honest table breaks, whatever shape the blocks have: an entry
@@ -346,6 +349,8 @@ impl Frequency {
         blocks: &[Block],
         counting: bool,
     ) -> Self {
+        #[cfg(test)]
+        WORKED.with(|one| one.set(one.get() + 1));
         let mut taken = IndexMap::default();
         for block in blocks {
             for (to, chance) in body.odds.chances(block.at, &block.succ) {
@@ -379,7 +384,7 @@ impl Frequency {
         let mut shared: IndexMap<(i64, i64), f64> = IndexMap::default();
         for block in blocks.iter().filter(|block| bridge(block.at).is_none() || block.at == entry) {
             let list = successors.entry(block.at).or_default();
-            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
+            for to in crate::model::lir::distinct(&block.succ) {
                 let past = beyond(to);
                 *shared.entry((block.at, past)).or_default() += taken[&(block.at, to)];
                 if !list.contains(&past) {
@@ -419,7 +424,7 @@ impl Frequency {
         let mut entering: IndexMap<i64, Vec<&crate::model::lir::Block>> = IndexMap::default();
         let mapped = pending.len() > 16;
         for from in blocks.iter().filter(|_| mapped) {
-            for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
+            for to in crate::model::lir::distinct(&from.succ) {
                 entering.entry(to).or_default().push(from);
             }
         }
@@ -449,21 +454,7 @@ impl Frequency {
                 break;
             }
         }
-        // Every edge as the trips left it, through the bridges: a bridge on an
-        // edge takes its share of it.
-        let mut flow: IndexMap<(i64, i64), f64> = IndexMap::default();
-        for from in blocks.iter().filter(|block| successors.contains_key(&block.at)) {
-            for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
-                let past = beyond(to);
-                if let Some(probability) = edges.get(&(from.at, past)) {
-                    flow.insert(
-                        (from.at, to),
-                        probability * taken[&(from.at, to)] / shared[&(from.at, past)].max(f64::MIN_POSITIVE),
-                    );
-                }
-            }
-        }
-        Self { block: block.into_iter().collect(), taken, flow }
+        Self { block: block.into_iter().collect(), taken }
     }
 
     /// Per call; zero for a block the entry does not reach.
@@ -531,15 +522,16 @@ fn trip_adjusted(
 /// The blocks between `entry` and the rest, as `BlockFrequencyInfoImpl` runs
 /// over a `MachineFunction` (`MachineBlockFrequencyInfo`): each block's
 /// frequency per call, `edges` its edges' probabilities.
-struct Flow<'a> {
+struct Flow {
     blocks: Vec<BlockId>,
-    at: Vec<i64>,
     succs: Vec<BlockList>,
     preds: Vec<BlockList>,
-    edges: &'a IndexMap<(i64, i64), f64>,
+    /// Each block's successors' probabilities, normalized once, as a
+    /// `MachineBasicBlock` keeps them.
+    probabilities: Vec<Vec<BranchProbability>>,
 }
 
-impl DomGraph for Flow<'_> {
+impl DomGraph for Flow {
     fn entry(&self) -> Option<BlockId> {
         (!self.blocks.is_empty()).then_some(BlockId(0))
     }
@@ -567,24 +559,15 @@ impl DomGraph for Flow<'_> {
     }
 }
 
-impl FlowGraph for Flow<'_> {}
+impl FlowGraph for Flow {}
 
-impl EdgeProbabilities for Flow<'_> {
+impl EdgeProbabilities for Flow {
     fn get_edge_probability(
         &self,
         src: BlockId,
         index: usize,
     ) -> BranchProbability {
-        let from = self.at[src.0 as usize];
-        let mut probs: Vec<BranchProbability> = self.succs[src.0 as usize]
-            .iter()
-            .map(|to| {
-                let p = self.edges.get(&(from, self.at[to.0 as usize])).copied().unwrap_or(0.0);
-                BranchProbability::get_branch_probability_f64(p.clamp(0.0, 1.0))
-            })
-            .collect();
-        BranchProbability::normalize_probabilities(&mut probs);
-        probs[index]
+        self.probabilities[src.0 as usize][index]
     }
 }
 
@@ -610,7 +593,22 @@ fn propagated(
         succs[0] = [BlockId(1)].into_iter().collect();
         preds[1].push(BlockId(0));
     }
-    let flow = Flow { blocks: (0..at.len() as u32).map(BlockId).collect(), succs, preds, at: at.clone(), edges };
+    let probabilities = at
+        .iter()
+        .zip(&succs)
+        .map(|(from, list)| {
+            let mut probs: Vec<BranchProbability> = list
+                .iter()
+                .map(|to| {
+                    let p = edges.get(&(*from, at[to.0 as usize])).copied().unwrap_or(0.0);
+                    BranchProbability::get_branch_probability_f64(p.clamp(0.0, 1.0))
+                })
+                .collect();
+            BranchProbability::normalize_probabilities(&mut probs);
+            probs
+        })
+        .collect();
+    let flow = Flow { blocks: (0..at.len() as u32).map(BlockId).collect(), succs, preds, probabilities };
     let cycles = CycleInfo::compute(&flow);
     let bfi = BlockFrequencyInfo::calculate(&flow, &flow, &cycles);
     let entry_freq = bfi.get_entry_freq().get_frequency().max(1) as f64;
@@ -813,6 +811,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A table with blocks made since: a chain of `n` new blocks behind the
+    /// entry, laid out last first.
+    fn carried_chain(n: i64) -> LirBody {
+        let mut blocks = vec![block(1, "jmp", Operation::Jump, vec![n + 1])];
+        blocks.extend((2..=n + 1).map(|at| {
+            if at == 2 {
+                block(at, "ret", Operation::Return, vec![])
+            } else {
+                block(at, "jmp", Operation::Jump, vec![at - 1])
+            }
+        }));
+        let mut body =
+            LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let table = [(1, 1.0)].into_iter().collect();
+        body.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+        body
+    }
+
+    /// The blocks made since were filled in from a second working-out of the
+    /// whole function, for edge flows that equal the odds once `over` stopped
+    /// reading trips (#2816): 6.5 M of `d_faces`'s 23 M in frequencies.
+    #[test]
+    fn test_a_carried_table_is_not_worked_out_again() {
+        let body = carried_chain(3);
+        let before = super::WORKED.with(|one| one.get());
+        let carried = Frequency::of(&body);
+        assert_eq!(super::WORKED.with(|one| one.get()), before, "the function was worked out again");
+        assert!((2..=4).all(|at| (carried.block(at) - 1.0).abs() < 1e-12), "{carried:?}");
+    }
+
+    /// Filling in a chain of new blocks laid out last first asked every block
+    /// once per pass, one block settled per pass: quadratic. Each block is
+    /// asked about a bounded number of times.
+    #[test]
+    fn test_a_carried_table_fills_a_chain_linearly() {
+        let asked = |n| {
+            let body = carried_chain(n);
+            let before = super::FILLED_ASKED.with(|one| one.get());
+            let carried = Frequency::of(&body);
+            assert!((carried.block(2) - 1.0).abs() < 1e-12);
+            super::FILLED_ASKED.with(|one| one.get()) - before
+        };
+        let (one, four) = (asked(64), asked(256));
+        assert!(four <= 5 * one, "64 blocks asked {one} times, 256 asked {four}");
     }
 
     fn counted(

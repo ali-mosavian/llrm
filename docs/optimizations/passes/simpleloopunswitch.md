@@ -1,11 +1,13 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simpleloopunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simpleloopunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:23c2c011e82a71a3daf6357e05028fd17072292028979ad89b014f7c77001fb8 -->
+<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:01b4186f0351e2996987cfb23a170f4223c7f1494145712bb61bcfee584d0832 -->
 
 # simpleloopunswitch
 
-`SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a
-loop-invariant condition, one side of which leaves the loop, is decided
-before the loop instead of on every trip.
+`SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant
+condition, one side of which leaves the loop, is decided before the loop
+instead of on every trip (trivial). With `non_trivial`, a condition whose
+sides both stay in the loop is decided there too, at the price of a copy of
+the loop for each way (`nontrivial.rs`, chosen by `candidates.rs`).
 
 ## How it works
 `unswitch_all_trivial_conditions` walks from the loop header along the
@@ -44,6 +46,13 @@ sent to the latch's exit as well.
 - SU5 `isGuaranteedNotToBeUndefOrPoison` of a frozen invariant is the
   poison-only form with no dominator tree: MIR has no `undef`.
 - SU6 ScalarEvolution is made for the one query, not kept and forgotten.
+- SU7, SU8, SU10, SU11 are the non-trivial form's: see `nontrivial.rs`.
+- SU9 No partially invariant conditions (`hasPartialIVCondition` and
+  `buildPartialInvariantUnswitchConditionalBranch`: a loop-header test of
+  loads MemorySSA shows unchanged on a path), no injected invariant
+  conditions, no guards (MIR has none). Costs 2 of the 21 corpus functions
+  `opt` unswitches (4 of 20 rotated), which the oracle classifies. Exit: the
+  MemorySSA migration lands (mssa-green-2127, 2026-10-29).
 
 ## Example
 Before:
@@ -61,6 +70,12 @@ b0:
   %z = icmp eq i16 %n, 0
   br i1 %z, label %out, label %b0.head
 ```
+
+## Runs
+In the `trivialunswitch@732` slot of LLVM's order, LPM1 after the second
+LICM. Non-trivially at -O3 and -Omax, where the pin builds
+`SimpleLoopUnswitchPass(NonTrivial = Level == O3)`; otherwise trivially
+only.
 
 ## See also
 [`unswitchTrivialBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimpleLoopUnswitch.cpp#L580),

@@ -26,7 +26,8 @@ def triple_cpu(which: str | None = None) -> list[str]:
     if which == "host":
         return []
     one = targets()[which]
-    return [f"-mtriple={one['llvm_triple']}", f"-mcpu={one['llvm_cpu']}"]
+    triple, cpu = one["llvm_triple"], one["llvm_cpu"]
+    return [f"-mtriple={triple}", f"-mcpu={cpu}"]
 
 
 def opt_args(which: str | None = None) -> list[str]:

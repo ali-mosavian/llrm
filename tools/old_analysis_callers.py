@@ -3,7 +3,8 @@
 
     tools/old_analysis_callers.py [--root DIR] [--list FILE]
 
-Static: reads the source under crates/, no build. Lists, per old analysis (tools/old_analyses.toml), the callers as
+Static: reads the source under crates/, no build. Lists, per old analysis (the Old rows of parity.rs's ANALYSES, plus the modules and
+types in tools/old_analyses.toml), the callers as
 file:line grouped by pass (the file), then ends with the one number:
 `old-analysis callers under parity: N (X 222; without it N-222); analyses with old callers: M (M-1 without X)`: N call sites, M analyses
 with at least one, X the entries flagged `moves_last` (MemRef: the shared location type that moves last), split out.
@@ -20,15 +21,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LIST = Path(__file__).resolve().parent / "old_analyses.toml"
+REGISTRY = "crates/opt/llrm-transforms/src/parity.rs"
+OLD_ROW = re.compile(r'old_analysis\(\s*"([^"]+)",\s*"(\w+)"')
 
 
 def pattern(entry: dict) -> re.Pattern[str]:
     """`ask`: a manager analysis asked as `get::<T>`; `use`: a name used in code; `module`: a call `module::f`."""
     if "ask" in entry:
-        return re.compile(rf"\b\w+::<(?:\w+::)*{entry['ask']}>")
+        return re.compile(rf"\b\w+::<(?:\w+::)*{entry['ask']}>|<(?:\w+::)*{entry['ask']} as ")
     if "module" in entry:
         return re.compile(rf"\b{entry['module']}::\w")
     return re.compile(rf"\b{entry['use']}\b")
+
+
+def registry_entries(root: Path) -> list[dict]:
+    """The Old rows of parity.rs's ANALYSES as `ask` entries named by their type. A row whose type no source defines (the four
+    counters) is skipped. An ask is `get::<T>`; a definition never matches, so the defining file still counts its own asks."""
+    text = (root / REGISTRY).read_text()
+    sources_text = {relative: path.read_text(errors="replace") for relative, path in sources(root)}
+    entries = []
+    for _key, symbol in OLD_ROW.findall(text):
+        defining = re.compile(rf"\b(?:struct|enum|type)\s+{symbol}\b|\bimpl\b[^\n{{]*\bfor\s+{symbol}\b")
+        if any(defining.search(body) for body in sources_text.values()):
+            entries.append({"name": symbol, "ask": symbol})
+    return entries
 
 
 def code_lines(text: str):
@@ -92,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--list", type=Path, default=LIST)
     args = parser.parse_args(argv)
-    entries = tomllib.loads(args.list.read_text())["analysis"]
+    entries = registry_entries(args.root) + tomllib.loads(args.list.read_text())["analysis"]
     last = frozenset(entry["name"] for entry in entries if entry.get("moves_last"))
     print("\n".join(report(callers(args.root, entries), last)))
     return 0

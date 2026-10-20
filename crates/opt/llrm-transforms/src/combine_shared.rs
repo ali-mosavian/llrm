@@ -49,11 +49,12 @@
 //! ```
 
 use llrm_mir::constantfolding;
-use llrm_mir::context::{ConstantId, ConstantKind};
+use llrm_mir::context::{Constant, ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_binop_at;
+use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::{Combiner, handle_use_count_decrement};
@@ -234,6 +235,54 @@ pub fn has_one_use(
     match v {
         Operand::Value(value) => c.function.users(value).has_one_use(),
         _ => false,
+    }
+}
+
+impl Combiner<'_> {
+    /// `Value::hasOneUse`.
+    pub(crate) fn has_one_use(
+        &self,
+        v: Operand,
+    ) -> bool {
+        has_one_use(self, v)
+    }
+
+    /// `isa<UndefValue>`: `undef` or `poison`.
+    pub fn is_undef_value(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| matches!(
+            self.context.get(id).kind,
+            ConstantKind::Undef | ConstantKind::Poison
+        ))
+    }
+
+    /// `isa<PoisonValue>`.
+    pub fn is_poison_value(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| self.context.get(id).kind == ConstantKind::Poison)
+    }
+
+    /// `isa<ConstantPointerNull>`.
+    pub fn is_null_pointer(
+        &self,
+        v: Operand,
+    ) -> bool {
+        constant(v).is_some_and(|id| matches!(
+            self.context.get(id).kind,
+            ConstantKind::Null | ConstantKind::Zero
+        ))
+    }
+
+    /// `PoisonValue::get(ty)`.
+    pub fn poison(
+        &mut self,
+        ty: TypeId,
+    ) -> Operand {
+        Operand::Constant(self.context.constant(Constant { ty, kind: ConstantKind::Poison }))
     }
 }
 
