@@ -3,7 +3,7 @@
 //! -passes='simplifycfg<switch-to-lookup;switch-to-arithmetic>'` prints.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 use llrm_x86::tti::X86;
 
 use crate::simplifycfg::{Options, simplified_with};
@@ -23,8 +23,9 @@ fn check(
     let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    assert_eq!(simplified_with(&Options::L1438, context, &spec, function), text != expected, "{text}");
+    assert_eq!(simplified_with(&Options::L1438, context, &spec, &mut declared, function), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
