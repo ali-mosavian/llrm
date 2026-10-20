@@ -86,7 +86,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
@@ -142,6 +142,25 @@ pub fn lowered(
     let context = &module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        // Arithmetic on the condition where the constants allow it, as the
+        // DAG combiner makes it before any conditional move.
+        let all: Vec<InstId> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| function.instruction(inst).opcode == Opcode::Select)
+            .collect();
+        for select in all {
+            if wanted(&context.types.display(function.instruction(select).ty).to_string()) {
+                if !crate::backend::selectconstants::boolean(context, function, select)? {
+                    crate::backend::selectconstants::folded(
+                        context,
+                        function,
+                        select,
+                        tti.convert_select_of_constants_to_math(),
+                    )?;
+                }
+            }
+        }
         loop {
             let found = function
                 .walk()
@@ -151,38 +170,107 @@ pub fn lowered(
                         && wanted(&context.types.display(function.instruction(inst).ty).to_string()),
                 );
             let Some(select) = found else { break };
-            // Arithmetic on the condition where the constants allow it, as the
-            // DAG combiner makes it before any conditional move.
-            if crate::backend::selectconstants::folded(
-                context,
-                function,
-                select,
-                tti.convert_select_of_constants_to_math(),
-            )? {
-                continue;
-            }
-            _branched(function, select)?;
+            // `EmitLoweredSelect` case 1: the selects on one condition are
+            // lowered together, by one branch. The pin's scheduler puts them in
+            // a row; here an instruction between that reads none of their
+            // results stays above the branch, and the rest follows the join.
+            let (run, join_side) = _run(context, function, select, wanted);
+            _branched(function, &run, &join_side)?;
         }
     }
     Ok(())
 }
 
-/// `select` made a branch around an empty block into a phi.
+/// The selects that `EmitLoweredSelect` lowers with `select` (same condition,
+/// operands not made after it) and the instructions of the block that follow
+/// the join, terminator last.
+fn _run(
+    context: &llrm_mir::context::Context,
+    function: &Function,
+    select: InstId,
+    wanted: &dyn Fn(&str) -> bool,
+) -> (Vec<InstId>, Vec<InstId>) {
+    let block = function.parent(select).expect("a placed select");
+    let condition = function.instruction(select).operands[0];
+    let following: Vec<InstId> = function.iter_block(block).skip_while(|&inst| inst != select).skip(1).collect();
+    let mut run = vec![select];
+    // What is only known after the branch: the selects' results and what reads them.
+    let mut group: Vec<Operand> = function.instruction(select).result.map(Operand::Value).into_iter().collect();
+    let mut after: Vec<Operand> = Vec::new();
+    let mut effects = false;
+    // The independent, pure instructions between: kept above the branch only
+    // where a select of the run reads them, else they follow the join with
+    // the code that reads them (a compare feeding the block's branch fuses
+    // with it there).
+    let mut kept: Vec<InstId> = Vec::new();
+    for (index, &inst) in following.iter().enumerate() {
+        let one = function.instruction(inst);
+        if index + 1 == following.len() {
+            break;
+        }
+        let reads = |among: &[Operand]| one.operands.iter().any(|operand| among.contains(operand));
+        if one.opcode == Opcode::Select
+            && one.operands[0] == condition
+            && wanted(&context.types.display(one.ty).to_string())
+            && !one.operands[1..].iter().any(|operand| after.contains(operand))
+        {
+            run.push(inst);
+            group.extend(one.result.map(Operand::Value));
+            continue;
+        }
+        let pure = matches!(
+            one.opcode,
+            Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::GetElementPtr { .. }
+        ) || matches!(
+            one.opcode,
+            Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+            )
+        );
+        if reads(&group) || reads(&after) || effects || !pure {
+            effects |= !pure;
+            after.extend(one.result.map(Operand::Value));
+        } else {
+            kept.push(inst);
+        }
+    }
+    let mut needed: Vec<Operand> = run.iter().flat_map(|&inst| function.instruction(inst).operands[1..].to_vec()).collect();
+    let mut above: Vec<InstId> = Vec::new();
+    for &inst in kept.iter().rev() {
+        let one = function.instruction(inst);
+        if one.result.is_some_and(|result| needed.contains(&Operand::Value(result))) {
+            needed.extend(one.operands.iter().copied());
+            above.push(inst);
+        }
+    }
+    let join_side: Vec<InstId> =
+        following.iter().copied().filter(|inst| !run.contains(inst) && !above.contains(inst)).collect();
+    (run, join_side)
+}
+
+/// The selects of `run` (in a row, on one condition) made a branch around an
+/// empty block and a phi each (`createPHIsForCMOVsInSinkBB`).
 fn _branched(
     function: &mut Function,
-    select: InstId,
+    run: &[InstId],
+    moved: &[InstId],
 ) -> Result<(), String> {
+    let select = run[0];
     let block = function.parent(select).ok_or("a placed select")?;
-    let op = function.instruction(select).clone();
-    let [condition, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
-    let result = op.result.ok_or("a select's value")?;
-    // What follows the select moves to the join, the block's way out with it.
-    let body = function.iter_block(block).collect::<Vec<_>>();
-    let after = body.iter().position(|&inst| inst == select).expect("its own block") + 1;
+    let first = function.instruction(select).clone();
+    let condition = first.operands[0];
+    // What follows the run moves to the join, the block's way out with it.
     let join = function.create_block(None);
     function.insert_block(join, Some(block))?;
-    let moved = body[after..].to_vec();
-    function.move_run(&moved, join)?;
+    function.move_run(moved, join)?;
     for next in function.successors(join) {
         _renamed_edges(function, next, block, join);
     }
@@ -191,26 +279,46 @@ fn _branched(
     let void = function.instruction(*moved.last().expect("a terminator")).ty;
     let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
     function.insert(jump, Position::End(taken))?;
-    let (otherwise, from) = (join, block);
     let branch = function.create_instruction(
         Opcode::Br,
         void,
-        vec![condition, Operand::Block(taken), Operand::Block(otherwise)],
+        vec![condition, Operand::Block(taken), Operand::Block(join)],
         Flags::default(),
         None,
     );
     function.insert(branch, Position::End(block))?;
-    let phi = function.create_instruction(
-        Opcode::Phi,
-        op.ty,
-        vec![yes, Operand::Block(taken), no, Operand::Block(from)],
-        Flags::default(),
-        None,
-    );
-    let first = function.block(join).first().expect("a block with instructions");
-    function.insert(phi, Position::Before(first))?;
-    function.replace_all_uses_with(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
-    function.erase(select)
+    // What each result is on each edge: a phi may not read an earlier phi of its
+    // own block, so a select reading an earlier one reads what that was on the
+    // edge.
+    let mut edges: Vec<(Operand, Operand, Operand)> = Vec::new();
+    let at_top = function.block(join).first().expect("a block with instructions");
+    for &inst in run {
+        let op = function.instruction(inst).clone();
+        let [_, yes, no] = op.operands[..] else { return Err("a select of three operands".into()) };
+        let result = op.result.ok_or("a select's value")?;
+        let renamed = |value: Operand, taken_edge: bool| {
+            edges
+                .iter()
+                .find(|(earlier, _, _)| *earlier == value)
+                .map_or(value, |&(_, yes, no)| if taken_edge { yes } else { no })
+        };
+        let (yes, no) = (renamed(yes, true), renamed(no, false));
+        let phi = function.create_instruction(
+            Opcode::Phi,
+            op.ty,
+            vec![yes, Operand::Block(taken), no, Operand::Block(block)],
+            Flags::default(),
+            None,
+        );
+        function.insert(phi, Position::Before(at_top))?;
+        let made = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        edges.push((Operand::Value(result), yes, no));
+        function.replace_all_uses_with(result, made);
+    }
+    for &inst in run {
+        function.erase(inst)?;
+    }
+    Ok(())
 }
 
 /// `next`'s phis name `to` where they named `from`.
@@ -246,6 +354,79 @@ mod tests {
         tti: &dyn Tti,
     ) {
         super::lowered(module, tti, &|_| true).unwrap();
+    }
+
+    fn same_answers(
+        before: &Module,
+        after: &Module,
+        inputs: &[(i128, i128)],
+    ) {
+        for &(a, b) in inputs {
+            let arguments = |one: i128, other: i128| {
+                vec![Val::Int { bits: one as u128 & 0xFFFF, width: 16 }, Val::Int { bits: other as u128 & 0xFFFF, width: 16 }]
+            };
+            assert_eq!(
+                run(after, "f", arguments(a, b), 100).unwrap(),
+                run(before, "f", arguments(a, b), 100).unwrap(),
+                "{a}, {b}"
+            );
+        }
+    }
+
+    fn conditional_branches(module: &Module) -> usize {
+        llrm_mir::print::module(module).lines().filter(|line| line.trim_start().starts_with("br i1")).count()
+    }
+
+    /// The two selects of isqrt's step test one condition, with a subtract
+    /// between them. Each made its own branch, and the second tested a flag
+    /// the first block had materialised (`setae al; test al, al`), where the
+    /// pin's `EmitLoweredSelect` lowers the pair with one branch: x_isqrt
+    /// executed 2x the instructions.
+    #[test]
+    fn test_selects_on_one_condition_share_one_branch() {
+        let text = "define i16 @f(i16 %a, i16 %b) {
+entry:
+  %c = icmp uge i16 %a, %b
+  %p = select i1 %c, i16 %b, i16 0
+  %d = sub i16 %a, %p
+  %q = select i1 %c, i16 %a, i16 0
+  %r = add i16 %q, %d
+  ret i16 %r
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        lowered(&mut after, &llrm_mir::tti::Basic);
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("select"));
+        assert_eq!(conditional_branches(&after), 1, "{}", llrm_mir::print::module(&after));
+        same_answers(&before, &after, &[(3, 5), (9, 2), (4, 4), (0, 0), (65535, 1)]);
+    }
+
+    /// `select x, true, y` is `x | y` (`foldBoolSelectToLogic`): queens' `||`
+    /// chain made a branch per select and a setcc-and-test between them.
+    #[test]
+    fn test_a_boolean_select_is_a_logic_operation() {
+        let text = "define i1 @f(i16 %a, i16 %b) {
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp eq i16 %a, %b
+  %o = select i1 %x, i1 true, i1 %y
+  %z = icmp ult i16 %a, %b
+  %p = select i1 %o, i1 true, i1 %z
+  ret i1 %p
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        lowered(&mut after, &llrm_mir::tti::Basic);
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert_eq!(conditional_branches(&after), 0, "{}", llrm_mir::print::module(&after));
+        for (a, b) in [(0, 5), (3, 3), (4, 9), (9, 4)] {
+            let arguments =
+                vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+            assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), run(&before, "f", arguments, 100).unwrap());
+        }
     }
 
     /// `llvm.smax.i16` and its kin, which SCEV's exit values and InstCombine
