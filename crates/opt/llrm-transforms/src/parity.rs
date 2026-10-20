@@ -251,6 +251,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     partial(
+        "simplifycfg@1682",
+        Late,
+        "simplifycfg",
+        "translated SimplifyCfg at the default options runs here; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
+    ),
+    partial(
         "simplifycfg@2376",
         Late,
         "simplifycfg",
@@ -782,7 +788,7 @@ pub(crate) fn check_phase_with(
 ) -> Result<(), String> {
     let absent: Vec<&str> =
         if level == Level::O1 { ABSENT_AT_O1.iter().chain(off).copied().collect() } else { off.to_vec() };
-    // The translated `loop-rotate` is in the order only with `LLRM_ROTATE`.
+    // The translated `loop-rotate` is in the order unless `LLRM_NO_ROTATE`.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {
