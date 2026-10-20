@@ -10,6 +10,7 @@ use crate::types::TypeId;
 
 #[cfg(test)]
 mod boundary_tests;
+pub mod bittest;
 pub mod bytewise;
 #[cfg(test)]
 mod bytewise_tests;
