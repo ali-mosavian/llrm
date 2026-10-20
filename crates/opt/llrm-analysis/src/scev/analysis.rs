@@ -198,6 +198,26 @@ impl ScevSession {
         self.scev = ScalarEvolution::new();
     }
 
+    /// The expressions the edits since `mark` made stale dropped, the others
+    /// kept: after edits that leave the CFG as it was. All are dropped where
+    /// the log from `mark` is gone or the edits changed the CFG.
+    pub fn forget_since(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        mark: llrm_mir::module::Mark,
+    ) {
+        match function.touched_since(mark) {
+            Some(touched) if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() => {
+                self.ask_within(context, layout, globals, metadata, function, |se, cx| se.forget_touched(cx, &touched));
+            }
+            _ => self.forget_expressions(),
+        }
+    }
+
     /// Runs `query` with the expressions and the context they are read in.
     pub fn ask<R>(
         &mut self,
