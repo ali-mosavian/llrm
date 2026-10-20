@@ -242,6 +242,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
+    // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
+    // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
+    // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
+    // pipeline, and llrm has neither a profile nor a vectorizer.
     partial(
         "simplifycfg@1438",
         Late,
