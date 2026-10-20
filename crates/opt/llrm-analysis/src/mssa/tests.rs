@@ -841,3 +841,66 @@ b0:
     assert!(!aa.get_mod_ref_info(calls[0], &loc).is_mod_or_ref(), "before the escape");
     assert!(aa.get_mod_ref_info(calls[1], &loc).is_mod_or_ref(), "the escape itself reaches it");
 }
+
+/// A call that reads unknown memory reads a local only after the local's
+/// address was captured (`EarliestEscapeInfo`). The whole function was asked:
+/// the `error()` on the path that never reaches the capture was taken to read
+/// the slot, and DSE kept a `memset` that another path overwrote.
+#[test]
+fn test_unknown_reads_of_a_call_reach_a_local_only_after_its_capture() {
+    use super::alias::AliasQuery;
+    use crate::alias::{Effect, NONLOCAL, UNKNOWN};
+    use crate::memory::MemRef;
+    let parsed = Parsed::new(
+        "declare void @use(ptr)
+
+declare void @error() noreturn
+
+define void @f(i1 %c) {
+b0:
+  %s = alloca [4 x i8]
+  store i16 1, ptr %s
+  br i1 %c, label %b2, label %b1
+
+b1:
+  call void @use(ptr %s)
+  call void @error()
+  ret void
+
+b2:
+  call void @error()
+  unreachable
+}
+",
+    );
+    let unit = parsed.unit();
+    let references = unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
+    let calls: Vec<_> = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .collect();
+    let [_use, after_capture, before_capture] = calls[..] else { panic!("{calls:?}") };
+    let unknown: std::rc::Rc<[MemRef]> =
+        std::rc::Rc::from(vec![MemRef::reach(1, UNKNOWN.clone()), MemRef::reach(1, NONLOCAL.clone())]);
+    let effect = Effect { loads: unknown, stores: std::rc::Rc::from(Vec::new()), fills: Vec::new() };
+    let effects = [(after_capture, effect.clone()), (before_capture, effect)].into_iter().collect();
+    let accesses = Accesses::of(&unit, references, &effects);
+    let aa = AliasQuery::new(&unit, &accesses);
+    let store = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let slot = aa.location_of(store).expect("the slot");
+    assert!(aa.get_mod_ref_info(after_capture, &slot).reads, "after the capture the call may read the slot");
+    assert!(!aa.get_mod_ref_info(before_capture, &slot).reads, "before any capture it cannot");
+}
