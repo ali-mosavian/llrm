@@ -63,6 +63,17 @@ b5:
     ));
 }
 
+/// qcport host -Os: an exit entered by a switch's two cases got an exit phi
+/// with one input for its two edges, which the verifier refused.
+#[test]
+fn test_a_switch_with_two_cases_to_one_exit_gives_its_phi_two_inputs() {
+    let text = MULTIPLE_EXITS.replace(
+        "  br i1 %more, label %b2, label %b3",
+        "  switch i16 %carried, label %b2 [\n    i16 5, label %b3\n    i16 9, label %b3\n  ]",
+    );
+    assert!(closed_once(&text).contains("%carried.lcssa = phi i16 [ %carried, %b1 ], [ %carried, %b1 ]"));
+}
+
 #[test]
 fn test_bypass_phi_keeps_its_non_loop_input() {
     let text = MULTIPLE_EXITS

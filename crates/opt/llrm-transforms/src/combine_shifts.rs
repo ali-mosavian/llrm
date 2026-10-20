@@ -1817,7 +1817,11 @@ fn lshr_by_constant(
     let zext = {
         let q = query(c, Some(inst));
         pattern::cast(&q, op0, CastOp::ZExt)
-            .filter(|&(_, _, x)| has_one_use(c, op0) && should_change_type(layout, w, width(&q, x)))
+            // DEVIATE 2: LLVM asserts C < M here, as SimplifyDemandedInstructionBits has made
+            // a bigger shift zero; without it the narrow shift is poison.
+            .filter(|&(_, _, x)| {
+                has_one_use(c, op0) && should_change_type(layout, w, width(&q, x)) && amount < width(&q, x)
+            })
             .map(|(_, _, x)| x)
     };
     if let Some(x) = zext {
