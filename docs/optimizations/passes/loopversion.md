@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopversion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopversion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:d9002d740a23d1b52cf967b21e209b8d060a7b6619d34332d8e338cb63373c7b -->
+<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:8df615d638da646de5f35d54ea032daf1c33d3882d3cc3db7bb016131f2b8752 -->
 
 # loopversion
 
@@ -66,8 +66,8 @@ From unit test `a_loop_that_steps_by_a_stride_is_copied_for_one` in
 `loopversion_tests.rs`.
 
 ## Runs
-Once per body, after `unswitch`, `split` and `distribute` and
-before unroll-jam, at -O3 and -Omax (`-fversion-loops`, both
+Once per body, after `unswitch` and `distribute` and
+at -O3 and -Omax (`-fversion-loops`, both
 reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 pass is selected by name. The module declares `llrm.noalias.p0` first
 (`DeclareRestrict`), so that every pass reads a copy's restrict pointers;

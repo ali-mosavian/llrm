@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll.rs sha256:052ed9110374887073fcba4ac2fc89ac34bca80d5665c130c990f5d514148dd0 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll.rs sha256:486b9628657a7dac92276033fc6f89e59a2230ca5e0ae6be0f12db16e38b5f0e -->
 
 # unroll
 
@@ -74,7 +74,7 @@ starts again, so a loop around an expanded one may follow. A loop `peelsize`
 refused is not priced again while its blocks are unchanged.
 
 Loops with a branch in the body are copied by [`crate::peel`](peel.md) instead; a
-nest's outer loop can be unrolled only by [`crate::unroll_jam`](unroll_jam.md).
+nest's outer loop is not unrolled by this pass.
 
 `LLRM_DEBUG=unroll` prints one line per loop priced (size, unrolled size,
 boost, undecided branches, and the reason for a refusal; or "admitted")

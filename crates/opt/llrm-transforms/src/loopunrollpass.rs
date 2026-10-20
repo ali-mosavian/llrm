@@ -72,6 +72,7 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::tti::{Cost, CostKind, Tti, UnrollingPreferences};
 use llrm_mir::valuetracking::AssumptionCache;
 
+use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
@@ -110,6 +111,8 @@ pub struct Run<'a> {
     pub options: Options,
     /// Blocks an unroll merged away, erased when the pass is done.
     pub emptied: Vec<BlockId>,
+    /// The iterations peeled off the loop headed by a block in this run (PL1).
+    pub peeled: std::collections::BTreeMap<BlockId, u32>,
 }
 
 /// `TransformationMode`.
@@ -947,6 +950,8 @@ fn compute_unroll_count(
     trip_multiple: u32,
     uce: &UnrollCostEstimator,
     up: &mut UnrollingPreferences,
+    se: &mut ScalarEvolution,
+    pp: &mut PeelingPreferences,
 ) -> u32 {
     let loop_size = uce.rolled_loop_size();
 
@@ -989,7 +994,25 @@ fn compute_unroll_count(
         return factor;
     }
 
-    // 5th priority is loop peeling: `computePeelCount` is not translated (U3).
+    // 5th priority is loop peeling.
+    {
+        let cx = llrm_analysis::scev::Cx {
+            context: &*run.context,
+            globals: run.globals,
+            metadata: run.metadata,
+            function: &*run.function,
+            layout: run.layout,
+            loops: &analyzed.loops,
+            tree: &analyzed.tree,
+            assumptions: &analyzed.assumptions,
+        };
+        let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
+        crate::looppeel::compute_peel_count(se, &cx, lp, loop_size, pp, up.threshold, already);
+    }
+    if pp.peel_count != 0 {
+        up.runtime = false;
+        return 1;
+    }
 
     // Before starting partial unrolling, set `up.partial` if the user
     // explicitly asked for unrolling.
@@ -1288,6 +1311,7 @@ fn try_to_unroll_loop(
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);
+    let mut pp = PeelingPreferences::default();
     let count = compute_unroll_count(
         run,
         analyzed,
@@ -1300,6 +1324,8 @@ fn try_to_unroll_loop(
         trip_multiple,
         &uce,
         &mut up,
+        &mut se,
+        &mut pp,
     );
     if count == 0 {
         why(
@@ -1311,6 +1337,19 @@ fn try_to_unroll_loop(
             ),
         );
         return Unrolled::Unmodified;
+    }
+
+    if pp.peel_count != 0 {
+        why(run, lp, &format!("peeling {} iterations", pp.peel_count));
+        let loop_ = peelable(run.function, lp);
+        return match crate::loopclone::peeled_any_latch(run.function, &loop_, i64::from(pp.peel_count)) {
+            Ok(Some(_)) => {
+                *run.peeled.entry(header).or_insert(0) += pp.peel_count;
+                Unrolled::Peeled
+            }
+            Ok(None) => Unrolled::Unmodified,
+            Err(error) => panic!("loop peel: {error}"),
+        };
     }
 
     // Do not attempt partial/runtime unrolling in the full unroller.
@@ -1338,6 +1377,19 @@ fn try_to_unroll_loop(
     match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
         Ok(result) => result,
         Err(error) => panic!("loop unroll: {error}"),
+    }
+}
+
+/// The loop `lp` as the cloner reads it.
+fn peelable(
+    function: &Function,
+    lp: Loop,
+) -> llrm_analysis::graph::loops::Loop {
+    use llrm_analysis::cfg;
+    llrm_analysis::graph::loops::Loop {
+        header: cfg::id(lp.get_header()),
+        latches: lp.get_loop_latches(function).into_iter().map(cfg::id).collect(),
+        body: llrm_mir::forest::Body::from_blocks(lp.get_blocks().iter().map(|&block| cfg::id(block))),
     }
 }
 
@@ -1493,10 +1545,24 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();
-        if try_to_unroll_loop(run, &analyzed, lp) == Unrolled::Unmodified {
+        let result = try_to_unroll_loop(run, &analyzed, lp);
+        if result == Unrolled::Unmodified {
             continue;
         }
+        let peeled = result == Unrolled::Peeled;
         changed = true;
+        if peeled {
+            // `PartiallyUnrolled`: the loop is looked at again, as
+            // `revisitCurrentLoop` does; its analyses and its nest are made
+            // again (the cloned iterations are loops' blocks of its parent).
+            let _ = crate::lcssa::closed(run.function);
+            analyzed = Analyzed::of(run);
+            let after = unrolled_blocks(run, capacity, &body);
+            simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
+            analyzed = Analyzed::of(run);
+            work.push_front(header);
+            continue;
+        }
         // A top-level loop with no loops inside leaves the analyses of the
         // other loops as they were: they are made again only otherwise (made
         // after every loop they were `n^2` over `n` loops in a function).
@@ -1566,6 +1632,7 @@ impl FunctionPass for LoopFullUnroll {
             tti: &*tti,
             function: unit.function,
             emptied: Vec::new(),
+            peeled: Default::default(),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -1611,6 +1678,7 @@ pub fn unroll_function(
         function,
         options,
         emptied: Vec::new(),
+        peeled: Default::default(),
     };
     Ok(unroll_loops(&mut run))
 }

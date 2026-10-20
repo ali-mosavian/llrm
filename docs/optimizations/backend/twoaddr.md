@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/twoaddr.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:2a63e2113f993d841107c03d4eb3f512a7e247d51a53fbfdb4855cddce41037f -->
+<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:d33061bf64c584db96365de450c486704c2ce19b7315c2f31e8a32f7fc6d42bf -->
 
 # twoaddr
 
@@ -27,7 +27,9 @@ Three things happen first so the copy is less often needed.
   second source dies, or when neither lives on and the second is less
   blocked (by interference with the destination's copy neighbours) and
   closer by copies. Interference is computed only among the values a swap
-  asks about.
+  asks about. Before those, a sum that ends in a register (`requires`) keeps
+  the operand delivered in it as the tied one (LLVM's physical-register rule
+  in `isProfitableToCommute`), so `a + b` returned in EAX is `add eax, edx`.
 - A memory destination whose cell is not the first source (`[m] := a + b`)
   is computed in a fresh register: load, operate, store.
 

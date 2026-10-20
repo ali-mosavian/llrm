@@ -107,7 +107,7 @@
 //! [`crate::ranges`], [`crate::alias`], [`crate::peelsize`],
 //! [`crate::difference`], [`crate::guards`], [`crate::floatfacts`], and in
 //! llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
-//! `unroll_jam`, `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
+//! `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
 //! `window`, `loopidioms`, `floatloop`.
 //!
 //! # Needs

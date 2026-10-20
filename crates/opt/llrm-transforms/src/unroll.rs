@@ -69,7 +69,7 @@
 //! refused is not priced again while its blocks are unchanged.
 //!
 //! Loops with a branch in the body are copied by [`crate::peel`] instead; a
-//! nest's outer loop can be unrolled only by [`crate::unroll_jam`].
+//! nest's outer loop is not unrolled by this pass.
 //!
 //! `LLRM_DEBUG=unroll` prints one line per loop priced (size, unrolled size,
 //! boost, undecided branches, and the reason for a refusal; or "admitted")

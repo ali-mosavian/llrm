@@ -160,8 +160,7 @@ pub fn unswitched(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
-    let shape = cfg::Shape::of(function);
-    for loop_ in &shape.loops {
+    for loop_ in &cfg::loops_of(function) {
         if let Some(plan) = planned(context, callees, function, loop_) {
             moved(function, plan);
             return true;
