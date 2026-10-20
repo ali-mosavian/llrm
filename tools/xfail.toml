@@ -152,6 +152,11 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
+id = "unit llrm-transforms::jumpthread::tests::test_a_way_in_found_twice_is_copied_once"
+issue = 3018
+owner = "parity-pipeline"
+date = "2026-10-19"
+[[xfail]]
 id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
 issue = 3052
 owner = "lir-cleanup-port"
