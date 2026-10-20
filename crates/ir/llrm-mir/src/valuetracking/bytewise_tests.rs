@@ -35,7 +35,7 @@ fn dump(text: &str) -> Vec<String> {
         if function.is_declaration() {
             continue;
         }
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         let query = Query::new(&module, function, &layout);
         let mut values: Vec<Operand> =
             function.parameters().iter().map(|&parameter| Operand::Value(parameter)).collect();
@@ -60,7 +60,7 @@ fn dump(text: &str) -> Vec<String> {
                 let object = match object {
                     Operand::Constant(id) => match &module.context.get(id).kind {
                         ConstantKind::Global(global) => {
-                            format!("@{}", module.globals[global.0 as usize].name.clone().unwrap_or_default())
+                            format!("@{}", module.globals[global.0 as usize].name.owned().unwrap_or_default())
                         }
                         ConstantKind::Null => "null".to_owned(),
                         _ => "const".to_owned(),

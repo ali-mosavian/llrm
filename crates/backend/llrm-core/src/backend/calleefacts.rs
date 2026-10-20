@@ -138,14 +138,14 @@ impl CalleeFacts {
         let eligible = private
             .iter()
             .filter(|&&id| !graph.recursive(id))
-            .filter_map(|&id| module.global(id).name.clone())
+            .filter_map(|&id| module.global(id).name.owned())
             .collect();
         (
             Self {
                 callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))),
                 eligible,
                 written: RefCell::default(),
-                aligned: aligned.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
+                aligned: aligned.iter().filter_map(|&id| module.global(id).name.owned()).collect(),
             },
             graph.bottom_up(),
         )
@@ -321,7 +321,7 @@ mod tests {
         let module =
             parsed(&format!("define i16 @f(i16 %x) {{\nb0:\n  %r = call i16 @leaf(i16 %x)\n  ret i16 %r\n}}\n{LEAF}"));
         let order: Vec<_> =
-            CalleeFacts::of(&module).1.into_iter().filter_map(|id| module.global(id).name.clone()).collect();
+            CalleeFacts::of(&module).1.into_iter().filter_map(|id| module.global(id).name.owned()).collect();
         assert_eq!(order, ["leaf", "f"]);
     }
 

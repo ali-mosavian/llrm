@@ -151,7 +151,7 @@ impl Declared {
             .globals
             .iter()
             .enumerate()
-            .filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32))))
+            .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
             .collect();
         Self {
             ids: Some(ids),
@@ -188,7 +188,7 @@ impl Declared {
             held.iter()
                 .flat_map(|all| all.iter())
                 .enumerate()
-                .filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32))))
+                .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
                 .collect()
         })
     }

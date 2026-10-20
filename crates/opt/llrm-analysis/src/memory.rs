@@ -1147,7 +1147,7 @@ impl<'a> Unit<'a> {
         inst: InstId,
     ) -> Option<llrm_mir::intrinsics::Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
-        llrm_mir::intrinsics::Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
+        self.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     /// Whether `inst` calls out: a call no intrinsic's instructions
@@ -2143,8 +2143,7 @@ impl MemRef {
         let instruction = unit.function.instruction(inst);
         let Opcode::Call(_) = instruction.opcode else { return None };
         let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
-        let name = unit.globals.get(callee.0 as usize)?.name.as_deref()?;
-        let cell = match Intrinsic::named(name)? {
+        let cell = match unit.globals.get(callee.0 as usize)?.intrinsic()? {
             Intrinsic::MemSet => 1,
             Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
             _ => return None,

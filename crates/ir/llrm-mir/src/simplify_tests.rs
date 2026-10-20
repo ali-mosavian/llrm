@@ -657,7 +657,7 @@ fn simplify_cases() {
         });
         lines += &format!(
             "{} {}\n",
-            module.globals[at].name.clone().unwrap_or_default(),
+            module.globals[at].name.owned().unwrap_or_default(),
             found.map_or("none".to_owned(), |value| format!("simplified {value}"))
         );
     }

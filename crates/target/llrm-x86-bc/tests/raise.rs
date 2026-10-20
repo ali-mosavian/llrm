@@ -72,7 +72,7 @@ fn stub_runtime(module: &mut Module) {
             function.is_declaration()
                 && global.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME))
         })
-        .map(|(id, global, _)| (id, global.name.clone().unwrap()))
+        .map(|(id, global, _)| (id, global.name.owned().unwrap()))
         .collect();
     for (id, name) in routines {
         let returns = match &module.globals[id.0 as usize].kind {
@@ -484,7 +484,7 @@ fn a_push_after_the_prologue_is_no_register_save() {
         matches!(one.opcode, Opcode::Call(_))
             .then(|| match one.operands.last() {
                 Some(Operand::Constant(id)) => match module.context.get(*id).kind {
-                    ConstantKind::Global(global) => module.globals[global.0 as usize].name.clone(),
+                    ConstantKind::Global(global) => module.globals[global.0 as usize].name.owned(),
                     _ => None,
                 },
                 _ => None,

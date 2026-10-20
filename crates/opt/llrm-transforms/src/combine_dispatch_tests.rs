@@ -155,3 +155,15 @@ fn visit_xor_hoists_a_constant_out_of_the_inner_xor() {
         &[],
     );
 }
+
+#[test]
+fn visit_or_isolates_the_lowest_set_bit() {
+    check(
+        "or",
+        "i32",
+        "i32 %x",
+        "  %n = xor i32 %x, -1\n  %d = add i32 %x, -1\n  %r = or i32 %n, %d\n  ret i32 %r\n",
+        &["sub i32 0, %x", "and i32 %x, %"],
+        &[" or i32"],
+    );
+}

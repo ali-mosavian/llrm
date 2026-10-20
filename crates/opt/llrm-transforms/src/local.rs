@@ -182,7 +182,7 @@ fn intrinsic_of(
     inst: InstId,
 ) -> Option<Intrinsic> {
     let global = memory::callee(context, function, inst)?;
-    Intrinsic::named(declarations.get(global.0 as usize)?.name.as_deref()?)
+    declarations.get(global.0 as usize)?.intrinsic()
 }
 
 pub(crate) fn is_lifetime(

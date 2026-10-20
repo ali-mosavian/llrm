@@ -198,7 +198,7 @@ impl ScalarEvolution {
                 ConstantKind::Global(global) => {
                     format!(
                         "@{}",
-                        printed_name(&llrm_mir::print::quoted(&cx.global(*global).name.clone().unwrap_or_default()))
+                        printed_name(&llrm_mir::print::quoted(&cx.global(*global).name.owned().unwrap_or_default()))
                     )
                 }
                 other => format!("{other:?}"),

@@ -29,7 +29,7 @@ impl Placed {
         let mut segments: Vec<(String, Vec<String>)> = Vec::new();
         for object in &hir.data {
             let (Some(segment), Some(name)) =
-                (&object.segment, data.get(&object.id).and_then(|&id| module.global(id).name.clone()))
+                (&object.segment, data.get(&object.id).and_then(|&id| module.global(id).name.owned()))
             else {
                 continue;
             };

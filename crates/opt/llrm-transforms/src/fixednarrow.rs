@@ -107,7 +107,7 @@ impl FunctionPass for FixedNarrow {
             .map(|(_, inst)| inst)
             .filter(|&inst| {
                 llrm_mir::memory::callee(unit.context, unit.function, inst)
-                    .and_then(|callee| globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named))
+                    .and_then(|callee| globals.get(callee.0 as usize)?.intrinsic())
                     == Some(Intrinsic::Fixed { divide: false })
             })
             .collect();

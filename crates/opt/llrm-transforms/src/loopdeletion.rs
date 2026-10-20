@@ -140,8 +140,7 @@ fn is_droppable(
 ) -> bool {
     llrm_mir::memory::callee(run.context, run.function, inst)
         .and_then(|global| run.globals.get(global.0 as usize))
-        .and_then(|global| global.name.as_deref())
-        .and_then(Intrinsic::named)
+        .and_then(GlobalValue::intrinsic)
         == Some(Intrinsic::Assume)
 }
 

@@ -2629,7 +2629,7 @@ fn test_mir_infers_what_a_nib_function_touches() {
             .global(module.named(name).unwrap_or_else(|| {
                 panic!(
                     "{name} among {:?}",
-                    module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()
+                    module.globals.iter().filter_map(|one| one.name.owned()).collect::<Vec<_>>()
                 )
             }))
             .kind

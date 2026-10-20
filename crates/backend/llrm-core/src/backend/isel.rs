@@ -156,6 +156,7 @@ use llrm_analysis::memory::Unit;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::types::Types;
@@ -1629,7 +1630,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
-    exact: BTreeSet<ValueId>,
+    exact: IdSet<ValueId>,
     /// What is known of the function without memory: found once, for the body
     /// as selected.
     registers: IndexMap<ValueId, llrm_analysis::consts::Known>,
@@ -2515,7 +2516,7 @@ impl Selector<'_, '_, '_> {
         inst: InstId,
     ) -> Option<crate::backend::lifetimes::Marker> {
         let global = llrm_mir::memory::callee(&self.module.context, self.function, inst)?;
-        let starts = match Intrinsic::named(self.module.global(global).name.as_deref()?)? {
+        let starts = match self.module.global(global).intrinsic()? {
             Intrinsic::LifetimeStart => true,
             Intrinsic::LifetimeEnd => false,
             _ => return None,
@@ -2842,8 +2843,7 @@ impl Selector<'_, '_, '_> {
                     return None;
                 };
                 let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                let name = self.module.global(global).name.as_deref()?;
-                if Intrinsic::named(name) != Some(Intrinsic::MemSet) || !zero(volatile) {
+                if self.module.global(global).intrinsic() != Some(Intrinsic::MemSet) || !zero(volatile) {
                     return None;
                 }
                 (value, destination)
@@ -3438,6 +3438,34 @@ impl Selector<'_, '_, '_> {
                 self.joined(joined, offset, selector, at, out);
                 return Ok(joined);
             }
+        }
+        // `ptrtoint` of a segment-space pointer constant: the segment word of
+        // the global it addresses, a link-time address (the data initializer's
+        // `SegmentWord`). A near global's segment is DGROUP.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && let Type::Pointer(space) = self.types().get(self.module.context.get(value).ty).clone()
+            && self.spaces.is_segment(Some(space))
+            && matches!(width, 2 | 4)
+        {
+            let (global, _) = crate::backend::globals::target(self.module, &self.layout, value)
+                .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
+            let (space, index) = if self.module.global(global).address_space == self.spaces.near {
+                crate::hir::symbols::DGROUP
+            } else {
+                (Space::Group, crate::backend::globals::segment_of(global))
+            };
+            let word = Held { value: self.fresh(), width: 2 };
+            let symbol = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(word)], vec![symbol])));
+            if width == 2 {
+                return Ok(word);
+            }
+            // The integer is wider than the segment word: zero-extended.
+            let wide = Held { value: self.fresh(), width };
+            out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
+            return Ok(wide);
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -5846,7 +5874,7 @@ impl Selector<'_, '_, '_> {
             Operand::Block(_) => return refuse("a call of a block"),
         };
         let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
