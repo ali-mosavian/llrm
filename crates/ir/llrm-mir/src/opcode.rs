@@ -137,6 +137,22 @@ pub enum FloatPredicate {
 }
 
 impl FloatPredicate {
+    /// `CmpInst::isOrdered`.
+    pub fn is_ordered(self) -> bool {
+        matches!(
+            self,
+            Self::Oeq | Self::Ogt | Self::Oge | Self::Olt | Self::Ole | Self::One | Self::Ord
+        )
+    }
+
+    /// `CmpInst::isUnordered`.
+    pub fn is_unordered(self) -> bool {
+        matches!(
+            self,
+            Self::Uno | Self::Ueq | Self::Ugt | Self::Uge | Self::Ult | Self::Ule | Self::Une
+        )
+    }
+
     /// `FCmpInst::compare`
     /// ([Instructions.cpp:3916](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/Instructions.cpp#L3916)):
     /// whether the predicate holds for operands that compare as `order`, None
