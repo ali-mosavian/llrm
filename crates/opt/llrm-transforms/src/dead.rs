@@ -63,7 +63,7 @@
 //! Blocks and edges are unchanged: dominators and loops are preserved.
 //!
 //! # See also
-//! [`crate::dse`] removes dead stores; [`crate::promote`] makes the loads that
+//! [`crate::deadstore`] removes dead stores; [`crate::promote`] makes the loads that
 //! make a store dead; [`crate::loopmotion`] sinks stores out of loops.
 
 use std::collections::BTreeSet;

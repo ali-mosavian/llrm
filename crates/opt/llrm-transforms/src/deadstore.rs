@@ -75,7 +75,7 @@
 //! ```
 //!
 //! # Runs
-//! In the slot of `dse@820` (LLVM's order); the older `dse.rs` runs elsewhere.
+//! In the slot of `dse@820` (LLVM's order); the legacy pipeline runs it too.
 //!
 //! # Needs
 //! MemorySSA (`mssa`), its alias query, dominators and post-dominators, the
