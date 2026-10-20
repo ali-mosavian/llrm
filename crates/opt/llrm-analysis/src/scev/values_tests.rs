@@ -57,7 +57,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
 #[test]
 fn test_the_intrinsics_createscev_models_and_mir_lacks_are_not_mir_intrinsics() {
     for name in
-        ["llvm.abs", "llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"]
+        ["llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"]
     {
         assert!(llrm_mir::intrinsics::Intrinsic::named(name).is_none(), "{name} is a MIR intrinsic now: translate it");
     }
@@ -192,4 +192,64 @@ fn test_a_phi_of_poison_and_a_later_phi_of_its_block_is_not_that_phi() {
     let printed = print_module_values(&module);
     let a = printed.lines().find(|line| line.starts_with("%a\t")).expect("a line for %a");
     assert!(!a.contains("{0,+,1}"), "{printed}");
+}
+
+/// `llvm.abs` is `getAbsExpr` (`smax(-x, x)`, the negation `nsw` where the
+/// poison flag is set), as the pin's `print<scalar-evolution>` lists it: before
+/// MIR gained the intrinsic a call to it was an unknown.
+#[test]
+fn test_llvm_abs_is_the_smax_of_the_value_and_its_negation() {
+    let text = "declare i32 @llvm.abs.i32(i32, i1)\n\
+        define i32 @f(i32 %x) {\nentry:\n\
+          %a = call i32 @llvm.abs.i32(i32 %x, i1 false)\n\
+          %b = call i32 @llvm.abs.i32(i32 %x, i1 true)\n  ret i32 %a\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let heads: Vec<&str> = printed.lines().map(|line| line.split("\t\t").next().expect("a line")).collect();
+    assert_eq!(
+        heads,
+        [
+            "@f",
+            "%a\t((-1 * %x) smax %x) U: full-set S: full-set",
+            "%b\t((-1 * %x)<nsw> smax %x) U: full-set S: full-set",
+        ]
+    );
+}
+
+/// A hasher that counts what it is given.
+#[derive(Default)]
+struct Writes(usize);
+
+impl std::hash::Hasher for Writes {
+    fn finish(&self) -> u64 {
+        0
+    }
+
+    fn write(
+        &mut self,
+        _: &[u8],
+    ) {
+        self.0 += 1;
+    }
+}
+
+/// The key of a node went into the hasher a field at a time, 12 writes for
+/// `a + b`: 745 K of d_faces -O2's 10.3 M for `indvars` was hashing (the pin
+/// hashes a precomputed node id, 102 K). The operands are one word each now.
+#[test]
+fn test_the_key_of_a_sum_is_hashed_in_a_few_writes() {
+    use std::hash::Hash;
+
+    use super::expr::{Scev, Type, Use};
+    let key = super::Key {
+        tag: Type::Add,
+        ops: vec![Use::of(Scev(3)), Use::of(Scev(4))],
+        ty: Some(super::expr::Ty::Int(32)),
+        constant: None,
+        value: None,
+        header: None,
+    };
+    let mut writes = Writes::default();
+    key.hash(&mut writes);
+    assert!(writes.0 <= 4, "{} writes", writes.0);
 }

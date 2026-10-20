@@ -2868,6 +2868,46 @@ mod tests {
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         assert!(lines.iter().any(|line| matches!(*line, "imul eax" | "imul edx" | "imul ecx" | "imul ebx")), "{asm}");
         assert!(!lines.iter().any(|line| line.starts_with("mul ")), "{asm}");
+    /// Ten floats live across a loop spill x87 values. Every spill cell was a
+    /// qword, so a float reloaded from it kept double precision and nbody_single
+    /// printed 86015, the pin 86016. The cell is the float's own dword, as the
+    /// pin's RFP32 `fst dword` rounds; a double keeps its qword.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m32_a_float_spills_to_a_dword_cell_and_a_double_to_a_qword() {
+        let listing = |kind: &str| {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("spill.c");
+            std::fs::write(
+                &source,
+                format!(
+                    "extern {kind} g[12];\n\
+                     {kind} f(int n) {{ int i; {kind} a0 = g[0], a1 = g[1], a2 = g[2], a3 = g[3], a4 = g[4], \
+                     a5 = g[5], a6 = g[6], a7 = g[7], a8 = g[8], a9 = g[9];\n\
+                     for (i = 0; i < n; ++i) {{\n\
+                     a0 = a0 * a1 + a9; a1 = a1 * a2 + a0; a2 = a2 * a3 + a1; a3 = a3 * a4 + a2; a4 = a4 * a5 + a3;\n\
+                     a5 = a5 * a6 + a4; a6 = a6 * a7 + a5; a7 = a7 * a8 + a6; a8 = a8 * a9 + a7; a9 = a9 * a0 + a8; }}\n\
+                     return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9; }}\n"
+                ),
+            )
+            .unwrap();
+            let text =
+                super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+                    .expect("wccq records spill.c");
+            let argv: Vec<String> = ["-m32", "-O2", "-march=i486", "x.c"].map(str::to_owned).to_vec();
+            let built = super::selected(&text, "spill", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
+            llrm_core::backend::masm::text(&built).unwrap()
+        };
+        let spills = |asm: &str, width: &str| {
+            asm.lines().filter(|line| line.trim().starts_with("fstp") && line.contains(&format!("{width} ptr [e")))
+                .count()
+        };
+        let single = listing("float");
+        assert_eq!(spills(&single, "qword"), 0, "{single}");
+        assert!(spills(&single, "dword") > 0, "{single}");
+        let double = listing("double");
+        assert!(spills(&double, "qword") > 0, "{double}");
     }
 
     /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4]

@@ -282,6 +282,16 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    fn is_type_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+        // W and X registers hold i32 and i64 (narrower integers are promoted);
+        // there is no x87.
+        matches!(ty, Ty::Int(32 | 64) | Ty::Pointer | Ty::Float | Ty::Double)
+    }
+
     fn intrinsic_cost(
         &self,
         name: &str,

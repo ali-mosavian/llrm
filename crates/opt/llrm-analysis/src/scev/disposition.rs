@@ -41,6 +41,18 @@ pub(super) fn loop_of<'a>(
 
 impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L14466
+    /// Sets what is held for `key`, or adds it.
+    fn remember<K: PartialEq, D>(
+        all: &mut Vec<(K, D)>,
+        key: K,
+        d: D,
+    ) {
+        match all.iter_mut().find(|one| one.0 == key) {
+            Some(one) => one.1 = d,
+            None => all.push((key, d)),
+        }
+    }
+
     /// `ScalarEvolution::getLoopDisposition`; `None` is the function body.
     pub fn get_loop_disposition(
         &mut self,
@@ -48,13 +60,13 @@ impl ScalarEvolution {
         s: Scev,
         l: Option<BlockId>,
     ) -> LoopDisposition {
-        if let Some(&found) = self.loop_dispositions.get(&(s, l)) {
+        if let Some(&(_, found)) = self.loop_dispositions.get(&s).and_then(|all| all.iter().find(|one| one.0 == l)) {
             return found;
         }
         // The provisional answer a recursive query sees.
-        self.loop_dispositions.insert((s, l), LoopDisposition::Variant);
+        Self::remember(self.loop_dispositions.entry(s).or_default(), l, LoopDisposition::Variant);
         let d = self.compute_loop_disposition(cx, s, l);
-        self.loop_dispositions.insert((s, l), d);
+        Self::remember(self.loop_dispositions.entry(s).or_default(), l, d);
         d
     }
 
@@ -210,13 +222,13 @@ impl ScalarEvolution {
         s: Scev,
         bb: BlockId,
     ) -> BlockDisposition {
-        if let Some(&found) = self.block_dispositions.get(&(s, bb)) {
+        if let Some(&(_, found)) = self.block_dispositions.get(&s).and_then(|all| all.iter().find(|one| one.0 == bb)) {
             return found;
         }
         // The provisional answer a recursive query sees.
-        self.block_dispositions.insert((s, bb), BlockDisposition::DoesNotDominateBlock);
+        Self::remember(self.block_dispositions.entry(s).or_default(), bb, BlockDisposition::DoesNotDominateBlock);
         let d = self.compute_block_disposition(cx, s, bb);
-        self.block_dispositions.insert((s, bb), d);
+        Self::remember(self.block_dispositions.entry(s).or_default(), bb, d);
         d
     }
 
