@@ -399,3 +399,51 @@ exit:
     let tti = X86::of_cpu("i486").unwrap();
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
 }
+
+/// An 8x8 walk: the inner loop's base and addend step with the outer loop. The
+/// outer loop is entered by a conditional branch, so it has no preheader.
+const NEST: &str = "define i32 @f(i32 %k) {
+entry:
+  %p = alloca [256 x i8]
+  %g = icmp sgt i32 %k, 0
+  br i1 %g, label %outer, label %exit
+outer:
+  %o = phi i32 [ 0, %entry ], [ %o2, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %r, %latch ]
+  %q = getelementptr inbounds nuw [32 x i8], ptr %p, i32 %o
+  %s = shl nuw nsw i32 %o, 3
+  %t = or disjoint i32 %s, 1
+  br label %inner
+inner:
+  %acc1 = phi i32 [ %acc, %outer ], [ %r, %inner ]
+  %i = phi i32 [ 0, %outer ], [ %i2, %inner ]
+  %a = getelementptr inbounds nuw [4 x i8], ptr %q, i32 %i
+  store i32 %i, ptr %a
+  %v = load i32, ptr %a
+  %w = add nuw nsw i32 %t, %i
+  %m = mul i32 %v, %w
+  %r = add i32 %m, %acc1
+  %i2 = add nuw nsw i32 %i, 1
+  %c = icmp samesign ult i32 %i2, 8
+  br i1 %c, label %inner, label %latch
+latch:
+  %o2 = add nuw nsw i32 %o, 1
+  %c2 = icmp samesign ult i32 %o2, 8
+  br i1 %c2, label %outer, label %exit
+exit:
+  %res = phi i32 [ 0, %entry ], [ %r, %latch ]
+  ret i32 %res
+}
+";
+
+/// matmul -Os (465 bytes against 326 for llc): the outer loop of its last nest
+/// had no preheader, so LSR left the inner loop's `q + 32 * o` and `8 * o + 1`
+/// as per-trip values of the outer loop; `opt -passes=loop-reduce`
+/// (LoopSimplify required) steps one pointer and one counter by the outer loop.
+#[test]
+fn an_outer_loop_without_a_preheader_gets_its_invariants_stepped() {
+    let (changed, after) = reduced_on(FLAT, NEST, "i486", &[&[1], &[3]]);
+    assert!(changed, "{after}");
+    assert!(after.contains(" = phi ptr"), "{after}");
+    assert!(!after.contains(" = shl nuw nsw i32 %o, 3"), "{after}");
+}
