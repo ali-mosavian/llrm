@@ -2,7 +2,7 @@
 
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::Outer;
-use llrm_x86::tti::X86;
+use llrm_x86::tti::{RealMode, X86};
 
 use crate::testing::{parsed, printed, results};
 
@@ -307,4 +307,50 @@ fn a_zip_loop_with_three_element_exits_keeps_the_element_counter_as_opt_does() {
     assert!(changed, "{after}");
     assert_eq!(after.matches(" = phi i").count(), 4, "the element index, the sum and the two joins: {after}");
     assert_eq!(after.matches("shl i16 %8, 1").count(), 2, "{after}");
+}
+
+/// `for i < 33: p[i] = (7 * i) & 31`, stored through `p + 2 * i`.
+const FILL: &str = "define i16 @f(i16 %k) {
+b1:
+  %p = alloca [70 x i8]
+  br label %b2
+b2:
+  %v = phi i16 [ 0, %b1 ], [ %v2, %b5 ]
+  %i = phi i16 [ 0, %b1 ], [ %i2, %b5 ]
+  %c = icmp samesign ult i16 %i, 33
+  br i1 %c, label %b5, label %b6
+b5:
+  %o = shl nuw nsw i16 %i, 1
+  %a = getelementptr i8, ptr %p, i16 %o
+  %m = and i16 %v, 31
+  store i16 %m, ptr %a
+  %i2 = add nuw nsw i16 %i, 1
+  %v2 = add nuw nsw i16 %v, 7
+  br label %b2
+b6:
+  %o2 = shl i16 %k, 1
+  %q = getelementptr i8, ptr %p, i16 %o2
+  %r = load i16, ptr %q
+  ret i16 %r
+}
+";
+
+/// #3075: real mode priced like the flat model kept the `shl` and the element
+/// counter, listed as `lea` and 32-bit addresses in 16-bit code. With the
+/// prefix and its stall priced, the fill steps a pointer by 2 as before the
+/// flip.
+#[test]
+fn a_scaled_address_costs_real_mode_its_prefix_and_steps_a_pointer() {
+    let real = RealMode { scale_costs: vec![(0, 0), (1, 0), (2, 2), (4, 2), (8, 2)], registers: 6 };
+    let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+    let mut module = parsed(&format!("{DOS}{FILL}"));
+    let before = module.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert_eq!(results(&module, &[&[0], &[3]]), results(&before, &[&[0], &[3]]), "{after}");
+    assert!(after.contains("getelementptr i8, ptr %0, i16 2"), "{after}");
+    assert!(!after.contains(" shl nuw nsw i16 %i, 1"), "{after}");
 }
