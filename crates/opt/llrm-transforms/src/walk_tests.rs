@@ -432,3 +432,60 @@ b0:
     let calls = text.matches("call i32 @fib").count();
     assert!(calls <= 3, "fib was copied into itself at -Os, {calls} calls of it:\n{text}");
 }
+
+/// Two calls of itself in exclusive branches (recpow: `b * power(b, e - 1)`
+/// when the exponent is odd, `power(b * b, e >> 1)` when even) are less than
+/// one call per call: a linear recursion, which is a loop. Copied, it was
+/// peeled three levels: +3.7% clocks at -O2 against the base.
+#[test]
+fn test_two_calls_in_exclusive_branches_are_not_a_tree_to_copy() {
+    let mut module = parsed(
+        "define internal i32 @power(i32 %b, i32 %e) {
+b0:
+  %zero = icmp eq i32 %e, 0
+  br i1 %zero, label %one, label %more
+
+one:
+  ret i32 1
+
+more:
+  %bit = and i32 %e, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %mul, label %square
+
+mul:
+  %e1 = sub i32 %e, 1
+  %p = call i32 @power(i32 %b, i32 %e1)
+  %m = mul i32 %b, %p
+  %r = urem i32 %m, 30011
+  ret i32 %r
+
+square:
+  %bb = mul i32 %b, %b
+  %sq = urem i32 %bb, 30011
+  %h = lshr i32 %e, 1
+  %q = call i32 @power(i32 %sq, i32 %h)
+  ret i32 %q
+}
+
+define i32 @top(i32 %b, i32 %e) {
+b0:
+  %r = call i32 @power(i32 %b, i32 %e)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let power = text.split("define").find(|one| one.contains("@power(")).expect("@power");
+    let peeled = power.matches("urem i32").count();
+    assert!(peeled <= 2, "power was copied into itself, {peeled} remainders:\n{power}");
+}

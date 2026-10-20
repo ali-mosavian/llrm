@@ -320,8 +320,9 @@ impl ProgramPass for Walk {
 /// it is not: it calls itself in fewer than two distinct ways (calls of a
 /// function that reads and writes nothing, with the same arguments, are one
 /// call: `hanoi(n-1, a, c, b) + hanoi(n-1, a, c, b)` is a loop once the
-/// simplifier has merged them, 188 clocks, and 185482 copied before), or the
-/// body is sized for bytes (gcc does not inline recursively at -Os).
+/// simplifier has merged them, 188 clocks, and 185482 copied before), the
+/// calls it makes of itself are fewer than one per call (below), or the body
+/// is sized for bytes (gcc does not inline recursively at -Os).
 fn self_calls(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -352,6 +353,15 @@ fn self_calls(
         for (block, inst) in function.walk().filter_map(|(_, inst)| function.parent(inst).map(|block| (block, inst))) {
             frequencies.insert(inst, found.relative_to_entry(block));
         }
+    }
+    // A tree: each call of the function makes one or more calls of itself
+    // (the frequencies of its distinct self-calls over the entry's sum to 1
+    // or more). Fewer, as in recpow's two calls in exclusive branches (0.625),
+    // is a linear recursion, which tail-call elimination turns into a loop:
+    // copying it peels it (+3.7% clocks at -O2).
+    let calls: f64 = distinct.iter().map(|(_, inst)| frequencies.get(inst).copied().unwrap_or(0.0)).sum();
+    if calls < 1.0 - 1e-9 {
+        return None;
     }
     Some(frequencies)
 }
