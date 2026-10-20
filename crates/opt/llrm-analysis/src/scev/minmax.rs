@@ -163,6 +163,19 @@ impl ScalarEvolution {
         s
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3883
+    /// `getAbsExpr`: `smax(Op, -Op)`.
+    pub fn get_abs_expr(
+        &mut self,
+        cx: &Cx,
+        op: Scev,
+        is_nsw: bool,
+    ) -> Scev {
+        let flags = if is_nsw { super::expr::flags::NSW } else { super::expr::flags::NONE };
+        let negated = self.get_negative_scev(cx, op, flags);
+        self.get_smax_expr(cx, vec![Use::of(op), Use::of(negated)])
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4356
     /// `getSMaxExpr`.
     pub fn get_smax_expr(

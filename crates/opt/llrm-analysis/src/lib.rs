@@ -117,6 +117,7 @@ pub mod demandedbits;
 pub mod dependence;
 pub mod difference;
 pub mod effects;
+pub mod equivalence;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;

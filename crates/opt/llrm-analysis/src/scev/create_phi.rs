@@ -769,6 +769,18 @@ impl ScalarEvolution {
         self.get_constant_of_type(cx, int_ty, size as i128)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4407
+    /// `getStoreSizeOfExpr(IntTy, StoreTy)`.
+    pub fn get_store_size_of_expr(
+        &mut self,
+        cx: &Cx,
+        int_ty: Ty,
+        store_ty: llrm_mir::types::TypeId,
+    ) -> Scev {
+        let size = cx.layout.store_size(&cx.context.types, store_ty);
+        self.get_constant_of_type(cx, int_ty, size as i128)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4411
     /// `getOffsetOfExpr(IntTy, STy, FieldNo)`.
     pub fn get_offset_of_expr(

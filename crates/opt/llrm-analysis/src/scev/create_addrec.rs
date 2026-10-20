@@ -454,6 +454,72 @@ impl ScalarEvolution {
         result
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4912
+    /// `SCEVPostIncRewriter::rewrite`: `s` with the post-increment form of each
+    /// add recurrence of loop `l`; could-not-compute if it has an unknown that
+    /// varies in the loop.
+    pub(super) fn post_inc_rewrite(
+        &mut self,
+        cx: &Cx,
+        s: Scev,
+        l: BlockId,
+    ) -> Scev {
+        let mut seen_loop_variant_unknown = false;
+        let result = self.post_inc_visit(cx, s, l, &mut seen_loop_variant_unknown, &mut HashMap::default());
+        if seen_loop_variant_unknown { self.get_could_not_compute() } else { result }
+    }
+
+    fn post_inc_visit(
+        &mut self,
+        cx: &Cx,
+        s: Scev,
+        l: BlockId,
+        variant_unknown: &mut bool,
+        memo: &mut HashMap<Scev, Scev>,
+    ) -> Scev {
+        if let Some(&done) = memo.get(&s) {
+            return done;
+        }
+        let result = match self.node(s).kind.clone() {
+            Kind::Unknown(_) => {
+                if !self.is_loop_invariant(cx, s, Some(l)) {
+                    *variant_unknown = true;
+                }
+                s
+            }
+            // Only re-write AddRecExprs for this loop.
+            Kind::AddRec(_, header) if header == l => self.get_post_inc_expr(cx, s),
+            Kind::AddRec(..) => s,
+            _ => {
+                let mut recurse = |se: &mut Self, op: Scev| se.post_inc_visit(cx, op, l, variant_unknown, memo);
+                self.rewrite_operands(cx, s, &mut recurse)
+            }
+        };
+        memo.insert(s, result);
+        result
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L11383
+    /// `SplitIntoInitAndPostInc`: `s` on entry to loop `l` and its
+    /// post-increment form; both could-not-compute if it has an unknown that
+    /// varies in the loop.
+    pub fn split_into_init_and_post_inc(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        s: Scev,
+    ) -> (Scev, Scev) {
+        // Compute SCEV on entry of loop L.
+        let start = self.init_rewrite(cx, s, l, true);
+        if start == self.get_could_not_compute() {
+            return (start, start);
+        }
+        // Compute post increment SCEV for loop L.
+        let post_inc = self.post_inc_rewrite(cx, s, l);
+        debug_assert!(post_inc != self.get_could_not_compute(), "Unexpected could not compute");
+        (start, post_inc)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L5028
     /// `SCEVShiftRewriter::rewrite`: `s` with every add recurrence of loop
     /// `l` one iteration earlier; could-not-compute if anything in it is not
