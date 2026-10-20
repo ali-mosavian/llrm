@@ -30,9 +30,9 @@
 
 use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_mir::context::Context;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashMap;
 
 use crate::edges::{phis, single_predecessor};
 use crate::simplifycfg::Options;
@@ -89,7 +89,7 @@ pub fn folded(
     let operands = function.instruction(last).operands.clone();
     let condition = operands[0];
     let mut forwarding: Vec<(InstId, Vec<usize>)> = Vec::new();
-    let mut found: HashMap<InstId, usize> = HashMap::default();
+    let mut found: IdMap<InstId, usize> = IdMap::new();
     let mut changed = false;
     for pair in operands[2..].chunks(2) {
         let (case, Operand::Block(dest)) = (pair[0], pair[1]) else { continue };
@@ -106,10 +106,14 @@ pub fn folded(
         }
         // Phis that use the case constants indirectly.
         if let Some((phi, index)) = phi_for_forwarding(function, case, dest) {
-            let at = *found.entry(phi).or_insert_with(|| {
-                forwarding.push((phi, Vec::new()));
-                forwarding.len() - 1
-            });
+            let at = match found.get(&phi) {
+                Some(&at) => at,
+                None => {
+                    forwarding.push((phi, Vec::new()));
+                    found.insert(phi, forwarding.len() - 1);
+                    forwarding.len() - 1
+                }
+            };
             forwarding[at].1.push(index);
         }
     }

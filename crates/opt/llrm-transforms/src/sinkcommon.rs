@@ -551,10 +551,9 @@ pub fn identical_merged(
     if candidates.len() < 2 {
         return false;
     }
-    let successor = |function: &Function, block: BlockId| match function.instruction(
-        function.terminator(block).expect("a jump"),
-    )
-    .operands[..]
+    let successor = |function: &Function, block: BlockId| match function
+        .instruction(function.terminator(block).expect("a jump"))
+        .operands[..]
     {
         [Operand::Block(target)] => target,
         _ => unreachable!("a candidate is a jump"),

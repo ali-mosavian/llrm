@@ -1,7 +1,7 @@
 //! The first two expected texts are what the pinned
 //! `opt -passes='simplifycfg<no-speculate-blocks>'` prints. The third is
-//! derived by hand: `opt` also removes the dead case in `eliminateDeadSwitchCases`,
-//! which is not translated yet.
+//! derived by hand: `opt` also removes the dead case in
+//! `eliminateDeadSwitchCases`, which is not translated yet.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};
