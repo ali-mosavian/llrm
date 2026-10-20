@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 153 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 154 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -31,12 +31,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. |  | [combine_gep_index](combine_gep_index.md) |
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. |  | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. |  | [combine_gep_phi](combine_gep_phi.md) |
-| combine_loadstore | InstCombine's stores: the store that cannot matter is erased, the one that cannot execute stores poison. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
-| combine_muldivrem | InstCombine's `visitMul` and the helpers it calls, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul family's slot is flipped. | [combine_muldivrem](combine_muldivrem.md) |
+| combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
+| combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
+| combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
@@ -134,7 +135,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | sccp | Sparse conditional constant propagation. |  | [sccp](sccp.md) |
 | sccpsolver | Sparse conditional constant propagation: the solver. |  | [sccpsolver](sccpsolver.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
-| simpleloopunswitch | `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip. |  | [simpleloopunswitch](simpleloopunswitch.md) |
+| simpleloopunswitch | `SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip (trivial). |  | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
 | simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
 | sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. |  | [sinkcommon](sinkcommon.md) |
