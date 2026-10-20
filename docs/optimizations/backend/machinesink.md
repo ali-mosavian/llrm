@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:7ca2b5dcc91a15da4c6e26fdb137996bb5a6961325c3343e3bf8fa5851164529 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:39eb673188f57e687e0833b5d0bda499978299c0782b48651b87e7f2e167be70 -->
 
 # machinesink
 
@@ -11,7 +11,7 @@ critical edge where that is what lets it go. Translated from
 ## How it works
 Each block with several successors is walked bottom-up. An instruction that
 is safe to move (`safe_to_move`: no store, call or volatile access, a
-load only above every store of its block, no register but virtual ones)
+load only above every store of its block, no register but virtual ones; the flags it writes dead: read by no later instruction of its block and live into no successor, and not live into the block it moves to)
 goes to the successor that dominates every use of the values it defines
 (`FindSuccToSinkTo`): a use in a phi counts at the end of the phi's
 predecessor. Successors are tried by block frequency, then by loop depth,
