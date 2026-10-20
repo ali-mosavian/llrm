@@ -22,6 +22,7 @@ llrm-target = { workspace = true }
 tempfile = { workspace = true }
 llrm-instr = { workspace = true }
 llrm-iselgen = { workspace = true }
+llrm-target = { workspace = true }
 
 [[bin]]
 name = "llrm-arm64-llc"
