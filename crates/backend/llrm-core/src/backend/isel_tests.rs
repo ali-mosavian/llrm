@@ -1774,6 +1774,41 @@ other:
     assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
+/// InstCombine's canonical `icmp slt %s, 1` for `sle %s, 0` (and `sgt %s, -1`
+/// for `sge %s, 0`) was refused as "a call's flags read apart from its compare
+/// with zero": qbdemo and oimad failed to compile at -O1 (#2890 put InstCombine
+/// in the pipeline). The pin's `TranslateX86CC` reads them as the zero
+/// compares.
+#[test]
+fn test_the_canonical_strict_compares_of_a_flags_result_read_its_flags() {
+    for (predicate, constant, jumps, inverse) in
+        [("slt", 1, "jle ", "jg "), ("sgt", -1, "jge ", "jl "), ("slt", 0, "jl ", "jge "), ("sge", 0, "jge ", "jl ")]
+    {
+        let text = format!(
+            "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b) addrspace(1) {{
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp {predicate} i16 %s, {constant}
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}}
+"
+        );
+        let got = listing(&text, "f");
+        let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+        // Either polarity: the branch reads the call's flags, no compare
+        // between.
+        assert!(
+            got[call + 1].starts_with(jumps) || got[call + 1].starts_with(inverse),
+            "{predicate} {constant}: {got:?}"
+        );
+    }
+}
+
 /// A loop rotated left the counter's increment between B$SCMP's compare and
 /// the branch: the compare was fused, the flags no longer reached it and the
 /// function was refused (qbdemo at every level).
