@@ -66,7 +66,7 @@ use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
 
 /// Operations that read their destination.
-pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
+pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
 
 pub struct TwoAddress;
 

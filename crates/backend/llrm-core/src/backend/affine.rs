@@ -157,7 +157,7 @@ pub fn lea_start(
     {
         return None;
     }
-    let (base, index) = (cell.through.full_register32(), cell.index_through.full_register32());
+    let (base, index) = (regs.root(cell.through), regs.root(cell.index_through));
     let terms = if base == index { vec![(base, 1 + cell.scale)] } else { vec![(base, 1), (index, cell.scale)] };
     let width = i64::from(dest.width);
     Some((*dest, terms, cell.offset, cpu.operations.sized(cpu.operations.address, width, i64::from(cpu.operand_bytes))))
