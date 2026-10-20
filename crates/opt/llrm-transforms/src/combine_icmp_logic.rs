@@ -11,6 +11,16 @@
 //! ([L3445](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L3445))
 //! listed below.
 //!
+//! # How it works
+//! Both operands are `i1` compares. `getMaskedTypeForICmpPair` views each as
+//! `(A & B) ==/!= C` (a compare of a mask, a bit test, or a compare with an
+//! all-ones mask), finds the `A` they share and classifies each side
+//! (all-ones, all-zeros, mixed). The classes both sides satisfy say how to
+//! merge: OR the masks, AND them, or one side implies the other. The part of
+//! `foldAndOrOfICmps` kept merges two compares of the same operands by their
+//! compare codes and turns pairs of zero, all-ones and sign tests into one
+//! test of the OR, AND or XOR.
+//!
 //! # Example
 //! A sign test of each of two values is one test of their `or`
 //! (`(icmp slt a, 0)` is `(a & signbit) != 0`, so the sign bit is the common

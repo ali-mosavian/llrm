@@ -632,6 +632,16 @@ pub trait Tti {
         !(ONE_NODE.contains(&name) || SMALLER.contains(&name) || MORE.contains(&name))
     }
 
+    /// `isTypeLegal`: whether the target holds a value of `ty` in a register
+    /// (`TargetLowering::isTypeLegal`). The default is a 32-bit target
+    /// with no wider integer.
+    fn is_type_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer)
+    }
+
     /// `getEstimatedNumberOfCaseClusters`
     /// ([BasicTTIImpl.h:584](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L584)):
     /// the clusters a switch on `cases` (sign-extended values, `index_bits`
