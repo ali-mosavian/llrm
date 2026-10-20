@@ -78,7 +78,7 @@ fn of(
             if upperzero::wide_roots(regs, one) != 0 {
                 bits |= UNHELD;
             }
-            if exactaddress::cell_of(one).is_some() {
+            if exactaddress::cell_of(regs, one).is_some() {
                 bits |= EXACT_CELL;
             }
         }

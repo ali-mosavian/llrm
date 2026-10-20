@@ -1,8 +1,12 @@
-//! An [`Object`] as a 64-bit Mach-O relocatable file for x86-64: one segment
-//! holding the sections, a symbol table, and the 8-byte relocation entries
-//! Mach-O keeps per section, with the addend in the field. A reference to a
-//! symbol the object defines and exports, or declares, names it; a reference to
-//! a local one names its section, and the field holds the address.
+//! An [`Object`] as a 64-bit Mach-O relocatable file for x86-64 or arm64: one
+//! segment holding the sections, a symbol table, and the 8-byte relocation
+//! entries Mach-O keeps per section, with the addend in the field. A reference
+//! to a symbol the object defines and exports, or declares, names it; a
+//! reference to a local one names its section, and the field holds the address.
+//!
+//! arm64 lists its local symbols and names them in every relocation, as LLVM's
+//! writer does; an addend goes in an `ARM64_RELOC_ADDEND` entry before its
+//! relocation.
 //!
 //! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays
 //! one atom, so a call between two functions of it may be resolved where it is
@@ -29,6 +33,15 @@ const X86_64_RELOC_BRANCH: u32 = 2;
 const X86_64_RELOC_SIGNED_1: u32 = 6;
 const X86_64_RELOC_SIGNED_2: u32 = 7;
 const X86_64_RELOC_SIGNED_4: u32 = 8;
+const CPU_TYPE_ARM64: u32 = 0x0100_000C;
+const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
+const ARM64_RELOC_UNSIGNED: u32 = 0;
+const ARM64_RELOC_BRANCH26: u32 = 2;
+const ARM64_RELOC_PAGE21: u32 = 3;
+const ARM64_RELOC_PAGEOFF12: u32 = 4;
+const ARM64_RELOC_GOT_LOAD_PAGE21: u32 = 5;
+const ARM64_RELOC_GOT_LOAD_PAGEOFF12: u32 = 6;
+const ARM64_RELOC_ADDEND: u32 = 10;
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
     Unsupported(text.into())
@@ -97,22 +110,103 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
     })
 }
 
-/// The relocation type and length (log2 of the field's bytes) of a field,
-/// whether it is pc-relative, and the bytes between the field's end and the
-/// place it is relative to.
-fn relocation(kind: Kind) -> Result<(u32, u32, bool, i64), Unsupported> {
-    Ok(match kind {
-        Kind::Abs { width: 8 } => (X86_64_RELOC_UNSIGNED, 3, false, 0),
-        Kind::Abs { width: 4 } => (X86_64_RELOC_UNSIGNED, 2, false, 0),
-        Kind::Branch { width: 4 } => (X86_64_RELOC_BRANCH, 2, true, 0),
-        Kind::PcRel { width: 4, from: 4 } => (X86_64_RELOC_SIGNED, 2, true, 0),
-        Kind::PcRel { width: 4, from: 5 } => (X86_64_RELOC_SIGNED_1, 2, true, 1),
-        Kind::PcRel { width: 4, from: 6 } => (X86_64_RELOC_SIGNED_2, 2, true, 2),
-        Kind::PcRel { width: 4, from: 8 } => (X86_64_RELOC_SIGNED_4, 2, true, 4),
-        Kind::SegmentBase => return Err(unsupported("a segment selector has no Mach-O relocation")),
-        Kind::FarPointer => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
-        other => return Err(unsupported(format!("Mach-O x86-64 has no relocation for {other:?}"))),
-    })
+/// What a relocation entry says of a field.
+struct Described {
+    kind: u32,
+    /// log2 of the field's bytes.
+    length: u32,
+    pcrel: bool,
+    /// The bytes between the field's end and the place it is relative to.
+    beyond: i64,
+    /// Whether the field holds the addend. The fields of arm64's instructions
+    /// do not: the instruction keeps its zeros, and an addend travels in an
+    /// `ARM64_RELOC_ADDEND` entry before the relocation.
+    addend_in_field: bool,
+}
+
+/// What differs between the machines a Mach-O object is written for.
+trait Flavor {
+    fn cpu(&self) -> (u32, u32);
+
+    /// Whether the symbol table lists the symbols the object keeps local. A
+    /// relocation then names the symbol and not its section.
+    fn lists_locals(&self) -> bool;
+
+    fn relocation(
+        &self,
+        kind: Kind,
+    ) -> Result<Described, Unsupported>;
+}
+
+struct X8664;
+
+impl Flavor for X8664 {
+    fn cpu(&self) -> (u32, u32) {
+        (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
+    }
+
+    fn lists_locals(&self) -> bool {
+        false
+    }
+
+    fn relocation(
+        &self,
+        kind: Kind,
+    ) -> Result<Described, Unsupported> {
+        let (kind, length, pcrel, beyond) = match kind {
+            Kind::Abs { width: 8 } => (X86_64_RELOC_UNSIGNED, 3, false, 0),
+            Kind::Abs { width: 4 } => (X86_64_RELOC_UNSIGNED, 2, false, 0),
+            Kind::Branch { width: 4 } => (X86_64_RELOC_BRANCH, 2, true, 0),
+            Kind::PcRel { width: 4, from: 4 } => (X86_64_RELOC_SIGNED, 2, true, 0),
+            Kind::PcRel { width: 4, from: 5 } => (X86_64_RELOC_SIGNED_1, 2, true, 1),
+            Kind::PcRel { width: 4, from: 6 } => (X86_64_RELOC_SIGNED_2, 2, true, 2),
+            Kind::PcRel { width: 4, from: 8 } => (X86_64_RELOC_SIGNED_4, 2, true, 4),
+            Kind::SegmentBase => return Err(unsupported("a segment selector has no Mach-O relocation")),
+            Kind::FarPointer => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
+            other => return Err(unsupported(format!("Mach-O x86-64 has no relocation for {other:?}"))),
+        };
+        Ok(Described { kind, length, pcrel, beyond, addend_in_field: true })
+    }
+}
+
+/// arm64, as LLVM's `AArch64MachObjectWriter` writes it
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MachObjectWriter.cpp>).
+struct Arm64;
+
+impl Flavor for Arm64 {
+    fn cpu(&self) -> (u32, u32) {
+        (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
+    }
+
+    fn lists_locals(&self) -> bool {
+        true
+    }
+
+    fn relocation(
+        &self,
+        kind: Kind,
+    ) -> Result<Described, Unsupported> {
+        let (kind, length, pcrel, addend_in_field) = match kind {
+            Kind::Abs { width: 8 } => (ARM64_RELOC_UNSIGNED, 3, false, true),
+            Kind::Abs { width: 4 } => (ARM64_RELOC_UNSIGNED, 2, false, true),
+            Kind::Branch26 => (ARM64_RELOC_BRANCH26, 2, true, false),
+            Kind::Page21 => (ARM64_RELOC_PAGE21, 2, true, false),
+            Kind::PageOffset12 { .. } => (ARM64_RELOC_PAGEOFF12, 2, false, false),
+            Kind::GotPage21 => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
+            Kind::GotPageOffset12 => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
+            other => return Err(unsupported(format!("Mach-O arm64 has no relocation for {other:?}"))),
+        };
+        Ok(Described { kind, length, pcrel, beyond: 0, addend_in_field })
+    }
+}
+
+/// The flavor of the machine `arch`.
+fn flavor(arch: Arch) -> Result<&'static dyn Flavor, Unsupported> {
+    match arch {
+        Arch::X8664 => Ok(&X8664),
+        Arch::Arm64 => Ok(&Arm64),
+        other => Err(unsupported(format!("{other:?} has no Mach-O writer"))),
+    }
 }
 
 fn align_up(
@@ -124,9 +218,7 @@ fn align_up(
 
 /// `object` as a Mach-O relocatable file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.arch != Arch::X8664 {
-        return Err(unsupported(format!("{:?} has no Mach-O writer: only x86-64 is written", object.arch)));
-    }
+    let flavor = flavor(object.arch)?;
     // DWARF's sections are this writer's, made from the object's debug
     // information.
     let expanded;
@@ -176,17 +268,26 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 && matches!(object.symbols[one].definition, Definition::Defined { .. })
         })
         .collect();
+    // The local ones come first in the table, where the machine lists them.
+    let locals: Vec<usize> = (0..object.symbols.len())
+        .filter(|&one| {
+            flavor.lists_locals()
+                && object.symbols[one].binding == Binding::Local
+                && matches!(object.symbols[one].definition, Definition::Defined { .. })
+        })
+        .collect();
+    // ...in the order the object defines them, as LLVM lists them.
     let mut undefined: Vec<usize> =
         (0..object.symbols.len()).filter(|&one| object.symbols[one].definition == Definition::Undefined).collect();
     defined.sort_by(|&a, &b| object.symbols[a].name.cmp(&object.symbols[b].name));
     undefined.sort_by(|&a, &b| object.symbols[a].name.cmp(&object.symbols[b].name));
     let mut index_of = vec![None; object.symbols.len()];
-    for (at, &one) in defined.iter().chain(&undefined).enumerate() {
+    for (at, &one) in locals.iter().chain(&defined).chain(&undefined).enumerate() {
         index_of[one] = Some(at as u32);
     }
     let mut strings = vec![0u8];
     let mut nlist = Vec::new();
-    for &one in defined.iter().chain(&undefined) {
+    for &one in locals.iter().chain(&defined).chain(&undefined) {
         let symbol = &object.symbols[one];
         let name = strings.len() as u32;
         strings.extend(symbol.name.as_bytes());
@@ -194,7 +295,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         put32(&mut nlist, name);
         match symbol.definition {
             Definition::Defined { section, offset } => {
-                nlist.extend([N_SECT | N_EXT, ordinal(section) as u8]);
+                let external = if symbol.binding == Binding::Public { N_EXT } else { 0 };
+                nlist.extend([N_SECT | external, ordinal(section) as u8]);
                 nlist.extend(0u16.to_le_bytes());
                 put64(&mut nlist, (address[section] + offset) as u64);
             }
@@ -213,7 +315,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
-            let (kind, length, pcrel, beyond) = relocation(one.kind)?;
+            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one.kind)?;
             let width = one.kind.width();
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
@@ -232,6 +334,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
             }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
                 Some(symbol) => (symbol, true, one.addend - beyond),
+                None if !addend_in_field => {
+                    return Err(unsupported(format!(
+                        "{}: an instruction field refers to a section, not to a symbol",
+                        section.name
+                    )));
+                }
                 None => {
                     // A local symbol: its section, and the address in the
                     // object's own space, which the
@@ -248,6 +356,27 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                     (ordinal(home), false, (address[home] + offset) as i64 + one.addend - beyond - place)
                 }
             };
+            if !addend_in_field {
+                // The addend rides in an entry before the one it belongs to.
+                if one.addend != 0 {
+                    if !(-(1 << 23)..1 << 23).contains(&one.addend) {
+                        return Err(unsupported(format!(
+                            "{}: an addend of {} does not fit 24 bits",
+                            section.name, one.addend
+                        )));
+                    }
+                    let addend = (one.addend as u32) & 0x00FF_FFFF;
+                    made.push((one.at, [one.at as u32, addend | length << 25 | ARM64_RELOC_ADDEND << 28]));
+                }
+                made.push((
+                    one.at,
+                    [
+                        one.at as u32,
+                        symbolnum | u32::from(pcrel) << 24 | length << 25 | u32::from(external) << 27 | kind << 28,
+                    ],
+                ));
+                continue;
+            }
             let fits = match (width, pcrel) {
                 (8, _) => true,
                 (_, true) => i32::try_from(field).is_ok(),
@@ -287,7 +416,10 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     for &one in order.iter().take(file_backed) {
         offsets[one] = first + address[one];
     }
-    let mut at = first + file_size;
+    // The section data is padded to 8 bytes, as `MachObjectWriter::writeObject`
+    // does for a 64-bit file
+    // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/MachObjectWriter.cpp#L914>).
+    let mut at = align_up(first + file_size, 8);
     let mut reloc_offsets = vec![0usize; object.sections.len()];
     for &one in &order {
         if !entries[one].is_empty() {
@@ -300,7 +432,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let strings_at = symbols_at + nlist.len();
 
     let mut out = Vec::new();
-    for field in [MH_MAGIC_64, CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL, MH_OBJECT, 3, commands as u32, 0, 0] {
+    let (cpu_type, cpu_subtype) = flavor.cpu();
+    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, 3, commands as u32, 0, 0] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_SEGMENT_64);
@@ -328,13 +461,18 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     }
     put32(&mut out, LC_SYMTAB);
     put32(&mut out, 24);
-    for field in [symbols_at as u32, (defined.len() + undefined.len()) as u32, strings_at as u32, strings.len() as u32]
-    {
+    for field in [
+        symbols_at as u32,
+        (locals.len() + defined.len() + undefined.len()) as u32,
+        strings_at as u32,
+        strings.len() as u32,
+    ] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_DYSYMTAB);
     put32(&mut out, 80);
-    for field in [0, 0, 0, defined.len() as u32, defined.len() as u32, undefined.len() as u32] {
+    let (nlocal, nextdef) = (locals.len() as u32, defined.len() as u32);
+    for field in [0, nlocal, nlocal, nextdef, nlocal + nextdef, undefined.len() as u32] {
         put32(&mut out, field);
     }
     out.resize(out.len() + 72 - 24, 0);
@@ -508,6 +646,162 @@ _flag:  .byte 0
         assert_eq!(mine.replace("mine.o", "x"), theirs.replace("theirs.o", "x"));
     }
 
+    const ARM64_REFERENCE: &str = "
+        .section __TEXT,__text
+        .p2align 2
+        .globl _main
+_main:
+        bl _puts
+        adrp x0, _msg@PAGE
+        add x0, x0, _msg@PAGEOFF
+        adrp x1, _count@PAGE
+        ldr w2, [x1, _count@PAGEOFF]
+        adrp x3, _ext@GOTPAGE
+        ldr x3, [x3, _ext@GOTPAGEOFF]
+        bl _puts+8
+        adrp x4, _count@PAGE+16
+        mov w0, #0
+        ret
+        .section __TEXT,__const
+_msg:   .asciz \"hi\"
+        .section __DATA,__data
+_count: .long 7
+        .quad _count
+";
+
+    /// The pinned build the arm64 comparison reads, if it is there. The
+    /// version it prints is the premise: a different LLVM is not the oracle.
+    fn arm64_tools() -> Option<(String, String, String)> {
+        let build = std::env::var("LLVM_BUILD")
+            .unwrap_or_else(|_| format!("{}/scratch/llvm-build-aarch64", std::env::var("HOME").unwrap_or_default()));
+        let tool = |name: &str| format!("{build}/bin/{name}");
+        let (mc, objdump, readobj) = (tool("llvm-mc"), tool("llvm-objdump"), tool("llvm-readobj"));
+        if ![&mc, &objdump, &readobj].iter().all(|path| Path::new(path).exists()) {
+            return None;
+        }
+        let version = Command::new(&objdump).arg("--version").output().ok()?;
+        let version = String::from_utf8_lossy(&version.stdout).into_owned();
+        assert!(version.contains("24.0.0git"), "not the pinned LLVM: {version}");
+        Some((mc, objdump, readobj))
+    }
+
+    /// The relocation entries as written (`llvm-readobj` lists the
+    /// `ARM64_RELOC_ADDEND` entries `llvm-objdump` folds away), the code with
+    /// its symbols, and every section's bytes.
+    fn arm64_dump(
+        (objdump, readobj): (&str, &str),
+        object: &Path,
+    ) -> String {
+        let run = |tool: &str, args: &[&str]| {
+            let said = Command::new(tool).args(args).arg(object).output().unwrap();
+            assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+            String::from_utf8_lossy(&said.stdout).into_owned()
+        };
+        let name = object.file_name().unwrap().to_string_lossy().into_owned();
+        [run(readobj, &["-r", "-S"]), run(objdump, &["-t", "-s"])].join("\n").replace(&name, "x")
+    }
+
+    fn arm64_program() -> Object {
+        let words = [
+            0x9400_0000u32,
+            0x9000_0000,
+            0x9100_0000,
+            0x9000_0001,
+            0xB940_0022,
+            0x9000_0003,
+            0xF940_0063,
+            0x9400_0000,
+            0x9000_0004,
+            0x5280_0000,
+            0xD65F_03C0,
+        ];
+        let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let relocs = vec![
+            reloc(0, Kind::Branch26, 2, 0),
+            reloc(4, Kind::Page21, 1, 0),
+            reloc(8, Kind::PageOffset12 { access: None }, 1, 0),
+            reloc(12, Kind::Page21, 3, 0),
+            reloc(16, Kind::PageOffset12 { access: Some(2) }, 3, 0),
+            reloc(20, Kind::GotPage21, 4, 0),
+            reloc(24, Kind::GotPageOffset12, 4, 0),
+            reloc(28, Kind::Branch26, 2, 8),
+            reloc(32, Kind::Page21, 3, 16),
+        ];
+        let mut data = vec![7, 0, 0, 0];
+        data.extend([0; 8]);
+        let mut text = section("text", Role::Text, text, relocs);
+        text.align = 4;
+        let local = |name: &str, section, offset| Symbol { binding: Binding::Local, ..defined(name, section, offset) };
+        Object {
+            name: "m.s".into(),
+            arch: Arch::Arm64,
+            sections: vec![
+                text,
+                section("const", Role::ROData, b"hi\0".to_vec(), vec![]),
+                section("data", Role::Data, data, vec![reloc(4, Kind::Abs { width: 8 }, 3, 0)]),
+            ],
+            symbols: vec![
+                defined("_main", 0, 0),
+                local("_msg", 1, 0),
+                external("_puts"),
+                local("_count", 2, 0),
+                external("_ext"),
+            ],
+            omf_groups: vec![],
+            omf_comdat: vec![],
+            debug: None,
+        }
+    }
+
+    /// What `-t` says of the symbols the program names, in the order of the
+    /// table: the assembler's own `ltmp` section symbols are its choice.
+    fn named_symbols(dump: &str) -> Vec<String> {
+        dump.lines()
+            .filter(|line| ["_main", "_msg", "_puts", "_count", "_ext"].iter().any(|name| line.ends_with(name)))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The object, dumped by the pinned llvm-objdump, says what the pinned
+    /// llvm-mc's object of the same arm64 program says: every relocation kind
+    /// (BRANCH26, PAGE21, PAGEOFF12, GOT_LOAD_*, UNSIGNED) against a local,
+    /// a global and an undefined symbol, two addends (`ARM64_RELOC_ADDEND`
+    /// entries), the section contents and the symbols.
+    #[test]
+    fn arm64_reads_as_llvm_mc_writes_the_same_program() {
+        let Some((mc, objdump, readobj)) = arm64_tools() else {
+            eprintln!("skipped: no pinned LLVM with AArch64");
+            return;
+        };
+        let scratch = tempfile::tempdir().unwrap();
+        let (mine, theirs, source) =
+            (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
+        std::fs::write(&mine, write(&arm64_program()).unwrap()).unwrap();
+        std::fs::write(&source, ARM64_REFERENCE).unwrap();
+        let made = Command::new(mc)
+            .args(["-triple", "arm64-apple-macos", "-filetype=obj"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&theirs)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let (mine, theirs) = (arm64_dump((&objdump, &readobj), &mine), arm64_dump((&objdump, &readobj), &theirs));
+        // Premise: the dump of the reference does list its relocations.
+        assert!(theirs.contains("ARM64_RELOC_ADDEND") && theirs.contains("ARM64_RELOC_GOT_LOAD_PAGEOFF12"), "{theirs}");
+        assert_eq!(named_symbols(&mine), named_symbols(&theirs));
+        let body = |dump: &str| {
+            dump.lines()
+                .filter(|line| !line.contains("ltmp") && !line.contains("SYMBOL TABLE"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (mine, theirs) = (body(&mine), body(&theirs));
+        let first = mine.lines().zip(theirs.lines()).find(|(mine, theirs)| mine != theirs);
+        assert_eq!(first, None, "first difference, mine then theirs");
+        assert_eq!(mine, theirs);
+    }
+
     /// A reference to a symbol the object keeps local names its section, and
     /// the link resolves it: the call lands on clang's function, the load
     /// on the local data.
@@ -629,7 +923,7 @@ _flag:  .byte 0
         assert!(write(&far).unwrap_err().0.contains("selector"));
         let mut other = program();
         other.arch = Arch::I386;
-        assert!(write(&other).unwrap_err().0.contains("only x86-64"));
+        assert!(write(&other).unwrap_err().0.contains("has no Mach-O writer"));
     }
 
     /// An object that asks for CodeView or Turbo Debugger information is

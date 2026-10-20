@@ -150,14 +150,17 @@ pub struct Pricing<'a> {
 pub fn lowered(
     module: &mut Module,
     pricing: &Pricing,
+    wanted: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
     let outer = Outer::of(module, pricing.target.clone());
     let context = &module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         loop {
-            let found =
-                function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == Opcode::Select);
+            let found = function.walk().map(|(_, inst)| inst).find(|&inst| {
+                function.instruction(inst).opcode == Opcode::Select
+                    && wanted(&context.types.display(function.instruction(inst).ty).to_string())
+            });
             let Some(select) = found else { break };
             // Arithmetic on the condition where the constants allow it, as the
             // DAG combiner makes it before any conditional move.
@@ -402,7 +405,7 @@ mod tests {
         let layout = module.datalayout.as_deref().map(|text| llrm_mir::datalayout::DataLayout::parse(text).unwrap());
         let layout = layout.unwrap_or_default();
         let pricing = super::Pricing { target: None, layout: &layout, tti };
-        super::lowered(module, &pricing).unwrap();
+        super::lowered(module, &pricing, &|_| true).unwrap();
     }
 
     /// A select between a division and a sum: the division is run on its own
