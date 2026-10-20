@@ -30,8 +30,9 @@ ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/debug/llrm-mir"
 TARGET = ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]
 # Differences with a stated deviation (the plan page), not failures.
-CLASSIFIED = {("nib-control", "count"): "U3: opt peels the loop (computePeelCount), llrm has no peeling until S2"}
-REQUIRED = {"counted_small", "counted_large", "table_sum", "table_cost", "nested_inner", "unknown_trips", "header_tested", "two_exits"}
+PL5 = "PL5: opt runs simplifyLoopIVs after a peel (nsw/nuw/samesign inferred, so the residual loop's compare folds); llrm does not"
+CLASSIFIED = {("optimized/nib-control", "count"): PL5, ("optimized/demo-deedlines", "RGBLIGHTS"): PL5}
+REQUIRED = {"counted_small", "counted_large", "table_sum", "table_cost", "nested_inner", "unknown_trips", "header_tested", "two_exits", "peel_compare"}
 
 
 def run(cmd, stdin=None):
@@ -169,7 +170,8 @@ def main():
         got_loops = loops_by_function(got.stdout.replace("define internal i16 @", "define internal i16 @"))
         clean_want, clean_got = {}, {}
         for fn_, text_ in before_fns.items():
-            if before_loops.get(fn_, 0) == want_loops.get(fn_, 0) == got_loops.get(fn_, 0):
+            peeled = ".peel" in want_fns.get(fn_, "")
+            if before_loops.get(fn_, 0) == want_loops.get(fn_, 0) == got_loops.get(fn_, 0) and not peeled:
                 continue
             a_ = cleaned(stripped(spliced(want, fn_, want_fns[fn_]) or ""))
             b_ = cleaned(stripped(spliced(want, fn_, got_fns.get(fn_, "{}")) or ""))
@@ -179,10 +181,6 @@ def main():
             total += 1
             wl, gl = want_loops.get(fn, 0), got_loops.get(fn, 0)
             unrolled += before_loops.get(fn, 0) != wl
-            # opt peels (computePeelCount): its blocks are named `.peel`.
-            if ".peel" in want_fns.get(fn, "") and (wl != gl or shape(clean_want.get(fn, "")) != shape(clean_got.get(fn, ""))):
-                classified.append(f"{name} @{fn}: U3: opt peels the loop, llrm has no peeling until S2")
-                continue
             if wl != gl and (name, fn) in CLASSIFIED:
                 classified.append(f"{name} @{fn}: {CLASSIFIED[(name, fn)]}")
                 continue
@@ -190,8 +188,12 @@ def main():
                 failed += 1
                 bad.append(f"{name} @{fn}: loops left: opt {wl}, llrm {gl} (before {before_loops.get(fn, 0)})")
                 continue
-            if wl != before_loops.get(fn, 0):
+            # A peel leaves the loops as they were: opt's `.peel` blocks say it ran.
+            if wl != before_loops.get(fn, 0) or ".peel" in want_fns.get(fn, ""):
                 a, b = clean_want.get(fn), clean_got.get(fn)
+                if (name, fn) in CLASSIFIED:
+                    classified.append(f"{name} @{fn}: {CLASSIFIED[(name, fn)]}")
+                    continue
                 if a is None or b is None or shape(a) != shape(b):
                     failed += 1
                     bad.append(f"{name} @{fn}: unrolled differently\n--- opt {shape(a) if a else None}\n--- llrm {shape(b) if b else None}")

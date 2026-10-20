@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looppeel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looppeel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looppeel.rs sha256:10990be5a43575a45e91ae9dc3939eeda13cc0212408780e8ab86c4e8b161985 -->
+<!-- src: crates/opt/llrm-transforms/src/looppeel.rs sha256:a93b4c2ccefd97274046c9ce10355c191c742706760690718054fb2af999a67e -->
 
 # looppeel
 
@@ -35,13 +35,20 @@ copied ahead of the loop, each keeping its exits.
   node): the caller keeps the count for the header in the run, so a loop
   revisited in the same run is bounded as the pin's is. Exit: metadata nodes
   made by function passes.
-- PL2 `peelToTurnInvariantLoadsDereferenceable` is not translated:
-  `isDereferenceablePointer` is asked with the dominator tree and the
-  assumptions, which `valuetracking::dereferenceable` is not.
+- PL2 `isDereferenceablePointer` of
+  `peelToTurnInvariantLoadsDereferenceable` is
+  `valuetracking::dereferenceable`: an argument attribute, an alloca or a
+  global of known size; not the pin's walk with the dominator tree and the
+  assumptions, so a load the pin proves dereferenceable by those is peeled
+  for here. Exit: that walk.
 - PL3 Peeling the last iteration (`PeelLast`, `canPeelLastIteration`,
   `shouldPeelLastIteration`) is not translated: no loop is peeled from the
   end, and a count that would have been is dropped.
 - PL4 Profile-based peeling is not translated (no profile data).
+- PL5 `simplifyLoopIVs` is not run after a peel (`SimplifyIndvar` is the
+  indvars pass's `Edit`): the residual loop keeps the `nsw`/`nuw`/`samesign`
+  `opt` infers, so a compare of the peeled phi against the bound stays in it
+  (demo-deedlines `RGBLIGHTS`). Exit: `simplifyLoopIVs` for the unroller.
 
 ## Example
 The loop of `bintree` (`for (i = 1; i <= 300; ++i) { t[3*i] = ...; if (i >

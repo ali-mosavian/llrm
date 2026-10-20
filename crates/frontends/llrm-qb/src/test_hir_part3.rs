@@ -1473,7 +1473,7 @@ fn test_the_shift_of_one_counter_is_made_once_per_trip() {
     let source = written(&directory, "T.BAS", SEVEN_TERMS.as_bytes());
     let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "T");
     let doubled = regex::Regex::new(r"lea\s+\w+, \[(\w+)\+(\w+)\]").unwrap();
-    let mut seen = std::collections::HashMap::new();
+    let mut seen = llrm_support::hash::HashMap::default();
     for line in inner.lines().filter(|line| doubled.captures(line).is_some_and(|found| found[1] == found[2])) {
         *seen.entry(line.trim().to_owned()).or_insert(0) += 1;
     }

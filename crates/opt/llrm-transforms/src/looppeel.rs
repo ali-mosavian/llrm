@@ -30,13 +30,20 @@
 //!   node): the caller keeps the count for the header in the run, so a loop
 //!   revisited in the same run is bounded as the pin's is. Exit: metadata nodes
 //!   made by function passes.
-//! - PL2 `peelToTurnInvariantLoadsDereferenceable` is not translated:
-//!   `isDereferenceablePointer` is asked with the dominator tree and the
-//!   assumptions, which `valuetracking::dereferenceable` is not.
+//! - PL2 `isDereferenceablePointer` of
+//!   `peelToTurnInvariantLoadsDereferenceable` is
+//!   `valuetracking::dereferenceable`: an argument attribute, an alloca or a
+//!   global of known size; not the pin's walk with the dominator tree and the
+//!   assumptions, so a load the pin proves dereferenceable by those is peeled
+//!   for here. Exit: that walk.
 //! - PL3 Peeling the last iteration (`PeelLast`, `canPeelLastIteration`,
 //!   `shouldPeelLastIteration`) is not translated: no loop is peeled from the
 //!   end, and a count that would have been is dropped.
 //! - PL4 Profile-based peeling is not translated (no profile data).
+//! - PL5 `simplifyLoopIVs` is not run after a peel (`SimplifyIndvar` is the
+//!   indvars pass's `Edit`): the residual loop keeps the `nsw`/`nuw`/`samesign`
+//!   `opt` infers, so a compare of the peeled phi against the bound stays in it
+//!   (demo-deedlines `RGBLIGHTS`). Exit: `simplifyLoopIVs` for the unroller.
 //!
 //! # Example
 //! The loop of `bintree` (`for (i = 1; i <= 300; ++i) { t[3*i] = ...; if (i >
@@ -52,11 +59,12 @@
 //! [`countToEliminateCompares`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopPeel.cpp#L549),
 //! [`PhiAnalyzer`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopPeel.cpp#L195).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use llrm_analysis::scev::expr::{Kind, Scev, Use};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::loopinfo::Loop;
+use llrm_mir::memory::Callees;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 
@@ -495,6 +503,86 @@ fn is_min_max(
     min_max_operands(cx, inst).is_some()
 }
 
+/// `peelToTurnInvariantLoadsDereferenceable`: 1 if an invariant load that is
+/// not known dereferenceable, and dominates the latch, feeds (transitively) a
+/// condition that leaves the loop, in a loop whose other exits are
+/// `unreachable`: once an iteration is peeled the load is known to be
+/// dereferenceable in the rest, and can be hoisted.
+fn peel_to_turn_invariant_loads_dereferenceable(
+    cx: &Cx,
+    callees: &Callees,
+    lp: Loop,
+) -> u32 {
+    let function = cx.function;
+    // Loops with a single exiting block have nothing to gain.
+    if lp.get_exiting_block(function).is_some() {
+        return 0;
+    }
+    // All non-latch exit blocks must end in `unreachable`; otherwise the
+    // heuristic may not be profitable.
+    if lp.get_unique_non_latch_exit_blocks(function).iter().any(|&exit| {
+        function.terminator(exit).is_none_or(|term| function.instruction(term).opcode != Opcode::Unreachable)
+    }) {
+        return 0;
+    }
+    let (Some(header), Some(latch)) = (Some(lp.get_header()), lp.get_loop_latch(function)) else { return 0 };
+    let mut load_users: HashSet<InstId> = HashSet::new();
+    let mut sizes = None;
+    for &block in lp.get_blocks() {
+        for inst in function.iter_block(block) {
+            // A write may alias the loads; calls that reach only inaccessible
+            // memory never do.
+            if llrm_mir::memory::of(cx.context, callees, function, inst).writes {
+                let inaccessible_only =
+                    matches!(
+                        function.instruction(inst).opcode,
+                        Opcode::Call(_) | Opcode::Invoke(_)
+                    )
+                        && llrm_mir::memory::callee(cx.context, function, inst)
+                            .and_then(|callee| callees.get(&callee))
+                            .is_some_and(|summary| summary.accessible == llrm_mir::memory::Effects::NONE);
+                if !inaccessible_only {
+                    return 0;
+                }
+            }
+            if load_users.contains(&inst) {
+                add_users(function, inst, &mut load_users);
+            }
+            // Reads in the header can be hoisted without peeling.
+            if block == header {
+                continue;
+            }
+            let end = function.instruction(inst);
+            let Opcode::Load { .. } = end.opcode else { continue };
+            let pointer = end.operands[0];
+            if cx.tree.dominates(block, latch) && lp.is_loop_invariant(function, pointer) {
+                let sizes =
+                    sizes.get_or_insert_with(|| llrm_mir::valuetracking::sizes_of(cx.context, cx.globals, cx.layout));
+                let bytes = cx.layout.alloc_size(&cx.context.types, end.ty);
+                if !llrm_mir::valuetracking::dereferenceable(cx.context, cx.layout, sizes, function, pointer, bytes) {
+                    add_users(function, inst, &mut load_users);
+                }
+            }
+        }
+    }
+    let feeds_an_exit = lp
+        .get_exiting_blocks(function)
+        .into_iter()
+        .any(|exiting| function.terminator(exiting).is_some_and(|term| load_users.contains(&term)));
+    u32::from(feeds_an_exit)
+}
+
+/// `LoadUsers.insert_range(I.users())`.
+fn add_users(
+    function: &llrm_mir::module::Function,
+    inst: InstId,
+    users: &mut HashSet<InstId>,
+) {
+    if let Some(result) = function.instruction(inst).result {
+        users.extend(function.users(result).iter().map(|one| one.user));
+    }
+}
+
 /// `computePeelCount`: how many iterations of `lp` to peel (`pp.peel_count`,
 /// zero for none) given its size, the exact trip count (zero if unknown), the
 /// unroll threshold and the iterations already peeled.
@@ -502,6 +590,7 @@ fn is_min_max(
 pub fn compute_peel_count(
     se: &mut ScalarEvolution,
     cx: &Cx,
+    callees: &Callees,
     lp: Loop,
     loop_size: u32,
     pp: &mut PeelingPreferences,
@@ -545,6 +634,10 @@ pub fn compute_peel_count(
     }
 
     desired = desired.max(count_to_eliminate_compares(se, cx, lp, max_peel_count));
+
+    if desired == 0 {
+        desired = peel_to_turn_invariant_loads_dereferenceable(cx, callees, lp);
+    }
 
     if desired > 0 {
         desired = desired.min(max_peel_count);
