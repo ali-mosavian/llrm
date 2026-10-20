@@ -82,7 +82,10 @@ pub fn get_complexity(
     v: Operand,
 ) -> u32 {
     if let Operand::Constant(id) = v {
-        return if matches!(q.context().get(id).kind, ConstantKind::Undef | ConstantKind::Poison) { 0 } else { 1 };
+        return if matches!(
+            q.context().get(id).kind,
+            ConstantKind::Undef | ConstantKind::Poison
+        ) { 0 } else { 1 };
     }
     let is_cast = q.instruction_of(v).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Cast(_)));
     if is_cast || pattern::neg(q, v).is_some() || pattern::not(q, v).is_some() || pattern::fneg(q, v).is_some() {
@@ -175,7 +178,10 @@ pub fn is_commutative(op: BinaryOp) -> bool {
 
 /// `Instruction::isAssociative`, DEVIATE 2: the integer operations.
 fn is_associative(op: BinaryOp) -> bool {
-    matches!(op, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+    matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    )
 }
 
 /// `isBitwiseLogicOp`.
