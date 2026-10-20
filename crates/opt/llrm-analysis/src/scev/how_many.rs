@@ -368,7 +368,8 @@ impl ScalarEvolution {
 
         // Specialize step for this loop so we get context sensitive facts
         // below.
-        let step_wlg = self.apply_loop_guards(cx, step, header);
+        let guards = super::guards::LoopGuards::collect(self, cx, header);
+        let step_wlg = self.apply_loop_guards_with(cx, step, &guards);
 
         // For positive steps (counting up until unsigned overflow):
         //   N = -Start/Step (as unsigned)
@@ -387,7 +388,7 @@ impl ScalarEvolution {
         //   N = Distance (as unsigned)
 
         if self.match_one(step) || self.match_all_ones(step) {
-            let guarded_distance = self.apply_loop_guards(cx, distance, header);
+            let guarded_distance = self.apply_loop_guards_with(cx, distance, &guards);
             let mut max_be_count = self.get_unsigned_range_max(cx, guarded_distance);
             max_be_count = max_be_count.umin(self.get_unsigned_range_max(cx, distance));
 
@@ -408,7 +409,7 @@ impl ScalarEvolution {
                 // loop guards to Distance + 1; the range of Distance itself
                 // may be a wrapped set even when the guards bound Distance + 1
                 // tightly.
-                let guarded = self.apply_loop_guards(cx, distance_plus_one, header);
+                let guarded = self.apply_loop_guards_with(cx, distance_plus_one, &guards);
                 let max =
                     self.get_unsigned_range_max(cx, guarded).umin(self.get_unsigned_range_max(cx, distance_plus_one));
                 max_be_count = max_be_count.umin(max.sub(Ap::one(max.width)));
@@ -440,7 +441,7 @@ impl ScalarEvolution {
             let exact = self.get_udiv_expr(cx, Use::of(distance), Use::of(divisor));
             let mut constant_max = self.get_could_not_compute();
             if exact != self.get_could_not_compute() {
-                let guarded = self.apply_loop_guards(cx, exact, header);
+                let guarded = self.apply_loop_guards_with(cx, exact, &guards);
                 let max_int = self.get_unsigned_range_max(cx, guarded);
                 let exact_max = self.get_unsigned_range_max(cx, exact);
                 constant_max = self.get_constant(max_int.umin(exact_max));
@@ -459,7 +460,7 @@ impl ScalarEvolution {
 
         let mut m = e;
         if e != self.get_could_not_compute() {
-            let guarded = self.apply_loop_guards(cx, e, header);
+            let guarded = self.apply_loop_guards_with(cx, e, &guards);
             let max_with_guards = self.get_unsigned_range_max(cx, guarded);
             let e_max = self.get_unsigned_range_max(cx, e);
             m = self.get_constant(max_with_guards.umin(e_max));
