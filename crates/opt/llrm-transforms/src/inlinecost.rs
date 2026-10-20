@@ -86,7 +86,8 @@
 //!   A recursive callee inlined into another function is also peeled
 //!   (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
 //!   of it to itself per call, to the power of the copies deep, are below
-//!   1 - 1/8 (squared per copy), a copy adds at most 15 `gcc_insns` and the
+//!   1 - 1/8 (squared per copy where the body has more than one call to
+//!   itself), a copy adds at most 15 `gcc_insns` and the
 //!   copies of a call at most 450; a tree is never peeled; not at -Os.
 //!
 //! # See also
@@ -2460,6 +2461,7 @@ pub fn sites(
                     frame: crate::inline::grown(&module.context, layout, callee),
                     moved: false,
                     callee: Some(decision.callee),
+                    self_sites: own.len(),
                     self_calls: (!own.is_empty()).then(|| {
                         let frequencies = call_frequencies(module, layout, callee);
                         own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()

@@ -668,14 +668,15 @@ b0:
 /// A recursive callee inlined into a caller has its own call inlined in the
 /// copy, to gcc's peeling depth: the probability of reaching the copy (the
 /// calls to itself per call, 0.5 here, to the power of the copies deep) below
-/// 1 - 1/8 squared per copy, so five copies after the one the cost allowed
-/// (hanoi: 180 clocks with one, 163 with the three the per-call probability
-/// allowed, 133 with these).
+/// 1 - 1/8, squared per copy only where the body has more than one call
+/// (their copies grow as sites to the power of the depth; one call grows them
+/// by one a level). Eight copies after the one the cost allowed (hanoi: 180
+/// clocks with one copy, 163 with three, 133 with six squared, 103 now).
 #[test]
 fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     let top = walked_top(LINEAR);
     let copies = top.matches("mul i32 %").count();
-    assert_eq!(copies, 6, "{copies} copies of down in top:\n{top}");
+    assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%

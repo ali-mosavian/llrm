@@ -72,6 +72,7 @@ fn every_body(
                     moved: false,
                     callee: None,
                     self_calls: None,
+                    self_sites: 0,
                 },
             )
         })
@@ -564,6 +565,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
             moved: false,
             callee: None,
             self_calls: None,
+                    self_sites: 0,
         }
     };
     let available = [(name, itself)].into_iter().collect();
