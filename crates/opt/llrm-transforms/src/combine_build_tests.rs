@@ -2,7 +2,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 
-use crate::combine::{Combiner, Visit, combine_with};
+use crate::combine::{Combiner, Visit, combine_with, combine_with_declared};
 use crate::testing::{parsed, printed};
 
 /// `@f` with `visit` run on every `sub`.
@@ -75,4 +75,34 @@ fn constants_wrap_to_the_width() {
     }
     let text = "define i16 @f(i16 %x, i16 %y) {\nb0:\n  %s = sub i16 %x, %y\n  ret i16 %s\n}\n";
     assert_eq!(combined(text, visit), "define i16 @f(i16 %x, i16 %y) {\nb0:\n  ret i16 4\n}\n");
+}
+
+/// `Builder.CreateIntrinsic(i16, umax, {x, y})` is a call of `llvm.umax.i16`
+/// with its declaration added to the module; a second one reads the same
+/// declaration. Intrinsics could not be built before (the funnel-shift fold,
+/// `abs` and the min/max folds waited on it).
+#[test]
+fn the_builder_declares_the_intrinsic_it_calls() {
+    fn visit(
+        c: &mut Combiner,
+        inst: InstId,
+    ) -> Visit {
+        if c.function.instruction(inst).opcode != Opcode::Binary(BinaryOp::Sub) {
+            return Visit::None;
+        }
+        let [x, y] = c.function.instruction(inst).operands[..] else { return Visit::None };
+        let first = c.create_intrinsic(inst, "umax", c.type_of(x), &[x, y]);
+        Visit::Replace(c.create_intrinsic(inst, "umax", c.type_of(x), &[first, y]))
+    }
+    let mut module = parsed("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %s = sub i16 %x, %y\n  ret i16 %s\n}\n");
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with_declared(context, &globals, &metadata, &DataLayout::default(), function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("declare i16 @llvm.umax.i16(i16, i16)"), "{out}");
+    assert_eq!(out.matches("call i16 @llvm.umax.i16").count(), 2, "{out}");
+    assert_eq!(out.matches("declare").count(), 1, "{out}");
 }

@@ -19,6 +19,7 @@ mod context_tests;
 pub mod fp;
 #[cfg(test)]
 mod fp_tests;
+pub mod fpredicate;
 pub mod guarantee;
 #[cfg(test)]
 mod guarantee_tests;
@@ -711,18 +712,20 @@ pub fn sizes(
     module: &Module,
     layout: &DataLayout,
 ) -> Sizes {
-    let variables = module
-        .globals
-        .iter()
-        .enumerate()
-        .filter_map(
-            |(at, global)| match &global.kind {
-                GlobalKind::Variable(variable) => {
-                    Some((GlobalId(at as u32), layout.alloc_size(&module.context.types, variable.ty)))
-                }
-                GlobalKind::Function(_) => None,
-            },
-        );
+    sizes_of(&module.context, &module.globals, layout)
+}
+
+/// [`sizes`] of a module's parts, for a pass that holds those and not the
+/// module.
+pub fn sizes_of(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+) -> Sizes {
+    let variables = globals.iter().enumerate().filter_map(|(at, global)| match &global.kind {
+        GlobalKind::Variable(variable) => Some((GlobalId(at as u32), layout.alloc_size(&context.types, variable.ty))),
+        GlobalKind::Function(_) => None,
+    });
     variables.collect()
 }
 

@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 65 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -14,7 +14,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
 | attrsummary | `Summary` for each defined function, derived from its attributes alone. |  | [attrsummary](attrsummary.md) |
-| avail | Dead stores, and the cells loads and stores name, as LLVM's DSE finds them. | `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`, | [avail](avail.md) |
+| avail | The cells loads and stores name: what a load reads and lands in, what a store writes. | The accessors `loaded_into`, `stored_from`, `stored_cell`. | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
 | blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `BranchProbabilityInfo` (`crate::bpi`), as `BlockFrequencyInfoWrapperPass` runs it. | `inlinecost` (cold and hot call sites, D1), `profit`. | [blockfreq](blockfreq.md) |
 | bpi | `BranchProbabilityInfo` of a MIR function: LLVM's static branch probabilities, translated from llvm/lib/Analysis/BranchProbabilityInfo.cpp at d1106deb71cc. | `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers | [bpi](bpi.md) |
@@ -29,7 +29,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |
 | demandedbits | Which bits of each integer value anything reads: a translation of LLVM's `DemandedBits` (`DemandedBits.cpp` at d1106deb71cc). | `DemandedBits::of`, then `demanded_bits`, `demanded_bits_of_use`, | [demandedbits](demandedbits.md) |
-| dependence | Data dependence distances over a two-deep loop nest, the outer unroll factor that unroll-and-jam may use for them, and whether two loops may be fused. | `distances`, `factor`, `fusable`, `meetings`, `interchangeable`, | [dependence](dependence.md) |
+| dependence | Data dependence distances over a two-deep loop nest, and whether its two loops may swap. | `distances`, `interchangeable`, `walk_cost`. Consumer: `loopinterchange`. | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
@@ -56,7 +56,6 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | nearest | The items placed in blocks that dominate a given block, nearest first. | The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`](avail.md) and | [nearest](nearest.md) |
 | noreturn | Finds the bodies and blocks that cannot reach a normal return, and cuts a block after a call that cannot return, so the code after it and the paths into it fold away. | `terminal_sites`, `inferred`, `inferred_in`, `cold`, `stranded`, | [noreturn](noreturn.md) |
 | num | An integer that is a machine word until it must not be. | `Num`, for [`crate::ranges`](ranges.md) and [`crate::induction`](induction.md). | [num](num.md) |
-| observers | Finds the memory cells nothing outside a function can read, so dead store elimination can drop a store that no later code observes. | `private` and `private_of` (the same test with `Published`, the manager's | [observers](observers.md) |
 | occurrence | Walks a function's instructions as occurrences, operations and phis apart, so an analysis can key by identity and keep two equal instructions distinct. | The three walks. Consumers: [`crate::induction`](induction.md), [`crate::ssa`](ssa.md), and the | [occurrence](occurrence.md) |
 | parameter_ranges | Bounds each integer parameter of a body only the program calls by what its callers pass, so the body's own checks on it can be decided. | `stamp`: a `range` attribute on each integer parameter whose callers all | [parameter_ranges](parameter_ranges.md) |
 | peelsize | Decides whether a counted loop is worth copying out completely, from the size the copy would have once constants fold, before anything is cloned. | `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in | [peelsize](peelsize.md) |

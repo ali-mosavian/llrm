@@ -16,10 +16,11 @@
 //! DEVIATE 1: no instruction names (`Twine`): MIR names are not read by any
 //! pass.
 //!
-//! DEVIATE 2: intrinsic calls (`CreateIntrinsic`) are not built here: they need
-//! the module's declaration of the intrinsic, which a pass over one function
-//! does not hold. A fold that builds one is not translated until the
-//! declaration is (the numbered DEVIATE of that fold names it).
+//! DEVIATE 2: `CreateIntrinsic` ([`Combiner::create_intrinsic`]) builds a call
+//! to the declaration the pass makes through `Unit::declared`
+//! (`Intrinsic::getOrInsertDeclaration`); the declaration reaches the module
+//! after the pass. It is for intrinsics overloaded on one integer type, named
+//! `llvm.<base>.i<width>`, with the argument types as the parameters.
 //!
 //! # How it works
 //! Each `create_*` asks `simplify*` of its operands first (the folder) and
@@ -34,12 +35,13 @@
 //! `create_binop(at, Add, x, 0)` is `x`, found by `simplifyAddInst`;
 //! `create_binop(at, Add, x, y)` is a new `add` before `at`.
 
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::simplify::{
     simplify_binop_operands, simplify_cast_operand, simplify_icmp_operands, simplify_select_operands,
 };
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 
 use crate::combine::{Combiner, Visit};
 
@@ -94,6 +96,37 @@ impl Combiner<'_> {
         }
         let ty = self.type_of(a);
         let new = self.insert_before(at, Opcode::Binary(op), ty, vec![a, b], flags);
+        self.value_of(new)
+    }
+
+    /// `Builder.CreateIntrinsic(ty, ID, args)` before `at`: a call of
+    /// `llvm.<base>.i<width of ty>` returning `ty`, its declaration made
+    /// where the module has none.
+    pub fn create_intrinsic(
+        &mut self,
+        at: InstId,
+        base: &str,
+        ty: TypeId,
+        args: &[Operand],
+    ) -> Operand {
+        let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
+        let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
+        let width = self.context.types.int_bits(ty).expect("an integer");
+        let callee = self.declared.declare(&format!("llvm.{base}.i{width}"), function_type);
+        let pointer = self.context.types.ptr(0);
+        let callee =
+            Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+        let info = CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); args.len()],
+            attrs: Vec::new(),
+            tail: Tail::default(),
+        };
+        let mut operands = args.to_vec();
+        operands.push(callee);
+        let new = self.insert_before(at, Opcode::Call(Box::new(info)), ty, operands, Flags::default());
         self.value_of(new)
     }
 

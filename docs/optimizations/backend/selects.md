@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:add70581b49957f51d894db5de8ff7b1e4ae7ccbec9061e074289fa228e8ab59 -->
+<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:4a162ab8b1861092f68a570b6a65cf67e2b85ee8fae056dc80e4ceea7f96fb86 -->
 
 # selects
 
@@ -22,21 +22,16 @@ replaces the select's uses:
                                        rest
 ```
 
-An operand of the select that only the select uses, is safe to execute
-speculatively and costs `TCC_Expensive` or more (a division) moves into the
-block of its own side, so the other path does not run it: CodeGenPrepare's
-`sinkSelectOperand`. A cheap one stays, as in LLVM. Where the target states
-no cost model every instruction costs one, and nothing moves.
-
 DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 CodeGenPrepare's `optimizeSelectInst` forms no branch where
 `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
 `isFormingBranchFromSelectProfitable`), and `X86TargetLowering::
 EmitLoweredSelect` then expands the select to a diamond on machine IR, with
-both operands computed before it. Ours expands in MIR and moves an
-expensive operand into its arm. Exit: move the expansion to selection and
-drop the operand sinking: the registry slot `emit-lowered-select`
-(lir-cleanup-port, PR by 2026-11-13, rows pair after it lands; #3052).
+both operands computed before it. Ours expands in MIR. The operand sinking
+of `sinkSelectOperand`, which the pin does not do here, is deleted: it
+moved nothing over 834 objects. Exit: the expansion at selection, the
+registry slot `emit-lowered-select` (lir-cleanup-port, PR by 2026-11-13;
+##3052).
 
 The loop is repeated until no select is left in any function, so two selects
 in one block each get their own split. The result is checked by an
