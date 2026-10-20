@@ -2,7 +2,7 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
 use super::simplified;
 use crate::testing::{parsed, printed, results};
@@ -14,8 +14,9 @@ fn simplify(module: &mut Module) -> bool {
     let outer = Outer::of(module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    simplified(context, &spec, function)
+    simplified(context, &spec, &mut declared, function)
 }
 
 /// @f simplified under `options`; whether anything changed.
@@ -26,8 +27,9 @@ fn simplify_with(
     let outer = Outer::of(module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    super::simplified_with(options, context, &spec, function)
+    super::simplified_with(options, context, &spec, &mut declared, function)
 }
 
 /// `text` simplified is `expected`, and computes what it did on `inputs`.
@@ -556,9 +558,10 @@ b5:
     let outer = Outer::of(&mut module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let options = super::Options { need_canonical_loop: false, ..Default::default() };
-    assert!(super::simplified_with(&options, context, &spec, function));
+    assert!(super::simplified_with(&options, context, &spec, &mut declared, function));
     assert!(!printed(&module).contains("b4:"), "{}", printed(&module));
 }
 

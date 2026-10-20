@@ -18,6 +18,7 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 
 ## Landing
 - The owner lands through `tools/landing/land.sh` when its session may; never `gh pr merge` by hand; never land another session's PR.
+- An owner may mark its own evidence-complete PR ready (the runner then lands it) only after running the fast gate on its own host (user, 2026-10-20: "The workers may do it after running the gate locally"). One gate at a time per host. Mark no one else's PR ready.
 - A refused PR: read the REFUSED line, fix, merge fresh feat/parity (never force-push), tell the owner.
 - A fast gate on your own host, one at a time (buildslot). Build the compiler with `cargo build --release -p llrm --bin llrm-c`, check the exit code and the md5 before any A/B.
 
