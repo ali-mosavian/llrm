@@ -1071,6 +1071,10 @@ pub struct LirBody {
     /// A phi's value, by number, and the fixed cell the program also holds it
     /// in wherever it is live (`!llrm.home`).
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
+    /// The bytes of the float type of each value selection numbered from the
+    /// program's (4, 8 or 10): a spill of the value rounds to that type, as
+    /// the pin's RFP32, RFP64 and RFP80 classes do.
+    pub float_bytes: Arc<std::collections::BTreeMap<u32, u32>>,
     /// 16 or 32: the mode the target's code runs in, which decides how an
     /// instruction encodes and what it touches.
     pub bits: u32,
@@ -1257,6 +1261,7 @@ impl LirBody {
             spares: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
+            float_bytes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
             registers: Self::default_registers(),
             slotted: false,
@@ -1319,6 +1324,7 @@ impl LirBody {
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
+            float_bytes: Arc::clone(&self.float_bytes),
             bits: self.bits,
             registers: self.registers,
             slotted: self.slotted,

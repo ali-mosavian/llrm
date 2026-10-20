@@ -265,6 +265,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         if let Some(width) = width {
             widths.insert(new, width);
         }
+        let bytes = self.tables.float_bytes.borrow().get(&from).copied();
+        if let Some(bytes) = bytes {
+            self.tables.float_bytes.borrow_mut().insert(new, bytes);
+        }
         let order = self.tables.orders.borrow().get(&from).cloned();
         if let Some(order) = order {
             self.tables.orders.borrow_mut().entry(new).or_insert(order);
@@ -415,6 +419,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         let known = self.tables.widths.borrow().get(&from).copied();
         let width = known.or_else(|| Self::named_width(lis, from)).unwrap_or(4);
         self.tables.widths.borrow_mut().insert(to, width);
+        let bytes = self.tables.float_bytes.borrow().get(&from).copied();
+        if let Some(bytes) = bytes {
+            self.tables.float_bytes.borrow_mut().insert(to, bytes);
+        }
         let what = Semantics {
             name: Some("mov".to_owned()),
             dests: vec![Loc::Held(Held { value: to, width })],
@@ -700,6 +708,7 @@ pub fn decide_with_split(
     for (value, width) in crate::backend::allocate::_widest(body) {
         tables.widths.borrow_mut().insert(value, width);
     }
+    tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
     tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
     let pins = inputs
         .pins
