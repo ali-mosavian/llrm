@@ -2280,8 +2280,10 @@ out:
 }
 
 /// Drops one of the two inputs of the phi that two edges feed (#3016).
+#[cfg(debug_assertions)]
 struct ShortPhi;
 
+#[cfg(debug_assertions)]
 impl llrm_mir::passes::FunctionPass for ShortPhi {
     fn name(&self) -> &'static str {
         "short-phi"
