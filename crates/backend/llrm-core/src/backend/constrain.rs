@@ -33,17 +33,10 @@
 //! The same file holds the other splits the allocator applies to a body
 //! before it places values:
 //!
-//! - [`distinct_roles`]: a value that is both the base and the index of one
-//!   16-bit address needs two registers at once; the index reads a copy.
 //! - [`distinct_classes`]: a value read as a byte (AX..DX) and as the index of
 //!   a frame array (SI, DI) has no register that fits all reads. The reads that
 //!   fit the most others keep the value; each remaining read takes a copy, live
 //!   across that instruction alone.
-//! - [`addressed`]: a candidate shape the allocator tries when the first
-//!   allocation spills. A spilled value that is a base or index in more than
-//!   one instruction and has no other role (no plain operand, selector,
-//!   requirement or hidden use) is copied at each addressing instruction, so
-//!   the copy can sit in an address register while the value is spilled.
 //! - [`required`], [`required_in`] and [`required_added`]: the pin map of a
 //!   body, of some blocks, or of only the instructions added since a previous
 //!   body.
@@ -75,10 +68,9 @@
 //! -march=i386` of the program under `calleefacts`.
 //!
 //! # Used by
-//! Register allocation (`allocate.rs`), which calls `distinct_roles`,
-//! `distinct_classes` and `constrained` on the body entering allocation, the
-//! `required` family each time the body is rewritten, and `addressed` for a
-//! candidate shape.
+//! Register allocation (`allocate.rs`), which calls `distinct_classes` and
+//! `constrained` on the body entering allocation, and the `required` family
+//! each time the body is rewritten.
 //!
 //! # See also
 //! The phase map: [`crate::backend`]
@@ -112,7 +104,7 @@ fn _same_register(
     if regs.width_of(other) == Some(width) {
         return other == regs.named(one, width);
     }
-    ir::root(one) == ir::root(other)
+    regs.root(one) == regs.root(other)
 }
 
 /// Whether this value is pinned to the register the instruction wants.
@@ -126,7 +118,7 @@ fn _already_there(
     let Some(had) = pinned.get(&value) else {
         return false;
     };
-    if ir::root(*had) != ir::root(register) {
+    if regs.root(*had) != regs.root(register) {
         return false;
     }
     regs.width_of(register) == Some(i64::from(width))
@@ -223,7 +215,7 @@ pub fn constrained(
                 .collect();
             if wanted.is_empty() && given.is_empty() {
                 for one in insns[start..].iter().map(|one| &**one).chain([&*one]) {
-                    carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                    carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
                 }
                 insns.push(one);
                 continue;
@@ -244,7 +236,7 @@ pub fn constrained(
             for Wanted { value, register, places } in ordered {
                 let held = Held { value: fresh, width: _declared(&widths, &one, value) };
                 let read_only = places.iter().all(|(side, _)| *side == "source");
-                let key = (value, ir::root(register));
+                let key = (value, regs.root(register));
                 if let Some(kept) = carried.get(&key).copied().filter(|kept| read_only && kept.width == held.width) {
                     for (_side, index) in &places {
                         sources[*index] = Loc::Held(kept);
@@ -356,11 +348,11 @@ pub fn constrained(
             // The copies in front of it, this one's own among them, can
             // displace an older one.
             for one in &insns[start..] {
-                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
             }
             carried.extend(added);
             for one in std::iter::once(&made).chain(after.iter().map(|one| &**one)) {
-                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                carried.retain(|(value, root), kept| !_disturbs(regs, one, *value, kept, *root, &pins));
             }
             insns.push(Arc::new(made));
             insns.extend(after);
@@ -373,87 +365,19 @@ pub fn constrained(
 /// Whether `one` redefines `value` or its copy `kept` in `root`, or puts
 /// anything else in `root`.
 fn _disturbs(
+    regs: Regs,
     one: &Insn,
     value: u32,
     kept: &Held,
     root: RegId,
     pins: &IndexMap<u32, RegId>,
 ) -> bool {
-    let in_root = |register: &RegId| ir::root(*register) == root;
+    let in_root = |register: &RegId| regs.root(*register) == root;
     one.defines.iter().any(|defined| {
         *defined == value || *defined == kept.value || pins.get(defined).is_some_and(|register| in_root(register))
     }) || one.clobbers.iter().any(in_root)
         || one.delivers.iter().any(|(_held, register)| in_root(register))
         || one.requires.iter().any(|(held, register)| held.value != kept.value && in_root(register))
-}
-
-/// `body` with no value in both the base and the index of one address.
-///
-/// Word addressing takes a base from one set of registers and an index from
-/// another, so one value in both roles needs two registers at once: the
-/// index reads a copy.
-pub fn distinct_roles(
-    body: &LirBody,
-    floor: u32,
-) -> LirBody {
-    let twice = |cell: &Mem| {
-        matches!(
-            (cell.base, cell.index),
-            (Some(base), Some(index)) if base.value == index.value && base.width == 2 && index.width == 2
-        )
-    };
-    if !body
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref())
-        .any(|what| what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(cell) if twice(cell))))
-    {
-        return body.clone();
-    }
-    // Above every pin too: a copy must not take over a pinned number.
-    let mut fresh = _next_value(body).max(floor);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                insns.push(Arc::clone(one));
-                continue;
-            };
-            let mut copies: IndexMap<u32, u32> = IndexMap::default();
-            let mut separate = |place: &Loc| -> Loc {
-                let Loc::Mem(cell) = place else { return place.clone() };
-                if !twice(cell) {
-                    return place.clone();
-                }
-                let index = cell.index.expect("twice names an index");
-                let copy = *copies
-                    .entry(index.value)
-                    .or_insert_with(
-                        || {
-                            fresh += 1;
-                            fresh - 1
-                        },
-                    );
-                Loc::Mem(Mem { index: Some(Held { value: copy, width: index.width }), ..cell.clone() })
-            };
-            let (dests, sources): (Vec<Loc>, Vec<Loc>) =
-                (what.dests.iter().map(&mut separate).collect(), what.sources.iter().map(&mut separate).collect());
-            if copies.is_empty() {
-                insns.push(Arc::clone(one));
-                continue;
-            }
-            for (value, copy) in &copies {
-                insns.push(_move(one, Held { value: *copy, width: 2 }, Loc::Held(Held { value: *value, width: 2 })));
-            }
-            let mut made = (**one).clone();
-            made.what = Some(Semantics { dests, sources, ..what.clone() });
-            made.uses.extend(copies.values().copied());
-            insns.push(Arc::new(made));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
 }
 
 /// `body` with no value whose reads need registers that share none.

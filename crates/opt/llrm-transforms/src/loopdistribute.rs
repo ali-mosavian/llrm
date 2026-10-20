@@ -88,7 +88,7 @@
 //! `loopdistribute_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax
+//! Once per body, after `unswitch` and `split`, at -O3 and -Omax
 //! (`-ftree-loop-distribution`). Not run where one pass is selected by name.
 //!
 //! # Needs
@@ -104,8 +104,6 @@
 //! gcc `tree-loop-distribution.cc` (`loop_distribution::distribute_loop`,
 //! on at -O3); LLVM `LoopDistribute.cpp` (`InstPartitionContainer`,
 //! `LoopDistributeForLoop::processLoop`; off by default).
-//! [`crate::loopfuse`] is the opposite and judges by the same price; it runs
-//! first, so what it joins is not parted again.
 
 use std::collections::{BTreeMap, BTreeSet};
 

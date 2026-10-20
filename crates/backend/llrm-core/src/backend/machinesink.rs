@@ -48,9 +48,13 @@
 //! greedy allocator with SplitKit as the default allocator (target 2026-11-05).
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
-//! costs a jump (`bench/recpow` -Os +5 bytes with the edge split) and nothing
-//! in a size build pays it back. Exit: block placement that falls through
-//! every split edge.
+//! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
+//! 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
+//! +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
+//! `xor` and a copy before its test, and a frame, where the pin sinks the
+//! constant (195 bytes against 190 with the edge broken). Exit, decided
+//! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
+//! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 //!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
@@ -190,6 +194,9 @@ struct Sinker {
     frequency: Arc<Frequency>,
     /// `CEBCandidates` and `CEMergeCandidates`.
     considered: HashSet<(usize, usize)>,
+    /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
+    /// the instruction.
+    sorted: Vec<Vec<usize>>,
     merged: HashMap<(u32, usize), usize>,
     /// `ToSplit`.
     to_split: Vec<(usize, usize)>,
@@ -229,16 +236,17 @@ impl Sinker {
             body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
         let natural = loops::loops(&body.blocks, Some(body.entry));
         let hard = loops::irreducible(&body.blocks, Some(body.entry));
-        let cycle = body
-            .blocks
-            .iter()
-            .map(|block| {
-                natural
-                    .iter()
-                    .find(|one| one.body.contains(&block.at))
-                    .and_then(|one| position.get(&one.header).copied())
-            })
-            .collect();
+        // The first loop of the list that holds a block is its cycle; made by
+        // walking each loop's body once, not asking every loop of every block.
+        let mut cycle: Vec<Option<usize>> = vec![None; body.blocks.len()];
+        for one in &natural {
+            let header = position.get(&one.header).copied();
+            for at in one.body.iter() {
+                if let Some(&number) = position.get(at) {
+                    cycle[number] = cycle[number].or(header);
+                }
+            }
+        }
         let depths = crate::analysis::intervals::depths_shared(body);
         let mut owner = HashMap::default();
         let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
@@ -255,7 +263,7 @@ impl Sinker {
                 }
             }
         }
-        Self {
+        let mut sinker = Self {
             size,
             insns: body.blocks.iter().map(|block| block.insns.to_vec()).collect(),
             at: body.blocks.iter().map(|block| block.at).collect(),
@@ -270,12 +278,15 @@ impl Sinker {
             uses,
             cycle,
             considered: HashSet::default(),
+            sorted: Vec::new(),
             merged: HashMap::default(),
             to_split: Vec::new(),
             changed: false,
             regs: body.regs(),
             bits: body.bits,
-        }
+        };
+        sinker.sort_successors();
+        sinker
     }
 
     /// The block a use reads its value in: a phi reads it at the end of the
@@ -347,23 +358,43 @@ impl Sinker {
     fn sorted_successors(
         &self,
         block: usize,
-    ) -> Vec<usize> {
-        let mut all = self.cfg.succs[block].clone();
-        for child in 0..self.cfg.len() {
-            if self.dom.idom(child) == Some(block) && child != block && !all.contains(&child) {
-                all.push(child);
+    ) -> &[usize] {
+        &self.sorted[block]
+    }
+
+    /// `sorted_successors` of every block: the dominator tree's children are
+    /// gathered in one pass, not asked of each block among all of them.
+    fn sort_successors(&mut self) {
+        let n = self.cfg.len();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for child in 0..n {
+            if let Some(parent) = self.dom.idom(child) {
+                if parent != child {
+                    children[parent].push(child);
+                }
             }
         }
         let busy = |one: usize| self.frequency.block(self.at[one]);
-        let unknown = all.iter().all(|&one| busy(one) == 0.0);
-        all.sort_by(|&left, &right| {
-            if self.size || unknown {
-                self.depth[left].cmp(&self.depth[right])
-            } else {
-                busy(left).total_cmp(&busy(right))
-            }
-        });
-        all
+        let sorted = (0..n)
+            .map(|block| {
+                let mut all = self.cfg.succs[block].clone();
+                for &child in &children[block] {
+                    if !all.contains(&child) {
+                        all.push(child);
+                    }
+                }
+                let unknown = all.iter().all(|&one| busy(one) == 0.0);
+                all.sort_by(|&left, &right| {
+                    if self.size || unknown {
+                        self.depth[left].cmp(&self.depth[right])
+                    } else {
+                        busy(left).total_cmp(&busy(right))
+                    }
+                });
+                all
+            })
+            .collect();
+        self.sorted = sorted;
     }
 
     /// `FindSuccToSinkTo`.
@@ -386,7 +417,7 @@ impl Sinker {
                 }
                 continue;
             }
-            for succ in self.sorted_successors(block) {
+            for &succ in self.sorted_successors(block) {
                 let mut local = false;
                 if self.all_uses_dominated_by(value, succ, block, break_phi_edge, &mut local) {
                     sink_to = Some(succ);
