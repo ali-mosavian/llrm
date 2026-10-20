@@ -21,8 +21,8 @@
 //! Each case is walked to the common block, folding what the case block
 //! computes from the condition (`case_results`). A table of the results is
 //! sized (`condition_is_index`, the offset of the lowest case), priced
-//! (`should_build_lookup_table`) and, per phi, found to be one value or
-//! linear in the index. The phis then take the arithmetic, behind a range
+//! (`should_build_lookup_table`) and, per phi, found to be one value, linear
+//! in the index, a bit map in a register or cells of an array global. The phis then take the arithmetic, behind a range
 //! check or, for holes with a default that is not a constant, a bit mask.
 //!
 //! # Example
@@ -35,7 +35,7 @@
 //!
 //! | # | DEVIATE |
 //! |---|---|
-//! | D1 | OWED (llrm-w-4, 2026-10-20; exit: the bit map and the array table in the next PR): a phi whose results are neither one value nor linear in the index (`SwitchReplacement`'s `BitMapKind`, `LookupTableKind`) makes the whole fold give up. |
+//! | D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name or the preferred alignment of its cells; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
 //! | D2 | No branch weights on the range check (`setFittedBranchWeights`). |
 //! | D3 | No `DomTreeUpdater`: callers recompute the tree. |
 //! | D4 | A hole at index 0 of a table whose holes are poison takes the first result as the linear offset; the pin `cast<ConstantInt>`s the poison. |
@@ -45,12 +45,14 @@
 //! `convert_switch_to_arithmetic` or `convert_switch_to_lookup_table`.
 
 use llrm_mir::constantfolding::{self, Env};
-use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
+use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::passes::Declared;
 use llrm_mir::tti::Ty;
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::range::compute_constant_range;
 use llrm_support::hash::HashMap;
@@ -64,12 +66,13 @@ pub fn folded(
     options: &Options,
     context: &Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
 ) -> bool {
     let Some(switch) = function.terminator(block) else { return false };
     let Some(plan) = Plan::of(options, context, spec, function, switch, block) else { return false };
-    plan.apply(context, spec, function, switch, block);
+    plan.apply(context, spec, declared, function, switch, block);
     true
 }
 
@@ -98,6 +101,39 @@ fn is_poison(
     constant: ConstantId,
 ) -> bool {
     matches!(context.get(constant).kind, ConstantKind::Poison)
+}
+
+/// `isa<UndefValue>`, which a poison is.
+fn is_undef_or_poison(
+    context: &Context,
+    constant: ConstantId,
+) -> bool {
+    matches!(context.get(constant).kind, ConstantKind::Undef | ConstantKind::Poison)
+}
+
+/// `validLookupTableConstant`
+/// ([L6569](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L6569)):
+/// the backend can initialize an array with it. An aggregate is not one;
+/// pointer casts and in-bounds GEPs of a valid constant are. D1.
+fn valid_lookup_table_constant(
+    context: &Context,
+    constant: ConstantId,
+) -> bool {
+    match context.get(constant).kind {
+        ConstantKind::Int(_)
+        | ConstantKind::Float(_)
+        | ConstantKind::Null
+        | ConstantKind::Undef
+        | ConstantKind::Poison
+        | ConstantKind::Global(_) => true,
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { inbounds: true, ref operands, .. }) => {
+            valid_lookup_table_constant(context, operands[0])
+        }
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+            valid_lookup_table_constant(context, value)
+        }
+        _ => false,
+    }
 }
 
 fn int_bits(
@@ -358,15 +394,20 @@ enum Replacement {
     Single(ConstantId),
     /// `LinearMapKind`: `index * multiplier + offset`, in `ty`.
     Linear { ty: TypeId, offset: u128, multiplier: u128, wrapped: bool },
+    /// `BitMapKind`: the elements of `ty`, `width` bits each, packed in `map`.
+    BitMap { ty: TypeId, width: u32, map: u128 },
+    /// `LookupTableKind`: the cells, of type `cell`, of an array global.
+    Table { ty: TypeId, cell: TypeId, cells: Vec<ConstantId> },
 }
 
 impl Replacement {
     /// `SwitchReplacement::SwitchReplacement`
     /// ([L7090](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L7090)):
     /// the table of `values` over `table_size` indices from `offset`, holes
-    /// holding `default`. None: D1.
+    /// holding `default`. None: no representation (`InvalidKind`).
     fn of(
         context: &Context,
+        spec: &Speculation,
         table_size: u64,
         offset: u128,
         width: u32,
@@ -402,7 +443,49 @@ impl Replacement {
         if let Some(one) = single {
             return Some(Replacement::Single(one));
         }
-        Self::linear(context, &contents, values[0].1, value_type)
+        if let Some(linear) = Self::linear(context, &contents, values[0].1, value_type) {
+            return Some(linear);
+        }
+        // If the values are integer constants and the table fits in a
+        // register, build a bitmap.
+        if would_fit_in_register(context, spec, table_size, value_type)
+            && contents.iter().all(|&one| int_bits(context, one).is_some() || is_undef_or_poison(context, one))
+        {
+            let width = context.types.int_bits(value_type).expect("a bit map holds integers");
+            let mut map = 0u128;
+            // Undef values are set to zero.
+            for &one in contents.iter().rev() {
+                map = (map << width) | int_bits(context, one).unwrap_or(0);
+            }
+            return Some(Replacement::BitMap { ty: value_type, width, map });
+        }
+        // The remaining representation needs a global initializer.
+        if !contents.iter().all(|&one| valid_lookup_table_constant(context, one)) {
+            return None;
+        }
+        let mut contents = contents;
+        let mut cell = value_type;
+        if let Some(width) = context.types.int_bits(value_type) {
+            let mut range = ConstantRange::empty(width);
+            for &one in contents.iter().filter(|&&one| !is_undef_or_poison(context, one)) {
+                let bits = int_bits(context, one).expect("an integer");
+                range = range.union_with(&ConstantRange::single(width, bits), PreferredRangeType::Smallest);
+            }
+            // TODO in the pin: handle sign extension as well.
+            let needed =
+                spec.tti.minimum_lookup_table_entry_bit_width().max(range.get_active_bits().next_power_of_two());
+            if needed < width {
+                cell = context.types.int(needed);
+                for one in &mut contents {
+                    let kind = match &context.get(*one).kind {
+                        ConstantKind::Int(bits) => ConstantKind::Int(*bits & mask(needed)),
+                        other => other.clone(),
+                    };
+                    *one = context.constant(Constant { ty: cell, kind });
+                }
+            }
+        }
+        Some(Replacement::Table { ty: value_type, cell, cells: contents })
     }
 
     /// The `isa<IntegerType>(ValueType)` arm: the same distance between two
@@ -582,13 +665,24 @@ impl Plan {
             } else {
                 defaults.get(&phi).copied()
             };
-            let replacement = Replacement::of(context, table_size, offset, width, &results, default)?;
+            let replacement = Replacement::of(context, spec, table_size, offset, width, &results, default)?;
             phis.push((phi, results, replacement, default));
         }
 
-        // In the early pipeline, no mask check: it may inhibit further
-        // optimization.
-        if !options.convert_switch_to_lookup_table && need_mask {
+        let any_tables = phis.iter().any(|(_, _, one, _)| matches!(one, Replacement::Table { .. }));
+        let any_bit_maps = phis.iter().any(|(_, _, one, _)| matches!(one, Replacement::BitMap { .. }));
+        // A few conditions prevent the generation of lookup tables: the target
+        // does not support them, or the function says "no-jump-tables". Other
+        // replacements, like the bit map, are not stopped by them.
+        let no_jump_tables = function.attrs.iter().any(
+            |attr| matches!(attr, Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"),
+        );
+        if any_tables && (!spec.tti.should_build_lookup_tables() || no_jump_tables) {
+            return None;
+        }
+        // In the early pipeline, no lookup tables, bit maps or mask checks:
+        // they may inhibit further optimization.
+        if !options.convert_switch_to_lookup_table && (any_tables || any_bit_maps || need_mask) {
             return None;
         }
 
@@ -613,6 +707,7 @@ impl Plan {
         self,
         context: &Context,
         spec: &Speculation,
+        declared: &mut Declared,
         function: &mut Function,
         switch: InstId,
         block: BlockId,
@@ -696,7 +791,7 @@ impl Plan {
                 table_mask |= 1u128 << limited(case.wrapping_sub(offset) & mask(self.width));
             }
             let at = Position::End(first);
-            let index = int_cast(context, function, at, table_index, map_ty, "switch.maskindex");
+            let index = int_cast(context, function, at, table_index, map_ty, Flags::default(), "switch.maskindex");
             let shifted = emit(
                 function,
                 at,
@@ -726,11 +821,13 @@ impl Plan {
 
         let at = Position::End(lookup);
         for (phi, results, replacement, default) in &self.phis {
-            let result = match *replacement {
-                Replacement::Single(constant) => Operand::Constant(constant),
+            let result = match replacement {
+                Replacement::Single(constant) => Operand::Constant(*constant),
                 Replacement::Linear { ty, offset, multiplier, wrapped } => {
+                    let (ty, offset, multiplier, wrapped) = (*ty, *offset, *multiplier, *wrapped);
                     let flags = if wrapped { Flags::default() } else { Flags::NSW };
-                    let mut value = int_cast(context, function, at, table_index, ty, "switch.idx.cast");
+                    let mut value =
+                        int_cast(context, function, at, table_index, ty, Flags::default(), "switch.idx.cast");
                     if multiplier != 1 {
                         let operands = vec![value, int(ty, multiplier)];
                         value =
@@ -741,6 +838,73 @@ impl Plan {
                         value = emit(function, at, Opcode::Binary(BinaryOp::Add), ty, operands, flags, "switch.offset");
                     }
                     value
+                }
+                Replacement::BitMap { ty, width, map } => {
+                    // The bit map's type, and the index in it: the index is
+                    // below the table size, so truncating is safe.
+                    let map_ty = context.types.int((self.table_size * u64::from(*width)) as u32);
+                    let shift = int_cast(context, function, at, table_index, map_ty, Flags::default(), "switch.cast");
+                    // wouldFitInRegister guarantees the product fits.
+                    let mut no_wrap = Flags::NUW;
+                    no_wrap.insert(Flags::NSW);
+                    let operands = vec![shift, int(map_ty, u128::from(*width))];
+                    let shift =
+                        emit(function, at, Opcode::Binary(BinaryOp::Mul), map_ty, operands, no_wrap, "switch.shiftamt");
+                    let operands = vec![int(map_ty, *map), shift];
+                    let down = emit(
+                        function,
+                        at,
+                        Opcode::Binary(BinaryOp::LShr),
+                        map_ty,
+                        operands,
+                        Flags::default(),
+                        "switch.downshift",
+                    );
+                    emit(function, at, Opcode::Cast(CastOp::Trunc), *ty, vec![down], Flags::default(), "switch.masked")
+                }
+                Replacement::Table { ty, cell, cells } => {
+                    let array = context.types.intern(Type::Array { element: *cell, count: cells.len() as u64 });
+                    let initial =
+                        context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(cells.clone()) });
+                    let table = declared.table("switch.table", array, initial);
+                    let address = context.types.ptr(0);
+                    let base = context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
+                    let index_bits = spec.layout.pointer(0).index_bits;
+                    let index_ty = context.types.int(index_bits);
+                    let old = self.width;
+                    // The index is below the table size: a zext of it is
+                    // non-negative where the table fits the type's positive half.
+                    let flags = if index_bits > old && (cells.len() as u128 - 1) < (1u128 << (old - 1)) {
+                        Flags::NNEG
+                    } else {
+                        Flags::default()
+                    };
+                    let index = int_cast(context, function, at, table_index, index_ty, flags, "");
+                    let operands = vec![Operand::Constant(base), int(index_ty, 0), index];
+                    let place = emit(
+                        function,
+                        at,
+                        Opcode::GetElementPtr { source: array },
+                        address,
+                        operands,
+                        Flags::INBOUNDS,
+                        "switch.gep",
+                    );
+                    let load = Opcode::Load { align: None, volatile: false };
+                    let loaded = emit(function, at, load, *cell, vec![place], Flags::default(), "switch.load");
+                    if cell == ty {
+                        loaded
+                    } else {
+                        emit(
+                            function,
+                            at,
+                            Opcode::Cast(CastOp::ZExt),
+                            *ty,
+                            vec![loaded],
+                            Flags::default(),
+                            "switch.ext",
+                        )
+                    }
                 }
             };
             // Re-use the switch table compare if possible.
@@ -806,6 +970,7 @@ fn int_cast(
     at: Position,
     value: Operand,
     ty: TypeId,
+    zext_flags: Flags,
     name: &str,
 ) -> Operand {
     let from = function.operand_type(context, value).and_then(|one| context.types.int_bits(one)).expect("an integer");
@@ -815,7 +980,15 @@ fn int_cast(
         std::cmp::Ordering::Less => CastOp::ZExt,
         std::cmp::Ordering::Greater => CastOp::Trunc,
     };
-    emit(function, at, Opcode::Cast(op), ty, vec![value], Flags::default(), name)
+    emit(
+        function,
+        at,
+        Opcode::Cast(op),
+        ty,
+        vec![value],
+        if op == CastOp::ZExt { zext_flags } else { Flags::default() },
+        name,
+    )
 }
 
 /// `reuseTableCompare`
