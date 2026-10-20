@@ -176,7 +176,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 19 | `eliminateIdentitySCEV` reuses the operand only if `impliesPoison(IVOperand, UseInst)`; `canReuseInstruction` is not translated | the same fact as D12: the call only widens the cases where a poison-generating flag can be dropped |
 | 20 | `optimizeLoopExits` and `getLoopInvariantExitCondDuringFirstIterations` ignore `samesign` on an `icmp`; `predicateLoopExits` has no token check | `IntPredicate` carries no `samesign` (the flag is on the instruction) and SCEV's predicate queries do not read it; llrm has no token type | `exitopt.rs`, `invariant.rs`, `exitpredicate.rs` |
 | 21 | `computeExitCountExhaustively` answers CouldNotCompute (`exit_value.rs`, D-T4) | owed: `getConstantEvolvingPHI` and `EvaluateExpression` are not translated; a loop of constant-evolving values (`udiv iv, 10 <u 2`) has no exit count | `compute_exit_count_exhaustively`; `exitopt_tests.rs` uses `iv <u 20` for LLVM's `ult_const_max` |
-| 22 | (closed) LFTR runs in the pipeline as in the pin; `LLRM_NO_LFTR` turns it off | it was opt-in while the old `lsr` could not reduce the counter LFTR leaves; the translated LSR is the default, and ring -O2 went 48154 → 41127 instructions, tile 5235 → 4235 (rows harness, m32) | the field and the switch are deleted when the rows pair is blessed |
+| 22 | (closed) LFTR runs in the pipeline as in the pin | it was opt-in while the old `lsr` could not reduce the counter LFTR leaves; the translated LSR is the default, and ring -O2 went 48154 → 41127 instructions, tile 5235 → 4235 (rows harness, m32) | none |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 
