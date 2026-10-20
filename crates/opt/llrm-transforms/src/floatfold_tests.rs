@@ -322,10 +322,12 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
     assert!(!said("  %r = fmul nnan nsz double %x, 0.0\n  ret double %r").contains("fmul"));
     stays("  %r = fmul nnan double %x, 0.0\n  ret double %r", "fmul");
     stays("  %r = fmul nsz double %x, 0.0\n  ret double %r", "fmul");
-    // nnan and ninf make x - x a zero and x / x a one
-    assert!(!said("  %r = fsub nnan ninf double %x, %x\n  ret double %r").contains("fsub"));
-    assert!(!said("  %r = fdiv nnan ninf double %x, %x\n  ret double %r").contains("fdiv"));
-    stays("  %r = fsub nnan double %x, %x\n  ret double %r", "fsub");
+    // nnan makes x - x a zero and x / x a one (simplifyFSubInst,
+    // simplifyFDivInst)
+    assert!(!said("  %r = fsub nnan double %x, %x\n  ret double %r").contains("fsub"));
+    assert!(!said("  %r = fdiv nnan double %x, %x\n  ret double %r").contains("fdiv"));
+    stays("  %r = fsub double %x, %x\n  ret double %r", "fsub");
+    stays("  %r = fdiv double %x, %x\n  ret double %r", "fdiv");
     // a multiply by one needs no flag
     assert!(!said("  %r = fmul double 1.0, %x\n  ret double %r").contains("fmul"));
 }

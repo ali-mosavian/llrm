@@ -5,23 +5,12 @@ use llrm_mir::passes::Outer;
 
 use crate::testing::{parsed, printed, results};
 
-thread_local! {
-    /// Forces `widening_enabled` in this test's thread.
-    pub static FORCED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// `simplifyAndExtend` is on again (#2531, a user with no value, is fixed):
-/// a run without `LLRM_NO_SCEV_WIDEN` takes it.
-#[test]
-fn test_widening_by_scalar_evolution_is_on_unless_turned_off() {
-    assert!(super::widening_enabled());
-}
-
 fn simplified(text: &str) -> (bool, String) {
     let mut module = parsed(&format!("{DOS}{text}"));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = super::simplified(context, &layout, function, &outer);
+    let changed =
+        super::simplified_and_extended(context, &layout, function, &mut llrm_mir::passes::Declared::default(), &outer);
     (changed, printed(&module))
 }
 
@@ -56,7 +45,7 @@ fn test_a_compare_the_trip_count_decides_is_a_constant() {
     let mut module = parsed(&format!("{DOS}{BELOW}"));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    super::simplified(context, &layout, function, &outer);
+    super::simplified_and_extended(context, &layout, function, &mut llrm_mir::passes::Declared::default(), &outer);
     assert_eq!(results(&module, &[&[0], &[5], &[99]]), results(&before, &[&[0], &[5], &[99]]));
 }
 
@@ -64,8 +53,9 @@ fn test_a_compare_the_trip_count_decides_is_a_constant() {
 /// 100 may fail.
 #[test]
 fn test_a_compare_nothing_decides_is_left() {
-    let (changed, after) = simplified(&BELOW.replace("%i, 200", "%i, 50"));
-    assert!(!changed, "{after}");
+    // The flags `simplifyUsers` strengthens (`samesign`, `nsw`) are not a
+    // decision.
+    let (_, after) = simplified(&BELOW.replace("%i, 200", "%i, 50"));
     assert!(after.contains("br i1 %big"), "{after}");
 }
 
@@ -196,10 +186,9 @@ fn extended(
     text: &str,
     inputs: &[&[i128]],
 ) -> String {
-    super::tests_forced(true);
     let mut module = parsed(text);
     let before = results(&module, inputs);
-    crate::testing::managed(&mut module, crate::indvars::IndVars { exit_values: true, unrolls: None });
+    crate::testing::managed(&mut module, crate::indvars::IndVars { lftr: true });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after

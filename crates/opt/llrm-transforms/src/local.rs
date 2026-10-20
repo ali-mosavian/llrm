@@ -62,6 +62,14 @@
 //!     is `valuetracking::underlying`, which does not look through a `select`,
 //!     a `phi` or a call that returns an argument: two pointers that differ
 //!     only below one are not replaceable here, where LLVM may say they are.
+//! 24. `MergeBlockIntoPredecessor` erases `PTI` after redirecting the uses of
+//!     `BB`; here before. A `DbgMarker` hands `PTI`'s records to the next
+//!     instruction or the trailing list, which `STI` adopts when it moves.
+//!     `Function::erase` re-homes a record when its instruction goes
+//!     (`settle_records`), and the branch must still name `BB` for that to
+//!     reach `STI`: redirected first, it names its own block and the records
+//!     stay on the erased branch. Asserted by
+//!     `merging_leaves_the_records_of_the_old_branch_before_the_new_terminator`.
 //!
 //! # Example
 //! Two phis with the same arms in one block. Before:
@@ -177,7 +185,7 @@ fn intrinsic_of(
     Intrinsic::named(declarations.get(global.0 as usize)?.name.as_deref()?)
 }
 
-fn is_lifetime(
+pub(crate) fn is_lifetime(
     context: &Context,
     declarations: &Declarations,
     function: &Function,
@@ -769,7 +777,7 @@ pub fn fold_single_entry_phi_nodes(
 /// `bb`, which its predecessor alone reaches, joins the predecessor and is
 /// erased. With `predecessor_with_two_successors`, the predecessor may end in
 /// a conditional branch to `bb` and another block, and then branches to where
-/// `bb` jumped. Whether it merged. DEVIATE 15, 16.
+/// `bb` jumped. Whether it merged. DEVIATE 15, 16, 24.
 pub fn merge_block_into_predecessor(
     context: &Context,
     function: &mut Function,
@@ -841,6 +849,17 @@ pub fn merge_block_into_predecessor(
         function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
     }
 
+    // DEVIATE 24: the pin erases `PTI` after redirecting the uses of BB. The
+    // records said before the branch go with `sti` when it takes the branch's
+    // place (the pin: the trailing records `PTI` leaves, which
+    // `moveBeforePreserving` hands to `STI`); `settle_records` does that only
+    // while the branch still names BB as the one block it enters, so it is
+    // erased first.
+    if fall_thru.is_none() {
+        // Delete the unconditional branch from the predecessor.
+        function.erase(pti).expect("a jump defines nothing");
+    }
+
     // Make all PHI nodes that referred to BB now refer to Pred as their
     // source...
     function.replace_block_uses_with(bb, pred_bb);
@@ -851,8 +870,6 @@ pub fn merge_block_into_predecessor(
         // Update branch in the predecessor.
         function.set_operand(pti, 1 + fall_thru_path, Operand::Block(new_succ));
     } else {
-        // Delete the unconditional branch from the predecessor.
-        function.erase(pti).expect("a jump defines nothing");
         // Move terminator instruction.
         function.move_to(sti, Position::End(pred_bb)).expect("a placed instruction");
     }

@@ -468,6 +468,37 @@ fn test_an_alias_question_looks_at_one_cache_entry() {
     }
 }
 
+/// A pointer's underlying object is found once, however often it is asked: the
+/// walk down its GEP chain, made again at every step of every store's upward
+/// walk, was two thirds of DSE's cost on a body of 400 stores through one
+/// pointer.
+#[test]
+fn test_an_underlying_object_is_walked_once_per_pointer() {
+    use super::alias::AliasQuery;
+    let mut text = String::from("define void @f(ptr %p, i32 %a) {\nb0:\n");
+    for k in 0..64 {
+        text += &format!("  %g{k} = getelementptr i8, ptr %p, i16 {}\n  store i32 %a, ptr %g{k}\n", 4 * k);
+    }
+    text += "  ret void\n}\n";
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let locations: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    assert_eq!(locations.len(), 64);
+    for _ in 0..8 {
+        for pair in locations.windows(2) {
+            aa.alias(&pair[0], &pair[1]);
+        }
+    }
+    assert!(
+        aa.bases_walked() <= locations.len() as u64,
+        "{} walks for {} locations",
+        aa.bases_walked(),
+        locations.len()
+    );
+}
+
 /// A pointer read from memory cannot point into an alloca whose address is
 /// never taken, so a store through it does not clobber the alloca's load
 /// (`isNonEscapingLocalObject`). Without it every loop that stores through a
@@ -652,4 +683,161 @@ b3:
     let second = view.clobbering_access(loads[1]).expect("an answer");
     assert_eq!(first, second, "both loads have the same one clobber");
     assert!(view.is_phi(first), "the clobbers diverge, so it is the join's phi");
+}
+
+/// Two inbounds geps off a global and an argument, sharing a variable index,
+/// with the second 4 bytes on: `aliasGEP` puts that past the global, so no
+/// alias. The stand-in's own test said May, so a walk kept a store live
+/// that BasicAA clears.
+#[test]
+fn test_an_alias_question_is_answered_by_basicaa() {
+    use super::alias::{AliasQuery, AliasResult};
+    let parsed = Parsed::new(
+        "define i16 @f(ptr %p, i16 %i) {
+b0:
+  %a = getelementptr inbounds i8, ptr @g, i16 %i
+  %b0 = getelementptr inbounds i8, ptr %p, i16 %i
+  %b = getelementptr inbounds i8, ptr %b0, i16 4
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let loads: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    assert_eq!(aa.alias(&loads[0], &loads[1]), AliasResult::No);
+}
+
+/// A call that names no location may touch any alloca whose address is
+/// captured, and none whose address is only compared: the stand-in read the
+/// `icmp` as exposing it, so the call kept a load of the local live (MayModRef,
+/// where CaptureTracking says NoModRef).
+#[test]
+fn test_a_call_does_not_reach_a_local_whose_address_is_only_compared() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "define i16 @f(ptr %p) {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  %same = icmp eq ptr %a, %p
+  call void @anything()
+  %x = load i16, ptr %a
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let call = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .expect("the call");
+    let load = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("the load");
+    let loc = aa.location_of(load).expect("a location");
+    let touched = aa.get_mod_ref_info(call, &loc);
+    assert!(!touched.is_mod_or_ref(), "{touched:?}");
+}
+
+/// A call that is handed a local's address without capturing it still reaches
+/// the local through its argument. The stand-in asked only whether the address
+/// is captured, so `look(ptr nocapture %a)` was taken to leave the slot alone
+/// and a store before it was dropped: a miscompile (#2887).
+#[test]
+fn test_a_call_reaches_a_local_it_is_handed_without_capturing_it() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare void @look(ptr nocapture)
+define i16 @f() {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  call void @look(ptr %a)
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.walk().map(|(_, inst)| inst).collect();
+    let call = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .expect("the call");
+    let store = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let loc = aa.location_of(store).expect("a location");
+    // Premise: the call's effects are unknown to the access lists.
+    assert!(accesses.writes(call).is_none());
+    assert!(aa.get_mod_ref_info(call, &loc).is_mod_or_ref());
+    assert!(aa.mod_set_loc(call, &loc), "the call may write the slot it was handed");
+}
+
+/// A call that names no location cannot touch a local that only a later call
+/// captures: the whole-function capture answer made it reach the slot, so a
+/// store before the escape stayed live across the unknown call.
+#[test]
+fn test_a_call_before_the_escape_does_not_reach_the_local() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare void @keep(ptr)
+define i16 @f() {
+b0:
+  %a = alloca i16
+  store i16 1, ptr %a
+  call void @anything()
+  call void @keep(ptr %a)
+  ret i16 0
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.walk().map(|(_, inst)| inst).collect();
+    let is_call = |&&inst: &&llrm_mir::module::InstId| {
+        matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        )
+    };
+    let calls: Vec<_> = insts.iter().filter(is_call).copied().collect();
+    let store = *insts
+        .iter()
+        .find(|&&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let loc = aa.location_of(store).expect("a location");
+    // Premise: both calls are unknown to the access lists.
+    assert!(calls.iter().all(|&call| accesses.writes(call).is_none()), "{calls:?}");
+    assert!(!aa.get_mod_ref_info(calls[0], &loc).is_mod_or_ref(), "before the escape");
+    assert!(aa.get_mod_ref_info(calls[1], &loc).is_mod_or_ref(), "the escape itself reaches it");
 }

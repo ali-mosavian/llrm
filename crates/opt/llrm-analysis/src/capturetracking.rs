@@ -18,7 +18,9 @@
 //! pointer-returning intrinsics (`launder.invariant.group`, `ptrmask`,
 //! `threadlocal.address`), atomics, `va_arg`, `ptrtoaddr`, volatile memory
 //! intrinsics or `!captures` metadata exist in MIR, so those cases are absent.
-//! `PointerMayBeCapturedBefore` and `FindEarliestCapture` are not translated.
+//! `PointerMayBeCapturedBefore` is not translated; `FindEarliestCapture` is
+//! ([`find_earliest_capture`]), and [`crate::captureanalysis`] answers
+//! `getCapturesBefore` with it.
 //!
 //! # Example
 //! `%p` is stored to memory, so it is captured; `%q` is only loaded through:
@@ -39,12 +41,13 @@
 //! # Provides
 //! [`CaptureComponents`], [`UseCaptureInfo`], [`CaptureTracker`],
 //! [`determine_use_capture_kind`], [`pointer_may_be_captured_by`],
-//! [`pointer_may_be_captured`].
+//! [`pointer_may_be_captured`], [`find_earliest_capture`].
 //!
 //! # See also
 //! LLVM `CaptureTracking.cpp`, `Support/ModRef.h` (`CaptureComponents`).
 
 use llrm_mir::context::ConstantKind;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::module::{Function, GlobalValue, InstId, Operand, Use, ValueId};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
 use llrm_mir::types::Type;
@@ -372,6 +375,76 @@ pub fn pointer_may_be_captured(
         Simple { mask, stop, cc: CaptureComponents::NONE, cc_with_ret: CaptureComponents::NONE, function };
     pointer_may_be_captured_by(function, globals, context, value, &mut tracker, max_uses);
     CaptureResult { without_ret: tracker.cc, with_ret: tracker.cc_with_ret }
+}
+
+/// `EarliestCaptures`
+/// (CaptureTracking.cpp:156,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L156>):
+/// every capturing user, reduced to the nearest instruction that dominates
+/// them all.
+struct Earliest<'a> {
+    function: &'a Function,
+    tree: &'a DomTree,
+    mask: CaptureComponents,
+    earliest: Option<InstId>,
+    cc: CaptureComponents,
+    cc_with_ret: CaptureComponents,
+}
+
+impl CaptureTracker for Earliest<'_> {
+    fn too_many_uses(&mut self) {
+        self.cc = self.mask;
+        self.cc_with_ret = self.mask;
+        self.earliest = self.function.entry().and_then(|entry| self.function.iter_block(entry).next());
+    }
+
+    fn captured(
+        &mut self,
+        used: Use,
+        info: UseCaptureInfo,
+    ) -> Action {
+        let kept = info.use_cc.intersect(self.mask);
+        if kept.captures_anything() {
+            self.cc_with_ret = self.cc_with_ret.union(kept);
+            if !matches!(self.function.instruction(used.user).opcode, Opcode::Ret) {
+                self.earliest = Some(match self.earliest {
+                    None => used.user,
+                    Some(held) => self.tree.find_nearest_common_dominator_inst(self.function, held, used.user),
+                });
+                self.cc = self.cc.union(kept);
+            }
+        }
+        // Every potential capture is needed.
+        Action::Continue
+    }
+}
+
+/// `FindEarliestCapture`
+/// (CaptureTracking.cpp:254,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L254>):
+/// the instruction that dominates every capture of `value` (none if it is not
+/// captured; the entry block's first instruction if its uses are too many),
+/// and which components may be captured by any use. The caller must make sure
+/// an instruction compared against the answer is not in a cycle.
+pub fn find_earliest_capture(
+    function: &Function,
+    globals: &[GlobalValue],
+    context: &Context,
+    tree: &DomTree,
+    value: ValueId,
+    mask: CaptureComponents,
+    max_uses: usize,
+) -> (Option<InstId>, CaptureResult) {
+    let mut tracker = Earliest {
+        function,
+        tree,
+        mask,
+        earliest: None,
+        cc: CaptureComponents::NONE,
+        cc_with_ret: CaptureComponents::NONE,
+    };
+    pointer_may_be_captured_by(function, globals, context, value, &mut tracker, max_uses);
+    (tracker.earliest, CaptureResult { without_ret: tracker.cc, with_ret: tracker.cc_with_ret })
 }
 
 #[cfg(test)]

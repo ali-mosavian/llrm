@@ -96,8 +96,9 @@ fn show(
                 _ => format!("{t} {{ {body} }}"),
             }
         }
-        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
-            let flags = if *inbounds { "inbounds" } else { "" };
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
+            let flags = crate::print::gep_flag_words(*inbounds, *nusw, *nuw);
+            let flags = flags.trim_end().replace(' ', ",");
             format!("{t} gep[{flags}] {} ({})", context.types.display(*source), members(operands).join(", "))
         }
         ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {

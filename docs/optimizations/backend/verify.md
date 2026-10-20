@@ -47,11 +47,8 @@ in `verify.rs`.
 
 ## Runs
 After instruction selection and after every machine phase when `LLRM_VERIFY`
-is set to anything but `0`, or `-fverify-ir` is given (`flow::verified`,
-`flow::checked`). Tests, the gate and torture set it. A failure names the phase.
-The HIR and MIR a frontend made are checked then too, and not in a plain
-compile, as LLVM's release builds leave its verifier off (30 M instructions,
-0.9% of d_faces -O2); a malformed frontend output then fails in a later pass.
+is set to anything but `0` (`flow::verified`, `flow::checked`). Tests, the
+gate and torture set it. A failure names the phase.
 
 ## See also
 LLVM's

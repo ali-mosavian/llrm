@@ -695,3 +695,11 @@ def test_a_waived_count_is_excused_in_the_ratio_to_each_reference_too():
     assert bench.ratio_problems("matmul c -O2", "ow", {"instructions": 103}, want, ref, waiver) == []
     assert bench.ratio_problems("matmul c -O2", "ow", {"instructions": 104}, want, ref, waiver), "another count"
     assert bench.ratio_problems("matmul bas -O2", "ow", {"instructions": 103}, want, ref, waiver), "another row"
+
+
+def test_lang_keeps_the_other_languages_out_of_the_run(monkeypatch):
+    """A BASIC build failing on the head (#2672) stopped the whole bench: the m16 clocks of a C change could not be taken."""
+    monkeypatch.setattr(bench, "ONLY", ["c"])
+    assert {one.language for one in bench.variants(bench.BENCH / "fib")} == {"c"}
+    monkeypatch.setattr(bench, "ONLY", None)
+    assert {"c", "bas"} <= {one.language for one in bench.variants(bench.BENCH / "fib")}

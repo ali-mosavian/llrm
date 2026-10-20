@@ -8,47 +8,30 @@
 //!
 //! 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
 //!    into it, so the edge block becomes a bare jump that threading can skip.
-//! 2. `_placed` orders the blocks. By estimated frequency (every block counts
-//!    once at -Os): the likelier edge falls through, a diamond's likelier arm
-//!    falls into its join, and a new trace starts at the busiest block left. A
-//!    loop header that only decides whether to go round (`_tests`) is placed
-//!    after its latch, so a pass round the loop takes one branch. Cold blocks
-//!    go last.
-//! 3. `threaded` applies local changes until none applies (`_step`): a jump to
-//!    a block that only jumps goes to its target (`_through`; a loop header
-//!    with a measured trip count is kept), a jump to the next block is dropped,
-//!    `jcc L; jmp M` where `L` is next becomes `j!cc M`, and a `jcc` over a
-//!    block that only jumps is inverted. Unreachable blocks go.
+//! 2. `_placed` orders the blocks as LLVM's `MachineBlockPlacement` does
+//!    (`placement`): chains joined along the likelier edges, loops innermost
+//!    first with their top and exit chosen and rotated, trellises, and a short
+//!    block copied into the blocks that jump to it where that saves taken
+//!    branches. See `docs/architecture/jumps-placement-check.md`.
+//! 3. `threaded` is `branchfold` (LLVM's `OptimizeBranches`): a jump to a block
+//!    that only jumps goes to its target (a loop header with a measured trip
+//!    count is kept), a jump to the next block is dropped, `jcc L; jmp M` where
+//!    `L` is next becomes `j!cc M`. Unreachable blocks go.
 //! 4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
 //!    blocks that share the last instructions one copy of them, splitting a
 //!    block where no one holds only the tail; `machinedce::eliminated` then
 //!    removes what the merge made dead (a compare nothing selects on), and the
 //!    body is threaded again. Both repeat until nothing merges.
-//!
-//! Then, unless sized for code size, `duplicated_tails` replaces a `jmp` to a
-//! short tail (at most `TAIL_DUPLICATION` plain instructions besides its
-//! jumps) by a copy of the tail, where the copy's own fall-through jump runs
-//! less often than the jump removed, and a copy that would make a loop
-//! irreducible is refused. A tail is not copied into a jump that follows a
-//! branch whose other way is likelier than the tail (and is not the block
-//! itself): the copy would leave code between that branch and what follows
-//! it, and the likelier way would be taken whatever is laid next (a latch with
-//! a short exit tail would pay a taken back edge every trip to save the exit's
-//! one jump). `duplicated` then does the same for tails that return,
-//! `rotated` rotates a loop so its latch falls into the header (gcc's
-//! bb-reorder `rotate_loop`) when that takes fewer jumps by the target's jump
-//! prices, and `inverted` flips each `jcc L; jmp M` the copying left where `L`
-//! is next; where neither way is next, it makes the likelier way the
-//! conditional jump, so the trip that goes on pays one taken branch, not a
-//! branch not taken and a jump (the loop that went round by `je exit; jmp
-//! top`).
+//! 5. `inverted` flips each `jcc L; jmp M` the copying left where `L` is next;
+//!    where neither way is next, it makes the likelier way the conditional
+//!    jump, so the trip that goes on pays one taken branch, not a branch not
+//!    taken and a jump (the loop that went round by `je exit; jmp top`).
 //!
 //! ```text
-//!   before                       after (placed, threaded)
-//!   test: cmp; jge exit          jmp test
-//!   body: ...; jmp test          body: ...
-//!   exit: ...                    test: cmp; jl body
-//!                                exit: ...
+//!   before                       after (placed, a guard copy of the test)
+//!   test: cmp; jge exit          cmp; jge exit
+//!   body: ...; jmp test          body: ...; cmp; jl body
+//!   exit: ...                    exit: ...
 //! ```
 //!
 //! `duplicated_returns` is separate and runs later, from `assemble`, because
@@ -101,6 +84,7 @@
 //! LLVM `BranchFolding` and `MachineBlockPlacement`; gcc `cleanup_cfg`,
 //! `bb-reorder` and `copy_bb_p`.
 
+mod branchfold;
 mod placement;
 mod tailmerge;
 
@@ -109,14 +93,14 @@ use std::sync::Arc;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::frequency::Frequency;
-use crate::analysis::loops as loopy;
+use crate::analysis::loops::{self as loopy, Loop};
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
-use crate::model::lir::{self, Block, BlockOdds, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::HashSet;
-use crate::support::hash::{IndexMap, IndexSet};
+use crate::support::hash::IndexMap;
 
 /// Python's AttributeError on `None.op`: `_real` keeps semantics-less markers.
 const NO_OP: &str = "'NoneType' object has no attribute 'op'";
@@ -186,12 +170,7 @@ pub fn optimized(
     cpu: &cpu::Profile,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size)?);
-    // Tail duplication before the merge, as LLVM places with it: after, the
-    // merge would give back what the copy gained.
-    if !size {
-        placed = threaded(&duplicated_tails(&placed));
-    }
+    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
@@ -204,7 +183,7 @@ pub fn optimized(
         };
         placed = machinedce::eliminated(threaded(&merged));
     }
-    let done = inverted(&if size { placed } else { duplicated(&placed, true) });
+    let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
     for block in &done.blocks {
@@ -213,13 +192,57 @@ pub fn optimized(
     Ok(done)
 }
 
+/// `alignBlocks`: a block of a loop that is entered other than by falling
+/// through, or only rarely so, starts at the target's preferred loop alignment,
+/// unless it is cold against the function or its loop. Not for size.
+fn aligned(
+    body: &LirBody,
+    cpu: &cpu::Profile,
+) -> LirBody {
+    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 {
+        return body.clone();
+    }
+    const COLD: f64 = 0.2;
+    let found = loopy::loops(&body.blocks, Some(body.entry));
+    if found.is_empty() {
+        return body.clone();
+    }
+    let busy = Frequency::of(body);
+    let entry = busy.block(body.entry);
+    // The loop nearest round each block: the smallest first.
+    let mut nearest: IndexMap<i64, &Loop> = IndexMap::default();
+    for one in found.iter().rev() {
+        for at in one.body.to_set() {
+            nearest.insert(at, one);
+        }
+    }
+    let mut blocks = body.blocks.clone();
+    for place in 1..blocks.len() {
+        let at = blocks[place].at;
+        let Some(round) = nearest.get(&at) else { continue };
+        let here = busy.block(at);
+        if here < entry * COLD || here < busy.block(round.header) * COLD {
+            continue;
+        }
+        let before = &blocks[place - 1];
+        let enters = before.succ.contains(&at);
+        if !enters || busy.edge(before.at, at) <= here * COLD {
+            blocks[place] = LirBlock { align: cpu.loop_alignment, ..blocks[place].clone().into_inner() }.into();
+        }
+    }
+    body.with_blocks(blocks)
+}
+
 /// A conditional branch taken to the block laid out next, followed by a jump:
 /// the opposite branch to the jump's target, and no jump (LLVM's
 /// `analyzeBranch` / `reverseBranchCondition` in BranchFolding). `_step` does
 /// this while it places blocks; copying a tail afterwards (`duplicated`) makes
 /// more of them. Where neither way is laid out next, the likelier one becomes
 /// the conditional jump, so the trip that goes on pays one taken branch.
-fn inverted(body: &LirBody) -> LirBody {
+fn inverted(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
     let mut odds: Option<std::sync::Arc<crate::analysis::frequency::Frequency>> = None;
@@ -247,6 +270,10 @@ fn inverted(body: &LirBody) -> LirBody {
             // conditional jump, so that the trip that goes on pays one taken
             // branch, not a branch not taken and a jump (the loop that went
             // round by `je exit; jmp top`).
+            // For size the branch keeps its condition (`optimizeBranches`).
+            if size {
+                continue;
+            }
             let (taken, onward) = (branch_what.target.expect("a target"), last_what.target.expect("a target"));
             let busy = odds.get_or_insert_with(|| crate::analysis::frequency::Frequency::of(body));
             if after == last_what.target || busy.edge(blocks[index].at, onward) <= busy.edge(blocks[index].at, taken) {
@@ -299,277 +326,6 @@ fn inverted(body: &LirBody) -> LirBody {
         changed = true;
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
-}
-
-/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this
-/// many unconditional jumps long.
-const COPY_BB_INSNS: usize = 8;
-
-/// gcc's `get_uncond_jump_length`: what the target prices one unconditional
-/// jump at, in its long form.
-pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
-    let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
-    select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
-}
-
-/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS`
-/// jumps of code.
-fn copy_limit(bits: u32) -> usize {
-    COPY_BB_INSNS * uncond_jump_bytes(bits)
-}
-
-/// A block that only returns: plain operations then a `ret`, no way on, within
-/// `limit` bytes and none of it source-owned.
-fn _return_tail(
-    bits: u32,
-    block: &LirBlock,
-) -> bool {
-    if !block.phis.is_empty()
-        || !block.succ.is_empty()
-        || block
-            .insns
-            .iter()
-            .any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty())
-    {
-        return false;
-    }
-    let real = _real(block);
-    let Some((last, rest)) = real.split_last() else { return false };
-    // A return that covers source bytes is the program's own (a BASIC module's
-    // end spells a runtime call at it): not copied.
-    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return)
-        || !last.inserted()
-        || rest.iter().any(|one| {
-            one.call.is_some()
-                || one.what.as_ref().is_none_or(|what| {
-                    matches!(
-                        what.op,
-                        Operation::Barrier
-                            | Operation::Branch
-                            | Operation::Call
-                            | Operation::Data
-                            | Operation::Jump
-                            | Operation::Return
-                    )
-                })
-        })
-    {
-        return false;
-    }
-    real.iter()
-        .try_fold(0usize, |bytes, one| {
-            select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())
-        })
-        .is_some_and(|bytes| bytes <= copy_limit(bits))
-}
-
-/// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its
-/// jumps.
-const TAIL_DUPLICATION: usize = 2;
-
-/// Each `jmp` to a short tail replaced by a copy of the tail, as LLVM's tail
-/// duplication: the copy runs where the jump did, and the jump is gone. A
-/// tail that falls through gets a `jmp` there in its copy, which runs only
-/// as often as the copy falls through, so a copy is made only where that is
-/// less often than the jump it removes. A copy claims none of the
-/// original's bytes, which the tail keeps.
-pub fn duplicated_tails(body: &LirBody) -> LirBody {
-    duplicated(body, false)
-}
-
-/// `duplicated_tails`, or only the tails that return: the jump a copied tail
-/// ended in may reach one. A tail is not copied into a jump after a branch
-/// whose other way is likelier than the tail (and is not the block itself): the
-/// copy would leave code between that branch and what follows it, and the
-/// likelier way would be taken whatever is laid next (x_adler's `jne top; jmp
-/// exit` latch).
-fn duplicated(
-    body: &LirBody,
-    returns: bool,
-) -> LirBody {
-    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
-    let frequency = Frequency::of(body);
-    let mut odds = body.odds.clone();
-    let irreducible = |blocks: &[Block]| !loopy::irreducible(blocks, Some(body.entry)).is_empty();
-    let reducible = !irreducible(&body.blocks);
-    // Every copy that can be made, whether or not an earlier one is: what a
-    // copy reads is the body as it came.
-    let mut copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)> = Vec::new();
-    for (index, parent) in body.blocks.iter().enumerate() {
-        let made = (|| {
-            let real = _real(parent);
-            let Some(last) = real
-                .last()
-                .and_then(|one| one.what.as_ref())
-                .filter(|what| what.op == Operation::Jump && !what.indirect)
-            else {
-                return None;
-            };
-            let Some(tail) =
-                last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at))
-            else {
-                return None;
-            };
-            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied())
-                .filter(|(_, falls)| !returns || falls.is_none())
-                .filter(|_| !returns || _return_tail(body.bits, tail))
-            else {
-                return None;
-            };
-            // A conditional branch before this jump leaves by its way when
-            // that way is the likelier, and it falls through to its block when
-            // that block is laid next (`inverted`, `rotated` lay it so): the
-            // jump is the cold way's. A copy of the tail in the jump's place
-            // leaves code between the branch and what follows it, so the branch
-            // is taken whatever is laid next: not where its way is the likelier
-            // (a latch with a short exit tail paid a taken back edge every trip
-            // to save the exit's one jump).
-            if let (_, Some(branch)) = _real_tail(parent) {
-                let way = branch.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
-                if let Some(way) = way.and_then(|what| what.target)
-                    && way != tail.at
-                    // A block cannot fall into itself: a loop of one block is a
-                    // taken branch back whatever is laid next.
-                    && way != parent.at
-                    && frequency.edge(parent.at, way) > frequency.edge(parent.at, tail.at)
-                {
-                    return None;
-                }
-            }
-            // Per run of the jump: the fall-through's jump runs as often as the
-            // tail falls through.
-            if let Some(next) = falls {
-                let share =
-                    |from: i64, to: i64| frequency.edge(from, to) / frequency.block(from).max(f64::MIN_POSITIVE);
-                if share(tail.at, next) >= 1.0 {
-                    return None;
-                }
-            }
-            let jump = &parent.insns[parent
-                .insns
-                .iter()
-                .rposition(|one| Arc::ptr_eq(one, real.last().expect("checked")))
-                .expect("a real instruction")];
-            // The jump's work goes; its source bytes stay, as `_reachable`
-            // keeps them.
-            let mut insns: Vec<Arc<Insn>> = parent
-                .insns
-                .iter()
-                .map(|one| if Arc::ptr_eq(one, jump) { lir::bytes_only(one) } else { Arc::clone(one) })
-                .collect();
-            insns.extend(copied.iter().map(|one| _unowned(one, jump)));
-            if let Some(next) = falls {
-                let mut made = (**jump).clone();
-                made.what = Some(Semantics { target: Some(next), ..last.clone() });
-                insns.push(_unowned(&made, jump));
-            }
-            // The edge to the tail becomes the tail's edges, at its share.
-            // The edge to the tail becomes the tail's edges, at their odds.
-            let into: Vec<(i64, f64)> =
-                tail.succ.iter().map(|next| (*next, body.odds.chance(tail.at, &tail.succ, *next))).collect();
-            // The parent's own branches keep their targets.
-            let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
-            succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
-            Some((LirBlock { succ: succ.into(), ..parent.with_insns(insns).into_inner() }, tail.at, into))
-        })();
-        if let Some((made, tail, into)) = made {
-            copies.push((index, made, tail, into));
-        }
-    }
-    // A copy that makes a second entry into a loop is refused: an irreducible
-    // body has no estimate of its loops. Checked once for all the copies, as
-    // each is checked after the ones before it only when the whole is not
-    // reducible.
-    // One by one, each checked after the ones before it.
-    let sequential = |odds: &mut BlockOdds, copies: Vec<(usize, LirBlock, i64, Vec<(i64, f64)>)>| {
-        let mut blocks = body.blocks.clone();
-        for (index, made, tail, into) in copies {
-            let before = std::mem::replace(&mut blocks[index], made.into());
-            if reducible && irreducible(&blocks) {
-                blocks[index] = before;
-            } else {
-                odds.rerouted(body.blocks[index].at, &body.blocks[index].succ, tail, &into);
-            }
-        }
-        blocks
-    };
-    let mut blocks: Vec<Block> = body.blocks.clone();
-    for (index, made, _, _) in &copies {
-        blocks[*index] = made.clone().into();
-    }
-    if reducible && irreducible(&blocks) {
-        blocks = sequential(&mut odds, copies);
-    } else {
-        #[cfg(test)]
-        {
-            let mut checked = odds.clone();
-            assert!(
-                sequential(&mut checked, copies.clone()) == blocks
-                    && checked == {
-                        let mut all = odds.clone();
-                        for (index, _, tail, into) in &copies {
-                            all.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
-                        }
-                        all
-                    },
-                "the copies checked once are not the copies checked one by one"
-            );
-        }
-        for (index, _, tail, into) in &copies {
-            odds.rerouted(body.blocks[*index].at, &body.blocks[*index].succ, *tail, into);
-        }
-    }
-    _reachable(&LirBody { odds, ..body.clone() }, blocks)
-}
-
-/// A tail's printed instructions where it may be copied, and the block it
-/// falls through to: at most `TAIL_DUPLICATION` besides the branches it ends
-/// in, every one a plain operation.
-fn _duplicable(
-    bits: u32,
-    tail: &LirBlock,
-    next: Option<i64>,
-) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
-    if !tail.phis.is_empty() {
-        return None;
-    }
-    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to
-    // `max-grow-copy-bb-insns` jumps of code.
-    if _return_tail(bits, tail) {
-        return Some((_real(tail), None));
-    }
-    let real = _real(tail);
-    let ops: Vec<Semantics> = real.iter().map(|one| one.what.clone()).collect::<Option<_>>()?;
-    let jumps = ops
-        .iter()
-        .rev()
-        .take_while(|one| matches!(one.op, Operation::Jump | Operation::Branch) && !one.indirect)
-        .count();
-    let plain = ops[..ops.len() - jumps]
-        .iter()
-        .all(
-            |one| !matches!(
-                one.op,
-                Operation::Call
-                    | Operation::Return
-                    | Operation::Data
-                    | Operation::Barrier
-                    | Operation::Jump
-                    | Operation::Branch
-            ),
-        );
-    if jumps == 0
-        || jumps > 2
-        || ops.len() - jumps > TAIL_DUPLICATION
-        || !plain
-        || real.iter().any(|one| one.group.is_some())
-    {
-        return None;
-    }
-    let ends = ops.last().is_some_and(|one| one.op == Operation::Jump);
-    let falls = if ends { None } else { Some(next.filter(|at| tail.succ.contains(at))?) };
-    Some((real, falls))
 }
 
 /// `one` copied where `beside` was, claiming no bytes.
@@ -649,7 +405,7 @@ fn _without_jumps_to_next(order: Vec<Block>) -> Vec<Block> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    _placed(body, false)
+    _placed(body, false, false)
 }
 
 /// The blocks in the order `MachineBlockPlacement` lays them out (see
@@ -657,36 +413,34 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 fn _placed(
     body: &LirBody,
     size: bool,
+    aggressive: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
-    let busy = Frequency::over(body, &explicit);
-    let order = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size);
-    Ok(body.with_blocks(order.into_iter().map(|place| explicit[place].clone()).collect()))
+    let busy = Frequency::of(body);
+    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive);
+    Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {
     let body = _hoisted(body);
-    let mut body = _reachable(&body, body.blocks.clone());
+    let body = _reachable(&body, body.blocks.clone());
     let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    let mut at = Places::of(&body);
-    // One pass applies every change it meets, going on from the changed block
-    // (LLVM's BranchFolding, gcc's `cleanup_cfg`); a change can open one in a
-    // block before it, so passes repeat from the top until one finds none.
-    let (mut from, mut visits) = (0, 0);
-    loop {
-        match _step(&mut body, &mut at, &protected, from, &mut visits) {
-            Some(next) => from = next,
-            None if from == 0 => break,
-            None => from = 0,
-        }
+    branchfold::folded(&body, &protected)
+}
+
+/// The value `one` is renamed to, through every rename after it.
+fn _root(
+    rename: &IndexMap<u32, u32>,
+    mut one: u32,
+) -> u32 {
+    while let Some(next) = rename.get(&one) {
+        one = *next;
     }
-    body.facts.0.bump_by("jump-visits", visits);
-    // Threading can leave a branch whose two ways went to one block.
-    _converged(&body)
+    one
 }
 
 /// An edge block's anchors moved up before the branch into it, where the other
@@ -976,135 +730,6 @@ fn _live_values(blocks: &[Block]) -> IndexMap<i64, BTreeSet<u32>> {
     .output
 }
 
-/// The value `one` is renamed to, through every rename after it.
-fn _root(
-    rename: &IndexMap<u32, u32>,
-    mut one: u32,
-) -> u32 {
-    while let Some(next) = rename.get(&one) {
-        one = *next;
-    }
-    one
-}
-
-/// Redirect every explicit edge, remove duplicate blocks, and fold diamonds.
-pub fn _redirected(
-    body: &LirBody,
-    redirect: &IndexMap<i64, i64>,
-) -> LirBody {
-    let target = |mut at: i64| -> i64 {
-        let mut seen = HashSet::default();
-        while redirect.contains_key(&at) && !seen.contains(&at) {
-            seen.insert(at);
-            at = redirect[&at];
-        }
-        at
-    };
-
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        if redirect.contains_key(&block.at) {
-            continue;
-        }
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            let mut one = Arc::clone(one);
-            if let Some(what) = &one.what {
-                if matches!(what.op, Operation::Branch | Operation::Jump) {
-                    if let Some(old) = what.target {
-                        let what = Semantics { target: Some(target(old)), ..what.clone() };
-                        one = Arc::new(Insn { what: Some(what), ..(*one).clone() });
-                    } else if !what.table.is_empty() {
-                        let table = what.table.iter().map(|at| target(*at)).collect();
-                        one = Arc::new(Insn { what: Some(Semantics { table, ..what.clone() }), ..(*one).clone() });
-                    }
-                }
-            }
-            insns.push(one);
-        }
-        let successors: IndexSet<i64> = block.succ.iter().map(|at| target(*at)).collect();
-        blocks.push(
-            _fold_converged(LirBlock {
-                succ: successors.into_iter().collect(),
-                ..block.with_insns(insns).into_inner()
-            })
-            .into(),
-        );
-    }
-    let entry = target(body.entry);
-    LirBody { entry, ..body.with_blocks(blocks) }
-}
-
-/// Every conditional whose two CFG edges became one is an unconditional edge
-/// (`OptimizeBlock` removing a branch whose two ways are one block).
-fn _converged(body: &LirBody) -> LirBody {
-    let mut changed = false;
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            if block.succ.is_empty() || block.succ.iter().any(|to| *to != block.succ[0]) {
-                return block.clone();
-            }
-            let folded = _fold_converged((**block).clone());
-            if folded.insns.same_insns(&block.insns) && folded.succ.len() == block.succ.len() {
-                block.clone()
-            } else {
-                changed = true;
-                folded.into()
-            }
-        })
-        .collect();
-    if changed { body.with_blocks(blocks) } else { body.clone() }
-}
-
-/// A conditional whose two CFG edges became one is an unconditional edge.
-pub fn _fold_converged(block: LirBlock) -> LirBlock {
-    // The edges are a set: `jae L; jmp L` has the one successor, listed twice
-    // or once.
-    if block.succ.is_empty() || block.succ.iter().any(|to| *to != block.succ[0]) {
-        return block;
-    }
-    let block = if block.succ.len() == 1 { block } else { LirBlock { succ: vec![block.succ[0]].into(), ..block } };
-    let destination = block.succ[0];
-    let real = _real(&block);
-    let last = real.last();
-    if let Some(last) = last {
-        if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump && what.target == Some(destination))
-            && real.len() > 1
-        {
-            let branch = &real[real.len() - 2];
-            if branch.what.as_ref().is_some_and(|what| what.op == Operation::Branch && what.target == Some(destination))
-            {
-                let insns = block
-                    .insns
-                    .iter()
-                    .map(|one| if Arc::ptr_eq(one, branch) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect();
-                return LirBlock { insns, ..block };
-            }
-        }
-        if last.what.as_ref().is_some_and(|what| what.op == Operation::Branch) {
-            let jump = Arc::new(Insn {
-                what: Some(Semantics {
-                    name: Some("jmp".to_owned()),
-                    target: Some(destination),
-                    ..Semantics::new(Operation::Jump)
-                }),
-                uses: Vec::new(),
-                ..(**last).clone()
-            });
-            let insns = block
-                .insns
-                .iter()
-                .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&jump) } else { Arc::clone(one) })
-                .collect();
-            return LirBlock { insns, ..block };
-        }
-    }
-    block
-}
-
 /// Duplicate a terminal tail when doing so costs no bytes and removes a jump.
 ///
 /// Frame teardown is emitted around RETURN rather than represented in LIR, so
@@ -1275,212 +900,6 @@ pub fn _with_return(
     LirBlock { succ: tail.succ.clone(), ..parent.with_insns(kept.chain(copies).collect()).into_inner() }.into()
 }
 
-/// One change to `body`, the first that applies, in place: its blocks are
-/// neither copied nor, but for the edited one and those the change strands,
-/// rebuilt. Whether it changed anything.
-///
-/// `at` is each block's position, kept while the blocks stay as they are: a
-/// change that only rewrites an instruction strands nothing, so the body is not
-/// searched for what it reaches again.
-pub fn _step(
-    body: &mut LirBody,
-    at: &mut Places,
-    protected: &BTreeSet<i64>,
-    from: usize,
-    visits: &mut usize,
-) -> Option<usize> {
-    let mut blocks = std::mem::take(&mut body.blocks);
-    for index in from..blocks.len() {
-        *visits += 1;
-        // The block's last two real instructions, which is all the rules read
-        // of the rest: nothing is copied for a block no rule applies
-        // to.
-        let (last, before) = _real_tail(&blocks[index]);
-        let Some(last) = last else {
-            continue;
-        };
-        let last_what = last.what.as_ref().expect(NO_OP);
-        if !matches!(last_what.op, Operation::Branch | Operation::Jump) {
-            continue;
-        }
-        let block = blocks[index].clone();
-        let here = block.at;
-        let last = &last;
-        // Control falls through blocks of only meta instructions, as layout
-        // places them.
-        let after = blocks[index + 1..]
-            .iter()
-            .find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta()))
-            .map(|next| next.at);
-        if !last_what.table.is_empty() {
-            // A table jump's index to a block that only jumps goes to where it
-            // jumps. None of the rules below read a jump with no target.
-            let table: Vec<i64> = last_what
-                .table
-                .iter()
-                .map(|&entry| _through(&blocks, at, Some(entry), protected).unwrap_or(entry))
-                .collect();
-            if table == last_what.table {
-                continue;
-            }
-            let changed: Vec<(i64, i64)> = last_what
-                .table
-                .iter()
-                .zip(&table)
-                .filter(|(old, new)| old != new)
-                .map(|(&old, &new)| (old, new))
-                .collect();
-            for &(old, onward) in &changed {
-                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
-            }
-            let moved = Arc::new(Insn {
-                what: Some(Semantics { table: table.clone(), ..last_what.clone() }),
-                ..(**last).clone()
-            });
-            let succ: IndexSet<i64> = table.iter().copied().collect();
-            let insns =
-                block.insns.iter().map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) });
-            let moved_succ: Vec<i64> = succ.into_iter().collect();
-            at.moved(&block.succ, &moved_succ);
-            blocks[index] =
-                LirBlock { succ: moved_succ.into(), ..block.with_insns(insns.collect()).into_inner() }.into();
-            body.blocks = blocks;
-            let freed: Vec<i64> = changed.iter().map(|&(old, _)| old).collect();
-            _stranded(body, at, &freed);
-            return Some(at.get(&here).unwrap_or(0));
-        }
-        let target = _through(&blocks, at, last_what.target, protected);
-        if target != last_what.target {
-            let onward = target.expect("a passage names its target");
-            if let Some(old) = last_what.target {
-                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
-            }
-            let retargeted = _retargeted(&block, last, onward);
-            at.moved(&block.succ, &retargeted.succ);
-            blocks[index] = retargeted.into();
-            body.blocks = blocks;
-            // Every block with edges is reached (the body was pruned after each
-            // change), so the only block this can strand is the one
-            // the branch left, and only when nothing else enters it.
-            match last_what.target {
-                Some(old) => _stranded(body, at, &[old]),
-                None => _stranded_whole(body, at),
-            }
-            return Some(at.get(&here).unwrap_or(0));
-        }
-        // A branch before the final jump goes through a block that only jumps
-        // as well (BranchFolding's `OptimizeBlock`, the true branch of a
-        // `Bcc T; B F` pair).
-        if let Some(branch) = before.as_ref().filter(|one| {
-            one.what
-                .as_ref()
-                .is_some_and(|what| what.op == Operation::Branch && !what.indirect && what.target.is_some())
-        }) {
-            let old = branch.what.as_ref().and_then(|what| what.target).expect("checked");
-            let onward = _through(&blocks, at, Some(old), protected).expect("a passage names its target");
-            if onward != old {
-                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
-                let retargeted = _retargeted(&block, branch, onward);
-                at.moved(&block.succ, &retargeted.succ);
-                blocks[index] = retargeted.into();
-                body.blocks = blocks;
-                _stranded(body, at, &[old]);
-                return Some(at.get(&here).unwrap_or(0));
-            }
-        }
-        // A block with a branch before the last two keeps its jump: without it,
-        // three ways out and nothing choosing among them.
-        let choosable = block.succ.len() <= 2;
-        if last_what.op == Operation::Jump && target == after && choosable {
-            // A fall-through needs no machine jump.  A decoded jump may still
-            // own source bytes, though; retain those as an inert anchor so
-            // fresh layout can account for the replaced range.  A frontend-
-            // inserted jump owns no bytes and disappears outright.
-            let kept = block
-                .insns
-                .iter()
-                .filter(|one| !Arc::ptr_eq(one, last) || !one.inserted())
-                .map(|one| {
-                    if Arc::ptr_eq(one, last) && !one.inserted() {
-                        lir::anchor(Arc::clone(one))
-                    } else {
-                        Arc::clone(one)
-                    }
-                })
-                .collect();
-            blocks[index] = LirBlock { insns: kept, ..block.into_inner() }.into();
-            body.blocks = blocks;
-            return Some(at.get(&here).unwrap_or(0));
-        }
-        if last_what.op == Operation::Jump
-            && choosable
-            && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
-        {
-            let branch = before.as_ref().expect("checked");
-            let branch_what = branch.what.as_ref().expect(NO_OP);
-            let opposite = branch_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
-            if branch_what.target == after && opposite.is_some() {
-                let inverted = Arc::new(Insn {
-                    what: Some(Semantics {
-                        name: opposite.map(|name| (*name).to_owned()),
-                        target,
-                        ..branch_what.clone()
-                    }),
-                    ..(**branch).clone()
-                });
-                let insns = block
-                    .insns
-                    .iter()
-                    .filter(|one| !Arc::ptr_eq(one, last))
-                    .map(|one| if Arc::ptr_eq(one, branch) { Arc::clone(&inverted) } else { Arc::clone(one) })
-                    .collect();
-                blocks[index] = LirBlock { insns, ..block.into_inner() }.into();
-                body.blocks = blocks;
-                return Some(at.get(&here).unwrap_or(0));
-            }
-        }
-        let opposite = last_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
-        if last_what.op == Operation::Branch && after.is_some() && opposite.is_some() {
-            // Falling into a block that only jumps, with the branch taken to
-            // the block past it.
-            let over = blocks[index + 1].clone();
-            let beyond = blocks.get(index + 2).map(|past| past.at);
-            let onward = _passage(&over);
-            if onward.is_some()
-                && !protected.contains(&over.at)
-                && !_real(&over).is_empty()
-                && last_what.target == beyond
-                && _predecessors(&blocks).get(&over.at) == Some(&BTreeSet::from([block.at]))
-            {
-                let inverted = Arc::new(Insn {
-                    what: Some(Semantics {
-                        name: opposite.map(|name| (*name).to_owned()),
-                        target: onward,
-                        ..last_what.clone()
-                    }),
-                    ..(**last).clone()
-                });
-                let insns = block
-                    .insns
-                    .iter()
-                    .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&inverted) } else { Arc::clone(one) })
-                    .collect();
-                let succ = vec![onward.expect("checked above"), beyond.expect("a branch names its target")];
-                at.moved(&block.succ, &succ);
-                at.moved(&over.succ, &[]);
-                let freed = vec![over.at];
-                blocks[index] = LirBlock { insns, succ: succ.into(), ..block.into_inner() }.into();
-                blocks[index + 1] = LirBlock { succ: Vec::new().into(), ..over.into_inner() }.into();
-                body.blocks = blocks;
-                _stranded(body, at, &freed);
-                return Some(at.get(&here).unwrap_or(0));
-            }
-        }
-    }
-    body.blocks = blocks;
-    None
-}
-
 /// The last two of `_real(block)`, the last first, without making the rest.
 fn _real_tail(block: &LirBlock) -> (Option<Arc<Insn>>, Option<Arc<Insn>>) {
     let nop = |one: &Insn| {
@@ -1519,59 +938,6 @@ pub fn _passage(block: &LirBlock) -> Option<i64> {
     None
 }
 
-/// The first block past pure passages, retaining measured loop anchors.
-///
-/// An exact loop header may emit no bytes after scalar optimization.  It is
-/// still a program fact: redirecting a nested backedge through it can merge
-/// two natural loops in the final CFG and invalidate the trip-count metadata
-/// used by measurement.  Keeping the zero-length block changes no encoding.
-pub fn _through(
-    blocks: &[Block],
-    at: &Places,
-    target: Option<i64>,
-    protected: &BTreeSet<i64>,
-) -> Option<i64> {
-    let (start, mut seen) = (target, HashSet::default());
-    let mut target = target;
-    while let Some(current) = target {
-        if protected.contains(&current) || !at.contains(&current) {
-            break;
-        }
-        let Some(onward) = _passage(&blocks[at.get(&current).expect("known above")]) else {
-            break;
-        };
-        if seen.contains(&current) {
-            return start;
-        }
-        seen.insert(current);
-        target = Some(onward);
-    }
-    target
-}
-
-pub fn _retargeted(
-    block: &LirBlock,
-    last: &Arc<Insn>,
-    target: i64,
-) -> LirBlock {
-    let what = last.what.as_ref().expect(NO_OP);
-    let old = what.target;
-    let moved = Arc::new(Insn { what: Some(Semantics { target: Some(target), ..what.clone() }), ..(**last).clone() });
-    let succ: IndexSet<i64> = block.succ.iter().map(|one| if Some(*one) == old { target } else { *one }).collect();
-    LirBlock {
-        succ: succ.into_iter().collect(),
-        ..block
-            .with_insns(
-                block
-                    .insns
-                    .iter()
-                    .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) })
-                    .collect(),
-            )
-            .into_inner()
-    }
-}
-
 pub fn _predecessors(blocks: &[Block]) -> IndexMap<i64, BTreeSet<i64>> {
     let mut found: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for block in blocks {
@@ -1590,272 +956,6 @@ pub fn _reachable(
     made.blocks = blocks;
     _prune(&mut made);
     made
-}
-
-/// `_prune`, and the positions in `at` made again where it removed a block,
-/// from the whole body: what the counts cannot settle.
-fn _stranded_whole(
-    body: &mut LirBody,
-    at: &mut Places,
-) {
-    #[cfg(test)]
-    WALKS.with(|one| one.set(one.get() + 1));
-    // Followed over the positions the caller keeps, and the blocks rebuilt only
-    // if one that is reached by nothing is not already the bytes it owned:
-    // the body is pruned after each change, so that is rarely more than the
-    // block a branch just left.
-    let blocks = &body.blocks;
-    let mut reached = vec![false; blocks.len()];
-    let mut work: Vec<usize> = at.get(&body.entry).into_iter().collect();
-    while let Some(index) = work.pop() {
-        if std::mem::replace(&mut reached[index], true) {
-            continue;
-        }
-        work.extend(blocks[index].succ.iter().filter_map(|to| at.get(to)).filter(|&next| !reached[next]));
-    }
-    let settled = |block: &LirBlock| {
-        block.succ.is_empty()
-            && block.phis.is_empty()
-            && !block.insns.is_empty()
-            && block.insns.iter().all(|one| Arc::ptr_eq(&lir::bytes_only(one), one) && !one.owned().is_empty())
-    };
-    let stranded: Vec<usize> = (0..blocks.len()).filter(|&index| !reached[index] && !settled(&blocks[index])).collect();
-    if stranded.is_empty() {
-        return;
-    }
-    // What `_prune` makes of them, in place: the blocks that keep bytes stay
-    // where they are, and only a block with none to keep takes the
-    // positions after it with it.
-    let mut keep = vec![true; body.blocks.len()];
-    for index in stranded {
-        let block = &body.blocks[index];
-        let kept: Vec<Arc<Insn>> =
-            block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
-        if kept.is_empty() {
-            keep[index] = false;
-        } else {
-            body.blocks[index] =
-                LirBlock { succ: Vec::new().into(), phis: Vec::new().into(), ..block.with_insns(kept).into_inner() }
-                    .into();
-        }
-    }
-    if keep.contains(&false) {
-        let mut places = keep.into_iter();
-        body.blocks.retain(|_| places.next().unwrap_or(true));
-    }
-    *at = Places::of(body);
-}
-
-// Walks from the entry made to find the blocks a change strands.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// The blocks on a cycle: those of a strongly connected component of more than
-/// one block, or with an edge to themselves.
-fn _cyclic(body: &LirBody) -> HashSet<i64> {
-    let mut cyclic = HashSet::default();
-    let blocks: IndexMap<i64, &crate::model::lir::Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    for members in llrm_support::graph::components(&body.blocks) {
-        if members.len() > 1 || blocks[&members[0]].succ.contains(&members[0]) {
-            cyclic.extend(members);
-        }
-    }
-    cyclic
-}
-
-/// The blocks that `freed`, blocks a change took an edge from, strand: the
-/// positions in `at` made again where one is removed.
-///
-/// What `_prune` makes of them, in place: the blocks that keep bytes stay where
-/// they are, and only a block with none to keep takes the positions after it
-/// with it.
-fn _stranded(
-    body: &mut LirBody,
-    at: &mut Places,
-    freed: &[i64],
-) {
-    let settled = |block: &LirBlock| {
-        block.succ.is_empty()
-            && block.phis.is_empty()
-            && !block.insns.is_empty()
-            && block.insns.iter().all(|one| Arc::ptr_eq(&lir::bytes_only(one), one) && !one.owned().is_empty())
-    };
-    // Only a block nothing enters is stranded; one that still has an edge in
-    // is left to the walk that `_prune` makes in the end.
-    let mut work: Vec<i64> =
-        freed.iter().copied().filter(|one| *one != body.entry && at.entering_of(*one) == Some(0)).collect();
-    let mut gone: Vec<usize> = Vec::new();
-    let mut stripped: HashSet<i64> = HashSet::default();
-    while let Some(block_at) = work.pop() {
-        if !stripped.insert(block_at) {
-            continue;
-        }
-        let Some(index) = at.get(&block_at) else { continue };
-        let block = &body.blocks[index];
-        if settled(block) {
-            continue;
-        }
-        let succ = block.succ.clone();
-        let kept: Vec<Arc<Insn>> =
-            block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
-        if kept.is_empty() {
-            gone.push(index);
-        } else {
-            body.blocks[index] =
-                LirBlock { succ: Vec::new().into(), phis: Vec::new().into(), ..block.with_insns(kept).into_inner() }
-                    .into();
-        }
-        for to in succ.iter().copied() {
-            let Some(count) = at.drop_edge(to) else { continue };
-            if count > 0 {
-                // Cut off from the entry all the same if the blocks that
-                // still enter it are a cycle's.
-                if at.on_cycle(body, to) {
-                    return _stranded_whole(body, at);
-                }
-            } else if to != body.entry {
-                work.push(to);
-            }
-        }
-    }
-    if !gone.is_empty() {
-        let mut keep = vec![true; body.blocks.len()];
-        for index in gone {
-            keep[index] = false;
-        }
-        for (index, block) in body.blocks.iter().enumerate() {
-            if !keep[index] {
-                at.remove(block.at);
-            }
-        }
-        let mut places = keep.into_iter();
-        body.blocks.retain(|_| places.next().unwrap_or(true));
-    }
-}
-
-/// Where each block is, kept as blocks are removed: a block's place is the one
-/// it began at less the blocks removed before it, from a Fenwick tree, so a
-/// removal does not number the blocks after it again.
-///
-/// It also keeps how many edges enter each block across the changes `_step`
-/// makes. Every block that has edges is reached (the body is pruned after each
-/// change), so the blocks a change strands are the ones whose count it takes to
-/// zero, and those they enter in turn: no walk from the entry. A block on a
-/// cycle can keep its count and be cut off, so a count that reaches one is
-/// settled by the walk.
-pub struct Places {
-    began: IndexMap<i64, usize>,
-    removed: Vec<u32>,
-    gone: Vec<bool>,
-    taken: usize,
-    entering: Vec<u32>,
-    /// Found when a count first needs it, on the body as it is then: the
-    /// cycles only shrink.
-    cyclic: Option<HashSet<i64>>,
-}
-
-impl Places {
-    fn of(body: &LirBody) -> Self {
-        let count = body.blocks.len();
-        let began: IndexMap<i64, usize> =
-            body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
-        let mut entering = vec![0; count];
-        for block in &body.blocks {
-            for to in &block.succ {
-                if let Some(&index) = began.get(to) {
-                    entering[index] += 1;
-                }
-            }
-        }
-        Self { began, removed: vec![0; count + 1], gone: vec![false; count], taken: 0, entering, cyclic: None }
-    }
-
-    /// How many edges enter `at`.
-    fn entering_of(
-        &self,
-        at: i64,
-    ) -> Option<u32> {
-        self.began.get(&at).map(|&index| self.entering[index])
-    }
-
-    /// An edge into `to` is gone; how many are left.
-    fn drop_edge(
-        &mut self,
-        to: i64,
-    ) -> Option<u32> {
-        let index = *self.began.get(&to)?;
-        self.entering[index] -= 1;
-        Some(self.entering[index])
-    }
-
-    fn on_cycle(
-        &mut self,
-        body: &LirBody,
-        at: i64,
-    ) -> bool {
-        self.cyclic.get_or_insert_with(|| _cyclic(body)).contains(&at)
-    }
-
-    /// A block's edges `old` become `new`.
-    fn moved(
-        &mut self,
-        old: &[i64],
-        new: &[i64],
-    ) {
-        for to in old {
-            if let Some(&index) = self.began.get(to) {
-                self.entering[index] -= 1;
-            }
-        }
-        for to in new {
-            if let Some(&index) = self.began.get(to) {
-                self.entering[index] += 1;
-            }
-        }
-    }
-
-    pub fn get(
-        &self,
-        at: &i64,
-    ) -> Option<usize> {
-        let began = *self.began.get(at)?;
-        if self.taken == 0 {
-            return Some(began);
-        }
-        if self.gone[began] {
-            return None;
-        }
-        // The blocks removed before it.
-        let (mut before, mut node) = (0_u32, began);
-        while node > 0 {
-            before += self.removed[node];
-            node &= node - 1;
-        }
-        Some(began - before as usize)
-    }
-
-    pub fn contains(
-        &self,
-        at: &i64,
-    ) -> bool {
-        self.get(at).is_some()
-    }
-
-    fn remove(
-        &mut self,
-        at: i64,
-    ) {
-        let began = self.began[&at];
-        self.gone[began] = true;
-        self.taken += 1;
-        let mut node = began + 1;
-        while node < self.removed.len() {
-            self.removed[node] += 1;
-            node += node & node.wrapping_neg();
-        }
-    }
 }
 
 /// `body` with the blocks its entry does not reach stripped to their source

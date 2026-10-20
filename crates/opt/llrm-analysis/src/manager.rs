@@ -142,8 +142,8 @@
 //! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
-//! `Accesses`, [`crate::observers`]'s `Published` and [`crate::noreturn`]'s
-//! `TerminalSites` are entries defined beside their analyses.
+//! `Accesses` and [`crate::observers`]'s `Published` are entries defined
+//! beside their analyses.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
@@ -308,6 +308,9 @@ impl ModuleAnalysis for Summaries {
     ) -> Self::Result {
         let globals_held = analyses.get::<GlobalsAA>(module);
         let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
+        if crate::attrsummary::enabled() {
+            return Ok(crate::attrsummary::summaries(module, &analyses.program().layout, globals.tracked_globals()));
+        }
         let program = Rc::clone(analyses.program());
         let known = match program.cached::<ProgramSummaries>() {
             Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),

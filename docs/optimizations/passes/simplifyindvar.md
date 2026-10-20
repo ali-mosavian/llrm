@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifyindvar.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifyindvar.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:7607e743985b5ab8c49265f03ad60ec3230fd04331c19fb374d831fdb59c510b -->
+<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:d84f8206ef8df01d2369348f64fa5da71b4a89ecc8edb90f02094793c3cbd4b5 -->
 
 # simplifyindvar
 
@@ -44,8 +44,7 @@ From unit test `test_a_compare_the_trip_count_decides_is_a_constant` in
 `simplifyindvar_tests.rs`.
 
 ## Runs
-Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it
-off.
+Step 0 of [`crate::indvars`](indvars.md), with the widening.
 
 ## Needs
 `llrm_analysis::scev` (`ScevSession`): `evaluatePredicateAt`,
@@ -55,5 +54,5 @@ off.
 Blocks and edges are as they were: only the uses of compares change.
 
 ## See also
-[`crate::exitfold`](exitfold.md), [`crate::decide`](decide.md); LLVM SimplifyIndVar
+[`crate::decide`](decide.md); LLVM SimplifyIndVar
 (`simplifyUsers`, `eliminateIVComparison`).

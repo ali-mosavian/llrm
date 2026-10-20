@@ -40,7 +40,7 @@
 //! keeps its partition's stores and the original the last's, `loopidioms` runs
 //! over the parts and what nothing reads is removed, and the result is priced
 //! beside the body. Only then is the pipeline run over it, as in
-//! [`crate::unswitch`], and [`crate::candidate`] keeps it when its price,
+//! [`crate::loopversion`], and [`crate::candidate`] keeps it when its price,
 //! spills included, is `MIN_PERCENT` smaller (`Gain::CheaperBy`). At most
 //! `MAX_TRIALS` loop is tried per body, the most nested, a loop of at most
 //! `MAX_LOOP_OPS` operations and `MAX_ACCESSES` accesses, in at most

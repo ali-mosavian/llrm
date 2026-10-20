@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:3cd44436ce36f7280381a8e3cae82558ab0ea2763e735fb215140a5e9b86556b -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:df727d6078a4aa81fcdf58bf85b7b082b75aacdc756d9a40ebc59ec80316ba9c -->
 
 # simplifycfg
 
@@ -87,8 +87,15 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
 | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
 | [`hoistCommonCodeFromSuccessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1873), called from `simplifyCondBranch` ([L9016](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9016)) and `simplifySwitch` ([L8647](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8647)) | `branch_hoisted`, `hoistcommon::hoisted`, `Options::hoist_common_insts` | MIRROR for the calls; see that module |
 | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
+| [`simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469), called from `simplifyCondBranch` ([L8985](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8985)) | `block_simplified`, `icmpchain::folded` | MIRROR for the call; see that module |
 | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
+| [`foldCondBranchOnValueKnownInPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3814), called from `simplifyCondBranch` ([L9068](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9068)) | `block_simplified`, `knownpred::folded` | MIRROR for the call; see that module |
+| [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form, called from `simplifyUncondBranch` ([L8827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8827)) | `block_simplified`, `uncondicmp::folded` | MIRROR for the call; see that module |
 | [`tailMergeBlocksWithSimilarFunctionTerminators`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L142), called from `simplifyFunctionCFGImpl` after the first `removeUnreachableBlocks` | `tailmerge::merged` | MIRROR; see that module |
+| [`sinkCommonCodeFromPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L2425) and [`simplifyDuplicatePredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8573), called from `simplifyOnce` ([L9336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9336)) under `SinkCommonInsts` | `sinkcommon::sunk`, `sinkcommon::duplicate_predecessors_merged`, `Options::sink_common_insts` | MIRROR for the calls; see that module |
+| [`foldBranchToCommonDest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4231), called from `simplifyCondBranch` ([L9005](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9005)) under `SpeculateBlocks` | `branchtocommon::folded` | MIRROR for the call; see that module |
+| [`mergeConditionalStores`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4604), called from `simplifyCondBranch` ([L9083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9083)) and `SimplifyCondBranchToCondBranch` ([L4805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4805)) | `stores_merged`, `condstores::merged` | MIRROR for the calls, both in `stores_merged` until `SimplifyCondBranchToCondBranch` is ported |
+| [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230), called from `simplifyOnce` ([L9327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9327)) | `undefpred::removed` | MIRROR; D1 there |
 | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -100,12 +107,10 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
 - D1. `LoopHeaders` is found once per `iteratively_simplified` and keeps the
   blocks that go; LLVM's `WeakVH`s drop them. Nothing reads a deleted
   block's entry.
-- D2. Not ported yet, each a later change of this series:
-  `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
-  at this slot), and the terminator simplifications `simplifyUncondBranch`
-  beyond the empty block (`tryToSimplifyUncondBranchWithICmpInIt`, landing
-  pads: none in the MIR), `simplifyCondBranch`, `simplifySwitch`,
-  `simplifyUnreachable`.
+- D2. Not ported yet, each a later change of this series: the terminator
+  simplifications `simplifyUncondBranch` beyond the empty block
+  (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
+  `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
 - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
   (`FoldInstsToUnreachable`): not ported yet. It reads the target's
@@ -165,11 +170,11 @@ facts of the body. Nothing runs at -O0.
 The C corpus (`identical.py`: 395 sources, -O1/-O2/-Os/-Omax, 1,580
 compiles): `decide` decides 646 branches instead of 3,002; the ones on a
 literal or a constant `switch` go from 2,464 to 153 (the rest are made by
-`jumpthread`'s own cleanup, after this pass), and it runs 32,640 times
-instead of 33,932. Of the 1,583 objects 40 differ in bytes, 36 only in label
-numbers; of the rest, `bintree` -O3 is 7 instructions longer (twice) and
-`switch_empty_cases` 2 shorter (twice). The 140 bench rows at -O2 and -Os of
-the 14 programs that differ have every counter unchanged.
+the old `jumpthread`'s own cleanup, after this pass), and it runs 32,640
+times instead of 33,932. Of the 1,583 objects 40 differ in bytes, 36 only in
+label numbers; of the rest, `bintree` -O3 is 7 instructions longer (twice)
+and `switch_empty_cases` 2 shorter (twice). The 140 bench rows at -O2 and
+-Os of the 14 programs that differ have every counter unchanged.
 
 ## Keeps
 Blocks and edges change: every analysis is invalidated when anything

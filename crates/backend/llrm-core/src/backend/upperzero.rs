@@ -20,12 +20,12 @@
 //! ```
 //!
 //! `established` makes the facts true where the code needs them. A cell that
-//! reads a root through a register holding no value (the frame pointer) needs
-//! that root's upper half zero. Where the analysis does not prove it, the pass
-//! inserts `movzx r32,r16`: in the preheader of the outermost loop around the
-//! cell in which nothing disturbs the root, when the loop's entry is one block
-//! with one successor, or else before the first such cell in the block. It
-//! repeats until no cell lacks the fact.
+//! reads a root 32 bits wide, whether the register holds a value or not (the
+//! frame pointer), needs that root's upper half zero. Where the analysis does
+//! not prove it, the pass inserts `movzx r32,r16`: in the preheader of the
+//! outermost loop around the cell in which nothing disturbs the root, when the
+//! loop's entry is one block with one successor, or else before the first such
+//! cell in the block. It repeats until no cell lacks the fact.
 //!
 //! # Example
 //! `mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry.
@@ -452,25 +452,23 @@ pub fn preheaded(
     (body.with_blocks(blocks), placed)
 }
 
-/// The roots `one`'s cells read 32 bits wide through a register holding no
-/// value, the frame pointer: nothing defines their upper half.
-pub(crate) fn unheld(
+/// The roots `one`'s cells read 32 bits wide, through a register that holds a
+/// value (a base or an index the allocator placed) or none (the frame pointer):
+/// in 16-bit code the cell names the byte its 16-bit form does only if the
+/// root's upper half is zero.
+pub(crate) fn wide_roots(
     regs: Regs,
     one: &Insn,
 ) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
-    let wide = |register: RegId, held: bool| {
-        if !held && regs.width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
-    };
+    let wide = |register: RegId| if regs.width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 };
     what.dests
         .iter()
         .chain(&what.sources)
         .filter_map(|operand| match operand {
-            Loc::Mem(cell) => {
-                Some(wide(cell.through, cell.base.is_some()) | wide(cell.index_through, cell.index.is_some()))
-            }
+            Loc::Mem(cell) => Some(wide(cell.through) | wide(cell.index_through)),
             _ => None,
         })
         .fold(0, |roots, one| roots | one)
@@ -606,7 +604,7 @@ pub fn established(body: &LirBody) -> LirBody {
             .blocks
             .iter()
             .flat_map(|block| block.insns.iter().map(move |one| (block.at, one)))
-            .map(|(at, one)| (at, id(one), unheld(regs, one) & !zero[&id(one)]))
+            .map(|(at, one)| (at, id(one), wide_roots(regs, one) & !zero[&id(one)]))
             .filter(|(_, _, roots)| *roots != 0)
             .collect();
         if missing.is_empty() {
@@ -653,7 +651,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{before, bit, hoisted};
+    use super::{before, bit, established, hoisted};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
     use crate::model::lir::Block;
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -669,6 +667,46 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
+    }
+
+    /// In 16-bit code `[esi]` names the byte `[si]` does only while esi's upper
+    /// half is zero. A base the allocator held in esi, written whole by an
+    /// `add`, was read through the prefixed form with nothing to say its upper
+    /// half was zero: past 64K the access faulted where the word form wrapped.
+    #[test]
+    fn test_a_held_dword_base_with_unknown_upper_half_is_zero_extended_first() {
+        use crate::model::ir::{Addr, Held, Mem, Space};
+        let (esi, ebx) =
+            (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
+        let cell = Mem {
+            through: RegId::ESI,
+            base: Some(Held { value: 7, width: 4 }),
+            ..Mem::new(Some(Addr::new(Space::Segment, 0)), 2)
+        };
+        let load = one(
+            1,
+            Operation::Move,
+            "mov",
+            vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
+            vec![Loc::Mem(cell)],
+            None,
+        );
+        let body = LirBody::new(
+            "held",
+            0,
+            vec![
+                LirBlock::new(0, vec![one(0, Operation::Binary, "add", vec![esi.clone()], vec![esi, ebx], None), load])
+                    .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let names: Vec<_> = established(&body)
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .collect();
+        assert_eq!(names, ["add", "movzx", "mov"], "esi is zero-extended between its write and the cell");
     }
 
     #[test]

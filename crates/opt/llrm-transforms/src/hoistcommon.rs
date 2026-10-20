@@ -161,11 +161,49 @@ fn commutative(opcode: &Opcode) -> bool {
 
 /// The `!mmra` tags of `inst`: two instructions with different ones are not
 /// hoisted together.
-fn mmra(
+pub(crate) fn mmra(
     function: &Function,
     inst: InstId,
 ) -> Option<llrm_mir::module::MetadataId> {
     function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "mmra").map(|&(_, value)| value)
+}
+
+/// The same operation and type, and operands of the same types: two calls need
+/// only attribute lists that intersect (`isSameOperationAs` with
+/// `CompareUsingIntersectedAttrs`).
+pub(crate) fn same_operation(
+    context: &Context,
+    function: &Function,
+    first: InstId,
+    second: InstId,
+) -> bool {
+    let (one, two) = (function.instruction(first), function.instruction(second));
+    if one.ty != two.ty || one.operands.len() != two.operands.len() {
+        return false;
+    }
+    // The operands' types are the same too: a store of an `i8` is not a store
+    // of an `i16`.
+    if one
+        .operands
+        .iter()
+        .zip(&two.operands)
+        .any(|(&a, &b)| function.operand_type(context, a) != function.operand_type(context, b))
+    {
+        return false;
+    }
+    match (&one.opcode, &two.opcode) {
+        (Opcode::Call(a), Opcode::Call(b)) => {
+            a.function_type == b.function_type
+                && a.calling_convention == b.calling_convention
+                && a.tail == b.tail
+                && crate::local::attribute_list_intersect_with(
+                    (&a.attrs, &a.return_attrs, &a.argument_attrs),
+                    (&b.attrs, &b.return_attrs, &b.argument_attrs),
+                )
+                .is_some()
+        }
+        (a, b) => a == b,
+    }
 }
 
 /// The same operation, type and operands, or a compare or a commutative
@@ -239,8 +277,8 @@ fn terminator_hoisted(
                     continue;
                 }
                 if !conditional
-                    || crate::speculate::passing_value_always_undefined(context, function, value, phi)
-                    || crate::speculate::passing_value_always_undefined(context, function, other_value, phi)
+                    || crate::alwaysundef::always_undefined(context, spec, function, value, phi, false)
+                    || crate::alwaysundef::always_undefined(context, spec, function, other_value, phi, false)
                 {
                     return false;
                 }

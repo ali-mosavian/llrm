@@ -6,8 +6,7 @@
 //! Peeling is the CFG counterpart of full straight-line unrolling. For each
 //! loop of a copy of the body, closed to LCSSA (`lcssa::closed`), the pass
 //! - takes the trip count (ScalarEvolution's `getSmallConstantTripCount`, else
-//!   `getSmallConstantMaxTripCount`; `LLRM_NO_SCEV_TRIPS` asks
-//!   `induction::trip_count`, else `trip_bound`) and
+//!   `getSmallConstantMaxTripCount`) and
 //!   skips the loop below two trips; with neither, the most backedges the
 //!   objects its `inbounds` accesses walk allow (`induction::object_backedges`,
 //!   GCC's `infer_loop_bounds_from_array`), after which the residual loop's
@@ -259,7 +258,7 @@ fn _candidate(
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
     let shape = cfg::Shape::of(&closed);
     let frequencies = profit::Frequencies::default();
-    let mut scevs = (profit::scev_trips_enabled() && !shape.loops.is_empty())
+    let mut scevs = (!shape.loops.is_empty())
         .then(|| ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, &closed));
     for loop_ in shape.loops.clone() {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
@@ -270,20 +269,26 @@ fn _candidate(
         }
         let unit =
             memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
-        let exact = match scevs.as_mut() {
-            Some(session) => profit::scev_trips(session, &unit, &loop_).map(BigInt::from).or_else(|| {
-                // A bound ScalarEvolution gives from the type's range (`n`
-                // unknown: 2^31 trips) says nothing; the object's extent,
-                // where tighter, is the bound, as GCC takes the tightest.
-                let bound = BigInt::from(profit::scev_trip_bound(session, &unit, &loop_)?);
-                induction::object_backedges(&unit, &loop_)
-                    .filter(|extent| *extent < bound)
-                    .map_or(Some(bound), |_| None)
-            }),
-            None => {
-                induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts))
-            }
-        };
+        let exact = scevs
+            .as_mut()
+            .and_then(
+                |session| {
+                    profit::scev_trips(session, &unit, &loop_)
+                        .map(BigInt::from)
+                        .or_else(
+                            || {
+                                // A bound ScalarEvolution gives from the type's
+                                // range (`n` unknown: 2^31 trips) says nothing;
+                                // the object's extent, where tighter, is the
+                                // bound, as GCC takes the tightest.
+                                let bound = BigInt::from(profit::scev_trip_bound(session, &unit, &loop_)?);
+                                induction::object_backedges(&unit, &loop_)
+                                    .filter(|extent| *extent < bound)
+                                    .map_or(Some(bound), |_| None)
+                            },
+                        )
+                },
+            );
         // No count: the most backedges the object an access walks allows.
         let bounded = exact.is_none();
         // Nothing folds in the copies of a loop bounded only by an object, and
