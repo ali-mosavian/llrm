@@ -167,6 +167,6 @@ end. Without the toolchain feature `llrm-c` still reads `.cgs` streams.
 
 ## Tests
 
-Unit tests are in `crates/frontends/llrm-c/src/`. Programs in `tests/run/c`
+Unit tests are in `crates/frontends/llrm-c/src/`. Run them with `cargo test -p llrm-c --features toolchain`; without it they do not compile. Programs in `tests/run/c`
 are compiled, run in DOSBox-X and compared with their `.out` by
 `tools/dosbatch/run_tests.py c`; see [testing](../../working/testing.md).
