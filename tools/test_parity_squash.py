@@ -706,3 +706,14 @@ def test_a_perf_pr_without_a_rows_line_is_refused():
     assert not ps.perf_needs_rows("perf(analysis): one use scan", "Rows: pair p3251, base e26a479f1924, new 46f5a90986bc: no row above base, run diff clean")
     assert not ps.perf_needs_rows("fix(analysis): a bug", "Owner: x")
     assert not ps.perf_needs_rows("", "")
+
+
+def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
+    """A refactor( PR with a pass-code diff and no Rows line is refused; docs/test-only refactors, fix( and feat( are not."""
+    code = ["crates/opt/llrm-analysis/src/globalsaa.rs", "docs/x.md"]
+    assert ps.perf_needs_rows("refactor(analysis): one scan", "Owner: x", code)
+    assert not ps.perf_needs_rows("refactor(analysis): one scan", "Rows: pair p1 base a new b: clean", code)
+    assert not ps.perf_needs_rows("refactor(docs): move", "Owner: x", ["docs/x.md", "crates/opt/llrm-analysis/src/globalsaa_tests.rs"])
+    assert not ps.perf_needs_rows("fix(analysis): bug", "Owner: x", code)
+    assert not ps.perf_needs_rows("feat(analysis): new", "Owner: x", code)
+    assert ps.perf_needs_rows("perf(analysis): faster", "Owner: x", [])
