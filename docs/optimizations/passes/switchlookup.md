@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlookup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlookup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:763501a3a5454b4db37e1a0b42f404623bea43421a8312ef13a40d62f790fb92 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:70a93ec866be7b3a56e8a39f665df7e64519a60b5b573aa5e49acc04f323aed1 -->
 
 # switchlookup
 
@@ -27,8 +27,9 @@ Each case is walked to the common block, folding what the case block
 computes from the condition (`case_results`). A table of the results is
 sized (`condition_is_index`, the offset of the lowest case), priced
 (`should_build_lookup_table`) and, per phi, found to be one value, linear
-in the index, a bit map in a register or cells of an array global. The phis then take the arithmetic, behind a range
-check or, for holes with a default that is not a constant, a bit mask.
+in the index, a bit map in a register or cells of an array global. The phis
+then take the arithmetic, behind a range check or, for holes with a default
+that is not a constant, a bit mask.
 
 ## Example
 ```text
