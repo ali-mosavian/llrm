@@ -533,6 +533,9 @@ impl<B: BlockNumber> LoopInfo<B> {
         self.get_loop_for(block).map_or(0, |one| one.get_loop_depth())
     }
 
+}
+
+impl LoopInfo<BlockId> {
     /// `Loop::addBasicBlockToLoop`
     /// ([L283](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L283)),
     /// for `new_blocks` at once: each is a new member of `loop_id`, and so of
@@ -622,6 +625,9 @@ impl<B: BlockNumber> LoopInfo<B> {
         summary(self) == summary(other)
     }
 
+}
+
+impl<B: BlockNumber> LoopInfo<B> {
     /// `isLoopHeader`.
     pub fn is_loop_header(
         &self,
