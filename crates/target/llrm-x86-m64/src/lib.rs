@@ -174,6 +174,10 @@ impl llrm_target::Target for M64 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
+    fn dialect(&self) -> &'static llrm_instr::Dialect {
+        llrm_x86::instructions::dialect()
+    }
+
     fn operand_bytes(&self) -> i64 {
         8
     }

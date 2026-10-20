@@ -723,6 +723,7 @@ name = "llrm-x86-m64"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
