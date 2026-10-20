@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:8decf20dc07891a21b5dcda469cafb1631b2023fb384dff54a3b40966aa3dd18 -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:95181815830744054ed664f464da2795067c23f336c7b826bb1e54559eb966e3 -->
 
 # splitkit
 
@@ -78,10 +78,6 @@ start of a target whose predecessors all need the same copy, else in a new
 block on the edge. A copy to leave is omitted if the piece never writes the
 value.
 
-`loop_bases` is a separate use of the same editor: a spilled address operand
-(base, index or selector) used inside a natural loop and outside it is
-carved into the loop as a piece, so the loop reads it from a register once.
-
 ## Example
 None: the tests build bodies in code and assert on structure, and a stage
 dump does not say which copy a split made. Read the figures above for the
@@ -91,8 +87,7 @@ shape.
 Inside the register allocator ([`crate::backend::allocate`](allocate.md)), at the split
 stage of a value that no register took and no eviction made room for; the
 pieces and the rest compete again. A piece splits again only while its live
-blocks strictly shrink, so splitting ends. `loop_bases` runs only as a
-candidate body when the allocation search is on (`-fallocation-search`).
+blocks strictly shrink, so splitting ends.
 
 ## See also
 LLVM's

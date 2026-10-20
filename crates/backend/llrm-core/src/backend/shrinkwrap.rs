@@ -148,7 +148,10 @@ pub fn named(one: &Insn) -> BTreeSet<RegId> {
 /// or argument, a push or pop, or an instruction the printer cannot read.
 fn touches_frame(one: &Insn) -> bool {
     let Some(what) = &one.what else { return false };
-    if matches!(what.op, ir::Operation::Push | ir::Operation::Pop | ir::Operation::Leave | ir::Operation::Escape)
+    if matches!(
+        what.op,
+        ir::Operation::Push | ir::Operation::Pop | ir::Operation::Leave | ir::Operation::Escape
+    )
         || (what.op == ir::Operation::Nothing
             && what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")))
     {
@@ -280,7 +283,10 @@ impl Frame for Uses<'_> {
         let last = self.block(block).insns.last();
         last.is_some_and(|one| {
             one.what.as_ref().is_some_and(|what| {
-                matches!(what.op, ir::Operation::Branch | ir::Operation::Jump | ir::Operation::Return)
+                matches!(
+                    what.op,
+                    ir::Operation::Branch | ir::Operation::Jump | ir::Operation::Return
+                )
             }) && self.insn_needs(one)
         })
     }
