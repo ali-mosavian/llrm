@@ -606,6 +606,7 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
         Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
         Box::new(crate::tailcallelim::TailCallElim),
+        Box::new(crate::trunc_inst_combine::TruncInstCombine),
     ]
 }
 
@@ -1084,27 +1085,6 @@ pub fn recorded(
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
-        specialise: {
-            let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
-            Box::new(move |module, analyses, mut function| {
-                let layout = analyses.program().layout.clone();
-                let outer = analyses.outer_held(module);
-                let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
-                let Module { context, metadata, .. } = &mut *module;
-                // A specialised copy has no global of its own yet.
-                llrm_mir::passes::set_running_function("(specialised copy)");
-                let mut unit = Unit {
-                    context,
-                    layout: &layout,
-                    function: &mut function,
-                    id: None,
-                    metadata,
-                    declared: &mut declared,
-                };
-                alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
-                (function, declared)
-            })
-        },
         proved: None,
         inline: applied.options.inline,
         ranges: applied.options.ipa_ranges,
