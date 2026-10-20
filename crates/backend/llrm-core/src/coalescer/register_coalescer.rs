@@ -163,6 +163,11 @@ pub fn join_copy(
         }
         return result;
     }
+    // Coalescing to a virtual register that is of a sub-register class of the
+    // other. Make sure the resulting register is set to the right register
+    // class.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2244-L2247
+    env.narrow(cp.dst_reg(), cp.src_reg());
     // CopyMI has been erased by joinVirtRegs at this point. Remove it from
     // ErasedInstrs since the work list does not add a successful join back.
     // This keeps ErasedInstrs from growing needlessly.

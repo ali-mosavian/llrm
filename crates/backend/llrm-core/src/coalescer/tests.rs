@@ -497,3 +497,34 @@ fn test_for_size_a_copy_of_a_constant_that_stays_read_is_not_made_again() {
     assert_eq!(result, JoinResult::Deferred);
     assert_eq!(names(&lis).len(), 5);
 }
+
+/// `v2 := mov v1` for a base (BX, BP) and `v3 := mov v1` for an index (SI, DI):
+/// each copy alone may join, but once one has, the merged value takes only the
+/// base registers. Judged against `v1`'s first palette the second joined too,
+/// leaving a value no register could hold: the generated regalloc bodies
+/// failed to allocate.
+#[test]
+fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let palette = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<_>>();
+    let palettes = IndexMap::from_iter([
+        (1, palette(&[RegId::AX, RegId::BX, RegId::SI])),
+        (2, palette(&[RegId::BX, RegId::BP])),
+        (3, palette(&[RegId::SI, RegId::DI])),
+    ]);
+    let env = TargetEnv { palettes: palettes.into(), pins: IndexMap::default(), size: false };
+    let (base, index) = (copy(2, 1), copy(3, 1));
+    let was = body(&[(&[def(1), Arc::clone(&base), Arc::clone(&index), read(2), read(3)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for value in 1..=3 {
+        lis.interval(value);
+    }
+    let mut state = State::new();
+    assert_eq!(join_copy(&mut lis, &env, &mut state, &mut Default::default(), base.id()), JoinResult::Joined);
+    let index = state.current(index.id());
+    assert_eq!(join_copy(&mut lis, &env, &mut state, &mut Default::default(), index), JoinResult::Rejected);
+}
