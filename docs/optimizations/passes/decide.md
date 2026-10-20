@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:6a412e7491068d40754047ae4f293a6970408878b79c0fa31caed225ba2ebd79 -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:8a429412946e1ff96a51eeb9cbf0b7291300ced93924a254d326983d868ba40f -->
 
 # decide
 
@@ -7,18 +7,10 @@ Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG
 on known conditions.
 
 ## How it works
-`decided` runs three steps, then `cfg::merged` joins the chains that result.
+`decided` runs two steps. Threading is `jumpthreading`'s and
+`simplifycfg`'s.
 
-1. Threading. A block holding only a `br` is bypassed (`_threaded`): each
-   branch or switch edge to it goes to what it jumps to, where that has no
-   phis to tell the edges apart. A loop's one entry edge, one latch and
-   dedicated exits are kept, so the loop stays in simplify form. A
-   conditional branch whose two arms go one way becomes a jump. Separately
-   (`_phi_threaded`), a predecessor that only jumps to a block holding just
-   a phi and a branch on it, and gives the phi a constant, goes straight to
-   where that constant leads (LLVM's `ProcessBranchOnPHI`); a loop header
-   keeps its edges.
-2. Deciding. For each block ending in a `br i1` or a `switch`, the way is
+1. Deciding. For each block ending in a `br i1` or a `switch`, the way is
    found from, in order: `consts`' answer for the condition, or for the two
    operands of the `icmp` it is, carried across loops by `constant_cycles`
    along only the edges that run; a pointer compared with null that
@@ -26,7 +18,7 @@ on known conditions.
    if exactly one successor is possible; the guards that hold at the block
    and the loops around it (`guards::Given`, over `induction` terms). A
    switch is decided by a known condition with distinct cases.
-3. The decided terminator is replaced by a `br` to the chosen block; blocks
+2. The decided terminator is replaced by a `br` to the chosen block; blocks
    no longer reachable go and phis left with one value are replaced by it.
 
 

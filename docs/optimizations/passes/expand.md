@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/expand.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expand.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:85fc500cca2d5a40fd83fa78ed65063a38721a1988d8e01a3e66f2f9e166ef5f -->
+<!-- src: crates/opt/llrm-transforms/src/expand.rs sha256:0dd4bd4e5af46a4635075cb172e6d3c4e89531cc359816743dea7afb45bb79b3 -->
 
 # expand
 
@@ -36,11 +36,10 @@ no pointer). `least` is the least of several sums as unsigned numbers, an
 None: `expand` is infrastructure and has no pass-level before and after of
 its own. Its `test_generated_recurrences_expand_to_what_the_loop_computes`
 in `expand_tests.rs` checks expanded values against the interpreter; the
-passes that use it show it at work, see [`crate::lsr_pass`](lsr_pass.md) and
-[`crate::exitfold`](exitfold.md).
+passes that use it show it at work, see [`crate::lsr_pass`](lsr_pass.md).
 
 ## Used by
-[`crate::lsr_pass`](lsr_pass.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and
+[`crate::lsr_pass`](lsr_pass.md), while it rewrites a loop, and
 [`crate::counting`](counting.md), which builds its seeds with it. Not a pass: it runs
 only inside those.
 

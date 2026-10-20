@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/float2int.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/float2int.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:cbb3cf0aaf3e5d3530ba0ef91c558eede59844736554f601d7d4dce864998fcb -->
+<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:807640e49fac0cf3cb3f403b585ce9e5b6c5851a8e7951b46e72d8951ba4aa52 -->
 
 # float2int
 
@@ -50,7 +50,8 @@ DEVIATE (anything MIR or Rust lacks), numbered after `tailcallelim`'s:
 float; see `float2int_tests.rs`.
 
 ## Runs
-Not in the pipeline yet.
+As `float2int@1594`, in the late list after the second `simplifycfg` slot
+and before `instsimplify`, at every level (`PassBuilderPipelines.cpp#L1594`).
 
 ## Needs
 The dominator tree, to leave unreachable blocks alone.
