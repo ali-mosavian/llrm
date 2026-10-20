@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:4ac137de4c0ff081e55fcf667bebc380f256ede770dffa47dc61f07c0f15a1e3 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:724132835ba35feeaf2496b74d54f45464320113a65415bebf27781439e3b034 -->
 
 # machinesink
 
@@ -43,14 +43,16 @@ pressure of the target (`registerPressureSetExceedsLimit`) for an
 instruction inside a cycle; no instruction here sinks on that ground.
 Exit: the target description's pressure limits.
 
-DEVIATE M4 (#2903): in a build for size only an instruction that reads no
-value moves (a constant). LLVM moves any, and its allocator splits the
-operands' ranges around the stretch. Rows with every instruction movable
-at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
-+29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
-Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
--O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
-greedy allocator with SplitKit as the default allocator (target 2026-11-05).
+DEVIATE M4 (#2903): in a build for size an instruction moves only if each
+value it reads is read again after it (a later instruction of its block, or
+a phi reading it at the block's end), so that no range grows; LLVM moves
+any, and its allocator splits the ranges around the stretch. Rows with every
+instruction movable at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed`
+m16 +50, `huge_runs` +29 (all 36 -Os objects that differ: 8 larger, +163, 21
+smaller, -998). Otherwise (-O1 to -O3) every safe instruction moves;
+`bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a reload more per trip).
+Exit: the greedy allocator with SplitKit as the default allocator (target
+2026-11-05).
 
 DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
