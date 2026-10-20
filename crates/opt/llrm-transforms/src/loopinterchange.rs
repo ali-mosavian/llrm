@@ -60,16 +60,15 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::dependence::{self, Innermost};
-use llrm_analysis::manager::Registers;
 use llrm_analysis::occurrence::{arms, from_arms};
-use llrm_analysis::{cfg, induction, memory};
+use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use num_traits::ToPrimitive;
 
 use crate::loopnest::{Nest, accesses, defined, inner_is_invariant, nest_of, work};
 
@@ -153,7 +152,7 @@ fn planned(
 ) -> Option<Plan> {
     let graph = cfg::graph(unit.function);
     let shape = cfg::Shape::of(unit.function);
-    let mut facts = None;
+    let mut scevs = None;
     for inner in &shape.loops {
         if shape.loops.iter().any(|other| other.header != inner.header && inner.body.is_superset(&other.body)) {
             continue;
@@ -176,17 +175,16 @@ fn planned(
                 return Err("the inner loop counts differently each outer trip");
             }
             let (outer_control, inner_control, moved) = controls(unit.function, unit.context, &nest)?;
-            let facts = facts
-                .get_or_insert_with(|| analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function));
+            let session = scevs.get_or_insert_with(|| {
+                ScevSession::within(unit.context, &analyses.outer().globals, &analyses.outer().metadata, unit.function)
+            });
             let costs = analyses.outer().target().costs();
-            let memory_unit = memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-                .with_registers(facts)
-                .with_shape(&shape);
-            let outer_trips = induction::trip_count(&memory_unit, outer, facts)
-                .and_then(|count| count.to_i64())
+            let memory_unit =
+                memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_shape(&shape);
+            let outer_trips = crate::profit::scev_trips(session, &memory_unit, outer)
                 .filter(|trips| (MIN_INNER_TRIPS..=MAX_OUTER_TRIPS).contains(trips))
                 .ok_or("the outer count is not a constant in range")?;
-            let inner_trips = induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64());
+            let inner_trips = crate::profit::scev_trips(session, &memory_unit, inner);
             let list = accesses(&memory_unit, &nest)
                 .filter(|list| !list.is_empty() && list.len() <= MAX_ACCESSES)
                 .ok_or("the accesses are not affine over objects")?;
