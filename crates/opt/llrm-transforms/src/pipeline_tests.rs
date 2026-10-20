@@ -2466,3 +2466,54 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
     let printed = llrm_mir::print::module(&module);
     assert!(printed.contains("@\"_report@3\"(i32 1)"), "selftest returned 0, not 1:\n{printed}");
 }
+
+/// The pin builds `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`: the slot
+/// copied a loop for each way of an invariant branch at -O3 only, where
+/// the old `unswitch` pass ran after the fixed point and judged candidates on
+/// a pipeline of its own.
+#[test]
+fn test_the_unswitch_slot_copies_a_loop_for_an_invariant_branch_at_o3_only() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %latch ]
+  br i1 %z, label %then, label %else
+
+then:
+  %a = add i16 %acc, %i
+  br label %latch
+
+else:
+  %b = mul i16 %acc, 3
+  br label %latch
+
+latch:
+  %sum = phi i16 [ %a, %then ], [ %b, %else ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %m
+  br i1 %done, label %out, label %head
+
+out:
+  %r = phi i16 [ %sum, %latch ]
+  ret i16 %r
+}
+";
+    let loops = |unswitch: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied {
+            only: Some("trivialunswitch@732".to_owned()),
+            options: pipeline::Options { unswitch, ..Default::default() },
+            ..Applied::default()
+        };
+        assert!(pipeline::slot_built(&applied, "trivialunswitch@732"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module).matches("icmp eq i16").count() - 1
+    };
+    assert_eq!((loops(false), loops(true)), (1, 2));
+}

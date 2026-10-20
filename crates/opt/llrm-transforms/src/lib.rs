@@ -284,7 +284,6 @@ pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;
-pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
 pub mod vncoercion;

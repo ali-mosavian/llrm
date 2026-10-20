@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:7ede9dafde2baabf9a23d656c6517592448a912495658611813db759db3c8ef2 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:73a275d0aabb18273ab4c1b6752258d2be90de953268de87ccc7430d70c61d72 -->
 
 # pipeline
 
@@ -31,7 +31,7 @@ flowchart TB
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
-    unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+    unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -78,8 +78,9 @@ printed body is an error, so an oscillating pair fails at once. `sroa` and
 dominators.
 
 Peeling repeats while it leaves fewer loops, so an outer loop whose inner
-loop was peeled is peeled in turn. [`crate::unswitch`](unswitch.md) re-optimizes each
-candidate with a `Fixed` of its own that has unswitching and jamming off.
+loop was peeled is peeled in turn. The passes that make a candidate
+re-optimize it with a `Fixed` of its own that has unswitching and jamming
+off.
 
 In E, `lsr` is after the interprocedural step because nothing after it may
 choose a loop's counters again; `rotate{proven}` is last of the loop

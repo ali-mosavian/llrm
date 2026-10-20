@@ -41,6 +41,13 @@
 //! - SU5 `isGuaranteedNotToBeUndefOrPoison` of a frozen invariant is the
 //!   poison-only form with no dominator tree: MIR has no `undef`.
 //! - SU6 ScalarEvolution is made for the one query, not kept and forgotten.
+//! - SU7, SU8, SU10, SU11 are the non-trivial form's: see `nontrivial.rs`.
+//! - SU9 No partially invariant conditions (`hasPartialIVCondition` and
+//!   `buildPartialInvariantUnswitchConditionalBranch`: a loop-header test of
+//!   loads MemorySSA shows unchanged on a path), no injected invariant
+//!   conditions, no guards (MIR has none). Costs 2 of the 21 corpus functions
+//!   `opt` unswitches (4 of 20 rotated), which the oracle classifies. Exit: the
+//!   MemorySSA migration lands (mssa-green-2127, 2026-10-29).
 //!
 //! # Example
 //! Before:
@@ -58,6 +65,12 @@
 //!   %z = icmp eq i16 %n, 0
 //!   br i1 %z, label %out, label %b0.head
 //! ```
+//!
+//! # Runs
+//! In the `trivialunswitch@732` slot of LLVM's order, LPM1 after the second
+//! LICM. Non-trivially at -O3 and -Omax, where the pin builds
+//! `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`; otherwise trivially
+//! only.
 //!
 //! # See also
 //! [`unswitchTrivialBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimpleLoopUnswitch.cpp#L580),
