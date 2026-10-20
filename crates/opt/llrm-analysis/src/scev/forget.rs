@@ -62,8 +62,8 @@ impl ScalarEvolution {
         &mut self,
         s: Scev,
     ) {
-        self.loop_dispositions.retain(|(one, _), _| *one != s);
-        self.block_dispositions.retain(|(one, _), _| *one != s);
+        self.loop_dispositions.remove(&s);
+        self.block_dispositions.remove(&s);
         self.unsigned_ranges.remove(&s);
         self.signed_ranges.remove(&s);
         self.constant_multiple_cache.remove(&s);
@@ -103,6 +103,40 @@ impl ScalarEvolution {
         if let Some(keys) = self.fold_cache_user.remove(&s) {
             for key in keys {
                 self.fold_cache.remove(&key);
+            }
+        }
+    }
+
+    /// What the edits in `touched` made stale, dropped, and the rest kept: the
+    /// work `SCEVCallbackVH` does in LLVM as values are deleted, and what
+    /// `forgetValue` and `forgetLoop` do for those whose operands or blocks
+    /// change. The edits leave the CFG as it was (`touched.cfg` is empty and no
+    /// block was made or erased), so the loops are those of `cx`.
+    pub fn forget_touched(
+        &mut self,
+        cx: &Cx,
+        touched: &llrm_mir::touched::Touched,
+    ) {
+        let removed: Vec<Scev> = touched.values_removed.iter().filter_map(|v| self.value_expr_map.remove(&v)).collect();
+        self.forget_memoized_results(&removed);
+        for v in touched.operands_changed.iter() {
+            if !touched.values_removed.contains(&v) {
+                self.forget_value(cx, Operand::Value(v));
+            }
+        }
+        // The count of a loop reads its blocks, and its parents' count its
+        // subloops.
+        let mut forgotten = IdSet::<BlockId>::new();
+        for block in touched.blocks.iter() {
+            let mut one = cx.loops.get_loop_for(block);
+            while let Some(found) = one {
+                let header = found.get_header();
+                if !forgotten.insert(header) {
+                    break;
+                }
+                self.forget_loop_users(cx, header);
+                self.trips.forget(header);
+                one = found.get_parent_loop();
             }
         }
     }

@@ -39,6 +39,16 @@ pub struct LoopGuards {
 /// What the divisibility guards of one block say.
 type Multiples = Vec<(Scev, Ap)>;
 
+thread_local! {
+    static COLLECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the guards of a loop were collected on this thread: a test
+/// counts what a query asks for afresh.
+pub fn collections() -> usize {
+    COLLECTIONS.with(std::cell::Cell::get)
+}
+
 impl LoopGuards {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L15749
     /// `LoopGuards::collect(L, SE)`.
@@ -47,6 +57,7 @@ impl LoopGuards {
         cx: &Cx,
         l: BlockId,
     ) -> Self {
+        COLLECTIONS.with(|one| one.set(one.get() + 1));
         let loop_ = cx.loops.get_loop_for(l).expect("the header of a loop");
         let header = loop_.get_header();
         let mut guards = Self::default();
