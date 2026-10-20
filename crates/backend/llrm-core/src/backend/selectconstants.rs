@@ -24,9 +24,10 @@
 //! stays a select, which `selects` turns into a branch where the target has no
 //! conditional move.
 //!
-//! DEVIATE S1 (no number): a select of one-bit values is left alone. LLVM's
-//! `foldBoolSelectToLogic` takes it (`and`/`or` of the condition); that fold
-//! is not translated yet. Exit: that function.
+//! A select of one-bit values is `foldBoolSelectToLogic` (`boolean`): `select
+//! c, c|1, f` is `c | f`, `select c, t, c|0` is `c & t`, `select c, t, 1` is
+//! `!c | t`, `select c, 0, f` is `!c & f`. The pin freezes the other operand,
+//! which no machine value needs, so it is left out.
 //!
 //! # Example
 //! `%r = select i1 %less, i32 4, i32 0` is `%z = zext i1 %less to i32` and
@@ -161,6 +162,43 @@ fn before(
     let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
     function.insert(made, Position::Before(select))?;
     Ok(Operand::Value(function.instruction(made).result.expect("a value")))
+}
+
+/// `foldBoolSelectToLogic`: a select of one-bit values with a constant arm, or
+/// one arm the condition itself, made `and`/`or` of the condition. Whether it
+/// replaced the select.
+pub fn boolean(
+    context: &Context,
+    function: &mut Function,
+    select: InstId,
+) -> Result<bool, String> {
+    let op = function.instruction(select).clone();
+    let [condition, yes, no] = op.operands[..] else { return Ok(false) };
+    if context.types.int_bits(op.ty) != Some(1) || function.operand_type(context, condition) != Some(op.ty) {
+        return Ok(false);
+    }
+    let result = op.result.ok_or("a select's value")?;
+    let (yes_value, no_value) = (constant(context, yes), constant(context, no));
+    let not = |function: &mut Function| {
+        let one = Operand::Constant(context.int(op.ty, 1));
+        before(function, select, Opcode::Binary(BinaryOp::Xor), op.ty, vec![condition, one])
+    };
+    let made = if yes == condition || yes_value == Some(-1) {
+        before(function, select, Opcode::Binary(BinaryOp::Or), op.ty, vec![condition, no])?
+    } else if no == condition || no_value == Some(0) {
+        before(function, select, Opcode::Binary(BinaryOp::And), op.ty, vec![condition, yes])?
+    } else if no_value == Some(-1) {
+        let flipped = not(function)?;
+        before(function, select, Opcode::Binary(BinaryOp::Or), op.ty, vec![flipped, yes])?
+    } else if yes_value == Some(0) {
+        let flipped = not(function)?;
+        before(function, select, Opcode::Binary(BinaryOp::And), op.ty, vec![flipped, no])?
+    } else {
+        return Ok(false);
+    };
+    function.replace_all_uses_with(result, made);
+    function.erase(select)?;
+    Ok(true)
 }
 
 fn built(
