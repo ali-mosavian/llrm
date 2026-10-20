@@ -823,7 +823,7 @@ impl RuntimePointerChecking {
         self.checks = self.make_checks(se, cx, dc);
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L614
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L613
     /// `generateChecks()`: a check for each pair of groups that `needs_checking`.
     fn make_checks(
         &mut self,
