@@ -982,6 +982,12 @@ pub fn recorded(
                 inline: applied.options.inline,
                 ranges: applied.options.ipa_ranges,
             });
+            // IPSCCP's own half, over each body: values that hold and flags
+            // from ranges (`trunc nsw`, `zext nneg`, `add nuw nsw`), which the
+            // first InstCombine reads. DEVIATE: what flows between bodies is
+            // `ModuleIpo`'s (`ipa-args`, `ipa-range`), not the solver's.
+            // Exit: `ModuleIpo` runs the solver over the program.
+            manager.add(sccp::Sccp);
             // A program pass abandons it.
             manager.hold::<GlobalsAA>();
         }

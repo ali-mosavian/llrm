@@ -2480,3 +2480,50 @@ out:
     };
     assert_eq!((loops(false), loops(true)), (1, 2));
 }
+
+/// A `short` counter, `i = (short)(i + 1)` under `i < N`, stayed an i32 phi
+/// with `ashr (shl i, 16), 16` after InstCombine: the pin's IPSCCP marks the
+/// `trunc` nsw from the loop's bound first, and `sext (trunc nsw x)` is `x`.
+/// SCEV found no trip count in the other form and LoopIdiom made no memmove:
+/// 8.8x the instructions of bench `scroll` (166810 against 1466660), matmul -O3
+/// unrolled no more.
+#[test]
+fn a_short_counter_loop_is_still_a_memmove() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@screen = internal global [2000 x i16] zeroinitializer
+
+define void @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b2 ]
+  %w = sext i16 %i to i32
+  %go = icmp slt i32 %w, 1920
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %up = add nsw i32 %w, 80
+  %src = getelementptr inbounds i16, ptr @screen, i32 %up
+  %v = load i16, ptr %src
+  %dst = getelementptr inbounds i16, ptr @screen, i32 %w
+  store i16 %v, ptr %dst
+  %next = add nsw i32 %w, 1
+  %n = trunc i32 %next to i16
+  br label %b1
+
+b3:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains("llvm.memmove"), "{text}");
+}
