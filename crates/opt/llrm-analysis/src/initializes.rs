@@ -34,17 +34,17 @@
 //! `a_store_through_the_parameter_initializes_its_bytes` in
 //! `initializes_tests.rs`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use llrm_mir::constantfolding::accumulate_constant_offset;
 use llrm_mir::context::{ConstantId, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::facts::Facts;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, Use};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::types::Type;
-use llrm_support::hash::HashMap;
 
 /// Byte ranges `[low, high)`, sorted, apart and not touching: LLVM's
 /// `ConstantRangeList`.
@@ -148,7 +148,7 @@ impl Access {
 /// `UsesPerBlockInfo`.
 #[derive(Default)]
 struct BlockUses {
-    insts: BTreeMap<InstId, Access>,
+    insts: IdMap<InstId, Access>,
     has_unknown_access: bool,
 }
 
@@ -157,7 +157,7 @@ struct BlockUses {
 struct Uses {
     any_write: bool,
     write_outside_entry: bool,
-    per_block: HashMap<BlockId, BlockUses>,
+    per_block: IdMap<BlockId, BlockUses>,
 }
 
 /// The bytes `[offset, offset + size)` as a range, unless it overflows.
@@ -310,7 +310,10 @@ fn collect(
         }
         let info = access_info(module, layout, function, used, offset);
         let Some(block) = function.parent(used.user) else { continue };
-        let uses = result.per_block.entry(block).or_default();
+        if !result.per_block.contains_key(&block) {
+            result.per_block.insert(block, BlockUses::default());
+        }
+        let uses = result.per_block.get_mut(&block).expect("inserted above");
         if uses.insts.contains_key(&used.user) {
             // More than one use of the argument in one instruction: a clobber.
             uses.insts.insert(used.user, Access::unknown());
@@ -344,13 +347,13 @@ fn inferred(
         return None;
     }
     // The uses of a block in instruction order.
-    let order: HashMap<InstId, usize> = uses
+    let order: IdMap<InstId, usize> = uses
         .per_block
         .keys()
-        .flat_map(|&block| function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)))
+        .flat_map(|block| function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)))
         .collect();
-    let mut initialized: HashMap<BlockId, Ranges> = HashMap::default();
-    let visit = |block: BlockId, initialized: &HashMap<BlockId, Ranges>| -> Ranges {
+    let mut initialized: IdMap<BlockId, Ranges> = IdMap::default();
+    let visit = |block: BlockId, initialized: &IdMap<BlockId, Ranges>| -> Ranges {
         let here = uses.per_block.get(&block);
         let mut ranges = Ranges::default();
         // Start with the intersection of the successors. A block with an
@@ -372,8 +375,8 @@ fn inferred(
             }
         }
         if let Some(here) = here {
-            let mut insts: Vec<(&InstId, &Access)> = here.insts.iter().collect();
-            insts.sort_by_key(|(inst, _)| order[*inst]);
+            let mut insts: Vec<(InstId, &Access)> = here.insts.iter().collect();
+            insts.sort_by_key(|(inst, _)| order.get(inst).copied());
             // From the end of the block to its start.
             for (_, info) in insts.into_iter().rev() {
                 if matches!(info.kind, Kind::Unknown | Kind::WriteWithSideEffect) {
@@ -415,12 +418,13 @@ fn post_order(
     function: &Function,
     entry: BlockId,
 ) -> Vec<BlockId> {
-    let mut seen = BTreeSet::from([entry.0]);
+    let mut seen = IdSet::default();
+    seen.insert(entry);
     let mut out = Vec::new();
     let mut stack = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>())];
     while let Some((block, pending)) = stack.last_mut() {
         match pending.pop() {
-            Some(next) if seen.insert(next.0) => {
+            Some(next) if seen.insert(next) => {
                 let after = function.successors(next).into_iter().collect::<Vec<_>>();
                 stack.push((next, after));
             }
