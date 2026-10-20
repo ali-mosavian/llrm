@@ -49,7 +49,7 @@
 //! Blocks and edges are as they were: only the uses of compares change.
 //!
 //! # See also
-//! [`crate::exitfold`], [`crate::decide`]; LLVM SimplifyIndVar
+//! [`crate::decide`]; LLVM SimplifyIndVar
 //! (`simplifyUsers`, `eliminateIVComparison`).
 
 use llrm_analysis::num::Num as BigInt;

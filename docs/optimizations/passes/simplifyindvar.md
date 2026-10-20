@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifyindvar.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifyindvar.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:8d29a4874bb49b98398381486bacfa552f4ab16050becf0b736592d50d31cced -->
+<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:d84f8206ef8df01d2369348f64fa5da71b4a89ecc8edb90f02094793c3cbd4b5 -->
 
 # simplifyindvar
 
@@ -54,5 +54,5 @@ Step 0 of [`crate::indvars`](indvars.md), with the widening.
 Blocks and edges are as they were: only the uses of compares change.
 
 ## See also
-[`crate::exitfold`](exitfold.md), [`crate::decide`](decide.md); LLVM SimplifyIndVar
+[`crate::decide`](decide.md); LLVM SimplifyIndVar
 (`simplifyUsers`, `eliminateIVComparison`).

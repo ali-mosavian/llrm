@@ -26,8 +26,8 @@
 //! `%exitcond = icmp ne i32 %i.next, %n` in the latch.
 //!
 //! # Used by
-//! Not wired in: [`crate::indvars`] will run [`replaced`] after
-//! `exitfold`, as `IndVarSimplify::run` does.
+//! [`crate::indvars`] runs [`replaced`] after the exit steps, as
+//! `IndVarSimplify::run` does.
 //!
 //! # See also
 //! `linearFunctionTestReplace`, `FindLoopCounter`, `genLoopLimit`,
