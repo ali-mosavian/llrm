@@ -10,7 +10,7 @@
 //! ```text
 //!   COPY        register-to-register mov       regthrash, machinecp
 //!   INSERTED    inserted instruction defining  secondary_bases
-//!   UNHELD      cell read via an unheld reg32  upperzero
+//!   UNHELD      cell read via a reg32          upperzero
 //!   EXACT_CELL  a cell lowering proved exact   exactaddress
 //!   BASED       a cell addressed via a value   secondary_bases
 //! ```
@@ -75,7 +75,7 @@ fn of(
             bits |= BASED;
         }
         if what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))) {
-            if upperzero::unheld(regs, one) != 0 {
+            if upperzero::wide_roots(regs, one) != 0 {
                 bits |= UNHELD;
             }
             if exactaddress::cell_of(regs, one).is_some() {

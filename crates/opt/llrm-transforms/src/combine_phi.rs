@@ -353,17 +353,21 @@ pub(crate) fn is_imm_constant(
 }
 
 impl Combiner<'_> {
-    /// `ConstantExpr::getBinOpIdentity(op, ty, /*AllowRHSConstant=*/false)`
-    /// (`NSZ` false).
-    fn bin_op_identity(
+    /// `ConstantExpr::getBinOpIdentity(op, ty, allow_rhs_constant)` (`NSZ`
+    /// false): the identity of a commutative operation, and with
+    /// `allow_rhs_constant` the right-hand one of the others.
+    pub(crate) fn bin_op_identity(
         &self,
         op: BinaryOp,
         ty: TypeId,
+        allow_rhs_constant: bool,
     ) -> Option<Operand> {
         Some(match op {
             BinaryOp::Add | BinaryOp::Or | BinaryOp::Xor => self.int(ty, 0),
             BinaryOp::Mul => self.int(ty, 1),
             BinaryOp::And => self.all_ones(ty),
+            BinaryOp::Sub | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if allow_rhs_constant => self.int(ty, 0),
+            BinaryOp::UDiv | BinaryOp::SDiv if allow_rhs_constant => self.int(ty, 1),
             BinaryOp::FAdd | BinaryOp::FMul => {
                 let Type::Float(kind) = *self.context.types.get(ty) else { return None };
                 let sem = if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE };
@@ -575,7 +579,7 @@ impl Combiner<'_> {
         // An identity constant on one side of every incoming pair.
         let in0: Vec<(Operand, BlockId)> = pattern::phi_incoming(self.function.instruction(phi0)).collect();
         let in1: Vec<(Operand, BlockId)> = pattern::phi_incoming(self.function.instruction(phi1)).collect();
-        if let Some(identity) = self.bin_op_identity(op, ty) {
+        if let Some(identity) = self.bin_op_identity(op, ty, false) {
             let mut values = Vec::with_capacity(in0.len());
             let all = in0
                 .iter()
