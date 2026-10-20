@@ -189,7 +189,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "indvars@738",
         Simplify,
         "indvars",
-        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitfold, congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; the old widen path is deleted",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
@@ -254,6 +254,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: the switch options (convertSwitchRangeToICmp, convertSwitchToArithmetic, speculateUnpredictables, hoistLoadsStoresWithCondFaulting), SimplifyCondBranchToCondBranch, simplifySwitch; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
+    entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     partial(
         "simplifycfg@2376",

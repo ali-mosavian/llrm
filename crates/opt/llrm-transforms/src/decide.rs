@@ -65,8 +65,8 @@
 //! # Runs
 //! Once per pass of the function fixed point, after `fold` and `ports` and
 //! before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
-//! at -O0. `jumpthread` is the separate pass that threads a state variable's
-//! edges.
+//! at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
+//! thread edges.
 //!
 //! # ScalarEvolution
 //! A branch the other engines leave is asked of ScalarEvolution
@@ -85,8 +85,8 @@
 //! decided or merged.
 //!
 //! # See also
-//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthread`]; LLVM JumpThreading,
-//! SimplifyCFG.
+//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM
+//! JumpThreading, SimplifyCFG.
 
 use std::collections::{BTreeMap, BTreeSet};
 

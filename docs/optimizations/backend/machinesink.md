@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:6aaca051d5f9d576b0ed052aa419bf7fbfc7174c5139886a85f4b725a1da2411 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:3dd7b82c131ffea7189801c817fcb8bfab1ef586d351a260838385ebf48f512d -->
 
 # machinesink
 
@@ -43,14 +43,14 @@ pressure of the target (`registerPressureSetExceedsLimit`) for an
 instruction inside a cycle; no instruction here sinks on that ground.
 Exit: the target description's pressure limits.
 
-DEVIATE M4 (#2903): only an instruction that reads no value moves (a
-constant). LLVM moves any, and its allocator splits the operands' ranges
-around the stretch; ours spills. Rows with every instruction movable and
-each operand read again below the destination: `bench/grep` -O2 m16 +718
-executed instructions and 601 spill stores (two sunk `movzx`),
-`bench/quicksort` -Os m16 +22 bytes. Exit: the greedy allocator with
-SplitKit as the default allocator and the `grep` m16 `movzx` case fixed
-(target 2026-11-05).
+DEVIATE M4 (#2903): in a build for size only an instruction that reads no
+value moves (a constant). LLVM moves any, and its allocator splits the
+operands' ranges around the stretch. Rows with every instruction movable
+at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
++29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
+Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
+-O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
+greedy allocator with SplitKit as the default allocator (target 2026-11-05).
 
 DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split) and nothing

@@ -68,24 +68,3 @@ flowchart TB
 After a rewrite the allocator recomputes `Facts`, finds the pins of the changed blocks (`required_added`), refreshes the `LiveUnion`, unplaces values whose register now clashes or is destroyed, and requeues what changed.
 
 When the queue is empty, `_recolored_hints` moves a value to a copy partner's register when that register is free over the whole interval and joins more of its copies than the one it has; each move deletes copies and the loop ends because each join count rises. At most `BUDGET` queue visits (200 000) are taken; more is a bug and is logged.
-
-## Search over shapes of the body
-
-`transform` first runs the body as is, with splitting (`regalloc base`). If it spilled something and `Profile::search` is on (`-fallocation-search`; -Omax), it builds other shapes the spills suggest, runs each as a `regalloc trial`, and keeps a trial only if it is cheaper and spilled none of the values the shape protects.
-
-| `Shape` | Body |
-|---|---|
-| `Addressed` | address computations of spilled values made apart from their users (`constrain::addressed`) |
-| `Unfolded` | indexes of spilled values folded into memory operands, opened (`spiller::unfolded_indexes`) |
-| `Scoped` | a copy of each spilled address base, index or selector made inside the loop that uses it, protected from spilling (`splitkit::loop_bases`) |
-| `ScopedOpened` | `Scoped` with the indexes it can fold opened |
-| `Retainable` | the body, with one spilled loop-invariant base protected |
-| `Whole` | the body, allocated without splitting |
-
-Not exhaustive (`-fallocation-search` below -Omax): `Whole` without splitting, and the first of `Retainable`, `Scoped`, `Addressed`, `Unfolded` present, with splitting. `-fallocation-search-all` (-Omax): every shape, both with and without splitting. Trial counts per level are in [levels](../../reference/levels.md); tests [`test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L1030) and [`test_an_allocator_that_does_not_search_allocates_a_body_once`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L994).
-
-### Cost model
-
-Candidates are compared by [`_emitted`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/allocate.rs#L3458), which is [`executed::work`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/executed.rs#L116): instructions plus memory operands the body is expected to execute per call, each block weighted by its frequency; an instruction that prints nothing counts for nothing. Where the control flow has no finite estimate (an irreducible loop), a count with the same prices is used. Only what the allocator added differs between candidates, so this is the cost of that. Which route wins between the allocator alone and the spiller's is decided on a different measure, clocks or bytes ([ssa-spill-route](ssa-spill-route.md)).
-
-The spill weight of [live-ranges](live-ranges.md#weights) and this cost agree in kind (a reference is one instruction and one memory operand) but are not the same quantity: one prices a decision for one value, the other a finished body.

@@ -495,12 +495,12 @@ fn convention(
                     continue;
                 };
                 used.push(register.to_owned());
-                parameters.push(Parameter::Registers(vec![llrm_x86::calling::register(register)]));
+                parameters.push(Parameter::Registers(vec![arch.register_named(register)]));
                 continue;
             }
             parameters.push(match places.next().expect("a place for each parameter") {
                 llrm_target::calling::Place::Registers(names) => {
-                    Parameter::Registers(names.iter().map(|name| llrm_x86::calling::register(name)).collect())
+                    Parameter::Registers(names.iter().map(|name| arch.register_named(name)).collect())
                 }
                 llrm_target::calling::Place::Stack(offset) => Parameter::Cell(first + hidden + offset),
             });
@@ -576,7 +576,7 @@ fn results(
     entry: Option<&llrm_target::calling::Convention>,
     width: u32,
 ) -> Vec<RegId> {
-    entry.map_or_else(|| arch.results(width), |one| llrm_x86::calling::results(one, width))
+    entry.map_or_else(|| arch.results(width), |one| arch.convention_results(one, width))
 }
 
 /// What `ty`, `size` bytes, is to a convention's registers (`class` its
@@ -617,7 +617,7 @@ fn saved(
 ) -> Vec<(RegId, RegId)> {
     // What the function's own convention keeps, not the target's default's.
     let Some(entry) = entry else { return arch.callee_saved() };
-    let kept = llrm_x86::calling::callee_saved(entry);
+    let kept = arch.convention_callee_saved(entry);
     if !(entry.arguments_clobbered || entry.results_clobbered) {
         return kept;
     }
@@ -5958,7 +5958,7 @@ impl Selector<'_, '_, '_> {
                 let llrm_target::calling::Place::Registers(names) = place else { continue };
                 let argument = arguments[index];
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                let registers: Vec<RegId> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
+                let registers: Vec<RegId> = names.iter().map(|name| self.arch.register_named(name)).collect();
                 if let [low, high] = registers[..] {
                     // A pair: an i64's dwords, a far pointer's offset and
                     // selector, or a long's words.
@@ -6201,7 +6201,7 @@ impl Selector<'_, '_, '_> {
                 names
                     .iter()
                     .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                    .map(|name| llrm_x86::calling::register(name))
+                    .map(|name| self.arch.register_named(name))
                     .map(|register| if register.is_gpr() { register.full_register32() } else { register })
                     .chain(unnamed)
                     .collect::<BTreeSet<RegId>>(),
@@ -6216,7 +6216,7 @@ impl Selector<'_, '_, '_> {
             named
                 .iter()
                 .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                .map(|name| llrm_x86::calling::register(name))
+                .map(|name| self.arch.register_named(name))
                 .map(|register| if register.is_gpr() { register.full_register32() } else { register })
                 .collect()
         });
@@ -6346,7 +6346,9 @@ impl Selector<'_, '_, '_> {
                 _ if known.is_some() => known.clone().unwrap_or_default(),
                 // What the convention keeps only the pushed part of (a 16-bit
                 // push of a 32-bit register) loses its upper half.
-                Some((entry, _)) => llrm_x86::calling::callee_saved(entry)
+                Some((entry, _)) => self
+                    .arch
+                    .convention_callee_saved(entry)
                     .into_iter()
                     .filter(|(full, pushed)| full != pushed)
                     .map(|(full, _)| full)

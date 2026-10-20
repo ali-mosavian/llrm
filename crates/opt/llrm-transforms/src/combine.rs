@@ -47,11 +47,12 @@ use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
-use crate::combine_compares::visit_icmp;
 use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
 use crate::combine_shifts::{visit_ashr, visit_lshr, visit_shl};
 use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};
+use crate::combine_sub::visit_sub;
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -394,6 +395,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
+        Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
         Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
         Opcode::Binary(BinaryOp::URem) => &[visit_urem],
@@ -507,6 +509,7 @@ pub fn combine(
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
 /// family sees what that family does.
+#[cfg(test)]
 pub(crate) fn combine_with(
     context: &mut Context,
     globals: &[GlobalValue],
