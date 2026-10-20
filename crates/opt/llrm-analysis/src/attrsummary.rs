@@ -38,6 +38,12 @@ use crate::aa::{IRMemLocation, MemoryEffects, ModRefInfo};
 use crate::alias::Summary;
 use crate::memory::{Identity, Key, MemoryKind, MemoryObject, ObjectInterner, Slice};
 
+/// Whether `Summaries` is this map; `LLRM_LEGACY_SUMMARIES=1` brings back the
+/// fixed point over the bodies (`alias::summaries`).
+pub fn enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_LEGACY_SUMMARIES")
+}
+
 /// The summaries of the defined functions of `module`, by name.
 pub fn summaries(module: &Module) -> IndexMap<String, Summary> {
     let objects = ObjectInterner::of(&module.context);

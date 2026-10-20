@@ -306,7 +306,7 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
-        if llrm_support::env_flag!("LLRM_ATTR_SUMMARIES") {
+        if crate::attrsummary::enabled() {
             return Ok(crate::attrsummary::summaries(module));
         }
         let globals_held = analyses.get::<GlobalsAA>(module);
