@@ -4,7 +4,7 @@
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::regalloc_input::{before_regalloc, before_regalloc_unspilled, through};
+use crate::backend::regalloc_input::{before_regalloc, through};
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 
@@ -64,7 +64,7 @@ fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
             CONC7,
             "Core",
             "RegAlloc",
-            &["SsaSpill", "Coalescer"],
+            &["SsaSpill", "Coalescer", "MachineSink"],
         )
     });
     let longest = longest_copy(&body);

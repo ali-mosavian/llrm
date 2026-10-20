@@ -59,7 +59,7 @@ use super::{
     semantics,
 };
 use crate::backend::arithmetic;
-use crate::model::ir::{Held, Imm, Loc, Operation};
+use crate::model::ir::{Field, FieldKind, Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
@@ -603,6 +603,39 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Imm(Imm { value, width: width as u32, address: None }))
     }
 
+    /// A shifted register's field: the target's shift `code` and the `amount`.
+    pub fn op_shift(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Shift, code: code as u8, amount: amount as u8 }))
+    }
+
+    /// A condition field: the target's condition `code`.
+    pub fn op_cond(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Condition, code: code as u8, amount: 0 }))
+    }
+
+    /// An extended register's field: the target's extension `code` and the
+    /// `amount`.
+    pub fn op_extend(
+        &mut self,
+        _: &Match,
+        _: &mut Vec<Arc<Insn>>,
+        code: i64,
+        amount: i64,
+    ) -> Result<Loc, Unselected> {
+        Ok(Loc::Field(Field { kind: FieldKind::Extend, code: code as u8, amount: amount as u8 }))
+    }
+
     // Predicates.
 
     /// Whether the target would rather run this operation, at its width, on
@@ -908,21 +941,21 @@ impl Selector<'_, '_, '_> {
     /// not counted: the allocator drops it where the source dies, as `add
     /// si, si` shows.
     fn chain_bytes(
+        &self,
         chain: &[(&str, i64)],
         width: i64,
-        operand: i64,
     ) -> i64 {
-        use llrm_x86::encoding::{register_bytes, shift_bytes};
+        let register_bytes = |width| self.arch.register_op_bytes(width);
+        let shift_bytes = |count, width| self.arch.shift_op_bytes(count, width);
+        let operand = self.arch.operand_bytes();
         // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
         chain
             .iter()
             .map(|&(name, count)| match name {
-                "shl" => shift_bytes(count, width, operand),
+                "shl" => shift_bytes(count, width),
                 "lea" | "flea" => 3 + i64::from(width != operand),
-                "fadd" | "fsub" => {
-                    shift_bytes(count, width, operand) + register_bytes(width, operand) + register_bytes(width, operand)
-                }
-                _ => register_bytes(width, operand),
+                "fadd" | "fsub" => shift_bytes(count, width) + register_bytes(width) + register_bytes(width),
+                _ => register_bytes(width),
             })
             .sum()
     }
@@ -948,8 +981,8 @@ impl Selector<'_, '_, '_> {
         let imul = arithmetic::immediate_multiply(self.cpu, n).ok()?;
         let (by_chain, by_imul) = if self.cpu.size {
             (
-                Self::by_size(Self::chain_bytes(&chain, width, self.cpu.operand_bytes), clocks),
-                Self::by_size(llrm_x86::encoding::imul_immediate_bytes(n, width, self.cpu.operand_bytes), imul),
+                Self::by_size(self.chain_bytes(&chain, width), clocks),
+                Self::by_size(self.arch.multiply_immediate_bytes(n, width), imul),
             )
         } else {
             (clocks, imul)
@@ -966,7 +999,7 @@ impl Selector<'_, '_, '_> {
         let n = self.constant(factor, width).expect("an integer factor");
         if self.cpu.size {
             return Ok(Self::by_size(
-                llrm_x86::encoding::imul_immediate_bytes(n, i64::from(width), self.cpu.operand_bytes),
+                self.arch.multiply_immediate_bytes(n, i64::from(width)),
                 arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)?,
             ));
         }
@@ -982,11 +1015,7 @@ impl Selector<'_, '_, '_> {
         // Tuned for size, the two compete in bytes, as they compete in clocks
         // otherwise.
         let width = self.width(self.function.instruction(m.inst).ty)?;
-        Ok(if self.cpu.size {
-            Self::by_size(Self::chain_bytes(&chain, i64::from(width), self.cpu.operand_bytes), clocks)
-        } else {
-            clocks
-        })
+        Ok(if self.cpu.size { Self::by_size(self.chain_bytes(&chain, i64::from(width)), clocks) } else { clocks })
     }
 
     // Hooks: what is selected by hand.

@@ -2,18 +2,10 @@
 //! on known conditions.
 //!
 //! # How it works
-//! `decided` runs three steps, then `cfg::merged` joins the chains that result.
+//! `decided` runs two steps. Threading is `jumpthreading`'s and
+//! `simplifycfg`'s.
 //!
-//! 1. Threading. A block holding only a `br` is bypassed (`_threaded`): each
-//!    branch or switch edge to it goes to what it jumps to, where that has no
-//!    phis to tell the edges apart. A loop's one entry edge, one latch and
-//!    dedicated exits are kept, so the loop stays in simplify form. A
-//!    conditional branch whose two arms go one way becomes a jump. Separately
-//!    (`_phi_threaded`), a predecessor that only jumps to a block holding just
-//!    a phi and a branch on it, and gives the phi a constant, goes straight to
-//!    where that constant leads (LLVM's `ProcessBranchOnPHI`); a loop header
-//!    keeps its edges.
-//! 2. Deciding. For each block ending in a `br i1` or a `switch`, the way is
+//! 1. Deciding. For each block ending in a `br i1` or a `switch`, the way is
 //!    found from, in order: `consts`' answer for the condition, or for the two
 //!    operands of the `icmp` it is, carried across loops by `constant_cycles`
 //!    along only the edges that run; a pointer compared with null that
@@ -21,7 +13,7 @@
 //!    if exactly one successor is possible; the guards that hold at the block
 //!    and the loops around it (`guards::Given`, over `induction` terms). A
 //!    switch is decided by a known condition with distinct cases.
-//! 3. The decided terminator is replaced by a `br` to the chosen block; blocks
+//! 2. The decided terminator is replaced by a `br` to the chosen block; blocks
 //!    no longer reachable go and phis left with one value are replaced by it.
 //!
 //!
@@ -71,10 +63,10 @@
 //! `decide_tests.rs`.
 //!
 //! # Runs
-//! Once per pass of the function fixed point, after `fold` and `ports` and
-//! before `phiopt`. `Options::decide` turns it off (no `-f` flag); nothing runs
-//! at -O0. `jumpthread` is the separate pass that threads a state variable's
-//! edges.
+//! Once per pass of the function fixed point, after `fold` and `ports`.
+//! `Options::decide` turns it off (no `-f` flag); nothing runs
+//! at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
+//! thread edges.
 //!
 //! # ScalarEvolution
 //! A branch the other engines leave is asked of ScalarEvolution
@@ -93,8 +85,8 @@
 //! decided or merged.
 //!
 //! # See also
-//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthread`]; LLVM JumpThreading,
-//! SimplifyCFG.
+//! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM
+//! JumpThreading, SimplifyCFG.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -113,15 +105,11 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
-use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
-use llrm_mir::valuelattice::LatticeConstant;
-use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::IndexMap;
 
-use crate::edges;
 use crate::transform;
 
 /// Read once: `decide` asks ScalarEvolution (`isKnownPredicateAt`) what the
@@ -189,10 +177,6 @@ fn _decided(
     analyses: &mut Analyses,
     use_scev: bool,
 ) -> Result<bool, String> {
-    let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
-    if threaded {
-        analyses.invalidate(function, &PreservedAnalyses::none());
-    }
     // What the values say, as LLVM's SimplifyCFG decides a branch: a number
     // memory gave is `fold`'s to put in the condition first. Solving memory
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
@@ -201,14 +185,10 @@ fn _decided(
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
-    let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(context, layout, function);
-    let mut lvi = shared.take();
-    let settled = _settled(context, layout, function, &outer, &mut lvi);
-    shared.put(lvi);
     let scev = LazyScevView::new(analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &settled, &scev, use_scev)?;
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev, use_scev)?;
     if decisions.is_empty() {
-        return Ok(threaded);
+        return Ok(false);
     }
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
@@ -223,7 +203,6 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    settled: &llrm_mir::dense::IdMap<BlockId, bool>,
     scev: &LazyScevView,
     use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
@@ -284,9 +263,6 @@ fn _decisions(
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
-            answer = settled.get(&block).copied();
-        }
-        if answer.is_none() {
             answer = if use_scev {
                 _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
             } else {
@@ -296,45 +272,6 @@ fn _decisions(
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
-}
-
-/// The conditional branches LazyValueInfo settles: the compare a branch is on
-/// holds or fails at it, from the branches that dominate it, the assumes and
-/// the `!range`s, as `JumpThreading`'s `processBranchOnCompare` asks
-/// (`getPredicateAt(Pred, LHS, RHS, Terminator)`); a condition that is no
-/// compare is asked as a constant (`getConstant`).
-fn _settled(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &Function,
-    outer: &Outer,
-    lvi: &mut LazyValueInfo,
-) -> llrm_mir::dense::IdMap<BlockId, bool> {
-    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
-    let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
-    let mut settled = llrm_mir::dense::IdMap::default();
-    for &block in function.layout() {
-        let Some(last) = function.terminator(block) else { continue };
-        let branch = function.instruction(last);
-        if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
-            continue;
-        }
-        let answer = match transform::_comparison(function, block, last) {
-            Some(compare) => {
-                let compare = function.instruction(compare);
-                let Opcode::ICmp(predicate) = compare.opcode else { continue };
-                lvi.get_predicate_at_values(&mut env, predicate, compare.operands[0], compare.operands[1], last, true)
-            }
-            None => match lvi.get_constant(&mut env, branch.operands[0], last) {
-                Some(LatticeConstant::Int { bits, .. }) => Some(bits & 1 == 1),
-                _ => None,
-            },
-        };
-        if let Some(answer) = answer {
-            settled.insert(block, answer);
-        }
-    }
-    settled
 }
 
 /// Whether the compare `last` branches on holds or fails there, by what the
@@ -523,99 +460,6 @@ pub fn _executable_successors(
     Some(all)
 }
 
-/// `value` as a constant in `from`, a block whose one predecessor branches on
-/// it: false where `from` is the branch's false side, true where it is the true
-/// side (LLVM JumpThreading's `getKnownConstant` of an edge).
-fn known_on_edge(
-    context: &Context,
-    function: &Function,
-    value: ValueId,
-    from: BlockId,
-) -> Option<Operand> {
-    let [only] = function.predecessors(from)[..] else { return None };
-    let branch = function.instruction(function.terminator(only)?);
-    let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-        return None;
-    };
-    if branch.opcode != Opcode::Br || condition != value || taken == other {
-        return None;
-    }
-    let ty = function.value(value).ty;
-    let bit = if from == taken {
-        1
-    } else if from == other {
-        0
-    } else {
-        return None;
-    };
-    Some(Operand::Constant(context.int(ty, bit)))
-}
-
-/// A predecessor that only jumps to a block holding just a phi and a
-/// branch on it, and gives the phi a constant, goes straight where that
-/// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
-/// header keeps its edges. Whether anything changed.
-pub fn _phi_threaded(
-    context: &Context,
-    function: &mut Function,
-) -> Result<bool, String> {
-    let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        let instructions = function.iter_block(block).collect::<Vec<_>>();
-        let [phi, last] = instructions[..] else { continue };
-        let branch = function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-            continue;
-        };
-        let reads_only = function.users(condition).has_one_use();
-        let is_phi = function.instruction(phi).opcode == Opcode::Phi;
-        if headers.contains(&cfg::id(block))
-            || branch.opcode != Opcode::Br
-            || !is_phi
-            || function.instruction(phi).result != Some(condition)
-            || !reads_only
-        {
-            continue;
-        }
-        for (value, from) in crate::lcssa::arms(function, phi) {
-            // A condition is its own answer on the edge that its branch
-            // settles.
-            let value = match value {
-                Operand::Value(one) => known_on_edge(context, function, one, from).unwrap_or(value),
-                other => other,
-            };
-            let Operand::Constant(id) = value else { continue };
-            let ConstantKind::Int(bits) = context.get(id).kind else { continue };
-            let target = if bits & 1 == 1 { taken } else { other };
-            let jump = function.terminator(from).expect("a terminator");
-            let only_jumps = function.instruction(jump).operands == [Operand::Block(block)];
-            if !only_jumps || target == block || function.predecessors(target).contains(&from) {
-                continue;
-            }
-            // What the target's phis took from `block` they now take from
-            // `from` too.
-            for one in edges::phis(function, target) {
-                let mut incoming = crate::lcssa::arms(function, one);
-                let (carried, _) =
-                    *incoming.iter().find(|(_, source)| *source == block).expect("an arm from the block");
-                incoming.push((if carried == Operand::Value(condition) { value } else { carried }, from));
-                function.set_operands(one, crate::lcssa::from_arms(&incoming));
-            }
-            let kept =
-                crate::lcssa::arms(function, phi).into_iter().filter(|(_, source)| *source != from).collect::<Vec<_>>();
-            function.set_operands(phi, crate::lcssa::from_arms(&kept));
-            function.set_operands(jump, vec![Operand::Block(target)]);
-            changed = true;
-        }
-    }
-    if changed {
-        cfg::_unreachable(context, function);
-        transform::_trivial_phis(function)?;
-    }
-    Ok(changed)
-}
-
 /// The blocks that hold a loop's simple form up: a jump alone in the block
 /// before the header (its one entry), the one latch, or an exit block only the
 /// loop reaches. A pass that takes them out meets `loopsimplify` putting them
@@ -659,75 +503,6 @@ pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
         }
     }
     loop_edges
-}
-
-/// Blocks holding only a jump bypassed, where what they jump to has no
-/// phis to tell the edges apart. Whether anything changed.
-///
-/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
-/// its dedicated exits as blocks of their own.
-pub fn _threaded(
-    context: &Context,
-    function: &mut Function,
-) -> bool {
-    if function.entry().is_none() {
-        return false;
-    }
-    let loop_edges = loop_form_blocks(function);
-    let mut redirects = BTreeMap::new();
-    for &block in function.layout() {
-        let at = cfg::id(block);
-        let [only] = function.iter_block(block).collect::<Vec<_>>()[..] else {
-            continue;
-        };
-        let instruction = function.instruction(only);
-        if let (Opcode::Br, [Operand::Block(next)]) = (&instruction.opcode, &instruction.operands[..])
-            && !loop_edges.contains(&at)
-            && edges::phis(function, *next).is_empty()
-        {
-            redirects.insert(at, cfg::id(*next));
-        }
-    }
-    let destination = |start: i64, source: i64| {
-        let (mut target, mut seen) = (start, BTreeSet::from([source]));
-        while let Some(&next) = redirects.get(&target) {
-            if !seen.insert(target) {
-                break;
-            }
-            target = next;
-        }
-        if seen.contains(&target) { start } else { target }
-    };
-
-    let mut changed = false;
-    for block in function.layout().to_vec() {
-        let Some(last) = function.terminator(block) else {
-            continue;
-        };
-        if !matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch) {
-            continue;
-        }
-        for (index, operand) in function.instruction(last).operands.clone().into_iter().enumerate() {
-            if let Operand::Block(target) = operand {
-                let to = destination(cfg::id(target), cfg::id(block));
-                if to != cfg::id(target) {
-                    function.set_operand(last, index, Operand::Block(cfg::block(to)));
-                    changed = true;
-                }
-            }
-        }
-        // Both arms one way: the condition chooses nothing.
-        if let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..]
-            && taken == other
-        {
-            _jump(context, function, last, taken);
-            changed = true;
-        }
-    }
-    if changed {
-        cfg::_unreachable(context, function);
-    }
-    changed
 }
 
 #[cfg(test)]

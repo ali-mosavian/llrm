@@ -1474,6 +1474,26 @@ b0:
         assert!(!overlapping(near, text, None, None, Some(&dos(&module))).unwrap());
     }
 
+    /// The same segment spelled as a constant expression, as #2614 folds a
+    /// POKE's address: the store had no selector, so it may alias the
+    /// program's data and a loop storing there read its other variables again.
+    #[test]
+    fn a_constant_expression_selector_lands_in_foreign_memory() {
+        let module = module(
+            "define void @f(ptr %p) {
+b0:
+  store i16 0, ptr %p
+  store i8 0, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 -18432 to ptr addrspace(2)) to ptr addrspace(1)), i16 4)
+  ret void
+}
+",
+        );
+        let dl = layout(&module);
+        let [near, text] = &accesses(&module, &dl)[..] else { panic!() };
+        assert_eq!(text.selector, Some(0xB800));
+        assert!(!overlapping(near, text, None, None, Some(&dos(&module))).unwrap());
+    }
+
     /// A flat address wrapped modulo 2^32 whatever the target's pointer: on a
     /// 64-bit one the video buffer's range was taken for 0x1_000B_8000, which
     /// a program's data may occupy. The word is the pointer's.

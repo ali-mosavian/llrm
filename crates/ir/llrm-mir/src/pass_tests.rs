@@ -381,6 +381,55 @@ fn verify_each_names_the_pass_that_broke_the_module() {
     assert!(error.starts_with("after drop-return: "), "{error}");
 }
 
+const TWO_EDGES: &str = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, label %b\nb:\n  %x = phi i16 [ 1, %entry ], [ 1, %entry ]\n  ret i16 %x\n}\n";
+
+/// Drops one of the two inputs of the phi that two edges feed: the body
+/// `SsaUpdaterBulk` left (#3016), which made SCEV and liveness allocate 3 GB.
+struct ShortPhi;
+
+impl FunctionPass for ShortPhi {
+    fn name(&self) -> &'static str {
+        "short-phi"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let function = &mut *unit.function;
+        let block = function.layout()[1];
+        let phi = function.iter_block(block).next().unwrap();
+        let first = function.instruction(phi).operands[..2].to_vec();
+        function.set_operands(phi, first);
+        PreservedAnalyses::none()
+    }
+}
+
+/// A pass that leaves a phi short of an input for one of its edges is named
+/// where it ran, not found as a consumer's runaway allocation later. Only a
+/// build with debug assertions checks: LLVM verifies a release build's passes
+/// only under `-verify-each`.
+#[test]
+#[cfg(debug_assertions)]
+fn a_pass_that_leaves_a_phi_short_of_an_edge_is_named() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(ShortPhi);
+    let error = passes.run_module(&mut module, Rc::new(Neutral)).unwrap_err();
+    assert!(error.starts_with("after short-phi: a phi in %b has 1 inputs from %entry for 2 edges"), "{error}");
+}
+
+/// The well-formed body passes the same check.
+#[test]
+fn a_pass_that_keeps_every_phi_whole_is_not_refused() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+}
+
 /// A bisection limit runs only the first pass runs, as LLVM's
 /// `-opt-bisect-limit`: with two functions and a limit of one, the second
 /// is left as it was. It found the peephole that added deedlines' z%(i)
@@ -1358,4 +1407,100 @@ fn the_stale_check_names_a_pass_that_declared_an_update_it_did_not_put_back() {
     let message = caught.expect_err("the lying pass went unnoticed");
     let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(message.contains("updates-counted") && message.contains("replace"), "{message}");
+}
+
+/// A function pass that changes nothing.
+struct Idle;
+
+impl FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PreservedAnalyses::all()
+    }
+}
+
+/// A program pass that changes nothing.
+struct Nothing;
+
+impl crate::program::ProgramPass for Nothing {
+    fn name(&self) -> &'static str {
+        "nothing"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        _: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// `LLRM_DUMP_INPUTS` dumped the input of the pipeline's function passes only:
+/// a module or program pass (the inliner, GlobalDCE, IPSCCP) wrote nothing, and
+/// a miscompile after inlining could not name its pass (#2982).
+#[test]
+fn a_module_or_program_pass_dumps_its_input_when_inputs_are_dumped() {
+    let text = "define i16 @g() {\nentry:\n  ret i16 0\n}\n\ndefine i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
+    let run = |inputs: bool| {
+        let directory = std::env::temp_dir().join(format!("llrm-dump-inputs-{}-{inputs}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let mut passes = PassManager::default();
+        passes.dump = Some(directory.clone());
+        passes.dump_inputs = inputs;
+        passes.add_module(MarkReadonly);
+        passes.add_program(Nothing);
+        passes.add(Idle);
+        passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+        directory
+    };
+    let directory = run(true);
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let lines: Vec<Vec<&str>> = manifest.lines().map(|line| line.split(' ').collect()).collect();
+    let named: Vec<(&str, &str)> = lines.iter().map(|line| (line[0], line[2])).collect();
+    assert_eq!(
+        named,
+        [("mark-readonly", "0001-in-mark-readonly.ll"), ("nothing", "0002-in-nothing.ll"), ("idle", "0003-in-idle.ll"),]
+    );
+    assert!(lines.iter().all(|line| line[3].parse::<usize>().unwrap() > 0), "{manifest}");
+    for (_, file) in named {
+        assert!(directory.join(file).exists(), "{file}");
+    }
+    let off = run(false);
+    assert!(!off.join("manifest.txt").exists(), "an input dump without LLRM_DUMP_INPUTS");
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(off);
+}
+
+/// A dump per pass added: five passes of the three kinds wrote fewer input
+/// files and manifest lines than that when a kind was left out.
+#[test]
+fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
+    let directory = std::env::temp_dir().join(format!("llrm-dump-count-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut module = parse::module(TEXT).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.dump = Some(directory.clone());
+    passes.dump_inputs = true;
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add(Idle);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let files = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains("-in-"))
+        .count();
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
+    let _ = std::fs::remove_dir_all(directory);
 }

@@ -105,8 +105,8 @@ use crate::backend::allocate::{_clobbered, _masks};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{Loc, Operation, Space};
-use crate::model::lir::LirBody;
-use crate::support::hash::IndexMap;
+use crate::model::lir::{Insn, LirBody};
+use crate::support::hash::{HashSet, IndexMap};
 
 pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
 
@@ -570,7 +570,7 @@ impl Scan {
             |value: u32| self.counts.get(&value).is_some_and(|c| c.selecting > 0),
             |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
         );
-        _through_webs(body, &selecting, &numeric, &selectors, false, &mut out);
+        _through_webs(body, &selecting, &numeric, &selectors, selector_bytes(segments), false, &mut out);
         out
     }
 }
@@ -641,6 +641,7 @@ fn collected(
             &|value| selecting.contains(&value),
             &|value| numeric.contains(&value),
             &selectors,
+            selector_bytes(segments),
             optimistic,
             &mut out,
         )
@@ -652,11 +653,18 @@ fn collected(
 /// one value once the coalescer has merged them: each takes the class of the
 /// web. A value that only a phi or such a copy reads, as one a loop reads
 /// through its header phi is, has no class of its own.
+/// How many bytes a segment selector is: the width of the segment registers the
+/// program model places selectors in.
+fn selector_bytes(segments: &Segments) -> Option<i64> {
+    segments.selectors.first().and_then(|register| segments.registers.width_of(*register))
+}
+
 fn _through_webs(
     body: &LirBody,
     selecting: &dyn Fn(u32) -> bool,
     numeric: &dyn Fn(u32) -> bool,
     selectors: &BTreeSet<RegId>,
+    selector_bytes: Option<i64>,
     optimistic: bool,
     out: &mut Classes,
 ) {
@@ -673,14 +681,40 @@ fn _through_webs(
         web.insert(value, top);
         top
     }
+    let mut of_phis: HashSet<u32> = HashSet::default();
     for phi in body.blocks.iter().flat_map(|block| &block.phis) {
+        of_phis.insert(phi.result);
         for (_, value) in &phi.incoming {
+            of_phis.insert(*value);
             let (one, other) = (find(&mut web, phi.result), find(&mut web, *value));
             web.insert(one, other);
         }
     }
-    for one in body.blocks.iter().flat_map(|block| &block.insns).filter(|one| optimistic && one.group.is_some()) {
+    // A selector carried round a loop by its phi is a plain `mov` to the
+    // register of the phi and another back: one value, which a segment
+    // register can hold the whole way. A copy off a call's result is not
+    // one: the word is in the call's register, and the web would ask a
+    // segment register of it.
+    let carries = |one: &Insn| {
+        one.group.is_none()
+            && one.what.as_ref().is_some_and(|what| {
+                matches!(
+                    (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
+                    (Operation::Move, Some("mov"), [Loc::Held(into)], [Loc::Held(from)])
+                        if Some(i64::from(into.width)) == selector_bytes && into.width == from.width
+                )
+            })
+    };
+    for one in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter(|one| if one.group.is_some() { optimistic } else { carries(one) })
+    {
         if let ([into], [from]) = (one.defines.as_slice(), one.uses.as_slice()) {
+            if one.group.is_none() && !of_phis.contains(into) && !of_phis.contains(from) {
+                continue;
+            }
             let (a, b) = (find(&mut web, *into), find(&mut web, *from));
             web.insert(a, b);
         }
@@ -719,7 +753,15 @@ fn _through_webs(
         let wanted = optimistic
             || agreed.as_ref().is_some_and(|class| class.iter().all(|register| selectors.contains(register)));
         if let (true, true, Some(class)) = (agree, wanted, agreed) {
-            let bare: Vec<u32> = list.iter().copied().filter(|value| !out.contains_key(value)).collect();
+            // A member read as a number (an `xor`) stays a general register:
+            // the copies between it and the selectors are real
+            // moves.
+            let agreed_selectors = class.iter().all(|register| selectors.contains(register));
+            let bare: Vec<u32> = list
+                .iter()
+                .copied()
+                .filter(|value| !out.contains_key(value) && !(agreed_selectors && numeric(*value)))
+                .collect();
             for value in bare {
                 out.insert(value, class.clone());
             }

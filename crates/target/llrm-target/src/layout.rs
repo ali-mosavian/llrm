@@ -50,6 +50,10 @@ pub struct Layout {
     /// `setOperationAction(..., Promote)`. An operation not listed runs as it
     /// is.
     pub promote: Vec<String>,
+    /// The cost model (`tti`: `"X86"`) and the CPU of it (`llvm_cpu`) the
+    /// compiler prices this target with; none where the description names none.
+    pub tti: Option<String>,
+    pub llvm_cpu: Option<String>,
 }
 
 impl AddressSpaces {
@@ -167,11 +171,19 @@ impl Layout {
                 .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
                 .ok_or("promote is not a list of operation names")?,
         };
+        let text = |name: &str| -> Result<Option<String>, String> {
+            match value.get(name) {
+                None => Ok(None),
+                Some(one) => one.as_str().map(|one| Some(one.to_owned())).ok_or(format!("{name} is not a string")),
+            }
+        };
         Ok(Self {
             mode,
             datalayout,
             expand,
             promote,
+            tti: text("tti")?,
+            llvm_cpu: text("llvm_cpu")?,
             spaces: AddressSpaces {
                 roles: Spaces {
                     near: required("near")?,
@@ -194,6 +206,16 @@ mod tests {
     use super::*;
 
     const FLAT: &str = "mode = 32\ndatalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
+
+    /// The cost model and the CPU a target is priced as were read nowhere: the
+    /// targets spelled "i486" in code (m16 and m32 both).
+    #[test]
+    fn the_layout_names_the_cost_model_and_its_cpu() {
+        let named = Layout::parse(&format!("tti = \"X86\"\nllvm_cpu = \"i386\"\n{FLAT}")).unwrap();
+        assert_eq!((named.tti.as_deref(), named.llvm_cpu.as_deref()), (Some("X86"), Some("i386")));
+        let bare = Layout::parse(FLAT).unwrap();
+        assert_eq!((bare.tti, bare.llvm_cpu), (None, None));
+    }
 
     #[test]
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {

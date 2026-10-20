@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_formula.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_formula.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_formula.rs sha256:bf7695b968f00c1a9b273ddb4096f0bd0fe111c1cd53f8a4e9d69e9066fdf4c4 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_formula.rs sha256:53a5998e81f42f5ba99736d10778029c24c7350666c495f3f6615a3e50ee014a -->
 
 # lsr_formula
 
@@ -19,7 +19,7 @@ scale 4, base offset 8.
 
 ## Runs
 Nothing runs it yet: stage 1 of the translation of LSR (the old pass in
-[`crate::lsr`](lsr.md) is gcc's ivopts and stays the default).
+[`crate::lsr_pass`](lsr_pass.md) is the pass that runs them).
 
 ## Limits
 DEVIATE: `Immediate` is fixed. LLVM's also holds a scalable quantity

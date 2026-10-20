@@ -642,126 +642,6 @@ pub fn required_added(
     out
 }
 
-/// Split address-class occurrences from an otherwise general value.
-pub fn addressed(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> (LirBody, BTreeSet<u32>) {
-    if values.is_empty() {
-        return (body.clone(), BTreeSet::new());
-    }
-
-    let mut eligible: BTreeSet<u32> = values.clone();
-    let mut occurrences: IndexMap<u32, i64> = values.iter().map(|value| (*value, 0)).collect();
-    for block in &body.blocks {
-        for one in &block.insns {
-            let mut address: BTreeSet<u32> = BTreeSet::new();
-            let mut ordinary: BTreeSet<u32> = BTreeSet::new();
-            if let Some(what) = &one.what {
-                for operand in &what.dests {
-                    if let Loc::Mem(cell) = operand {
-                        for held in [cell.base, cell.index].into_iter().flatten() {
-                            address.insert(held.value);
-                        }
-                        if let Some(selector) = cell.selector {
-                            ordinary.insert(selector.value);
-                        }
-                    }
-                }
-                for operand in &what.sources {
-                    if let Loc::Mem(cell) = operand {
-                        address.extend([cell.base, cell.index].into_iter().flatten().map(|held| held.value));
-                        if let Some(selector) = cell.selector {
-                            ordinary.insert(selector.value);
-                        }
-                    } else {
-                        ordinary.extend(ir::values(operand).iter().map(|held| held.value));
-                    }
-                }
-            }
-            let hidden: BTreeSet<u32> = one.uses.iter().copied().filter(|value| !address.contains(value)).collect();
-            let mut forbidden: BTreeSet<u32> = ordinary.union(&hidden).copied().collect();
-            forbidden.extend(one.requires.iter().chain(&one.delivers).map(|(held, _register)| held.value));
-            eligible.retain(|value| !forbidden.contains(value));
-            if one.group.is_some() {
-                eligible.retain(|value| !address.contains(value));
-            }
-            for value in address.intersection(values) {
-                *occurrences.get_mut(value).expect("every value is counted") += 1;
-            }
-        }
-    }
-
-    let eligible: BTreeSet<u32> =
-        eligible.into_iter().filter(|value| occurrences.get(value).copied().unwrap_or(0) > 1).collect();
-    if eligible.is_empty() {
-        return (body.clone(), BTreeSet::new());
-    }
-
-    let mut fresh = _next_value(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                insns.push(Arc::clone(one));
-                continue;
-            };
-            let mut widths: IndexMap<u32, u32> = IndexMap::default();
-            for operand in what.dests.iter().chain(&what.sources) {
-                let Loc::Mem(cell) = operand else {
-                    continue;
-                };
-                for held in [cell.base, cell.index].into_iter().flatten() {
-                    if eligible.contains(&held.value) {
-                        widths.insert(held.value, held.width);
-                    }
-                }
-            }
-            if widths.is_empty() {
-                insns.push(Arc::clone(one));
-                continue;
-            }
-            let mut sorted: Vec<u32> = widths.keys().copied().collect();
-            sorted.sort_unstable();
-            let swap: IndexMap<u32, u32> =
-                sorted.iter().enumerate().map(|(index, value)| (*value, fresh + index as u32)).collect();
-            fresh += swap.len() as u32;
-            for value in &sorted {
-                insns.push(_move(
-                    one,
-                    Held { value: swap[value], width: widths[value] },
-                    Loc::Held(Held { value: *value, width: widths[value] }),
-                ));
-            }
-
-            let operand = |place: &Loc| -> Loc {
-                let Loc::Mem(cell) = place else {
-                    return place.clone();
-                };
-                let renamed = |held: Option<Held>| {
-                    held.map(|held| Held {
-                        value: swap.get(&held.value).copied().unwrap_or(held.value),
-                        width: held.width,
-                    })
-                };
-                Loc::Mem(Mem { base: renamed(cell.base), index: renamed(cell.index), ..cell.clone() })
-            };
-
-            let mut made = (**one).clone();
-            made.what = Some(Semantics {
-                dests: what.dests.iter().map(operand).collect(),
-                sources: what.sources.iter().map(operand).collect(),
-                ..what.clone()
-            });
-            made.uses = one.uses.iter().map(|value| swap.get(value).copied().unwrap_or(*value)).collect();
-            insns.push(Arc::new(made));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    (body.with_blocks(blocks), eligible)
-}
-
 /// Each value this instruction writes in a register it names nowhere.
 fn _delivered(one: &Insn) -> IndexMap<u32, RegId> {
     one.delivers.iter().map(|(held, register)| (held.value, *register)).collect()
@@ -900,7 +780,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{addressed, constrained, required};
+    use super::{constrained, required};
     use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
     use crate::backend::{allocate, select, spiller, target};
@@ -1344,51 +1224,6 @@ mod tests {
             constrained(&body, Some(&pinned(&[(2, RegId::EAX)])), &crate::backend::classes::RegisterClasses::m16());
         assert!(fixed.is_empty(), "a copy was minted for a value already in eax: {fixed:?}");
         assert_eq!(got.insns()[0].uses, vec![2], "the instruction was given a fresh value it did not need");
-    }
-
-    fn read(
-        at: i64,
-        result: u32,
-        selector: Option<Held>,
-    ) -> Insn {
-        let cell =
-            Mem { base: Some(Held { value: 1, width: 2 }), selector, ..Mem::new(Some(Addr::new(Space::Far, at)), 2) };
-        _insn(semantics(Operation::Move, "mov", vec![held(result, 2)], vec![Loc::Mem(cell)]), &[result], &[1], at)
-    }
-
-    /// lru_use stored long-lived address values instead of making short copies.
-    #[test]
-    fn test_address_class_is_split_at_each_constrained_occurrence() {
-        let source = _insn(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(7, 2)]), &[1], &[], 1);
-        let (split, opened) = addressed(&_body(vec![source, read(2, 2, None), read(3, 3, None)]), &BTreeSet::from([1]));
-        let insns = split.insns();
-        let copies: Vec<_> =
-            insns.iter().filter(|one| what(one).name.as_deref() == Some("mov") && one.uses == vec![1]).collect();
-        let confined = crate::backend::regclass::classes(
-            &split,
-            &BTreeSet::new(),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        );
-
-        assert_eq!(opened, BTreeSet::from([1]));
-        assert_eq!(copies.len(), 2);
-        assert!(!confined.contains_key(&1));
-        assert!(copies.iter().all(|one| {
-            confined[&one.defines[0]].is_subset(&crate::backend::classes::RegisterClasses::m16().addressing)
-        }));
-    }
-
-    /// A base and far selector sharing one value cannot be partially renamed.
-    #[test]
-    fn test_address_occurrence_split_refuses_a_value_also_used_as_selector() {
-        let owner = _insn(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(7, 2)]), &[1], &[], 1);
-        let selector = Some(Held { value: 1, width: 2 });
-        let body = _body(vec![owner, read(2, 2, selector), read(3, 3, selector)]);
-        let (split, opened) = addressed(&body, &BTreeSet::from([1]));
-
-        assert_eq!(split, body);
-        assert!(opened.is_empty());
     }
 
     /// `a[i] = (char)i` into a frame array: `trunc` reads the low byte of the

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:d43c4fef13bcf56cbf078c52a59668f99e38420deab3a7a9fbf5f729eea0258a -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c8be581dfdd4667ef25ea98a2911377574c5473efa2845ca719f2134174bd9b1 -->
 
 # memcpyopt
 
@@ -22,7 +22,14 @@ destination walks up to decides what it can become:
 - a memcpy of a memset's bytes is a memset (`performMemCpyToMemSetOptzn`);
 - a copy of memory nothing wrote (a fresh alloca) is gone
   (`hasUndefContents`);
-- a memmove whose ranges cannot meet is a memcpy (`processMemMove`).
+- a call that fills a fresh alloca, copied to another place, fills that
+  place instead and the copy is gone (`performCallSlotOptzn`, from a memcpy
+  or a load and store of the alloca);
+- a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
+- an aggregate loaded and stored right after is a memcpy, or a memmove where
+  the store may write what the load reads (`processStoreOfLoad`), the store
+  lifted above the first write to the loaded bytes when nothing in between
+  needs it (`moveUp`).
 
 ## Example
 A copy of a copy reads the first source:
@@ -41,13 +48,23 @@ A copy of a copy reads the first source:
    false.
 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-4. Done later (stages): `processStoreOfLoad` and `moveUp`,
-   `performCallSlotOptzn`, `performStackMoveOptzn`, `processByValArgument`
-   and `processImmutArgument`.
+4. Done later (stages): `performStackMoveOptzn`, `processByValArgument` and
+   `processImmutArgument`.
 5. MIR holds no constant expression in code: where the builder folds
    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
    `CreateMemCpyInline` has no counterpart here.
+6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
+   what the lifted ones touch): a call between the load and the store ends
+   the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model
+   here. Exit: a call-against-call mod/ref query.
+7. The call slot asks `PointerMayBeCaptured` of the destination object where
+   the pin asks `PointerMayBeCapturedBefore` the call (only when the callee
+   may capture the source): a capture after the call also stops it. Exit: a
+   dominance-aware capture query.
+8. The call slot gives up where the alias model says the call may touch the
+   destination; the pin goes on to `callCapturesBefore`. Exit: that query in
+   `llrm_analysis::aa`'s model.
 
 ## Runs
 In the slot of `memcpyopt@818`.
