@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:1c578801f70edf14007e8c6b27f28e9bfc6b0fc5b49f5799ebdf6fd6f5413ee8 -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:571e4340f3c3441347dab92058f8f988e65bf1e20eb9453ed78f355257dd43ad -->
 
 # precse
 
@@ -13,7 +13,7 @@ The dominator tree is walked with a scoped table from an instruction's
 expression (operation, destination width and sources) to the value it
 defines: a block sees the entries of the blocks that dominate it and drops
 its own when its subtree is done (`ScopedHashTable`, `EnterScope`,
-`ExitScope`). An instruction that [`candidate`](../passes/candidate.md) admits (no store, call,
+`ExitScope`). An instruction that `candidate` admits (no store, call,
 terminator, volatile access, fixed register or load) and finds its
 expression in the table is removed, and every use of its value reads the
 table's, when `profitable` agrees:
