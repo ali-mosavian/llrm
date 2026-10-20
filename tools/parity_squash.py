@@ -158,6 +158,18 @@ def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
     return found
 
 
+PERF_TITLE = re.compile(r"^\s*perf(\(|:)", re.I)
+ROWS_LINE = re.compile(r"^\s*Rows:\s*\S+", re.I | re.M)
+
+
+def perf_needs_rows(title: str, description: str) -> list[str]:
+    """A `perf` PR lands only with a `Rows:` line naming its rows pair (base and new binaries, and that the run diff is clean): #3251 landed without one and broke alias/farstruct.nib."""
+    if PERF_TITLE.search(title or "") and not ROWS_LINE.search(description or ""):
+        return ["a perf PR needs a `Rows:` line in the description naming its rows pair and run diff (bench's pair: base and new binaries, rows above base, NEW FAIL lines); "
+                "mark the PR draft until the pair exists"]
+    return []
+
+
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
@@ -171,7 +183,7 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
     for path, page in dead_links(base, head, cwd):
         why.append(f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR")
-    return why + assistant_mentions(title, description, base, head, cwd)
+    return why + perf_needs_rows(title, description) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
