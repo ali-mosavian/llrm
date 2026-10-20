@@ -80,7 +80,7 @@ use crate::analysis::loops;
 use crate::backend::incremental::{Kept, Problem, Solution};
 use crate::backend::liveness;
 use crate::backend::peephole::{_register_effects, id};
-use crate::model::ir::{Loc, Operation, Reg, Semantics};
+use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
@@ -371,11 +371,14 @@ fn from_scratch(body: &LirBody) -> HashMap<usize, Roots> {
     result
 }
 
-/// `movzx root,word` for each root in `roots`, before `block`'s terminator.
+/// `movzx root,word` for each root in `roots`, before `block`'s terminator; a
+/// root in `whole` has its low word dead there, so `mov root,0` makes it zero
+/// without reading what nothing wrote.
 pub fn extended(
     regs: Regs,
     block: &LirBlock,
     roots: Roots,
+    whole: Roots,
 ) -> Block {
     let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
@@ -388,12 +391,21 @@ pub fn extended(
         if roots & 1 << index == 0 {
             continue;
         }
-        let word = regs.named(*root, 2);
-        let what = Semantics {
-            name: Some("movzx".into()),
-            dests: vec![Loc::Reg(Reg { register: *root, width: 4 })],
-            sources: vec![Loc::Reg(Reg { register: word, width: 2 })],
-            ..Semantics::new(Operation::Extend)
+        let dest = vec![Loc::Reg(Reg { register: *root, width: 4 })];
+        let what = if whole & 1 << index != 0 {
+            Semantics {
+                name: Some("mov".into()),
+                dests: dest,
+                sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            }
+        } else {
+            Semantics {
+                name: Some("movzx".into()),
+                dests: dest,
+                sources: vec![Loc::Reg(Reg { register: regs.named(*root, 2), width: 2 })],
+                ..Semantics::new(Operation::Extend)
+            }
         };
         insns.insert(position, Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new())));
     }
@@ -414,7 +426,7 @@ pub fn preheaded(
     let predecessors = loops::predecessors(&graph);
     let exits = liveness::dead_at_exit(body);
     let mut placed: IndexMap<i64, Roots> = IndexMap::default();
-    let mut per_block: IndexMap<i64, Roots> = IndexMap::default();
+    let mut per_block: IndexMap<i64, (Roots, Roots)> = IndexMap::default();
     for (header, roots) in wanted {
         let Some(inside) = found.iter().find(|one| one.header == *header).map(|one| &one.body) else {
             continue;
@@ -438,14 +450,24 @@ pub fn preheaded(
         }
         placed.insert(*header, allowed);
         for at in entries {
-            *per_block.entry(at).or_default() |= allowed;
+            let dead_low = ROOTS.iter().enumerate().fold(0, |dead: Roots, (index, root)| {
+                let low = [(*root, 0), (*root, 1)];
+                if allowed & 1 << index != 0 && low.iter().all(|lane| exits[&at].contains(lane)) {
+                    dead | 1 << index
+                } else {
+                    dead
+                }
+            });
+            let entry = per_block.entry(at).or_default();
+            entry.0 |= allowed;
+            entry.1 |= dead_low;
         }
     }
     let blocks = body
         .blocks
         .iter()
         .map(|block| match per_block.get(&block.at) {
-            Some(roots) => extended(regs, block, *roots),
+            Some((roots, whole)) => extended(regs, block, *roots, *whole),
             None => block.clone(),
         })
         .collect();
@@ -634,7 +656,7 @@ pub fn established(body: &LirBody) -> LirBody {
                 Some((position, roots)) => {
                     let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
                     let mut insns = block.insns.to_vec();
-                    let zeroed = extended(regs, &LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
+                    let zeroed = extended(regs, &LirBlock::new(block.at, Vec::new()), *roots, 0).insns.to_vec();
                     let when = insns[at].at;
                     insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
                     block.with_insns(insns)
@@ -652,7 +674,7 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::{before, bit, established, hoisted};
-    use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
+    use crate::model::ir::{Loc, Operation, Reg, Semantics};
     use crate::model::lir::Block;
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -881,6 +903,49 @@ mod tests {
             |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&after.blocks[0]), ["mov", "movzx", "jmp"]);
         assert_eq!(names(&after.blocks[1]), ["movzx", "add", "cmp", "jne"]);
+    }
+
+    /// A loop that writes DX before it reads it, then widens it, had the
+    /// `movzx edx, dx` hoisted before the loop: a read of a register nothing
+    /// wrote (`LLRM_VERIFY=1`: "reads edx before every path writes it" on
+    /// x_switch_dense and x_switch_sparse -O1). Its low word dead there, the
+    /// hoist is `mov edx, 0`.
+    #[test]
+    fn test_a_hoisted_zeroing_reads_no_register_nothing_wrote() {
+        let (edx, dx) =
+            (Loc::Reg(Reg { register: RegId::EDX, width: 4 }), Loc::Reg(Reg { register: RegId::DX, width: 2 }));
+        let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let entry = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(0, vec![one(0, Operation::Jump, "jmp", vec![], vec![], Some(1))])
+        };
+        let looped = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                1,
+                vec![
+                    one(1, Operation::Move, "mov", vec![dx.clone()], vec![word(7)], None),
+                    one(2, Operation::Extend, "movzx", vec![edx.clone()], vec![dx.clone()], None),
+                    one(3, Operation::Compare, "cmp", vec![], vec![edx.clone(), word(9)], None),
+                    one(4, Operation::Branch, "jne", vec![], vec![], Some(1)),
+                ],
+            )
+        };
+        let exit = LirBlock::new(2, vec![one(5, Operation::Return, "ret", vec![], vec![], None)]);
+        let body = LirBody::new(
+            "hoist",
+            0,
+            vec![entry.into(), looped.into(), exit.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let after = hoisted(&body);
+        let reads_dx = after.blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .any(|what| what.sources.iter().any(|source| matches!(source, Loc::Reg(Reg { register: RegId::DX, .. }))));
+        assert!(!reads_dx, "the entry reads DX, which nothing wrote: {:?}", after.blocks[0].insns);
     }
 
     /// A loop wrote ECX whole each trip, so ECX was not zero above its word
