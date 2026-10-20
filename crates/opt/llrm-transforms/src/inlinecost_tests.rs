@@ -383,3 +383,51 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::Speed).1, 487);
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
 }
+
+/// intrinsics_errors_qb45.bas m32 -O1: the module handler registers the error
+/// handler of the frame that runs it (`onerror(true)`); inlined into a
+/// procedure's pad, the registration belonged to a frame that returns, and the
+/// next error found no handler ("Illegal function call"; erlnum.bas hung).
+#[test]
+fn test_a_callee_that_registers_the_error_handler_is_never_inlined() {
+    let module = crate::testing::parsed(
+        "declare void @llrm.qb.onerror(i1) nounwind
+
+define internal i16 @callee(i16 %c) {
+b0:
+  call void @llrm.qb.onerror(i1 true)
+  ret i16 1
+}
+
+define i16 @f(i16 %a) {
+b0:
+  %r = call i16 @callee(i16 %a)
+  ret i16 %r
+}
+",
+    );
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (caller_id, _, caller) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("f")).unwrap();
+    let (callee_id, _, callee) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("callee")).unwrap();
+    let call = caller
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+        .unwrap();
+    let site = Site {
+        module: &module,
+        layout: &layout,
+        caller,
+        caller_id,
+        call,
+        callee,
+        callee_id,
+        sole_call_to_local: true,
+        caller_recursive: false,
+        caller_size: CallerSize::Speed,
+        relative_frequency: None,
+        tti: None,
+    };
+    let verdict = inline_cost(&site, InlineParams::from_level(2));
+    assert!(matches!(verdict, InlineCost::Never(_)), "{verdict:?}");
+}

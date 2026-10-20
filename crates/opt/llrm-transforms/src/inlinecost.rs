@@ -324,6 +324,9 @@ pub fn inline_viable(
                 if name == "llvm.localescape" {
                     return Err("disallowed inlining of @llvm.localescape".into());
                 }
+                if name == "llrm.qb.onerror" || name == "llrm.qb.onlocalerror" {
+                    return Err("disallowed inlining of an error-handler registration".into());
+                }
                 if name == "llvm.va_start" {
                     return Err("contains VarArgs initialized with va_start".into());
                 }
@@ -1377,6 +1380,12 @@ impl<'a> Analyzer<'a> {
         };
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
+        // DEVIATE: the QB runtime keeps the error handler of the frame that
+        // registers it; a copy in another frame registers that one.
+        if matches!(name.as_deref(), Some("llrm.qb.onerror" | "llrm.qb.onlocalerror")) {
+            self.has_uninlineable_intrinsic = true;
+            return false;
+        }
         if let Some(name) = name.as_deref().filter(|name| name.starts_with("llvm.")) {
             let family = |prefix: &str| name.starts_with(prefix);
             if family("llvm.load.relative") {
