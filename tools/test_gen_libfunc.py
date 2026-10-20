@@ -11,5 +11,3 @@ def test_the_table_is_not_stale():
         return
     done = subprocess.run([sys.executable, str(Path(gen_libfunc.__file__)), "--check"], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
-
-
