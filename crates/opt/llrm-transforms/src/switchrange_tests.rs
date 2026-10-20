@@ -1,4 +1,5 @@
-//! Each expected text is what the pinned `opt -passes='simplifycfg<no-speculate-blocks;switch-range-to-icmp>'` prints.
+//! Each expected text is what the pinned `opt
+//! -passes='simplifycfg<no-speculate-blocks;switch-range-to-icmp>'` prints.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};
