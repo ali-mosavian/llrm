@@ -255,7 +255,14 @@ impl Walk<'_> {
         index: usize,
     ) -> bool {
         for later in &self.body.blocks[block].insns[index + 1..] {
-            let Some(effect) = liveness::effect(self.regs, self.body.bits, later) else { return true };
+            let Some(effect) = liveness::effect(self.regs, self.body.bits, later) else {
+                // A load through virtual address registers has no effect
+                // table yet; a move leaves the flags alone.
+                if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
+                    continue;
+                }
+                return true;
+            };
             let flags = |lanes: &crate::backend::lanes::Lanes| {
                 lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
             };
