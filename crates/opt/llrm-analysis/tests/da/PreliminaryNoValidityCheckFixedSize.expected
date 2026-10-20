@@ -1,0 +1,16 @@
+== --disable-delinearization-checks
+@p2
+  none!
+  flow [* *|<]!
+  confused!
+  input [* * 0]!
+  confused!
+  confused!
+== 
+@p2
+  output [* * *]!
+  flow [* *|<]!
+  confused!
+  input [* * *]!
+  confused!
+  confused!

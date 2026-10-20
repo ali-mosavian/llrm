@@ -1,0 +1,71 @@
+== 
+@prop0
+  output [* *]!
+  flow [* <>]!
+  confused!
+  none!
+  confused!
+  none!
+@prop1
+  output [* * *]!
+  flow [* * *|<]!
+  confused!
+  input [* * *]!
+  confused!
+  none!
+@prop2
+  output [0 S]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@prop3
+  output [* *]!
+  flow [<> *]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@prop4
+  output [* *]!
+  flow [* <>]!
+  confused!
+  none!
+  confused!
+  none!
+@prop5
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  none!
+  confused!
+  none!
+@prop6
+  output [* *]!
+  flow [* <>]!
+  confused!
+  none!
+  confused!
+  none!
+@prop7
+  none!
+  flow [* -38]!
+  confused!
+  none!
+  confused!
+  none!
+@prop8
+  output [S 0]!
+  flow [* <>]!
+  confused!
+  none!
+  confused!
+  none!
+@prop9
+  output [* *]!
+  flow [* <>]!
+  confused!
+  input [S 0]!
+  confused!
+  none!

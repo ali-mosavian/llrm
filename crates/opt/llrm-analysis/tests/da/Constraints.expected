@@ -1,0 +1,68 @@
+== 
+@dep_constraint_crash_test
+  none!
+  none!
+  none!
+  none!
+  none!
+  none!
+  none!
+  none!
+  none!
+  none!
+  anti [|<]!
+  output [S * *]!
+  flow [S * *|<]!
+  none!
+  none!
+  output [S * *|<]!
+  flow [* * *|<]!
+  none!
+  none!
+  none!
+  none!
+  input [S * * *]!
+  none!
+  none!
+  anti [S * * *|<]!
+  input [S * *|<]!
+  none!
+  none!
+  none!
+  none!
+  input [S * S *]!
+  input [S * * *|<]!
+  none!
+  none!
+  none!
+  anti [* * *|<]!
+  input [S|<]!
+  none!
+  input [S * * *]!
+  none!
+  none!
+  none!
+  anti [S * *|<]!
+  input [S|<]!
+  none!
+  output [S * * *]!
+  flow [S * *|<]!
+  none!
+  none!
+  none!
+  none!
+  input [S * *]!
+  none!
+  none!
+  none!
+  none!
+  input [S * *]!
+  none!
+  none!
+  none!
+  output [S * *]!
+  flow [S|<]!
+  none!
+  input [S]!
+  none!
+  none!

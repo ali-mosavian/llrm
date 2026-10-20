@@ -1,0 +1,160 @@
+== 
+@strong0
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong1
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong2
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@strong3
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@strong5
+  none!
+  flow [19]!
+  confused!
+  none!
+  confused!
+  none!
+@strong6
+  none!
+  flow [3]!
+  confused!
+  none!
+  confused!
+  none!
+@strong7
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@strong8
+  output [*]!
+  flow [*|<]!
+  confused!
+  none!
+  confused!
+  none!
+@strong9
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@strong10
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  none!
+@strong11
+  output [* S]!
+== --test strong-siv
+@strong0
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong1
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong2
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@strong3
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@strong4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@strong5
+  none!
+  flow [19]!
+  confused!
+  none!
+  confused!
+  none!
+@strong6
+  none!
+  flow [3]!
+  confused!
+  none!
+  confused!
+  none!
+@strong7
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@strong8
+  output [*]!
+  flow [*|<]!
+  confused!
+  none!
+  confused!
+  none!
+@strong9
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@strong10
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  none!
+@strong11
+  output [* S]!

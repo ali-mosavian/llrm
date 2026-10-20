@@ -57,6 +57,18 @@ fn main() -> ExitCode {
     if delinearize {
         arguments.remove(0);
     }
+    let da = arguments.first().is_some_and(|one| one == "--da");
+    let mut da_print = llrm_analysis::depanalysis::print::PrintOptions::default();
+    if da {
+        arguments.remove(0);
+        match llrm_analysis::depanalysis::print::PrintOptions::take_flags(&mut arguments) {
+            Ok(found) => da_print = found,
+            Err(why) => {
+                eprintln!("--da: {why}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let counts = arguments.first().is_some_and(|one| one == "--scev-counts");
     if counts {
         arguments.remove(0);
@@ -322,6 +334,10 @@ fn main() -> ExitCode {
             }
             if delinearize {
                 print!("{}", llrm_analysis::scev::delinearize::print_module_delinearization(&module));
+                return ExitCode::SUCCESS;
+            }
+            if da {
+                print!("{}", llrm_analysis::depanalysis::print::print_module_da(&module, &da_print));
                 return ExitCode::SUCCESS;
             }
             if counts {
