@@ -87,7 +87,6 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("strength-reduce", |options, on| options.strength = on),
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
-    ("loop-unroll-and-jam", |options, on| options.unroll_jam = on),
     ("loop-interchange", |options, on| options.interchange = on),
     ("tree-loop-distribution", |options, on| options.distribute = on),
     ("version-loops", |options, on| options.version = on),

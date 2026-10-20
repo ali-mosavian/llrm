@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/access.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/access.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/access.rs sha256:b395cf1493b17d06e0bbb1b226af8f1ab9f3a2d287e994caf0e86caed5e3cf85 -->
+<!-- src: crates/opt/llrm-analysis/src/access.rs sha256:4b030e93484286933b3b58fdb0eeed5708b1b72b8a0a22e54823f17dfb8e3a16 -->
 
 # access
 
@@ -49,8 +49,8 @@ From unit test `an_array_walked_by_a_counter_is_an_affine_access` in
 `access_tests.rs`.
 
 ## Provides
-`references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam`
-(`crates/opt/llrm-transforms`).
+`references`, `Reference`, `Roots`, `Apart`. Consumers: none in
+`crates/opt/llrm-transforms` now.
 
 ## See also
 LLVM ScalarEvolution add recurrences read by `DependenceAnalysis`; gcc's

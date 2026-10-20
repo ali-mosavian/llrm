@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopinterchange.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopinterchange.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopinterchange.rs sha256:3a9513bf73cf4732d733ca3b0c6f39d9b2ce05d4b0302f4bd8617b9287e3ef85 -->
+<!-- src: crates/opt/llrm-transforms/src/loopinterchange.rs sha256:f403ca44e659a6073a457aa38ecaee0c7b1990bee0d6337fc3686b0cef8aa6dd -->
 
 # loopinterchange
 
@@ -46,7 +46,7 @@ bytes. Interchanged, `i` is the inner counter and steps 4.
 From unit test `a_column_walk_is_swapped` in `loopinterchange_tests.rs`.
 
 ## Runs
-Once per body, before `unroll-jam`; a swapped nest goes through `sroa` and
+Once per body; a swapped nest goes through `sroa` and
 the fixed point again. -O3 and -Omax: `-floop-interchange`.
 
 ## Needs
