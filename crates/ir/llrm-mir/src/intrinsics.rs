@@ -45,6 +45,16 @@ pub enum Intrinsic {
     BitCount(BitCount),
     /// `llvm.bswap`: the bytes of its argument in the opposite order.
     ByteSwap,
+    /// `llvm.fshl` and `llvm.fshr`: the concatenation of the first two
+    /// arguments shifted by the third modulo the width, the high half
+    /// (`fshl`) or the low half (`fshr`) kept. Both arguments the same value,
+    /// a rotate.
+    FunnelShift {
+        left: bool,
+    },
+    /// `llvm.abs`: the absolute value; the second argument says whether the
+    /// minimum value, which has none, is poison.
+    Abs,
     /// `llvm.scmp` and `llvm.ucmp`: -1, 0 or 1 as the first argument is less
     /// than, equal to or greater than the second, in the result's integer type.
     Compare {
@@ -384,6 +394,8 @@ const fn bit_count(
 }
 
 const UNARY: &[Slot] = &[Slot::Any(0)];
+const TERNARY: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Any(0)];
+const ABS: &[Slot] = &[Slot::Any(0), Slot::Int(1)];
 
 const fn compare(
     name: &'static str,
@@ -405,7 +417,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 45] = [
+const TABLE: [Spec; 48] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -420,6 +432,9 @@ const TABLE: [Spec; 45] = [
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
     arithmetic("llvm.bswap", Intrinsic::ByteSwap, Slot::Any(0), UNARY, Kind::Int),
+    arithmetic("llvm.fshl", Intrinsic::FunnelShift { left: true }, Slot::Any(0), TERNARY, Kind::Int),
+    arithmetic("llvm.fshr", Intrinsic::FunnelShift { left: false }, Slot::Any(0), TERNARY, Kind::Int),
+    arithmetic("llvm.abs", Intrinsic::Abs, Slot::Any(0), ABS, Kind::Int),
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),

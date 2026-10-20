@@ -2,10 +2,11 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 110 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 112 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
+| absolute | Expands `llvm.abs` into a sign mask, an xor and a subtract in MIR before instruction selection, for the targets whose description lists `abs` under `expand`. | Once per module in `driver::optimized`, for a target that lists `abs` under | [absolute](absolute.md) |
 | addressforms | Widens word definitions so a 67h address can take them as dword components. | `isel.rs`, after a function is selected, for the values the selector | [addressforms](addressforms.md) |
 | addressvalues | Spells the `address` operations of an allocated body as `lea` operands. | `assemble.rs`, on each machined body before `masm::cleaned_returns`, and | [addressvalues](addressvalues.md) |
 | affine | Recognises allocated instructions that keep a register an affine sum of registers, and names the 32-bit or 16-bit address of such a sum. | `exactaddress.rs`, which folds the chain into a memory operand, and the | [affine](affine.md) |
@@ -24,7 +25,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 110 documented
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
 | constpool | Readonly constants the machine phases put in memory, one datum per distinct bytes. | `isel.rs`, for each float constant it loads, and `floatassign.rs`: an | [constpool](constpool.md) |
-| constrain | Give each value a register is required for a value of its own, live across that instruction alone, copied in and out. | Register allocation (`allocate.rs`), which calls `distinct_classes` and | [constrain](constrain.md) |
+| constrain | Give each value a register is required for a value of its own, live across that instruction alone, copied in and out. | Register allocation (`allocate.rs`), which calls `distinct_roles`, | [constrain](constrain.md) |
 | copysink | Move a register copy out of a loop to its exit when only code after the loop reads it. | Inside the peephole phase, after copy propagation and extension | [copysink](copysink.md) |
 | cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
@@ -48,6 +49,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 110 documented
 | fpstack | The x87 stackifier: flat floating values in stack form, as LLVM's `X86FloatingPoint` does it. | As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once | [fpstack](fpstack.md) |
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
+| funnel | Expands `llvm.fshl` and `llvm.fshr` into shifts and an or in MIR before instruction selection, for the targets whose description lists `fshl` or `fshr` under `expand`. | Once per module in `driver::optimized`, for a target that lists `fshl` or | [funnel](funnel.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |

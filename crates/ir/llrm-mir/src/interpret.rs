@@ -431,6 +431,35 @@ impl<'m> Machine<'m> {
                 let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
                 Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
             }
+            Intrinsic::FunnelShift { left } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: by, .. }) =
+                    (argument(0), argument(1), argument(2))
+                else {
+                    return Ok(Val::Poison);
+                };
+                // The amount is taken modulo the width; a zero one keeps the
+                // half that is not shifted.
+                let amount = (by % u128::from(width)) as u32;
+                let bits = match (left, amount) {
+                    (true, 0) => a,
+                    (false, 0) => b,
+                    (true, _) => ((a << amount) | (b >> (width - amount))) & mask(width),
+                    (false, _) => ((a << (width - amount)) | (b >> amount)) & mask(width),
+                };
+                Val::Int { bits, width }
+            }
+            Intrinsic::Abs => {
+                let (Val::Int { bits, width }, Val::Int { bits: min_is_poison, .. }) = (argument(0), argument(1))
+                else {
+                    return Ok(Val::Poison);
+                };
+                let minimum = 1u128 << (width - 1);
+                if bits == minimum && min_is_poison == 1 {
+                    return Ok(Val::Poison);
+                }
+                let negative = bits & minimum != 0;
+                Val::Int { bits: if negative { bits.wrapping_neg() & mask(width) } else { bits }, width }
+            }
             Intrinsic::Compare { signed } => {
                 let (Val::Int { .. }, Val::Int { .. }) = (argument(0), argument(1)) else { return Ok(Val::Poison) };
                 let width = self.types().int_bits(returns).expect("an integer result");

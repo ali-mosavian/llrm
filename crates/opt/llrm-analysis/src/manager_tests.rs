@@ -277,14 +277,17 @@ b2:
     assert_eq!(seen[1], seen[2]);
 }
 
-/// Summaries and GlobalsAA ran points-to over every body with a shape of
-/// its own: 100k shapes a pipeline run. Each is its body's manager's.
+/// Summaries and GlobalsAA ran points-to over every body with a shape of its
+/// own: 100k shapes a pipeline run. Neither solves a body now (GlobalsAA is one
+/// use scan of the module), so neither makes a shape, its own or its manager's.
 #[test]
-fn summaries_read_each_bodys_shape_from_its_manager() {
+fn summaries_and_globals_aa_make_no_shape() {
     let module = parsed("define i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n");
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Shapes);
     analyses.get::<Summaries>(&module);
-    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
+    assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::Shapes) - before, 0, "a shape was derived");
+    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_none(), "a manager's shape was asked");
 }
 
 /// A body that calls something unknown may call back into any entry, so its
