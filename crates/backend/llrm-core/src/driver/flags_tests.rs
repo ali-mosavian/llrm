@@ -397,3 +397,17 @@ fn only_o3_and_omax_interchange_loops_and_the_flag_overrides_it() {
     assert!(pipeline(&["-O3"]).interchange);
     assert!(!pipeline(&["-O3", "-fno-loop-interchange"]).interchange);
 }
+
+/// `-disable-lsr` (LLVM's TargetPassConfig option, also `-mllvm -disable-lsr`)
+/// turns off the loop strength reduction alone: no flag turned off `lsr`
+/// without `indvars`, `window` and the other address passes, so an on/off
+/// diff of its asm was not possible.
+#[test]
+fn test_disable_lsr_turns_off_the_lsr_slot_alone() {
+    assert!(pipeline(&["-O2"]).lsr);
+    for arguments in [&["-O2", "-disable-lsr"][..], &["-O2", "-mllvm", "-disable-lsr"], &["-O2", "-fno-lsr"]] {
+        let options = pipeline(arguments);
+        assert!(!options.lsr && options.strength, "{arguments:?}");
+    }
+    assert!(parsed(&["-mllvm", "-nonsense"]).is_err());
+}

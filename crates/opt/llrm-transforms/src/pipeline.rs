@@ -198,6 +198,9 @@ pub struct Options {
     pub sink: bool,
     pub promote: bool,
     pub strength: bool,
+    /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
+    /// off); `strength` turns it off with the other address passes.
+    pub lsr: bool,
     pub unroll: bool,
     pub peel: bool,
     pub loopidioms: bool,
@@ -303,6 +306,7 @@ impl Default for Options {
             sink: true,
             promote: true,
             strength: true,
+            lsr: true,
             unroll: true,
             peel: true,
             loopidioms: true,
@@ -501,7 +505,8 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
+            "lsr" => self.strength && self.lsr,
+            "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
