@@ -2297,6 +2297,36 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
     assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
 }
 
+/// The write-through `Promote` ran after the translated SROA and mem2reg at
+/// every level: 34.6 M instructions of d_faces -O2 (1,894.7 -> 1,860.1 M) for
+/// assembly GVN already produces. Only -O1 (no GVN `pre`) keeps it.
+#[test]
+fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(
+                    one.name(),
+                    "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776"
+                ) {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let o2 = parts(&Applied::default());
+    assert_eq!(o2.len(), 4);
+    for (slot, parts) in &o2 {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
+    }
+    let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
+    for (slot, parts) in &parts(&o1) {
+        assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
+}
+
 /// `llrm-pass -O3 --order SLOT` ran the peeler in the slot's place:
 /// `transacted` runs a peeler first when `only`, and `Fixed::slot` kept it.
 /// Every oracle comparing a Simplify-phase slot at -O3 or -Omax compared the
