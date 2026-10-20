@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 154 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 155 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -29,6 +29,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_casts | InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they call, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
 | combine_demanded | `SimplifyDemandedUseBits`: an integer instruction is rewritten, or its operands are, when the users read only some of its bits. | The `visit*` of the integer families (`visitAnd`, `visitAdd`, `visitTrunc`, | [combine_demanded](combine_demanded.md) |
+| combine_funnel | `convertOrOfShiftsToFunnelShift` and `matchFunnelShift`: an `or` of two opposite shifts, or of a pair of concatenations, is a funnel shift. | `visitOr` ([`crate::combine_or`](combine_or.md)), and by `SimplifyDemandedBits` | [combine_funnel](combine_funnel.md) |
 | combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. |  | [combine_gep](combine_gep.md) |
 | combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. |  | [combine_gep_index](combine_gep_index.md) |
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. |  | [combine_gep_merge](combine_gep_merge.md) |

@@ -194,9 +194,9 @@ impl ProgramPass for Walk {
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
             let module = &mut program.modules[at];
-            let recursive = crate::inline::recursive(module);
+            let mut recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
-            let counts = crate::inline::call_counts(module);
+            let mut counts = crate::inline::call_counts(module);
             let components: Vec<Vec<GlobalId>> = llrm_mir::callgraph::CallGraph::new(module)
                 .bottom_up_components()
                 .into_iter()
@@ -259,6 +259,14 @@ impl ProgramPass for Walk {
                         modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                     (self.simplify)(module, &mut modules[at], id, "walk.");
+                    // Tail-call elimination makes a recursive body a loop: the
+                    // callers after it see a callee that no longer calls
+                    // itself, and with one call fewer
+                    // (CGSCC updates its call graph).
+                    if recursive.contains(&id) {
+                        recursive = crate::inline::recursive(module);
+                        counts = crate::inline::call_counts(module);
+                    }
                 }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.

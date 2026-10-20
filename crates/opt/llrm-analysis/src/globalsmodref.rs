@@ -80,7 +80,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::GlobalId;
 use llrm_mir::callgraph::CallGraph;
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context};
 use llrm_mir::facts::Facts;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
@@ -175,21 +175,64 @@ enum Root {
 /// Every instruction operand that names a global, and the globals some
 /// initializer names (a constant user: the global's address escapes).
 struct Sites {
+    /// An operand that is the global, or a constant `gep` or pointer cast of
+    /// it: the pin's scan recurses into those operators, so the use is the
+    /// instruction's.
     named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>>,
     in_initializer: BTreeSet<GlobalId>,
+    /// Globals in any other constant operand (`ptrtoint`, an aggregate, a
+    /// `gep` index): a live constant user, so escaped.
+    in_operand: BTreeSet<GlobalId>,
+}
+
+/// The global `c` is, or is a constant `gep` or pointer cast of.
+fn derived_from(
+    context: &Context,
+    c: ConstantId,
+) -> Option<GlobalId> {
+    match &context.get(c).kind {
+        ConstantKind::Global(global) => Some(*global),
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+            derived_from(context, *operands.first()?)
+        }
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+            derived_from(context, *value)
+        }
+        _ => None,
+    }
+}
+
+/// Every global named anywhere inside `c`.
+fn named_inside(
+    context: &Context,
+    c: ConstantId,
+    into: &mut BTreeSet<GlobalId>,
+) {
+    let mut work = vec![c];
+    while let Some(c) = work.pop() {
+        match &context.get(c).kind {
+            ConstantKind::Global(g) => {
+                into.insert(*g);
+            }
+            ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+            _ => {}
+        }
+    }
 }
 
 impl Sites {
     fn of(module: &Module) -> Self {
         let mut named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>> = BTreeMap::new();
-        let mut in_initializer = BTreeSet::new();
+        let (mut in_initializer, mut in_operand) = (BTreeSet::new(), BTreeSet::new());
         for (id, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             for (_, inst) in function.walk() {
                 for (at, operand) in function.instruction(inst).operands.iter().enumerate() {
-                    if let Operand::Constant(c) = operand
-                        && let ConstantKind::Global(global) = module.context.get(*c).kind
-                    {
-                        named.entry(global).or_default().push((id, inst, at as u32));
+                    let Operand::Constant(c) = operand else { continue };
+                    match derived_from(&module.context, *c) {
+                        Some(global) => named.entry(global).or_default().push((id, inst, at as u32)),
+                        None => named_inside(&module.context, *c, &mut in_operand),
                     }
                 }
             }
@@ -198,23 +241,10 @@ impl Sites {
             if let GlobalKind::Variable(variable) = &global.kind
                 && let Some(initializer) = variable.initializer
             {
-                let mut work = vec![initializer];
-                while let Some(c) = work.pop() {
-                    match &module.context.get(c).kind {
-                        ConstantKind::Global(g) => {
-                            in_initializer.insert(*g);
-                        }
-                        ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
-                        ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { operands, .. }) => {
-                            work.extend(operands.iter().copied());
-                        }
-                        ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { value, .. }) => work.push(*value),
-                        _ => {}
-                    }
-                }
+                named_inside(&module.context, initializer, &mut in_initializer);
             }
         }
-        Self { named, in_initializer }
+        Self { named, in_initializer, in_operand }
     }
 }
 
@@ -255,6 +285,11 @@ impl Analysis<'_> {
         if let Root::Global(g) = root
             && self.initializers_escape
             && self.sites.in_initializer.contains(&g)
+        {
+            return true;
+        }
+        if let Root::Global(g) = root
+            && self.sites.in_operand.contains(&g)
         {
             return true;
         }
