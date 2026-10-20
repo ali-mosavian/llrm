@@ -245,30 +245,46 @@ pub struct Options {
     pub hoist_common_insts: bool,
     /// `SinkCommonInsts`: sink the code every jump into a block shares.
     pub sink_common_insts: bool,
+    /// `ForwardSwitchCondToPhi`.
+    pub forward_switch_cond_to_phi: bool,
+    /// `ConvertSwitchRangeToICmp`.
+    pub convert_switch_range_to_icmp: bool,
+    /// `ConvertSwitchToArithmetic`.
+    pub convert_switch_to_arithmetic: bool,
+    /// `ConvertSwitchToLookupTable`.
+    pub convert_switch_to_lookup_table: bool,
 }
 
 impl Options {
     /// The slot at
     /// [L1438](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438):
     /// the extra sinking can create larger blocks, so loops need not stay
-    /// canonical. The switch options are not translated.
+    /// canonical.
     pub const L1438: Options = Options {
         need_canonical_loop: false,
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
+        forward_switch_cond_to_phi: true,
+        convert_switch_range_to_icmp: true,
+        convert_switch_to_arithmetic: true,
+        convert_switch_to_lookup_table: true,
     };
 
     /// The slot at
     /// [L1682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1682),
     /// after LoopSink: the pin sets the switch options,
-    /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`,
-    /// none translated, so these are the defaults.
+    /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`; the
+    /// last two are not translated.
     pub const L1682: Options = Options {
         need_canonical_loop: true,
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
+        forward_switch_cond_to_phi: false,
+        convert_switch_range_to_icmp: true,
+        convert_switch_to_arithmetic: true,
+        convert_switch_to_lookup_table: false,
     };
 
     /// The slot at
@@ -278,6 +294,10 @@ impl Options {
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: false,
+        forward_switch_cond_to_phi: false,
+        convert_switch_range_to_icmp: true,
+        convert_switch_to_arithmetic: true,
+        convert_switch_to_lookup_table: false,
     };
 }
 
@@ -288,6 +308,10 @@ impl Default for Options {
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
+            forward_switch_cond_to_phi: false,
+            convert_switch_range_to_icmp: true,
+            convert_switch_to_arithmetic: false,
+            convert_switch_to_lookup_table: false,
         }
     }
 }
@@ -423,6 +447,9 @@ fn block_simplified(
         return true;
     }
     if function.is_placed(block) && stores_merged(context, spec, function, block) {
+        return true;
+    }
+    if function.is_placed(block) && crate::switchopt::simplified(options, context, spec, function, block) {
         return true;
     }
     if function.is_placed(block)
