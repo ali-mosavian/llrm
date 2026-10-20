@@ -549,9 +549,8 @@ pub fn duplicate_predecessors_merged(
             }
         }
     }
-    let values = |at: usize| -> Vec<Operand> {
-        taken[at].iter().map(|one| one.expect("an arm per candidate")).collect()
-    };
+    let values =
+        |at: usize| -> Vec<Operand> { taken[at].iter().map(|one| one.expect("an arm per candidate")).collect() };
     // Candidates by what the phis take from them: the first of each kind stays.
     let mut kept: HashMap<Vec<Operand>, BlockId> = HashMap::default();
     for (at, &candidate) in candidates.iter().enumerate() {
