@@ -1370,6 +1370,15 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 
 **Translate first (user, 2026-10-18).** Before implementing anything, check whether LLVM has that pass or analysis at the pin `d1106deb71cc`; if it does, translate it, with the changes we need. Keep the result as close to O(n) as possible. The PR description names the LLVM source file and function translated (permalink), or states "LLVM has no such pass" and why. Any super-linear step needs a stated reason and a slope test. A fix to our own pass that has an LLVM counterpart is a translation row first.
 
+**The integration branch `feat/parity` (user decision, 2026-10-18).** LLVM-parity work lands on `feat/parity`, cut from main, not on main.
+
+- Every parity PR (translations, joins, migrations, block-list stages, greedy) targets `feat/parity`; a stacked PR keeps its stack base.
+- Merge rule: a ready (non-draft) PR is merged as soon as it builds merged with the branch (`cargo check -D warnings`) and passes the per-merge tests, total budget 10 s (build, a curated smoke set, the ratchet tests). No perf gate, no rows rule, no cap on open PRs, no CI wait. Fix forward; each fix carries its fail-first regression test.
+- `LLRM_EXP_LLVM` is on by default on the branch; a join flips its slot there directly.
+- Main keeps the full gate and the rows rule. Main is merged into the branch daily, no rebase. Fixes main also needs (miscompiles, instrument fixes) go to main as their own PRs.
+- Scoreboard: `d_faces` and three programs on the branch head against main and clang (dist, one method) every half hour; rows once a day on the branch.
+- Back to main in phases: the mid-end when its buckets and rows hold, then the backend. Each phase is one PR to main with the full gate, the rows rule and the old code deleted.
+
 **Parity slot and join step (user, 2026-10-18).** Every port PR names its parity slot (section 2.5) and its join step. A translation is done when it has joined the parity pipeline with its oracle passing, not when it merges off. A PR that joins a translated slot outranks a new translation, and no new translation starts while one of the owner's is translated but not joined.
 
 **Pass rules shared by every step:**
