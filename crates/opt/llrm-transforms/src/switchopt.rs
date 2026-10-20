@@ -19,6 +19,14 @@
 //! | 9 | `hoistCommonCodeFromSuccessors` | `simplifycfg::branch_hoisted` | `hoist_common_insts` |
 //! | 10 | `simplifyDuplicateSwitchArms`, `simplifySwitchWhenUMin`, `simplifySwitchDefaultBranch` | [`switcharms`] | |
 //!
+//! # How it works
+//! `simplified` returns at the first step that changes the block, as
+//! `requestResimplify` does; the block is visited again.
+//!
+//! # Example
+//! A `switch` whose cases all go to one block and the default goes elsewhere
+//! is rewritten by step 2 (`switchrange`) to a range check and a branch.
+//!
 //! DEVIATE 1: step 9 runs where the branch's `hoistCommonCodeFromSuccessors`
 //! does, before this dispatcher, not between 8 and 10.
 //!
@@ -28,6 +36,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::module::{BlockId, Function};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::Declared;
 
 use crate::simplifycfg::Options;
 use crate::twoentryphi::Speculation;
@@ -40,6 +49,7 @@ pub fn simplified(
     options: &Options,
     context: &Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
 ) -> bool {
@@ -52,8 +62,8 @@ pub fn simplified(
         || switchselect::folded(options, context, spec, function, block)
         || (options.forward_switch_cond_to_phi && switchphi::folded(options, context, spec, function, block))
         || ((options.convert_switch_to_arithmetic || options.convert_switch_to_lookup_table)
-            && switchlookup::folded(options, context, spec, function, block))
+            && switchlookup::folded(options, context, spec, declared, function, block))
         || switchpow2::folded(options, context, spec, function, block)
-        || switchreduce::folded(options, context, spec, function, block)
+        || switchreduce::folded(options, context, spec, declared, function, block)
         || switcharms::folded(options, context, spec, function, block)
 }
