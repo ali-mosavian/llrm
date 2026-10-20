@@ -110,21 +110,22 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_loadstore;
 pub mod combine_muldivrem;
-pub mod combine_negator;
 #[cfg(test)]
 mod combine_muldivrem_tests;
+pub mod combine_negator;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_select_bools;
+pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_shared;
 pub mod combine_shifts;
-pub mod combine_sub;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
+pub mod combine_sub;
 pub mod combine_visit_select;
 pub mod condstores;
 pub mod congruentiv;

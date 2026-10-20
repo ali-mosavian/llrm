@@ -40,6 +40,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_select_bools | `foldSelectOfBools`: a `select` of `i1` as a logical operation. |  | [combine_select_bools](combine_select_bools.md) |
+| combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. |  | [combine_select_ext_const](combine_select_ext_const.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. |  | [combine_select_into_op](combine_select_into_op.md) |
 | combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. |  | [combine_select_op_op](combine_select_op_op.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
