@@ -156,6 +156,7 @@ use llrm_analysis::memory::Unit;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::types::Types;
@@ -1629,7 +1630,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
-    exact: BTreeSet<ValueId>,
+    exact: IdSet<ValueId>,
     /// What is known of the function without memory: found once, for the body
     /// as selected.
     registers: IndexMap<ValueId, llrm_analysis::consts::Known>,
@@ -2515,7 +2516,7 @@ impl Selector<'_, '_, '_> {
         inst: InstId,
     ) -> Option<crate::backend::lifetimes::Marker> {
         let global = llrm_mir::memory::callee(&self.module.context, self.function, inst)?;
-        let starts = match Intrinsic::named(self.module.global(global).name.as_deref()?)? {
+        let starts = match self.module.global(global).intrinsic()? {
             Intrinsic::LifetimeStart => true,
             Intrinsic::LifetimeEnd => false,
             _ => return None,
@@ -2842,8 +2843,7 @@ impl Selector<'_, '_, '_> {
                     return None;
                 };
                 let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                let name = self.module.global(global).name.as_deref()?;
-                if Intrinsic::named(name) != Some(Intrinsic::MemSet) || !zero(volatile) {
+                if self.module.global(global).intrinsic() != Some(Intrinsic::MemSet) || !zero(volatile) {
                     return None;
                 }
                 (value, destination)
@@ -3438,6 +3438,28 @@ impl Selector<'_, '_, '_> {
                 self.joined(joined, offset, selector, at, out);
                 return Ok(joined);
             }
+        }
+        // `ptrtoint` of a segment-space pointer constant: the segment word of
+        // the global it addresses, a link-time address (the data initializer's
+        // `SegmentWord`). A near global's segment is DGROUP.
+        if let Operand::Constant(id) = operand
+            && let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) =
+                self.module.context.get(id).kind.clone()
+            && let Type::Pointer(space) = self.types().get(self.module.context.get(value).ty).clone()
+            && self.spaces.is_segment(Some(space))
+            && width == 2
+        {
+            let (global, _) = crate::backend::globals::target(self.module, &self.layout, value)
+                .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
+            let (space, index) = if self.module.global(global).address_space == self.spaces.near {
+                crate::hir::symbols::DGROUP
+            } else {
+                (Space::Group, crate::backend::globals::segment_of(global))
+            };
+            let held = Held { value: self.fresh(), width };
+            let symbol = Loc::Imm(Imm { value: 0, width, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])));
+            return Ok(held);
         }
         let operand = self.through_ptrtoint(operand);
         let pointer = match operand {
@@ -5846,7 +5868,7 @@ impl Selector<'_, '_, '_> {
             Operand::Block(_) => return refuse("a call of a block"),
         };
         let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
@@ -7348,9 +7370,10 @@ impl Selector<'_, '_, '_> {
         if let Operand::Value(value) = a
             && self.flagged.contains(&value)
         {
-            if self.constant(b, 2) != Some(0) || !self.flags_reach(value, inst) {
+            let against_zero = self.constant(b, 2).and_then(|constant| against_zero(predicate, constant));
+            let Some(predicate) = against_zero.filter(|_| self.flags_reach(value, inst)) else {
                 return refuse("a call's flags read apart from its compare with zero");
-            }
+            };
             return Ok(Test::One(condition_code(predicate)));
         }
         if let Operand::Value(value) = a
@@ -7744,6 +7767,24 @@ fn insn(
     what: Semantics,
 ) -> Arc<Insn> {
     Arc::new(insn_of(at, what))
+}
+
+/// The predicate of a compare of the flags of `x` against zero that tests
+/// `x predicate constant`: the rewrites of X86's `TranslateX86CC`
+/// ([X86ISelLowering.cpp:3261](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3261))
+/// for the constants InstCombine's canonical form uses: `x > -1` is `x >= 0`
+/// (jump on no sign), `x < 1` is `x <= 0`; `x < 0` and `x >= 0` already read
+/// the sign.
+fn against_zero(
+    predicate: IntPredicate,
+    constant: i64,
+) -> Option<IntPredicate> {
+    match (predicate, constant) {
+        (_, 0) => Some(predicate),
+        (IntPredicate::Sgt, -1) => Some(IntPredicate::Sge),
+        (IntPredicate::Slt, 1) => Some(IntPredicate::Sle),
+        _ => None,
+    }
 }
 
 fn condition_code(predicate: IntPredicate) -> &'static str {

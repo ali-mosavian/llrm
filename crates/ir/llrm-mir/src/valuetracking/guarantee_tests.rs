@@ -17,7 +17,7 @@ fn dump(text: &str) -> String {
         if function.is_declaration() {
             continue;
         }
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
         let entry_first = function.block(function.entry().expect("an entry")).first();

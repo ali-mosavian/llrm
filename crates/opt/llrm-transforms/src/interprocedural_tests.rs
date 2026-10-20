@@ -46,7 +46,7 @@ fn stepped(
             threshold,
             true,
             &mut |module, _, id, stage| {
-                stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
+                stages.push((module.global(id).name.owned().unwrap(), stage.to_owned()));
                 Ok(())
             },
         )
@@ -355,7 +355,7 @@ b:
 fn pure(text: &str) -> BTreeSet<String> {
     let mut module = parsed(text);
     crate::testing::stamped(&mut module).unwrap();
-    facts::stated_pure(&module).into_iter().map(|id| module.global(id).name.clone().unwrap()).collect()
+    facts::stated_pure(&module).into_iter().map(|id| module.global(id).name.owned().unwrap()).collect()
 }
 
 /// The callees whose unused calls in `@uses` of `text`, stamped, go.
@@ -366,7 +366,7 @@ fn dropped(text: &str) -> BTreeSet<String> {
         let uses = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("uses")).expect("@uses").2;
         uses.walk()
             .filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst))
-            .map(|id| module.global(id).name.clone().unwrap())
+            .map(|id| module.global(id).name.owned().unwrap())
             .collect::<BTreeSet<_>>()
     };
     let before = callees(&module);

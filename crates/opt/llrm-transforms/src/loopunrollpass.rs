@@ -1622,6 +1622,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
 pub struct LoopFullUnroll {
     pub opt_level: u32,
     pub opt_size: bool,
+    /// `OnlyWhenForced`: only a loop that asks to be unrolled is
+    /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
+    pub only_when_forced: bool,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -1657,7 +1660,7 @@ impl FunctionPass for LoopFullUnroll {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
                 min_size: false,
-                only_when_forced: false,
+                only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
             },
         };

@@ -323,3 +323,55 @@ fn test_two_stack_slots_are_kept_when_the_source_is_written_after_the_copy() {
     let body = &text[text.find("define void @f2").expect("@f2")..];
     assert!(body.contains("%b") && body.contains("@llvm.memcpy"), "{body}");
 }
+
+const ARGUMENT_DECLARES: &str = "declare void @take(ptr byval([16 x i8]) align 4)
+declare void @peek(ptr noalias nocapture readonly) memory(read)
+declare void @poke(ptr)
+";
+
+/// A module of `ARGUMENT_DECLARES` and `body`, after the pass.
+fn argument(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}{ARGUMENT_DECLARES}\n{body}"));
+    managed(&mut module, MemCpyOpt)
+}
+
+fn copy_to_tmp(
+    between: &str,
+    call: &str,
+) -> String {
+    format!(
+        "define void @f2(ptr align 4 %src) {{\nb0:\n  %tmp = alloca [16 x i8], align 4\n  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %tmp, ptr align 4 %src, i64 16, i1 false)\n{between}  {call}\n  ret void\n}}\n"
+    )
+}
+
+/// A `byval` argument fed by a memcpy copies from the memcpy's source instead
+/// (`opt -passes=memcpyopt` `@byval`).
+#[test]
+fn test_a_byval_argument_takes_the_source_of_the_memcpy_that_fed_it() {
+    let text = argument(&copy_to_tmp("", "call void @take(ptr byval([16 x i8]) align 4 %tmp)"));
+    assert!(text.contains("@take(ptr byval([16 x i8]) align 4 %src)"), "{text}");
+}
+
+/// The source is written between the copy and the call (`@byval_written`).
+#[test]
+fn test_a_byval_argument_keeps_the_copy_when_the_source_is_written_after_it() {
+    let text =
+        argument(&copy_to_tmp("  call void @poke(ptr %src)\n", "call void @take(ptr byval([16 x i8]) align 4 %tmp)"));
+    assert!(text.contains("@take(ptr byval([16 x i8]) align 4 %tmp)"), "{text}");
+}
+
+/// A pointer the callee only reads, to a whole alloca a memcpy filled, is the
+/// memcpy's source (`@immut`).
+#[test]
+fn test_an_immutable_argument_takes_the_source_of_the_memcpy_that_filled_it() {
+    let text = argument(&copy_to_tmp("", "call void @peek(ptr noalias nocapture readonly %tmp)"));
+    assert!(text.contains("@peek(ptr noalias nocapture readonly %src)"), "{text}");
+}
+
+/// The source is written between the copy and the call (`@immut_written`).
+#[test]
+fn test_an_immutable_argument_keeps_the_copy_when_the_source_is_written_after_it() {
+    let text =
+        argument(&copy_to_tmp("  call void @poke(ptr %src)\n", "call void @peek(ptr noalias nocapture readonly %tmp)"));
+    assert!(text.contains("@peek(ptr noalias nocapture readonly %tmp)"), "{text}");
+}

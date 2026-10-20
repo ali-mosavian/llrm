@@ -1774,6 +1774,41 @@ other:
     assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
+/// InstCombine's canonical `icmp slt %s, 1` for `sle %s, 0` (and `sgt %s, -1`
+/// for `sge %s, 0`) was refused as "a call's flags read apart from its compare
+/// with zero": qbdemo and oimad failed to compile at -O1 (#2890 put InstCombine
+/// in the pipeline). The pin's `TranslateX86CC` reads them as the zero
+/// compares.
+#[test]
+fn test_the_canonical_strict_compares_of_a_flags_result_read_its_flags() {
+    for (predicate, constant, jumps, inverse) in
+        [("slt", 1, "jle ", "jg "), ("sgt", -1, "jge ", "jl "), ("slt", 0, "jl ", "jge "), ("sge", 0, "jge ", "jl ")]
+    {
+        let text = format!(
+            "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b) addrspace(1) {{
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp {predicate} i16 %s, {constant}
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}}
+"
+        );
+        let got = listing(&text, "f");
+        let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+        // Either polarity: the branch reads the call's flags, no compare
+        // between.
+        assert!(
+            got[call + 1].starts_with(jumps) || got[call + 1].starts_with(inverse),
+            "{predicate} {constant}: {got:?}"
+        );
+    }
+}
+
 /// A loop rotated left the counter's increment between B$SCMP's compare and
 /// the branch: the compare was fused, the flags no longer reached it and the
 /// function was refused (qbdemo at every level).
@@ -6121,6 +6156,23 @@ fn test_an_escaped_local_read_past_its_end_shares_no_slot() {
     assert_eq!(frame_bytes(&text), frame_bytes(&unmarked));
 }
 
+/// oimad failed to compile at -O1 and -O2 ("@__main: an address of no global:
+/// Expr(Cast { op: PtrToInt ... })"): the casts of a global's address into the
+/// segment space and back to an integer are one constant expression since
+/// #2890, and `ptrtoint` of a segment-space pointer is the global's segment
+/// word.
+#[test]
+fn test_ptrtoint_of_a_segment_space_global_is_its_segment_word() {
+    let text = "@g = internal global [8 x i8] zeroinitializer
+define i32 @f() addrspace(1) {
+  %a = sext i16 ptrtoint (ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to i16) to i32
+  ret i32 %a
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("mov ") && line.contains("DGROUP")), "{got:?}");
+}
+
 /// Constant expressions as operands, the shapes `simplifyCastInst` and the GEP
 /// fold make since #2614/#2610: each was refused, "an address of no global".
 /// `ptrtoint` of a global (and of a GEP off one) is its link-time address; a
@@ -6305,10 +6357,7 @@ entry:
     // DAG does.
     let mut module = llrm_mir::parse::module(text).expect("parses");
     crate::backend::legalize::legalized(&mut module).expect("legalizes");
-    let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
-        .expect("a datalayout");
-    let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
-    crate::backend::selects::lowered(&mut module, &pricing, &|_| true).expect("lowers selects");
+    crate::backend::selects::lowered(&mut module, &llrm_mir::tti::Basic, &|_| true).expect("lowers selects");
     let got = listing_on("486", &llrm_mir::print::module(&module), "f");
     assert!(!got.is_empty(), "{got:?}");
 }

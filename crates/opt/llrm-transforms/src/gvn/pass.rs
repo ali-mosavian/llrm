@@ -39,7 +39,7 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_support::hash::HashSet;
@@ -930,8 +930,7 @@ impl GvnPass<'_> {
         inst: InstId,
     ) -> bool {
         let Some(callee) = llrm_mir::memory::callee(self.context, self.function, inst) else { return false };
-        self.outer.globals.get(callee.0 as usize).and_then(|global| global.name.as_deref()).and_then(Intrinsic::named)
-            == Some(Intrinsic::Assume)
+        self.outer.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic) == Some(Intrinsic::Assume)
     }
 
     /// `processAssumeIntrinsic`

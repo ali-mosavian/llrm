@@ -424,7 +424,7 @@ fn procedures<'a>(
 ) -> IndexMap<String, Procedure<'a>> {
     bodies(module)
         .filter_map(|(id, function)| {
-            let name = module.global(id).name.clone()?;
+            let name = module.global(id).name.owned()?;
             let one = &facts[&id];
             Some((
                 name,
@@ -534,7 +534,7 @@ fn imported(
                     let (there, defined) = program.definition(at, id).filter(|&(there, _)| there != at)?;
                     let from = &program.modules[there];
                     let summary = own[there].get(from.global(defined).name.as_deref()?)?;
-                    Some((global.name.clone()?, moved(summary, from, module)))
+                    Some((global.name.owned()?, moved(summary, from, module)))
                 })
                 .collect()
         })

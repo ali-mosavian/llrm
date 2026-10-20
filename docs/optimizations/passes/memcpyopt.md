@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:4a2d13b48a038274113de322bf8c6b6984ce2b3bfaec92a092a11bba92369a20 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:e6ab31838524f191805d32b6be6c74995cedf790e2b88078e69d84569e4fb1de -->
 
 # memcpyopt
 
@@ -27,6 +27,8 @@ destination walks up to decides what it can become:
   or a load and store of the alloca);
 - a copy of a whole stack slot to another that never conflict with it makes
   the two one slot (`performStackMoveOptzn`);
+- a `byval` argument, or one a callee only reads, fed by a memcpy takes the
+  memcpy's source (`processByValArgument`, `processImmutArgument`);
 - a memmove whose ranges cannot meet is a memcpy (`processMemMove`);
 - an aggregate loaded and stored right after is a memcpy, or a memmove where
   the store may write what the load reads (`processStoreOfLoad`), the store
@@ -50,11 +52,14 @@ A copy of a copy reads the first source:
    false.
 3. No debug-info assignment IDs (`mergeDIAssignID`), no `combineAAMetadata`
    (the formed calls carry no `!tbaa`, as in `loopidiom`).
-4. Done later (stages): `processByValArgument` and `processImmutArgument`.
 5. MIR holds no constant expression in code: where the builder folds
    `getelementptr (i8, @g, 16)` the pass makes the instruction. A forced
    inline copy (`llvm.memcpy.inline`) is not forwarded, as the builder's
    `CreateMemCpyInline` has no counterpart here.
+9. `getOrEnforceKnownAlignment` is `known_alignment`: it never raises an
+   alloca's or global's alignment, so a source aligned less than the byval
+   or the alloca needs ends the forwarding. Exit: the alignment-raising
+   helper (needs the writer of alloca alignment shared with call slot).
 6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
    what the lifted ones touch): a call between the load and the store ends
    the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model

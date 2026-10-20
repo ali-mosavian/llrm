@@ -272,7 +272,7 @@ pub fn markers_dropped(module: &mut llrm_mir::Module) {
             .globals
             .iter()
             .enumerate()
-            .filter(|(_, global)| global.name.as_deref().and_then(Intrinsic::named) == Some(wanted))
+            .filter(|(_, global)| global.intrinsic() == Some(wanted))
             .map(|(at, _)| llrm_mir::GlobalId(at as u32))
             .collect::<BTreeSet<_>>()
     };

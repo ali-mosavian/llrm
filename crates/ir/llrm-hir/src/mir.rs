@@ -891,7 +891,7 @@ fn emit_module<'h>(
         }
     }
     if let Some((handler, (global, handled), owner)) = outlined {
-        let name = module.global(global).name.clone().unwrap_or_default();
+        let name = module.global(global).name.owned().unwrap_or_default();
         let mut builder = module.builder(global);
         let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| {
             // The handler is its own function; the owner's parameters are not

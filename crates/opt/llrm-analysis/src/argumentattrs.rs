@@ -21,7 +21,8 @@
 //! DEVIATE A2: only `captures(none)` can be stated (see
 //! [`crate::capturetracking`]), so a parameter that would be
 //! `captures(ret: ...)` stays unstated. Not translated yet:
-//! `addArgumentAttrsFromCallsites` (nonnull), `inferInitializes`, `returned`.
+//! `addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is
+//! [`crate::initializes`].
 //!
 //! # Example
 //! `get` reads through `%p` and never keeps it; `put` writes through it:
@@ -102,7 +103,7 @@ impl CaptureInfo {
 }
 
 /// `hasExactDefinition`.
-fn exact_definition(
+pub(crate) fn exact_definition(
     module: &Module,
     id: GlobalId,
 ) -> bool {
