@@ -1002,7 +1002,7 @@ pub fn dead_blocks_deleted(
 }
 
 /// The integer `operand` is, if it is a constant one.
-fn integer(
+pub(crate) fn integer(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {
@@ -1015,7 +1015,7 @@ fn integer(
 
 /// Whether `block` holds nothing but an `unreachable`: LLVM's
 /// `SwitchInst::defaultDestUnreachable`.
-fn only_unreachable(
+pub(crate) fn only_unreachable(
     function: &Function,
     block: BlockId,
 ) -> bool {
