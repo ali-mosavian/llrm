@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/globalsmodref.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsmodref.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:0a2e7523c9c4be72194236a516bad219b7752b9562188e6f196c08a2505d423c -->
+<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:b8b3b35d9595b72f2acf39692039bef0dff6fc2d4e7f867e2e902070021a7190 -->
 
 # globalsmodref
 
@@ -14,10 +14,11 @@ declaration (`AnalyzeUsesOfPointer`), with the functions that read and
 write each. `AnalyzeCallGraph` then walks the call graph callees first, one
 SCC at a time: a function gets a `FunctionInfo` (one `ModRefInfo` for all
 memory, a `ModRefInfo` per tracked global, and "may read any global") only
-if every callee of the SCC has one. A call to a declaration, an indirect
-call or a function whose definition is not exact leaves the caller
-without. `get_mod_ref_info` answers a call against a location that is a
-tracked global; any other location is left to the caller's other analyses.
+if every callee of the SCC has one. A call to a declaration that may call
+back into the module (no `nocallback`), an indirect call or a function
+whose definition is not exact leaves the caller without. `get_mod_ref_info`
+answers a call against a location that is a tracked global; any other
+location is left to the caller's other analyses.
 
 ```text
  @g = internal global i16 0      f reads @g          g() calls f, writes @g
@@ -54,6 +55,9 @@ From unit test `a_reader_of_a_private_global_has_ref_on_it` in
 - G4: no `TargetLibraryInfo`: a call to `free` is not recognised, so a
   global passed to it is not tracked.
 - G5: `hasOptNone` is `noipa` (`llrm_mir::facts::opaque`).
+- G6: a declaration needs `nocallback` only, not `nosync` as well
+  (`MaySyncOrCallIntoModule`): MIR has no `nosync` and the targets no
+  threads.
 
 ## Provides
 `GlobalsModRef`, `FunctionInfo`, `compute`.

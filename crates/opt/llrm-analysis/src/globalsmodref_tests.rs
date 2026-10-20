@@ -42,24 +42,33 @@ fn a_caller_adds_its_callees_global_effects_to_its_own() {
     assert_eq!(result.function_info(w).unwrap().mod_ref_for_global(g), ModRefInfo::ModRef);
 }
 
-/// A call to a declaration leaves the caller without information, as LLVM's
-/// SCC walk does (a declaration has no `FunctionInfo` and is not in the SCC).
+/// A declaration is read from its attributes (`AnalyzeCallGraph`'s
+/// `isDeclaration()` arm): one that touches no memory leaves the caller its
+/// info, one that may call back into the module leaves it none.
 #[test]
-fn a_call_to_a_declaration_leaves_the_caller_without_info() {
-    let (module, result) = found(
-        "@g = internal global i16 0
-declare void @out() nocallback readnone
+fn a_declaration_gives_its_caller_info_only_where_it_cannot_call_back() {
+    let text = |declaration: &str| {
+        format!(
+            "@g = internal global i16 0
+{declaration}
 
-define void @f() {
+define void @f() {{
 b0:
   call void @out()
   %v = load i16, ptr @g
   ret void
-}
-",
-    );
-    assert!(result.function_info(module.named("f").unwrap()).is_none());
-    assert_eq!(result.get_memory_effects(module.named("f").unwrap()), MemoryEffects::unknown());
+}}
+"
+        )
+    };
+    let (module, quiet) = found(&text("declare void @out() nocallback readnone"));
+    let f = module.named("f").unwrap();
+    assert_eq!(quiet.function_info(f).map(|one| one.mod_ref()), Some(ModRefInfo::Ref));
+    let (module, writes) = found(&text("declare void @out() nocallback"));
+    assert_eq!(writes.function_info(module.named("f").unwrap()).map(|one| one.mod_ref()), Some(ModRefInfo::ModRef));
+    let (module, calls_back) = found(&text("declare void @out()"));
+    assert!(calls_back.function_info(module.named("f").unwrap()).is_none());
+    assert_eq!(calls_back.get_memory_effects(module.named("f").unwrap()), MemoryEffects::unknown());
 }
 
 /// A global whose address is stored is not tracked, and what reaches it is
