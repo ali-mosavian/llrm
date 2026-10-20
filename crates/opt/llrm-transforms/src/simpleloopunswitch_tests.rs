@@ -12,7 +12,7 @@ fn unswitched(
 ) -> String {
     let before = parsed(text);
     let mut module = before.clone();
-    let after = managed(&mut module, SimpleLoopUnswitch);
+    let after = managed(&mut module, SimpleLoopUnswitch { non_trivial: false });
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -183,7 +183,7 @@ fn unswitching_loops_in_sequence_scans_in_proportion_to_their_number() {
     let scanned = |n: usize| {
         let mut module = parsed(&sequence(n));
         let before = layout_scanned();
-        managed(&mut module, SimpleLoopUnswitch);
+        managed(&mut module, SimpleLoopUnswitch { non_trivial: false });
         layout_scanned() - before
     };
     let (a, b, c) = (scanned(64), scanned(128), scanned(256));

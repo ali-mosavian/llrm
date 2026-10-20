@@ -78,8 +78,8 @@
 //!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
 //! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
-//! after them. [`crate::lsr`] enters a loop it counts to zero at its body too,
-//! behind a skip guard, with the same `_rotate`.
+//! after them. [`crate::lsr_pass`] enters a loop it counts to zero at its body
+//! too, behind a skip guard, with the same `_rotate`.
 //!
 //! # Example
 //! Before:

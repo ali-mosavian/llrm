@@ -14,7 +14,7 @@
 //!
 //! # Runs
 //! Nothing runs it yet: stage 1 of the translation of LSR (the old pass in
-//! [`crate::lsr`] is gcc's ivopts and stays the default).
+//! [`crate::lsr_pass`] is the pass that runs them).
 //!
 //! # Limits
 //! DEVIATE: `Immediate` is fixed. LLVM's also holds a scalable quantity

@@ -422,13 +422,20 @@ pub struct AAQueryInfo {
     pub use_dominator_tree: bool,
     locations: HashMap<MemoryLocation, u32>,
     answers: HashMap<u64, AliasResult>,
-    /// What the implementation memoises of capture questions
-    /// (`IsCapturedCache`): here so that a batch drops it, not the
-    /// implementation.
-    pub captured: HashMap<u64, crate::capturetracking::CaptureResult>,
+    /// `AAQI.CA`: how objects may be captured before an instruction. A batch
+    /// owns it, so a batch drops what it remembers.
+    pub capture: Box<dyn crate::captureanalysis::CaptureAnalysis>,
     /// What the implementation classified of an object, once for the batch.
     pub classes: HashMap<llrm_mir::module::Operand, u8>,
     pub(crate) decomposed: HashMap<llrm_mir::module::Operand, std::rc::Rc<crate::basicaa::Decomposed>>,
+}
+
+impl AAQueryInfo {
+    /// A batch whose capture questions go to `capture` (`AAQueryInfo(AAR,
+    /// CA)`).
+    pub fn with_capture(capture: Box<dyn crate::captureanalysis::CaptureAnalysis>) -> Self {
+        Self { capture, ..Self::default() }
+    }
 }
 
 impl Default for AAQueryInfo {
@@ -438,7 +445,7 @@ impl Default for AAQueryInfo {
             use_dominator_tree: true,
             locations: HashMap::default(),
             answers: HashMap::default(),
-            captured: HashMap::default(),
+            capture: Box::<crate::captureanalysis::SimpleCaptureAnalysis>::default(),
             classes: HashMap::default(),
             decomposed: HashMap::default(),
         }

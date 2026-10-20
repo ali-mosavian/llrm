@@ -885,3 +885,50 @@ b0:
         &[&[3, 1, 1]],
     );
 }
+
+/// The late slot L1438 has `needCanonicalLoops(false)`. An empty block of two
+/// predecessors that jumps to a loop header stays at the default (it would
+/// give the header a third entry) and goes at the slot: `opt -passes=
+/// 'simplifycfg<no-keep-loops;hoist-common-insts;sink-common-insts>'` makes
+/// the same (tools/llvmport/simplifycfgcompare.py --no-keep-loops).
+#[test]
+fn test_an_empty_entry_block_of_a_loop_goes_only_without_canonical_loops() {
+    let text = "@g = internal global i16 0
+
+define i16 @f(i16 %n, i1 %c) {
+entry:
+  br i1 %c, label %e, label %a
+
+a:
+  %t = add i16 %n, 1
+  store i16 %t, ptr @g
+  br label %e
+
+e:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %e ], [ %i1, %h ]
+  %i1 = add i16 %i, 1
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %h, label %x
+
+x:
+  ret i16 %i1
+}
+";
+    let inputs: &[&[i128]] = &[&[3, 1], &[3, 0], &[1, 1]];
+    let run = |options: &super::Options| {
+        let mut module = parsed(text);
+        let before = results(&module, inputs);
+        let changed = simplify_with(options, &mut module);
+        assert_eq!(results(&module, inputs), before);
+        (changed, printed(&module))
+    };
+    let (kept_changed, kept) = run(&super::Options::default());
+    assert!(!kept_changed && kept.contains("\ne:\n"), "{kept}");
+    // The options the pipeline builds the slot from.
+    let (gone_changed, gone) = run(&super::Options::L1438);
+    assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
+    assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
+}

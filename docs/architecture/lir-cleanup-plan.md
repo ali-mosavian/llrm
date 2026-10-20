@@ -18,7 +18,8 @@ TL;DR: on `d_faces` `-O2` the LIR passes after selection cost 315.5 M against ab
 | `shrink-wrap` / `prologue` | 11.2 | ShrinkWrap + PrologEpilogInserter | not measured | 1 / 1 | lir-cleanup-poc | measure LLVM's first | not read yet |
 | `parcopy` | 8.7 | (parallel copies resolved by the register rewriter and `TwoAddress`) | n/a | 1 / n/a | regalloc-core-poc | with the allocator's parallel-copy handling | cycle breaking priced per CPU |
 | `twoaddr` | 7.3 | TwoAddressInstructionPass | 1.0 | 1 / 1 | #2079 (pair queries), lir-cleanup-poc | #2079 lands: the graph is not built | builds a partial interference graph for commute candidates |
-| `pressuresink` | 7.9 | MachineSink (counted in the peephole row) | n/a | 1 / 1 | lir-cleanup-poc | folded into the `peephole` replacement | a load made where its reader is, before any value is placed |
+| `machinesink` | not priced | MachineSink (pre-RA, phi-constant and cheap-def sinking with edge splitting; DEVIATE M1-M5 in `machinesink.rs`) | n/a | 1 / 1 | lir-cleanup-port | translated, first stage: constants only |
+| `pressuresink` | 7.9 | none (in-block pressure sink; LLVM's scheduler orders loads) | n/a | 1 / 1 | lir-cleanup-poc | folded into the `peephole` replacement | a load made where its reader is, before any value is placed |
 | `loopslots` | 6.1 | StackSlotColoring | 0.8 | 1 / 1 | lir-cleanup-poc | measure why 9x | which slots a loop still reaches |
 | `phiconst` / `floatfold` / `farcall` / `scheduler` | 1.7 / 0.8 / 0.1 / 0.0 | (MachineScheduler 9.2, no counterpart) | 9.2 | 1 / 1 | n/a | n/a | `scheduler` is nearly free here because it moves nothing; LLVM's 9.2 M buys code quality this table does not price |
 

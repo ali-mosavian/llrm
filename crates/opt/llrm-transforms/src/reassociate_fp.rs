@@ -6,6 +6,10 @@
 //!
 //! # Used by
 //! `crate::reassociate_optimize`, `crate::reassociate_negate`.
+//!
+//! # Example
+//! `x * 4.0 * 0.25`: the constants fold to `1.0` (`fold_float`), the identity
+//! of `fmul`, so the result is `x`.
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::module::Operand;
