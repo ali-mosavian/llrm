@@ -349,6 +349,13 @@ pub trait Target {
         self.stack_slot_bytes()
     }
 
+    /// Whether every call finds the stack a multiple of `stack_alignment`
+    /// (`calling.toml`'s `aligned_calls`), not only those of a function
+    /// that holds a double.
+    fn aligned_calls(&self) -> bool {
+        false
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -444,6 +451,13 @@ pub trait Target {
         signed: bool,
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
+
+    /// The width a float value of `bytes` bytes is held at: x87 holds every one
+    /// as its stack register, a vector file as its own size.
+    fn float_width(
+        &self,
+        bytes: u32,
+    ) -> u32;
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(

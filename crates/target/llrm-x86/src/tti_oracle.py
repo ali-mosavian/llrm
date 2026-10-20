@@ -9,7 +9,13 @@ INTS = ["i8", "i16", "i32", "i64"]
 FLTS = ["float", "double", "x86_fp80"]
 BIN_INT = ["add", "sub", "mul", "sdiv", "udiv", "srem", "urem", "shl", "lshr", "ashr", "and", "or", "xor"]
 BIN_FLT = ["fadd", "fsub", "fmul", "fdiv", "frem"]
-CPUS = ["i386", "i486", "pentium", "pentiumpro", "k6", "athlon", "core2"]
+# (triple, datalayout, cpus): the 32-bit profiles, and the 64-bit one (x86-m64's `-march=x86-64`).
+TARGETS = [
+    ("i486-unknown-linux-gnu", "e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128",
+     ["i386", "i486", "pentium", "pentiumpro", "k6", "athlon", "core2"]),
+    ("x86_64-unknown-linux-gnu", "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+     ["x86-64"]),
+]
 KINDS = ["throughput", "latency", "code-size", "size-latency"]
 # operand variants of the second operand of an integer binary op
 VAR = {"reg": "%b", "c3": "3", "c8": "8", "cm8": "-8", "c1": "1"}
@@ -59,14 +65,15 @@ for ty in INTS + FLTS:
 args = ", ".join([f"{t} %a.{t}, {t} %b.{t}" for t in INTS + FLTS] + ["i1 %c", "ptr %p"])
 body = "\n".join(lines)
 stores = "\n".join(f"  store {t} %a.{t}, ptr %p" for t in INTS + FLTS)
-ir = f'target datalayout = "e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"\ntarget triple = "i486-unknown-linux-gnu"\ndefine void @f({args}) {{\n{body}\n{stores}\n  ret void\n}}\n'
 import tempfile
-SCALAR = os.path.join(tempfile.mkdtemp(), "scalar.ll")
-open(SCALAR, "w").write(ir)
 out = []
-for cpu in CPUS:
+for triple, datalayout, cpus in TARGETS:
+  ir = f'target datalayout = "{datalayout}"\ntarget triple = "{triple}"\ndefine void @f({args}) {{\n{body}\n{stores}\n  ret void\n}}\n'
+  SCALAR = os.path.join(tempfile.mkdtemp(), "scalar.ll")
+  open(SCALAR, "w").write(ir)
+  for cpu in cpus:
     for kind in KINDS:
-        r = subprocess.run([OPT, "-passes=print<cost-model>", "-disable-output", "-mtriple=i486-unknown-linux-gnu", f"-mcpu={cpu}", f"-cost-kind={kind}", SCALAR], capture_output=True, text=True)
+        r = subprocess.run([OPT, "-passes=print<cost-model>", "-disable-output", f"-mtriple={triple}", f"-mcpu={cpu}", f"-cost-kind={kind}", SCALAR], capture_output=True, text=True)
         n = 0
         for l in r.stderr.splitlines():
             m = re.match(r"Cost Model: Found an estimated cost of (\d+|Invalid) for instruction:\s+(?:%(\S+) = )?(.*)", l)
@@ -75,7 +82,7 @@ for cpu in CPUS:
             if name is None:
                 name = "store." + text.split()[1]
             out.append(f"{cpu} {kind} {name} {cost}"); n += 1
-        if cpu == CPUS[0] and kind == KINDS[0]: print("instructions per run", n)
+        if kind == KINDS[0]: print(cpu, "instructions per run", n)
 version = subprocess.run([OPT, "--version"], capture_output=True, text=True).stdout.splitlines()[1].strip()
 clang = subprocess.run([os.path.join(os.path.dirname(OPT), "clang"), "--version"], capture_output=True, text=True).stdout.split("\n")[0]
 version += " " + (clang.split("llvm-project.git ")[1].rstrip(")")[:12] if "llvm-project.git " in clang else "")

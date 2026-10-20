@@ -18,12 +18,15 @@
 //!   a(1) ... ->  B2 ---+--> B3: use of a     B3 gets a PHI-def value 2@B3
 //! ```
 //!
-//! DEVIATE (subregisters, no number): the `Undefs` argument and
+//! DEVIATE D-LC1 (subregisters): the `Undefs` argument and
 //! `isDefOnEntry` serve sub-register ranges (`<def,read-undef>` operands); a
 //! range here has none, so they are not translated, and a use is found by a
 //! `Operand` list instead of `MachineRegisterInfo::reg_nodbg_operands`. Several
 //! ranges under construction at once (the low-level interface `SplitEditor`
 //! uses) are passed as a slice, each `LiveInBlock` naming its range by index.
+//! Checked line by line against `extend`, `findReachingDefs`, `updateSSA` and
+//! `updateFromLiveIns` at d1106deb71cc on 2026-10-20: nothing else differs, so
+//! the cost per call is the input's (ranges the coalescer joined).
 //!
 //! # Example
 //! A value defined in B0 and used in B3, reached through B1 and B2 which do not

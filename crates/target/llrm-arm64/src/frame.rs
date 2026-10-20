@@ -1,0 +1,316 @@
+//! Frame lowering: the frame's layout, the prologue and epilogue, and the
+//! frame objects turned into stack-pointer offsets
+//! (`AArch64FrameLowering::emitPrologue`, `emitEpilogue`,
+//! `eliminateFrameIndex`). The frame, from the stack pointer up: outgoing
+//! arguments, frame objects, the callee-saved registers in pairs, and the frame
+//! record (`x29`, `x30`) at the top. Offsets are from the stack pointer, which
+//! does not move in the body.
+
+use crate::mc::inst::*;
+use crate::mc::visit::Reg;
+use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MFunc, Op};
+use crate::regalloc::Allocation;
+
+/// A block of real instructions.
+#[derive(Clone, Debug)]
+pub struct Lowered {
+    pub label: String,
+    pub insts: Vec<Inst>,
+}
+
+#[derive(Debug)]
+struct Layout {
+    size: u64,
+    /// The stack pointer moves in the body: objects are addressed from `x29`.
+    dynamic: bool,
+    /// Each frame object's offset from the stack pointer.
+    slots: Vec<u64>,
+    /// The register pairs saved, with their offsets.
+    saves: Vec<(Save, u64)>,
+    frame_record: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Save {
+    GprPair(u32, Option<u32>),
+    FprPair(u32, Option<u32>),
+}
+
+fn layout(
+    function: &MFunc,
+    allocation: &Allocation,
+) -> Layout {
+    let outgoing = function.outgoing;
+    let mut at = outgoing;
+    let mut slots = vec![0; function.slots.len()];
+    for (index, slot) in function.slots.iter().enumerate() {
+        at = at.next_multiple_of(slot.align.max(1));
+        slots[index] = at;
+        at += slot.size;
+    }
+    let locals_end = at.next_multiple_of(16);
+    let pair = |list: &[u32]| -> Vec<(u32, Option<u32>)> {
+        list.chunks(2).map(|chunk| (chunk[0], chunk.get(1).copied())).collect()
+    };
+    let mut saves = Vec::new();
+    let mut top = locals_end;
+    for (first, second) in pair(&allocation.saved_gprs) {
+        saves.push((Save::GprPair(first, second), top));
+        top += 16;
+    }
+    for (first, second) in pair(&allocation.saved_fprs) {
+        saves.push((Save::FprPair(first, second), top));
+        top += 16;
+    }
+    let frame_record = function
+        .calls
+        .then(
+            || {
+                let at = top;
+                top += 16;
+                at
+            },
+        );
+    Layout { size: top, dynamic: function.dynamic, slots, saves, frame_record }
+}
+
+impl Layout {
+    /// The register and the offset from it that address byte `offset` of frame
+    /// object `slot` (or of the caller's argument area): the stack pointer, or
+    /// the frame pointer where the stack pointer moves.
+    fn place(
+        &self,
+        slot: u32,
+        offset: i64,
+    ) -> (Gpr, i64) {
+        let from_sp = if slot == INCOMING_ARGUMENTS { self.size } else { self.slots[slot as usize] };
+        if !self.dynamic {
+            return (Gpr::R31, from_sp as i64 + offset);
+        }
+        // `x29` is where the frame record is: that many bytes above the stack
+        // pointer the frame was made with.
+        let record = self.frame_record.expect("a moving stack has a frame record");
+        (Gpr::FP, from_sp as i64 + offset - record as i64)
+    }
+}
+
+struct Emitter {
+    insts: Vec<Inst>,
+}
+
+impl Emitter {
+    /// `sp = sp + delta` (a multiple of 16).
+    fn adjust_sp(
+        &mut self,
+        delta: i64,
+    ) {
+        if delta == 0 {
+            return;
+        }
+        let subtract = delta < 0;
+        let magnitude = delta.unsigned_abs();
+        self.add_to(Gpr::R31, Gpr::R31, subtract, magnitude, Gpr(16));
+    }
+
+    /// `rd = rn +- magnitude`, through `scratch` where one add cannot do it.
+    fn add_to(
+        &mut self,
+        rd: Gpr,
+        rn: Gpr,
+        subtract: bool,
+        magnitude: u64,
+        scratch: Gpr,
+    ) {
+        let op = AddSub { subtract, set_flags: false };
+        if magnitude < 4096 {
+            self.insts.push(Inst::AddSubImm { op, width: Width::X, rd, rn, imm12: magnitude as u16, shift12: false });
+        } else if magnitude & 0xFFF == 0 && magnitude >> 12 < 4096 {
+            self.insts.push(Inst::AddSubImm {
+                op,
+                width: Width::X,
+                rd,
+                rn,
+                imm12: (magnitude >> 12) as u16,
+                shift12: true,
+            });
+        } else {
+            self.insts.extend(crate::expand_imm::mov_imm(magnitude, 64, scratch));
+            // The register form takes the stack pointer through the extended
+            // form.
+            self.insts.push(Inst::AddSubExtended {
+                op,
+                width: Width::X,
+                rd,
+                rn,
+                rm: scratch,
+                extend: Extend::Uxtx,
+                amount: 0,
+            });
+        }
+    }
+}
+
+fn accessed_bytes(mem: &Memory) -> i64 {
+    match mem {
+        Memory::Int { bytes, .. } => i64::from(*bytes),
+        Memory::Fp { bytes, .. } => i64::from(*bytes),
+    }
+}
+
+/// `function`, its registers physical, as real instructions.
+pub fn lower(
+    function: &MFunc,
+    allocation: &Allocation,
+) -> Result<Vec<Lowered>, String> {
+    let frame = layout(function, allocation);
+    let mut out = Vec::new();
+    for (index, block) in function.blocks.iter().enumerate() {
+        let mut emitter = Emitter { insts: Vec::new() };
+        if index == 0 {
+            prologue(&frame, &mut emitter);
+        }
+        for op in &block.ops {
+            match op {
+                Op::I(inst) => lower_inst(inst, &frame, &mut emitter)?,
+                Op::Copy { dst, src } => match (dst, src) {
+                    (Reg::Gpr(rd), Reg::Gpr(rm)) => emitter.insts.push(Inst::LogicShifted {
+                        op: Logic::Orr,
+                        invert: false,
+                        width: Width::X,
+                        rd: *rd,
+                        rn: Gpr::R31,
+                        rm: *rm,
+                        shift: Shift::Lsl,
+                        amount: 0,
+                    }),
+                    (Reg::Fpr(rd), Reg::Fpr(rn)) => {
+                        emitter.insts.push(Inst::FpUnary { op: FpUnary::Mov, size: FpSize::D, rd: *rd, rn: *rn })
+                    }
+                    _ => return Err("a copy between register classes".into()),
+                },
+                Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::Call { callee, .. } => emitter.insts.push(match callee {
+                    Callee::Symbol(name) => {
+                        Inst::Branch { link: true, target: Target::Symbol { name: name.clone(), addend: 0 } }
+                    }
+                    Callee::Register(register) => Inst::BranchReg { link: true, rn: *register },
+                }),
+                Op::Return { .. } => {
+                    epilogue(&frame, &mut emitter);
+                    emitter.insts.push(Inst::Ret { rn: Gpr::LR });
+                }
+                Op::FrameAddress { dst, slot, offset } => {
+                    let (base, total) = frame.place(*slot, *offset);
+                    emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
+                }
+            }
+        }
+        out.push(Lowered { label: block.label.clone(), insts: emitter.insts });
+    }
+    Ok(out)
+}
+
+fn prologue(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    emitter.adjust_sp(-(frame.size as i64));
+    save_registers(frame, emitter, true);
+    if let Some(at) = frame.frame_record {
+        emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
+    }
+}
+
+fn epilogue(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    // A moving stack pointer is put back from the frame pointer first.
+    if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
+        emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
+    }
+    save_registers(frame, emitter, false);
+    emitter.adjust_sp(frame.size as i64);
+}
+
+/// The stores (`store`) or loads of the saved pairs and the frame record.
+fn save_registers(
+    frame: &Layout,
+    emitter: &mut Emitter,
+    store: bool,
+) {
+    let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
+    for (save, offset) in &frame.saves {
+        accesses.push(match *save {
+            Save::GprPair(a, b) => (
+                Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(a) },
+                b.map(|b| Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(b) }),
+                *offset,
+                8,
+            ),
+            Save::FprPair(a, b) => {
+                (Memory::Fp { bytes: 8, reg: Vreg(a) }, b.map(|b| Memory::Fp { bytes: 8, reg: Vreg(b) }), *offset, 8)
+            }
+        });
+    }
+    if let Some(at) = frame.frame_record {
+        accesses.push((
+            Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr::FP },
+            Some(Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr::LR }),
+            at,
+            8,
+        ));
+    }
+    for (first, second, offset, _) in accesses {
+        let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
+        // A pair reaches 504 bytes from the base; further, the address is made.
+        let (base, imm) = if offset <= 504 {
+            (Gpr::R31, offset as i64)
+        } else {
+            emitter.add_to(Gpr(16), Gpr::R31, false, offset, Gpr(17));
+            (Gpr(16), 0)
+        };
+        let addr = if offset <= 504 { addr } else { Addr::Offset { base, imm } };
+        let _ = imm;
+        let inst = match (second, store) {
+            (Some(second), true) => Inst::StorePair { first, second, addr },
+            (Some(second), false) => Inst::LoadPair { first, second, addr },
+            (None, true) => Inst::Store { mem: first, addr },
+            (None, false) => Inst::Load { mem: first, addr },
+        };
+        emitter.insts.push(inst);
+    }
+}
+
+/// `inst` with a frame object address turned into an offset from the stack
+/// pointer, through a scratch register where the offset does not encode.
+fn lower_inst(
+    inst: &Inst,
+    frame: &Layout,
+    emitter: &mut Emitter,
+) -> Result<(), String> {
+    let mut inst = inst.clone();
+    match &mut inst {
+        Inst::Load { mem, addr } | Inst::Store { mem, addr } => {
+            if let Addr::Slot { slot, offset } = *addr {
+                let bytes = accessed_bytes(mem);
+                let (base, total) = frame.place(slot, offset);
+                let scaled = total >= 0 && total % bytes == 0 && total / bytes < 4096;
+                if scaled || (-256..256).contains(&total) {
+                    *addr = Addr::Offset { base, imm: total };
+                } else {
+                    emitter.add_to(Gpr(16), base, total < 0, total.unsigned_abs(), Gpr(17));
+                    *addr = Addr::Offset { base: Gpr(16), imm: 0 };
+                }
+            }
+        }
+        Inst::LoadPair { addr, .. } | Inst::StorePair { addr, .. } => {
+            if let Addr::Slot { .. } = addr {
+                return Err("a frame object in a register pair".into());
+            }
+        }
+        _ => {}
+    }
+    emitter.insts.push(inst);
+    Ok(())
+}

@@ -163,7 +163,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction;
-use llrm_analysis::manager::Registers;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
@@ -272,7 +272,6 @@ impl Forest {
                 None => cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
             },
             loops,
-            reaching: Default::default(),
         });
         fresh.seed::<cfg::Shape>(function, std::rc::Rc::clone(&shape));
         shape
@@ -629,6 +628,7 @@ fn rotated(
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh, analyses);
+    let mut scevs = None;
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -638,10 +638,11 @@ fn rotated(
         };
         // Asked of the first loop that could be rotated: a body with none
         // derives nothing.
-        let facts = analyses.get::<Registers>(context, layout, function);
+        let session = scevs.get_or_insert_with(|| {
+            ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function)
+        });
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        let proven = induction::trip_count(&unit, &loop_, &facts).is_some();
-        drop((unit, facts));
+        let proven = crate::profit::scev_trips(session, &unit, &loop_).is_some();
         if !proven {
             continue;
         }
@@ -669,15 +670,15 @@ fn census(
     analyses: &Analyses,
 ) {
     let mut fresh = analyses.fresh();
-    let facts = fresh.get::<Registers>(context, layout, function);
     let found = fresh.get::<cfg::Shape>(context, layout, function);
     let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+    let mut scevs = ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function);
     let name = format!("{id:?}");
     let (mut proofs, mut constant, mut symbolic) = (0, 0, 0);
     for loop_ in found.loops.iter() {
-        let found = induction::counted(&unit, &loop_, Some(&facts), false);
+        let found = induction::counted(&unit, &loop_, None, false);
         proofs += usize::from(!found.is_empty());
-        constant += usize::from(induction::trip_count(&unit, &loop_, &facts).is_some());
+        constant += usize::from(crate::profit::scev_trips(&mut scevs, &unit, &loop_).is_some());
         symbolic += usize::from(found.iter().any(|proof| {
             induction::trips(proof, &mut |_, _| induction::AffineOperand::constant(0, proof.width())).is_some()
         }));
@@ -708,6 +709,7 @@ fn copied(
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh, analyses);
+    let mut scevs = None;
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -723,9 +725,11 @@ fn copied(
         // A loop proven to run needs no guard: it is entered at its body once
         // the loop passes are done (`rotated`, which unroll, peel and
         // fill wait for), as gcc's value propagation leaves it after its copy.
-        let facts = analyses.get::<Registers>(context, layout, function);
+        let session = scevs.get_or_insert_with(|| {
+            ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function)
+        });
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        if induction::trip_count(&unit, &loop_, &facts).is_some() {
+        if crate::profit::scev_trips(session, &unit, &loop_).is_some() {
             continue;
         }
         let Some((guard, copies)) = _copy_test(function, &shape) else {
@@ -739,7 +743,6 @@ fn copied(
             .map(|(_, node)| *node);
         _rotate(context, function, &shape, Some(guard), &copies)?;
         _weighed(context, declared, function, &shape, weights, guard.1);
-        drop(facts);
         drop(fresh);
         forest.keep(found);
         forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));

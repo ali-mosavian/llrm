@@ -274,7 +274,8 @@ fn intrinsic_name<'a>(
     inst: InstId,
 ) -> Option<&'a str> {
     let callee = llrm_mir::memory::callee(cx.context, cx.function, inst)?;
-    cx.globals[callee.0 as usize].name.as_deref().filter(|name| name.starts_with("llvm."))
+    // A declaration made since the module's globals were read has no name here.
+    cx.globals.get(callee.0 as usize)?.name.as_deref().filter(|name| name.starts_with("llvm."))
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1025

@@ -21,8 +21,8 @@ fn no_flag_is_the_default_target() {
 
 #[test]
 fn an_unknown_target_is_refused_with_the_known_ones() {
-    let error = target(&flags(&["-m64"]), Some(&["x86-m16"])).err().unwrap();
-    assert_eq!(error, "no target for -m64; choose -m16, -m32");
+    let error = target(&flags(&["-m128"]), Some(&["x86-m16"])).err().unwrap();
+    assert_eq!(error, "no target for -m128; choose -m16, -m32, -m64");
 }
 
 /// A frontend built for one target does not take another's flag.
@@ -195,7 +195,8 @@ fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
 #[test]
 fn no_list_lets_any_registered_target_through() {
     assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-m32");
-    assert!(target(&flags(&["-m64"]), None).err().unwrap().contains("no target for -m64"));
+    assert_eq!(target(&flags(&["-m64"]), None).unwrap().target.name(), "x86-m64");
+    assert!(target(&flags(&["-m128"]), None).err().unwrap().contains("no target for -m128"));
 }
 
 /// The audited multiply and divide bounds of a CPU are its description's: a
@@ -220,4 +221,256 @@ fn the_audited_bounds_come_from_the_targets_timings() {
     assert_eq!(signed_multiply(pentium, 2, true).unwrap(), Some(Clocks { minimum: 11, maximum: 11 }));
     assert_eq!(signed_multiply(pentium, 2, false).unwrap(), Some(Clocks { minimum: 10, maximum: 10 }));
     assert_eq!(signed_multiply(profile(&["-march=k6"]), 4, true).unwrap(), None);
+}
+
+/// LLVM IR for a target is found by its `target triple` and run through the
+/// mid-end as well as the backend: `llrm-llc` once compiled the module as
+/// written (no pipeline), leaving `40 + 2` and a dead stack slot in the code.
+#[test]
+fn llvm_ir_is_found_by_its_triple_and_optimized() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define dso_local i32 @main() {\n  %1 = alloca i32, align 4\n  store i32 0, ptr %1, align 4\n  \
+                %2 = add i32 40, 2\n  ret i32 %2\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "main").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> =
+        listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
+    assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
+}
+
+/// A call of a variadic function tells the callee in `al` how many vector
+/// registers carry arguments: SysV AMD64's callee saves them by it. It was
+/// never set, so `printf` read whatever the register held.
+#[test]
+fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @printf(ptr, ...)\n\
+                define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
+    let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
+    assert!(
+        before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"),
+        "{listing}"
+    );
+}
+
+/// A struct of two quadwords returns in rax and rdx and arrives so:
+/// `insertvalue` and the `ret` and `call` of an aggregate had no selection ("a
+/// { i64, i64 } value").
+#[test]
+fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare { i64, i64 } @mk(i64, i64)\n\
+                define { i64, i64 } @pair(i64 %a, i64 %b) {\n\
+                  %x = insertvalue { i64, i64 } poison, i64 %a, 0\n  %y = insertvalue { i64, i64 } %x, i64 %b, 1\n  ret { i64, i64 } %y\n}\n\
+                define i64 @sum(i64 %a, i64 %b) {\n  %r = call { i64, i64 } @mk(i64 %a, i64 %b)\n\
+                  %p = extractvalue { i64, i64 } %r, 0\n  %q = extractvalue { i64, i64 } %r, 1\n  %s = add i64 %p, %q\n  ret i64 %s\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "pair").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let mut lines = listing.lines().map(str::trim);
+    let pair: Vec<&str> =
+        lines.by_ref().skip_while(|line| *line != "pair proc near").take_while(|line| *line != "pair endp").collect();
+    assert!(pair.contains(&"mov rax, rdi") && pair.contains(&"mov rdx, rsi"), "{listing}");
+    let sum: Vec<&str> = listing.lines().map(str::trim).skip_while(|line| *line != "sum proc near").collect();
+    assert!(
+        sum.contains(&"call mk") && sum.iter().any(|line| line.starts_with("add ") && line.contains("rdx")),
+        "{listing}"
+    );
+}
+
+/// A frame register given to a value is a callee-saved register like rbx: `fib`
+/// kept its argument in rbp across the recursive call and never saved it (it
+/// listed `(rbp, rbp)` where the others list a root), so its caller's frame was
+/// garbage.
+#[test]
+fn a_freed_frame_register_holding_a_value_is_saved() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @fib(i32 %n) {\n\
+                  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %rec\n\
+                done:\n  ret i32 %n\n\
+                rec:\n  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n  %s = add i32 %x, %y\n  ret i32 %s\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "fib").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> = listing.lines().map(str::trim).collect();
+    let uses_rbp = body.iter().any(|line| line.contains("ebp") && !line.starts_with("push"));
+    let saved = body.contains(&"push rbp") && body.contains(&"pop rbp");
+    assert!(uses_rbp, "premise: the frame register holds a value\n{listing}");
+    assert!(saved, "{listing}");
+}
+
+/// The pin's one-operand `llvm.lifetime.start.p0(ptr)` was a call MIR could not
+/// read, so its alloca escaped and nothing was promoted: every local of a
+/// clang-front-end program stayed in the frame (`loop.c` kept its loop and four
+/// stores for a constant).
+#[test]
+fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.lifetime.start.p0(ptr captures(none))\n\
+                declare void @llvm.lifetime.end.p0(ptr captures(none))\n\
+                define i32 @f() {\n  %p = alloca i32, align 4\n  call void @llvm.lifetime.start.p0(ptr %p)\n  store i32 5, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  call void @llvm.lifetime.end.p0(ptr %p)\n  ret i32 %v\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let body: Vec<&str> =
+        listing.lines().map(str::trim).filter(|line| line.starts_with("mov") || *line == "ret").collect();
+    assert_eq!(body, ["mov eax, 5", "ret"], "{listing}");
+}
+
+/// A variadic definition saves the argument registers it does not name and
+/// `va_start` fills the SysV list: "va_start with no parameter before the
+/// variadic arguments" refused every `va_list` of x86-64.
+#[test]
+fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.va_start.p0(ptr)\n\
+                declare void @llvm.va_end.p0(ptr)\n\
+                define i32 @f(i32 %n, ...) {\n  %ap = alloca [24 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n  %g = load i32, ptr %ap, align 8\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %g\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    // One argument is named: rsi, rdx, rcx, r8 and r9 are saved; the list
+    // starts with gp_offset 8.
+    for register in ["rsi", "rdx", "rcx", "r8", "r9"] {
+        assert!(
+            listing.lines().any(|line| line.trim().starts_with("mov qword ptr") && line.trim().ends_with(register)),
+            "{register}\n{listing}"
+        );
+    }
+    let rdi_saved =
+        listing.lines().any(|line| line.trim().starts_with("mov qword ptr") && line.trim().ends_with("rdi"));
+    assert!(!rdi_saved, "the named argument is not saved\n{listing}");
+}
+
+/// An `alloca` whose element count is a value took a static slot of one
+/// element: `alloca i32, i64 %n` was `lea rdi, [rsp+12]`, four bytes for `n` of
+/// them. It lowers the stack pointer when it runs and keeps the frame register.
+#[test]
+fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
+    assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
+}
+
+/// A constant count above one reserved one element's bytes.
+#[test]
+fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  %p = alloca i64, i32 8, align 8\n  call void @use(ptr %p)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let reserved: i64 =
+        listing.lines().map(str::trim).find_map(|line| line.strip_prefix("sub rsp, ")?.parse().ok()).expect("a frame");
+    assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
+}
+
+/// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
+/// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
+#[test]
+fn a_select_is_one_conditional_move() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @min(i32 %a, i32 %b) {\n  %c = icmp slt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}\n\
+                define i64 @pick(i1 %c, i64 %a, i64 %b) {\n  %r = select i1 %c, i64 %a, i64 %b\n  ret i64 %r\n}\n";
+    for (name, cmov) in [("min", "cmovl"), ("pick", "cmovne")] {
+        let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, name).unwrap();
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        assert!(listing.lines().any(|line| line.trim().starts_with(cmov)), "{name}: {cmov}\n{listing}");
+        assert!(!listing.lines().any(|line| line.trim().starts_with('j')), "{name}: no branch\n{listing}");
+    }
+}
+
+/// The listing (`-S`, stage dumps) panicked "a pointer of 8 bytes" on a global
+/// holding a pointer, so a program with one could not be dumped at x86-64.
+#[test]
+fn a_global_holding_a_pointer_lists_as_a_quadword() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @x = global i32 0\n@p = global ptr @x\n\
+                define ptr @f() {\n  %v = load ptr, ptr @p\n  ret ptr %v\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("dq x"), "{listing}");
+}
+
+/// Every access to a global array made its own `lea reg,[rip+sym]` and `add
+/// reg,index`: two stores were four instructions more than `llc`'s one `lea`
+/// and `[base+index*4]` stores.
+#[test]
+fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [64 x i32] zeroinitializer\n\
+                define void @f(i64 %i) {\n  %p = getelementptr [64 x i32], ptr @a, i64 0, i64 %i\n  store i32 1, ptr %p\n  %q = getelementptr [64 x i32], ptr @a, i64 1, i64 %i\n  store i32 2, ptr %q\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let leas = lines.iter().filter(|line| line.ends_with("offset a")).count();
+    let adds = lines.iter().filter(|line| line.starts_with("add")).count();
+    assert_eq!((leas, adds), (1, 0), "{listing}");
+}
+
+/// The x86-64 timings still carried a 386's `imul` (10 clocks), so `x * 100`
+/// was five shifts and adds where `llc` has one `imul r,r,100`.
+#[test]
+fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x) {\n  %r = mul i32 %x, 100\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("imul")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
+}
+
+/// A call was said to destroy the upper half of every callee-saved register
+/// (`rbx` is not `ebx`, so the convention "kept only the pushed part"): values
+/// live across it fought over `ebp`, and `f` spilled three of four to the stack.
+#[test]
+fn values_live_across_a_call_take_the_callee_saved_registers() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @g(i32)\n\
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
+}
+
+/// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
+/// words and dwords. It is `xor eax, eax`.
+#[test]
+fn a_quadword_zero_is_a_dword_xor() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64)\n\
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_core::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
+}
+
+/// x86-64 describes sixteen xmm registers in a class of their own: none of them
+/// is a general register, and the 32-bit targets have none.
+#[test]
+fn xmm_registers_are_a_class_apart_from_the_general_ones() {
+    use llrm_core::backend::classes::RegisterClasses;
+    let m64 = RegisterClasses::of(&*crate::by_triple("x86_64-unknown-linux-gnu").unwrap());
+    assert_eq!(m64.xmm.len(), 16);
+    assert!(m64.xmm.iter().all(|one| !m64.available.contains(one)));
+    assert_eq!(m64.available.len(), 14);
+    assert!(RegisterClasses::of(&llrm_x86_m16::M16).xmm.is_empty());
 }

@@ -36,6 +36,17 @@
 //! DEVIATE D-SE4: `LRSplit` is not flagged on the copies: nothing here reads
 //! it.
 //!
+//! DEVIATE D-SE7: `rewriteAssigned` sets the register of a
+//! `MachineOperand` in place (`MO.setReg`); an `Insn` here is immutable and
+//! shared (`Arc`), so each rewritten instruction is rebuilt
+//! (`Insn::try_renamed`, then `LiveIntervals::rewrite_instr`). The fact:
+//! d_faces -O2, 746 rewrites cost 3.9 M of 1,330 M instructions (0.3%), about 5
+//! K each. Owner of the row: splitkit-port. Exit: uselist-port's LIR operand
+//! model (mutable in-place operands with use/def lists, the backend twin of the
+//! MIR storage work); design note due 2026-10-23, then slices. The row closes
+//! when `rewrite_assigned` sets the register in place; cite the note here when
+//! it lands.
+//!
 //! # Example
 //! A value live through `b1` with a use in it: `openIntv`; `enterIntvBefore`
 //! the use inserts `c1 = copy v`; `leaveIntvAfter` it inserts `c0 = copy v`;
