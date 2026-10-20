@@ -533,7 +533,10 @@ pub fn form_dedicated_exit_blocks(
     function: &mut Function,
     blocks: &[BlockId],
 ) -> bool {
-    let in_loop: std::collections::HashSet<BlockId> = blocks.iter().copied().collect();
+    let mut in_loop = llrm_mir::dense::IdSet::<BlockId>::new();
+    for &block in blocks {
+        in_loop.insert(block);
+    }
     let mut changed = false;
     let mut visited: Vec<BlockId> = Vec::new();
     for &block in blocks {

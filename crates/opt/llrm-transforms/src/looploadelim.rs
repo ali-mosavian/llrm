@@ -38,7 +38,7 @@
 //! In the parity pipeline at `loop-load-elim` (l.1400 of
 //! `PassBuilderPipelines.cpp`, after `infer-alignment`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
@@ -52,6 +52,7 @@ use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::{Kind, Ty};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::typebasedaa::TypeBasedAA;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
@@ -179,7 +180,7 @@ struct LoadEliminationForLoop<'a> {
     lai: &'a LoopAccessInfo,
     /// Maps the load/store instructions to their index according to program
     /// order.
-    inst_order: HashMap<InstId, u32>,
+    inst_order: IdMap<InstId, u32>,
 }
 
 impl LoadEliminationForLoop<'_> {
@@ -201,7 +202,7 @@ impl LoadEliminationForLoop<'_> {
         // Find store->load dependences (consequently true dep). Both
         // lexically forward and backward dependences qualify. Disqualify loads
         // that have other unsafe dependences.
-        let mut loads_with_unsafe_dependence: HashSet<InstId> = HashSet::new();
+        let mut loads_with_unsafe_dependence = IdSet::<InstId>::new();
 
         for dep in deps {
             let mut source = dep_checker.source(dep);
@@ -277,35 +278,32 @@ impl LoadEliminationForLoop<'_> {
     ) {
         // If the entry is `None` it means that we have multiple stores
         // forwarding to this load.
-        let mut load_to_single_cand: HashMap<InstId, Option<usize>> = HashMap::new();
+        let mut load_to_single_cand: IdMap<InstId, Option<usize>> = IdMap::new();
 
         for (index, cand) in candidates.iter().enumerate() {
-            match load_to_single_cand.entry(cand.load) {
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(Some(index));
-                }
-                std::collections::hash_map::Entry::Occupied(mut slot) => {
-                    // Already multiple stores forward to this load.
-                    let Some(other) = *slot.get() else { continue };
-                    let other_cand = candidates[other];
+            let Some(&entry) = load_to_single_cand.get(&cand.load) else {
+                load_to_single_cand.insert(cand.load, Some(index));
+                continue;
+            };
+            // Already multiple stores forward to this load.
+            let Some(other) = entry else { continue };
+            let other_cand = candidates[other];
 
-                    // Handle the very basic case when the two stores are in
-                    // the same block so deciding which one forwards is easy.
-                    // The later one forwards as long as they both have a
-                    // dependence distance of one to the load.
-                    if cx.function.parent(cand.store) == cx.function.parent(other_cand.store)
-                        && cand.is_dependence_distance_of_one(se, cx, self.lp)
-                        && other_cand.is_dependence_distance_of_one(se, cx, self.lp)
-                    {
-                        // They are in the same block, the later one will
-                        // forward to the load.
-                        if self.instr_index(other_cand.store) < self.instr_index(cand.store) {
-                            slot.insert(Some(index));
-                        }
-                    } else {
-                        slot.insert(None);
-                    }
+            // Handle the very basic case when the two stores are in the same
+            // block so deciding which one forwards is easy. The later one
+            // forwards as long as they both have a dependence distance of one
+            // to the load.
+            if cx.function.parent(cand.store) == cx.function.parent(other_cand.store)
+                && cand.is_dependence_distance_of_one(se, cx, self.lp)
+                && other_cand.is_dependence_distance_of_one(se, cx, self.lp)
+            {
+                // They are in the same block, the later one will forward to
+                // the load.
+                if self.instr_index(other_cand.store) < self.instr_index(cand.store) {
+                    load_to_single_cand.insert(cand.load, Some(index));
                 }
+            } else {
+                load_to_single_cand.insert(cand.load, None);
             }
         }
 
@@ -681,7 +679,7 @@ impl FunctionPass for LoopLoadElim {
                 aa.add_aa_result(BasicAA::new(&memory_unit));
                 aa.add_aa_result(TypeBasedAA::new(&memory_unit));
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, self.max_target_vector_width_in_bits);
-                let mut lel = LoadEliminationForLoop { lp: header, lai: &lai, inst_order: HashMap::new() };
+                let mut lel = LoadEliminationForLoop { lp: header, lai: &lai, inst_order: IdMap::new() };
                 lel.plan(se, &cx, has_opt_size(cx.function)).map(|plan| (plan, lai))
             };
             let Some((plan, lai)) = planned else { continue };
