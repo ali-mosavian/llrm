@@ -64,7 +64,7 @@ A slot is placed in a bucket by the bucket's label and top functions; slots insi
 | B4 | isel | 43.8 | `floatfold@6`, `farcall@1` (isel itself is not a slot) | unowned | x86 isel float folding, far-call lowering |
 | B5 | branch folding, placement | 36.6 | `jumps@17` (Partial), `early-tailduplication` (Missing) | lir-cleanup-poc (`jumps@17`) | branch-folder, block-placement, tailduplication |
 | B6 | phi-elim, two-address | 23.8 | `phielim@4`, `twoaddr@9`, `phiconst@2` | lir-cleanup-poc; `phiconst@2` unowned | phi-node-elimination, two-address-instruction |
-| B7 | assemble (frame, shrink-wrap) | 22.7 | `prologue@13`, `shrink-wrap` (Missing), `stack-coloring` (Missing) | unowned | prologepilog, shrink-wrap, stack-coloring |
+| B7 | assemble (frame, shrink-wrap) | 22.7 | `prologue@13`, `shrink-wrap` (Missing), `stack-coloring` (Missing) | domtree-port (`shrink-wrap`, #3067 S2) | prologepilog, shrink-wrap, stack-coloring |
 | B8 | coalesce, live intervals | 16.8 | `coalesce@10` | lir-cleanup-poc | register-coalescer |
 | B9 | emission | 16.8 | none (`driver::emitted`, not a slot) | none | none |
 
