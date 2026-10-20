@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 160 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 162 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -48,6 +48,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
 | combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. |  | [combine_visit_select](combine_visit_select.md) |
+| combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. |  | [combine_xor](combine_xor.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | Nothing yet: `difference` and `guards::Given::holds` move here. | [constraintelim](constraintelim.md) |
