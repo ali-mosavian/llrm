@@ -161,3 +161,8 @@ id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_divi
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
+issue = 3052
+owner = "lir-cleanup-port"
+date = "2026-10-23"
