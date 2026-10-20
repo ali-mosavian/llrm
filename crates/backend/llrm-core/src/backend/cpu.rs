@@ -331,6 +331,14 @@ impl Profile {
             && self.cost("alu_rr")? + self.cost("mov_rm")? + self.partial_register_stall < self.cost("movzx")?)
     }
 
+    /// Whether `and r,255` and `and r,65535` are better as the `movzx` of the
+    /// low byte or word (X86InstrCompiler.td): shorter, so for size; for
+    /// clocks only where the extension is no slower than the `and`. The 486
+    /// and the Pentium take three clocks for it and one for the `and`.
+    pub fn masks_by_extension(&self) -> Result<bool, String> {
+        Ok(self.size || self.cost("movzx")? <= self.cost("alu_rr")?)
+    }
+
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
@@ -774,6 +782,25 @@ mod zeroed_load_tests {
         for (name, pair) in [("386", false), ("486", true), ("P5", true), ("P6", false), ("Core", false)] {
             let cpu = profile(name).expect("a cpu");
             assert_eq!(cpu.clears_before_byte_load(), Ok(pair), "{name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    /// `and r,255` as `movzx r,al` is three clocks against one on the 386,
+    /// 486 and Pentium, so it is chosen there only for size; a one-clock
+    /// extension (Pentium Pro and later) makes it free. Priced from the
+    /// description, not named.
+    #[test]
+    fn test_the_extension_replaces_a_mask_for_size_or_where_it_is_no_slower() {
+        for (name, fast) in [("386", false), ("486", false), ("P5", false), ("P6", true)] {
+            let mut cpu = profile(name).expect("a cpu").clone();
+            assert_eq!(cpu.masks_by_extension(), Ok(fast), "{name}");
+            cpu.size = true;
+            assert_eq!(cpu.masks_by_extension(), Ok(true), "{name} for size");
         }
     }
 }

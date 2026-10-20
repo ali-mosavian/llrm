@@ -3161,7 +3161,15 @@ mod tests {
         fixture: &str,
         name: &str,
     ) -> Vec<String> {
-        let lines = flat_listing(fixture);
+        flat_body_with(fixture, name, &["-O2"])
+    }
+
+    fn flat_body_with(
+        fixture: &str,
+        name: &str,
+        flags: &[&str],
+    ) -> Vec<String> {
+        let lines = flat_listing_with(fixture, flags);
         lines
             .iter()
             .skip_while(|line| **line != format!("_{name} proc near"))
@@ -3234,13 +3242,21 @@ mod tests {
     }
 
     /// The same sum of dwords keeps the `movzx`: the word `add` would leave the
-    /// upper half as it was, and the result is read as a dword.
+    /// upper half as it was, and the result is read as a dword. The combiner
+    /// makes the extension `and eax, 65535`; the pin selects it back to `movzx`
+    /// (X86InstrCompiler.td), which the 486 and the Pentium price at 3 clocks
+    /// against 1: so for size (-Os), and `and` stays at -O2.
     #[test]
     fn test_m32_keeps_the_extension_where_the_upper_half_is_not_zero() {
-        let body = flat_body("narrow", "int_sum");
+        let small = flat_body_with("narrow", "int_sum", &["-Os"]);
         assert!(
-            body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"),
-            "{body:#?}"
+            small.iter().any(|line| line.starts_with("add eax, ")) && small.iter().any(|line| line == "movzx eax, ax"),
+            "{small:#?}"
+        );
+        let fast = flat_body("narrow", "int_sum");
+        assert!(
+            fast.iter().any(|line| line == "and eax, 65535") && !fast.iter().any(|line| line.starts_with("movzx")),
+            "{fast:#?}"
         );
     }
 
