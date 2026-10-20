@@ -108,6 +108,7 @@ pub mod combine_loadstore;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
+pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;
@@ -204,7 +205,7 @@ pub mod loopsplit;
 pub mod loopunroll;
 pub mod loopunrollpass;
 pub mod loopversion;
-pub mod lsr;
+pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
 mod lsr_collect_tests;
@@ -214,7 +215,13 @@ mod lsr_formula_tests;
 pub mod lsr_generate;
 #[cfg(test)]
 mod lsr_generate_tests;
+pub mod lsr_implement;
 pub mod lsr_narrow;
+pub mod lsr_pass;
+#[cfg(test)]
+mod lsr_pass_tests;
+pub mod lsr_prepare;
+pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
@@ -222,7 +229,6 @@ pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
 pub mod mergestores;
-pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
@@ -270,6 +276,7 @@ pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
+pub mod uncondicmp;
 pub mod undefpred;
 pub mod unroll;
 pub mod unroll_jam;

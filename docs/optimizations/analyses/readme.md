@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 65 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -16,7 +16,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 65 documented, 0 undoc
 | attrsummary | `Summary` for each defined function, derived from its attributes alone. |  | [attrsummary](attrsummary.md) |
 | avail | Dead stores, and the cells loads and stores name, as LLVM's DSE finds them. | `dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`, | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
-| blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `branchprob`'s edge probabilities, as `BlockFrequencyInfoWrapperPass` runs it over `BranchProbabilityInfo`. | `inlinecost` (cold and hot call sites, D1). | [blockfreq](blockfreq.md) |
+| blockfreq | `BlockFrequencyInfo` of a MIR function: LLVM's `BlockFrequencyInfoImpl` (`llrm_mir::blockfrequency`) over `BranchProbabilityInfo` (`crate::bpi`), as `BlockFrequencyInfoWrapperPass` runs it. | `inlinecost` (cold and hot call sites, D1), `profit`. | [blockfreq](blockfreq.md) |
 | bpi | `BranchProbabilityInfo` of a MIR function: LLVM's static branch probabilities, translated from llvm/lib/Analysis/BranchProbabilityInfo.cpp at d1106deb71cc. | `blockfreq` (`BlockFrequencyInfo`'s edge probabilities, once its callers | [bpi](bpi.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
 | captureanalysis | `CaptureAnalysis` of `AliasAnalysis.h` at d1106deb71cc: how an object may be captured before an instruction, with the two providers `BasicAliasAnalysis.cpp` has. | `CaptureAnalysis`, `SimpleCaptureAnalysis`, `EarliestEscapeAnalysis`. | [captureanalysis](captureanalysis.md) |
@@ -71,3 +71,4 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 65 documented, 0 undoc
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
 | ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. |  | [ssaupdater](ssaupdater.md) |
 | ssaupdaterbulk | `SSAUpdaterBulk`: values defined in several blocks, rewritten for all their uses at once, with a phi where definitions meet. |  | [ssaupdaterbulk](ssaupdaterbulk.md) |
+| typebasedaa | `TypeBasedAliasAnalysis.cpp` at d1106deb71cc: two accesses whose `!tbaa` types are unrelated cannot alias. | `TypeBasedAA`, `aliases`. | [typebasedaa](typebasedaa.md) |

@@ -262,9 +262,17 @@ fn is_alloca(
     unit: &passes::Unit,
     object: Operand,
 ) -> bool {
+    is_alloca_in(&*unit.function, object)
+}
+
+/// Whether `object` is the value of an `alloca` of `function`.
+pub(crate) fn is_alloca_in(
+    function: &llrm_mir::module::Function,
+    object: Operand,
+) -> bool {
     match object {
-        Operand::Value(value) => match unit.function.value(value).def {
-            ValueDef::Instruction(def) => matches!(unit.function.instruction(def).opcode, Opcode::Alloca { .. }),
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => matches!(function.instruction(def).opcode, Opcode::Alloca { .. }),
             ValueDef::Argument(_) => false,
         },
         _ => false,
@@ -295,16 +303,17 @@ fn is_not_visible_on_unwind_in_loop(
 }
 
 /// `isWritableObject`: an alloca or a variable that is not constant.
-fn is_writable_object(
-    unit: &passes::Unit,
+pub(crate) fn is_writable_object(
+    context: &llrm_mir::Context,
+    function: &llrm_mir::module::Function,
     outer: &Outer,
     object: Operand,
 ) -> bool {
-    if is_alloca(unit, object) {
+    if is_alloca_in(function, object) {
         return true;
     }
     match object {
-        Operand::Constant(id) => match unit.context.get(id).kind {
+        Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Global(global) => outer.globals.get(global.0 as usize).is_some_and(|one| {
                 matches!(
                     &one.kind,
@@ -500,7 +509,7 @@ pub fn promote_loop_accesses_to_scalars(
     // violating the memory model.
     if store_safety == StoreSafety::Unknown {
         let object = underlying_object(unit, first_pointer);
-        if is_writable_object(unit, outer, object) && is_thread_local_object() {
+        if is_writable_object(&*unit.context, &*unit.function, outer, object) && is_thread_local_object() {
             store_safety = StoreSafety::Safe;
         }
     }

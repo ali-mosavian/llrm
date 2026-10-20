@@ -1,6 +1,8 @@
-//! `SimpleLoopUnswitch<trivial>`: a branch or switch in a loop on a
-//! loop-invariant condition, one side of which leaves the loop, is decided
-//! before the loop instead of on every trip.
+//! `SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant
+//! condition, one side of which leaves the loop, is decided before the loop
+//! instead of on every trip (trivial). With `non_trivial`, a condition whose
+//! sides both stay in the loop is decided there too, at the price of a copy of
+//! the loop for each way (`nontrivial.rs`, chosen by `candidates.rs`).
 //!
 //! # How it works
 //! `unswitch_all_trivial_conditions` walks from the loop header along the
@@ -73,12 +75,16 @@ use llrm_mir::edit::Position;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::tti::Tti;
 use llrm_mir::valuetracking::{AssumptionCache, Query};
 
 use crate::edges::{self, phis};
 use crate::lcssa::{arms, from_arms};
+
+mod candidates;
+mod nontrivial;
 
 /// What the pass reads and changes.
 pub struct Run<'a> {
@@ -87,6 +93,7 @@ pub struct Run<'a> {
     pub globals: &'a [GlobalValue],
     pub metadata: &'a [MetadataNode],
     pub callees: &'a Callees,
+    pub tti: &'a dyn Tti,
     pub function: &'a mut Function,
 }
 
@@ -398,6 +405,8 @@ fn build_partial_unswitch_conditional_branch(
     unswitched: BlockId,
     normal: BlockId,
     insert_freeze: bool,
+    // The analyses and the instruction a freeze is judged at (`AC`, `DT`, `I`).
+    judged_at: Option<(&Analyzed, InstId)>,
 ) {
     let void = run.context.types.void();
     let mut frozen = Vec::new();
@@ -410,13 +419,13 @@ fn build_partial_unswitch_conditional_branch(
                 metadata: run.metadata,
                 function: &*run.function,
                 layout: run.layout,
-                dt: None,
-                assumptions: None,
+                dt: judged_at.map(|(analyzed, _)| &analyzed.tree),
+                assumptions: judged_at.map(|(analyzed, _)| &analyzed.assumptions),
                 dom_conditions: None,
                 cond_context: None,
-                cxt: None,
+                cxt: judged_at.map(|(_, at)| at),
             };
-            if !llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_poison(&query, inv, 0) {
+            if !llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(&query, inv, 0) {
                 let ty = match inv {
                     Operand::Value(one) => run.function.value(one).ty,
                     _ => unreachable!("an invariant is a value"),
@@ -627,6 +636,7 @@ fn unswitch_trivial_branch(
             unswitched_bb,
             new_ph,
             true,
+            None,
         );
     }
 
@@ -948,12 +958,60 @@ fn unswitch_all_trivial_conditions(
     }
 }
 
-/// `unswitchLoop` with only the trivial path on: whether the loop changed.
+/// What `unswitchLoop` did to a loop: whether it changed, and the headers of
+/// the loops it cloned, which `postUnswitch` hands to the pass manager.
+#[derive(Default)]
+struct Unswitched {
+    changed: bool,
+    siblings: Vec<BlockId>,
+}
+
+/// `unswitchBestCondition`: the cheapest non-trivial candidate, if its cost is
+/// below the threshold.
+fn unswitch_best_condition(
+    run: &mut Run,
+    analyzed: &mut Analyzed,
+    header: BlockId,
+) -> Option<Vec<BlockId>> {
+    let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
+    // Collect all invariant conditions within this loop (as opposed to an
+    // inner loop which would be handled when visiting that inner loop).
+    let candidates = candidates::collect(run, analyzed, lp);
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut best = candidates::best(run, analyzed, lp, &candidates)?;
+    let insert_freeze;
+    if run.function.instruction(best.terminator).opcode == Opcode::Select {
+        // Select instructions with a poison conditional do not propagate
+        // poison, but branching on poison causes UB: freeze the condition of
+        // the branch the select becomes.
+        let cond = run.function.instruction(best.terminator).operands[0];
+        insert_freeze = nontrivial::should_insert_freeze_of_select(run, analyzed, lp, cond);
+        best.terminator = nontrivial::turn_select_into_branch(run, best.terminator);
+        // The branch made new blocks in the loop (SU7).
+        *analyzed = Analyzed::of(run);
+    } else {
+        let cond = run.function.instruction(best.terminator).operands[0];
+        let cond = if run.function.instruction(best.terminator).opcode == Opcode::Switch {
+            cond
+        } else {
+            skip_trivial_select(run, cond)
+        };
+        insert_freeze = nontrivial::should_insert_freeze(run, analyzed, lp, cond, best.terminator);
+    }
+    llrm_support::debug!("simpleloopunswitch", "unswitching non-trivial terminator in b{}", header.0);
+    Some(nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers)
+}
+
+/// `unswitchLoop`: the trivial path, then, with `non_trivial`, the best
+/// non-trivial condition.
 fn unswitch_loop(
     run: &mut Run,
     analyzed: &mut Analyzed,
     header: BlockId,
-) -> bool {
+    non_trivial: bool,
+) -> Unswitched {
     // Must be in loop simplified form: we need a preheader and dedicated
     // exits.
     {
@@ -962,15 +1020,41 @@ fn unswitch_loop(
             || !lp.has_dedicated_exits(run.function)
             || lp.get_loop_latch(run.function).is_none()
         {
-            return false;
+            return Unswitched::default();
         }
     }
-    unswitch_all_trivial_conditions(run, analyzed, header)
+    // Try trivial unswitch first before looking at other blocks in the loop.
+    if unswitch_all_trivial_conditions(run, analyzed, header) {
+        return Unswitched { changed: true, siblings: Vec::new() };
+    }
+    // Skip non-trivial unswitching for optsize functions.
+    let optsize = run
+        .function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            ),
+        );
+    let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
+    if !non_trivial || optsize || !nontrivial::is_safe(run, analyzed, lp) {
+        return Unswitched::default();
+    }
+    match unswitch_best_condition(run, analyzed, header) {
+        Some(siblings) => Unswitched { changed: true, siblings },
+        None => Unswitched::default(),
+    }
 }
 
-/// `SimpleLoopUnswitchPass<trivial>` over a function: every loop, innermost
-/// first. Whether anything changed.
-pub fn unswitch_loops(run: &mut Run) -> bool {
+/// `SimpleLoopUnswitchPass` over a function: every loop, innermost first. The
+/// loops a non-trivial unswitch clones are looked at after. Whether anything
+/// changed.
+pub fn unswitch_loops(
+    run: &mut Run,
+    non_trivial: bool,
+) -> bool {
     let mut analyzed = Analyzed::of(run);
     let mut work: std::collections::VecDeque<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
@@ -980,21 +1064,32 @@ pub fn unswitch_loops(run: &mut Run) -> bool {
             continue;
         }
         // SU1: a loop that was unswitched is looked at again.
-        while unswitch_loop(run, &mut analyzed, header) {
+        loop {
+            let step = unswitch_loop(run, &mut analyzed, header, non_trivial);
+            if !step.changed {
+                break;
+            }
             changed = true;
+            work.extend(step.siblings);
             // The loops around it may have changed: derive them again where
-            // the nest is not a top-level loop.
+            // the nest is not a top-level loop, or the pass cloned blocks.
             let top_level = analyzed.loops.get_loop_for(header).is_some_and(|one| one.get_parent_loop().is_none());
-            if !top_level {
+            if !top_level || non_trivial {
                 analyzed = Analyzed::of(run);
+            }
+            if !run.function.is_placed(header) || !analyzed.loops.is_loop_header(header) {
+                break;
             }
         }
     }
     changed
 }
 
-/// `SimpleLoopUnswitchPass<trivial>` as a slot of the pipeline.
-pub struct SimpleLoopUnswitch;
+/// `SimpleLoopUnswitchPass` as a slot of the pipeline: `NonTrivial` is the
+/// pin's `Level == O3`.
+pub struct SimpleLoopUnswitch {
+    pub non_trivial: bool,
+}
 
 impl FunctionPass for SimpleLoopUnswitch {
     fn name(&self) -> &'static str {
@@ -1011,15 +1106,17 @@ impl FunctionPass for SimpleLoopUnswitch {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        let tti = crate::looprotate::target_tti(outer.target());
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
             globals: &outer.globals,
             metadata: unit.metadata,
             callees: outer.callees(),
+            tti: &*tti,
             function: unit.function,
         };
-        if unswitch_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if unswitch_loops(&mut run, self.non_trivial) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 

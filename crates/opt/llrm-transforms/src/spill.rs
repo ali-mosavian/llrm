@@ -103,7 +103,7 @@
 //!
 //! # Used by
 //! [`crate::profit`] (`spill_forecast`, `weighted`) prices every motion with
-//! it; [`crate::lsr`], [`crate::gvn`] (partial redundancy elimination),
+//! it; [`crate::lsr_pass`], [`crate::gvn`] (partial redundancy elimination),
 //! [`crate::hoist`] and [`crate::addresssink`] ask it
 //! directly when they weigh a rewrite against register pressure. Not a pass:
 //! it runs only inside those.

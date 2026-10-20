@@ -201,9 +201,7 @@ pub fn folded(
                 continue;
             }
         }
-        if !preds.contains(&pred) {
-            preds.push(pred);
-        }
+        preds.push(pred);
     }
     if preds.is_empty() {
         return false;
