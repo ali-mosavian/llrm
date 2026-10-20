@@ -133,3 +133,37 @@ fn a_run_with_nothing_changed_since_the_last_is_skipped() {
     let out = combine_spoil_combine(false);
     assert!(out.contains("add i32 %x, 0"), "{out}");
 }
+
+/// Runs `Combine` and keeps what it preserved.
+struct Recording(std::rc::Rc<std::cell::Cell<Option<bool>>>);
+
+impl FunctionPass for Recording {
+    fn name(&self) -> &'static str {
+        "recording"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let preserved = Combine { enabled: true }.run(unit, analyses);
+        self.0.set(Some(preserved.cfg_preserved()));
+        preserved
+    }
+}
+
+/// A run that changed the function still preserves the CFG analyses, as
+/// `InstCombinePass::run` returns `preserveSet<CFGAnalyses>`: it changes no
+/// block or edge. It returned `none()`, and the dominator tree and loops were
+/// rebuilt after every combine@N that changed anything.
+#[test]
+fn a_run_that_changed_the_function_preserves_the_cfg_analyses() {
+    let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+    let mut module = parsed(TEXT);
+    let mut manager = PassManager::default();
+    manager.add(Recording(std::rc::Rc::clone(&seen)));
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert!(printed(&module).contains("[4 x i8]"), "the run changed the body");
+    assert_eq!(seen.get(), Some(true));
+}

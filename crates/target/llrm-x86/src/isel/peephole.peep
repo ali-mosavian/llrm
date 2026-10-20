@@ -233,6 +233,13 @@ rule decrement
     when    dead(@0, CF), no_longer(@0, $0)
     rewrite @0: dec d, d
 
+// The combiner's canonical `x - 1` is `add x, -1`: the same DEC, as X86's
+// patterns select for `add x, -1` (X86InstrCompiler.td `(add GR32:$src, -1)`).
+rule decrement_by_add
+    match   add d:reg, d, #-1
+    when    dead(@0, CF), no_longer(@0, $0)
+    rewrite @0: dec d, d
+
 
 // A borrow spread to a mask: `0 - 0 - CF` is `r - r - CF`, flags and all,
 // and needs no zero. The mov between keeps the borrow.
