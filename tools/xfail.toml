@@ -156,8 +156,3 @@ id = "unit llrm-c::compile::tests::test_m32_an_unmarked_function_takes_registers
 issue = 3059
 owner = "backend-slopes"
 date = "2026-10-20"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest"
-issue = 2980
-owner = "simplify-combine-wiring-2128"
-date = "2026-10-21"

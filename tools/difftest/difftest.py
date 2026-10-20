@@ -64,7 +64,7 @@ COUNTERPART = {
     "bdce": "bdce",
     "tailrec": "tailcallelim",
     "float2int": "float2int",
-    "trunc-inst-combine": "aggressive-instcombine",
+    "aggressive-instcombine": "aggressive-instcombine",
     "tailcallelim": "tailcallelim",
     "memcpyopt": "memcpyopt",
     "cvp": "correlated-propagation",

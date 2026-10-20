@@ -61,7 +61,7 @@
 //! `loopversion_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `unswitch`, `split` and `distribute` and
+//! Once per body, after `unswitch` and `distribute` and
 //! before unroll-jam, at -O3 and -Omax (`-fversion-loops`, both
 //! reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 //! pass is selected by name. The module declares `llrm.noalias.p0` first
