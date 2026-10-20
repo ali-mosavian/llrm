@@ -665,3 +665,9 @@ def test_a_pr_that_names_the_assistant_is_refused_wherever_it_does(tmp_path):
     assert any("commit" in w for w in ps.refusals(head2, "", base="main", cwd=repo2))
     repo3, head3 = pr_over_main(sub(tmp_path, "l"), file_text="// written by " + "Clau" + "de\nfn a() {}\n")
     assert any("added line" in w for w in ps.refusals(head3, "", base="main", cwd=repo3))
+
+
+def test_the_word_clause_does_not_name_the_assistant(tmp_path):
+    """A loose pattern would refuse every PR with a where clause or an if clause."""
+    repo, head = pr_over_main(tmp_path, file_text="// the where clause and the if clause\nfn a() {}\n", message="docs: a clause")
+    assert ps.refusals(head, "the clause", base="main", cwd=repo, title="feat: clause") == []
