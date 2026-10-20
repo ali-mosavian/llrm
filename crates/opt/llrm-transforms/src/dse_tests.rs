@@ -551,8 +551,8 @@ fn a_switch_asks_only_the_cells_its_arms_differ_in() {
 
 /// The cells of one array were compared in pairs, every cell with all of its
 /// object's: `joins` 256, `mir dse` 1,270 Minstr and 3.8x for twice the size. A
-/// walk now stops at `MemorySSAUpwardsStepLimit` (90, LLVM's), so the cost is linear;
-/// stores that far apart are not paired, as in LLVM.
+/// walk now stops at `MemorySSAUpwardsStepLimit` (90, LLVM's), so the cost is
+/// linear; stores that far apart are not paired, as in LLVM.
 #[test]
 fn a_walk_over_the_cells_of_one_array_stops_at_the_step_limit() {
     let stores = |cells: usize| -> String {
