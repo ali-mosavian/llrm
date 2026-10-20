@@ -1241,7 +1241,6 @@ fn float_bytes(
                 FloatKind::Float => 4,
                 FloatKind::Double => 8,
                 FloatKind::X86Fp80 => 10,
-                _ => return None,
             };
             Some((number, bytes))
         })
