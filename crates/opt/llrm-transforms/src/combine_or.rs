@@ -17,10 +17,9 @@
 //! `foldIntegerPackFromVector`, `foldOrOfInversions`,
 //! `foldUsingDistributiveLaws`, the `i1` select folds
 //! (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-//! `matchBSwapOrBitReverse`, `matchFunnelShift` and `matchOrConcat` (MIR has
-//! no `fshl`), `foldBinOpShiftWithShift`, `tryFoldInstWithCtpopWithNot`, the
-//! disjoint-`or` folds, the `trunc`/`lshr` mask fold, `matchSelectFromAndOr`
-//! and everything after it.
+//! `matchBSwapOrBitReverse`, `matchOrConcat`, `foldBinOpShiftWithShift`,
+//! `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
+//! mask fold, `matchSelectFromAndOr` and everything after it.
 //!
 //! # Example
 //! `(x & 12) | (y & -13)` with `y = x | 3` keeps one mask:
@@ -38,6 +37,8 @@ use llrm_mir::opcode::{BinaryOp, Flags};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_funnel::match_funnel_shift;
+use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
@@ -45,8 +46,15 @@ use crate::combine_shared::{
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 
 /// The rewrites in the pin's order.
-const FOLDS: &[Fold] =
-    &[into_select_or_phi, select_binop_select, xor_constant, disjoint_mul, not_or_decrement, mask_merge];
+const FOLDS: &[Fold] = &[
+    into_select_or_phi,
+    select_binop_select,
+    match_funnel_shift,
+    xor_constant,
+    disjoint_mul,
+    not_or_decrement,
+    mask_merge,
+];
 
 fn into_select_or_phi(
     c: &mut Combiner,
@@ -247,7 +255,10 @@ pub fn visit_or(
     // foldComplexAndOrPatterns, foldIntegerPackFromVector, foldOrOfInversions,
     // foldUsingDistributiveLaws and the i1 select folds.
     let (op0, op1, _) = parts(c, inst);
-    FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
+        return found;
+    }
+    fold_boolean_and_or(c, inst, op0, op1, false, false).map_or(Visit::None, Visit::Replace)
 }
 
 #[cfg(test)]

@@ -39,8 +39,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{
-    binop, commutative, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited,
-    width,
+    binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
 
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;

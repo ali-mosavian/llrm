@@ -101,6 +101,9 @@ fn a_private_global_whose_address_leaves_is_forgotten() {
         "%n = ptrtoint ptr @g to i16\n  store i16 %n, ptr @word",
         "store i16 ptrtoint (ptr @g to i16), ptr @word",
         "%n = add i16 ptrtoint (ptr @g to i16), 1\n  store i16 %n, ptr @word",
+        "store ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), ptr @slot",
+        "store ptr getelementptr (i8, ptr @g, i16 1), ptr @slot",
+        "call void @outside(ptr getelementptr (i8, ptr @g, i16 1))",
     ] {
         let globals = format!("{PRIVATE}@slot = global ptr null\n@word = global i16 0\n");
         let call = format!("{leaves}\n  call void @outside(ptr null)");
@@ -136,6 +139,14 @@ b0:
     );
     let call = "%a = alloca [4 x i8]\n  %s = addrspacecast ptr %a to ptr addrspace(1)\n  call addrspace(1) void @mk(ptr addrspace(1) %s)\n  call addrspace(1) void @set(ptr addrspace(1) %s)";
     assert_eq!(kept(&globals, call), None);
+    // farstruct.nib as #3251 left it, 0 for 5: the address a constant cast,
+    // which the use scan did not see.
+    let constant = globals.replace(
+        "%far = addrspacecast ptr @g to ptr addrspace(1)\n  store ptr addrspace(1) %far,",
+        "store ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)),",
+    );
+    assert_ne!(constant, globals, "premise: the cast is a constant");
+    assert_eq!(kept(&constant, call), None);
 }
 
 /// QB's `REDIM` descriptor held every array's address in a private constant

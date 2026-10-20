@@ -270,6 +270,17 @@ impl TripState {
     }
 }
 
+thread_local! {
+    static COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many backedge-taken counts were worked out (a cache miss of
+/// `getBackedgeTakenInfo`) on this thread: a test counts what a pass asks
+/// afresh.
+pub fn backedge_taken_computations() -> usize {
+    COMPUTATIONS.with(std::cell::Cell::get)
+}
+
 impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8587
     /// `getBackedgeTakenInfo(L)`: the loop headed by `header`.
@@ -289,6 +300,7 @@ impl ScalarEvolution {
         let invalid = BackedgeTakenInfo::invalid(self);
         self.trips.counts.insert(header, invalid);
 
+        COMPUTATIONS.with(|one| one.set(one.get() + 1));
         let result = self.compute_backedge_taken_count(cx, header);
 
         // Now that we know more about the trip count for this loop, forget any

@@ -267,9 +267,11 @@ pub fn _merged(
     };
     let replacements = supplier.keys().map(|&at| (at, result(function, at))).collect::<BTreeMap<_, _>>();
     for (&at, &phi) in &phis {
-        let incoming = predecessors[&at]
-            .iter()
-            .map(|&parent| {
+        let incoming = function
+            .edge_predecessors(cfg::block(at))
+            .into_iter()
+            .map(cfg::id)
+            .map(|parent| {
                 (if exits.contains(&at) { Operand::Value(value) } else { replacements[&parent] }, cfg::block(parent))
             })
             .collect::<Vec<_>>();

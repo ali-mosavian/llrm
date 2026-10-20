@@ -57,7 +57,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
 #[test]
 fn test_the_intrinsics_createscev_models_and_mir_lacks_are_not_mir_intrinsics() {
     for name in
-        ["llvm.abs", "llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"]
+        ["llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"]
     {
         assert!(llrm_mir::intrinsics::Intrinsic::named(name).is_none(), "{name} is a MIR intrinsic now: translate it");
     }
@@ -192,4 +192,26 @@ fn test_a_phi_of_poison_and_a_later_phi_of_its_block_is_not_that_phi() {
     let printed = print_module_values(&module);
     let a = printed.lines().find(|line| line.starts_with("%a\t")).expect("a line for %a");
     assert!(!a.contains("{0,+,1}"), "{printed}");
+}
+
+/// `llvm.abs` is `getAbsExpr` (`smax(-x, x)`, the negation `nsw` where the
+/// poison flag is set), as the pin's `print<scalar-evolution>` lists it: before
+/// MIR gained the intrinsic a call to it was an unknown.
+#[test]
+fn test_llvm_abs_is_the_smax_of_the_value_and_its_negation() {
+    let text = "declare i32 @llvm.abs.i32(i32, i1)\n\
+        define i32 @f(i32 %x) {\nentry:\n\
+          %a = call i32 @llvm.abs.i32(i32 %x, i1 false)\n\
+          %b = call i32 @llvm.abs.i32(i32 %x, i1 true)\n  ret i32 %a\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let heads: Vec<&str> = printed.lines().map(|line| line.split("\t\t").next().expect("a line")).collect();
+    assert_eq!(
+        heads,
+        [
+            "@f",
+            "%a\t((-1 * %x) smax %x) U: full-set S: full-set",
+            "%b\t((-1 * %x)<nsw> smax %x) U: full-set S: full-set",
+        ]
+    );
 }
