@@ -56,6 +56,13 @@
 //! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 //! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 //!
+//! DEVIATE M6 (no number): an instruction that reads or writes any physical
+//! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
+//! through (and a use of a constant register). Effect: none seen, 0 sinks
+//! missed over d_faces and the 820-object corpus at -O2 (counted: no
+//! instruction that passes `safe_to_move` has a physical write and no read).
+//! Exit: honor a dead implicit def when LIR marks one.
+//!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
