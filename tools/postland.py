@@ -175,6 +175,13 @@ def by_binary(output: str) -> dict[str, list[str]]:
 
 
 NAMELESS = "unit workspace::failed-without-a-test-name"
+LAST_OUTPUT: dict[str, str] = {}
+
+
+def record_nameless(sha: str, output: str) -> None:
+    """Keep what a nameless run printed and the load it ran under, so the retry leaves a trace: HOME/nameless-<sha>.log."""
+    HOME.mkdir(parents=True, exist_ok=True)
+    (HOME / f"nameless-{sha[:9]}.log").write_text(f"load {os.getloadavg()}\n{output[-4000:]}\n")
 
 
 def merged(command: list[str], cwd: Path, env: dict[str, str]) -> tuple[str, int]:
@@ -199,6 +206,7 @@ def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
     fresh(at)
     output, code = merged(command, at, env)
+    LAST_OUTPUT["text"] = output
     return unit_result(output, code), unit_summary(output)
 
 
@@ -217,6 +225,7 @@ def probe(failure: str, sha: str) -> bool:
     if sha not in UNIT_SETS:
         UNIT_SETS[sha] = unit_failures(at)[0]
         if NAMELESS in UNIT_SETS[sha]:  # one retry: a build killed by load or a memory cap reads like a broken commit
+            record_nameless(sha, LAST_OUTPUT.get("text", ""))
             UNIT_SETS[sha] = unit_failures(at)[0]
     if NAMELESS in UNIT_SETS[sha]:
         raise Inconclusive(f"{sha[:9]} does not build")
