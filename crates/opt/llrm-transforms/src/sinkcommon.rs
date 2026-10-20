@@ -511,54 +511,78 @@ pub fn sunk(
     changed
 }
 
+/// `EqualBBWrapper::canBeMerged`: `block` holds a jump and nothing else, and
+/// is not the entry or unreachable.
+pub(crate) fn can_be_merged(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    let mut body = function.iter_block(block);
+    function.entry() != Some(block)
+        && !function.predecessors(block).is_empty()
+        && body.next().is_some_and(|first| {
+            function.instruction(first).opcode == Opcode::Br
+                && function.instruction(first).operands.len() == 1
+                && body.next().is_none()
+        })
+}
+
 /// `simplifyDuplicatePredecessors` over `block`: the predecessors that are a
 /// jump alone to it, and agree on every phi, are one.
 pub fn duplicate_predecessors_merged(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
-    let preds: Vec<BlockId> = function.predecessors(block).iter().copied().collect();
-    if preds.len() < 2 {
+    if function.predecessors(block).len() < 2 {
         return false;
     }
-    // A candidate holds a jump and nothing else
-    // (`EqualBBWrapper::canBeMerged`): the entry block is not one, it
-    // cannot be eliminated or have predecessors.
-    let candidates: Vec<BlockId> = preds
-        .iter()
-        .copied()
-        .filter(|&pred| {
-            let mut body = function.iter_block(pred);
-            function.entry() != Some(pred)
-                && !function.predecessors(pred).is_empty()
-                && body.next().is_some_and(|first| {
-                    function.instruction(first).opcode == Opcode::Br
-                        && function.instruction(first).operands.len() == 1
-                        && body.next().is_none()
-                })
-        })
-        .collect();
-    let mut changed = false;
-    // What each phi takes from each predecessor, once (`PhiPredIVs`).
-    let phis = crate::edges::phis(function, block);
+    let candidates: Vec<BlockId> =
+        function.predecessors(block).iter().copied().filter(|&pred| can_be_merged(function, pred)).collect();
+    identical_merged(function, candidates)
+}
+
+/// `mergeIdenticalBBs`: of the `candidates`, distinct blocks that
+/// [`can_be_merged`], those that jump to the same block and give its phis the
+/// same values are one; the first of each kind stays.
+pub fn identical_merged(
+    function: &mut Function,
+    candidates: Vec<BlockId>,
+) -> bool {
+    if candidates.len() < 2 {
+        return false;
+    }
+    let successor = |function: &Function, block: BlockId| match function
+        .instruction(function.terminator(block).expect("a jump"))
+        .operands[..]
+    {
+        [Operand::Block(target)] => target,
+        _ => unreachable!("a candidate is a jump"),
+    };
+    let targets: Vec<BlockId> = candidates.iter().map(|&one| successor(function, one)).collect();
     let mut candidate_at: IdMap<BlockId, usize> = IdMap::new();
     for (at, &candidate) in candidates.iter().enumerate() {
         candidate_at.insert(candidate, at);
     }
-    let mut taken: Vec<Vec<Option<Operand>>> = vec![vec![None; phis.len()]; candidates.len()];
-    for (column, &phi) in phis.iter().enumerate() {
-        for (value, from) in llrm_analysis::occurrence::arms(function, phi) {
-            if let Some(&at) = candidate_at.get(&from) {
-                taken[at][column] = Some(value);
+    // What each successor's phis take from each candidate, once
+    // (`PhiPredIVs`).
+    let mut taken: Vec<Vec<Operand>> = vec![Vec::new(); candidates.len()];
+    let mut seen: IdSet<BlockId> = IdSet::new();
+    for &target in &targets {
+        if !seen.insert(target) {
+            continue;
+        }
+        for phi in crate::edges::phis(function, target) {
+            for (value, from) in llrm_analysis::occurrence::arms(function, phi) {
+                if let Some(&at) = candidate_at.get(&from) {
+                    taken[at].push(value);
+                }
             }
         }
     }
-    let values =
-        |at: usize| -> Vec<Operand> { taken[at].iter().map(|one| one.expect("an arm per candidate")).collect() };
-    // Candidates by what the phis take from them: the first of each kind stays.
-    let mut kept: HashMap<Vec<Operand>, BlockId> = HashMap::default();
+    let mut changed = false;
+    let mut kept: HashMap<(BlockId, Vec<Operand>), BlockId> = HashMap::default();
     for (at, &candidate) in candidates.iter().enumerate() {
-        match kept.entry(values(at)) {
+        match kept.entry((targets[at], std::mem::take(&mut taken[at]))) {
             std::collections::hash_map::Entry::Vacant(slot) => {
                 slot.insert(candidate);
             }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchrange.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchrange.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchrange.rs sha256:4ac0cad9b61f3aa4312c06e4930f78773fed4e6a60f3ba1fcdeab76d298efeff -->
+<!-- src: crates/opt/llrm-transforms/src/switchrange.rs sha256:81a406ecfde168818b034f3bb27101a7ac12188d2f2847879cc69fa585bf3e30 -->
 
 # switchrange
 
@@ -10,6 +10,15 @@ with `findContiguousCases`
 
 A switch with two destinations, one of which gets a run of consecutive
 case values, becomes a range compare and a branch.
+
+## How it works
+The cases are split by destination, the default counting as the first. A
+third destination ends the fold. A destination with one case, or whose
+cases run without a gap (`findContiguousCases`), is the range: `x - min u<
+count` (an `icmp eq` for one case) branches to it. When the value's range
+spans exactly the first and last case of a set, the gap between the two
+runs is the other destination's run. The phis of both destinations drop
+the inputs of the cases that merged into one edge.
 
 ## Example
 ```text
