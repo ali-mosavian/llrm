@@ -261,6 +261,7 @@ impl TripState {
         header: BlockId,
     ) {
         self.counts.remove(&header);
+        self.properties.remove(&header);
     }
 
     /// `BackedgeTakenCounts.clear()`.

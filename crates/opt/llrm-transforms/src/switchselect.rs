@@ -41,12 +41,12 @@
 use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_mir::constantfolding::{Env, constant_fold_inst_operands_at};
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::known::compute_known_bits;
-use llrm_support::hash::HashMap;
 
 use crate::simplifycfg::Options;
 use crate::twoentryphi::Speculation;
@@ -77,7 +77,7 @@ fn constant_folded(
     spec: &Speculation,
     function: &Function,
     inst: InstId,
-    pool: &HashMap<ValueId, ConstantId>,
+    pool: &IdMap<ValueId, ConstantId>,
 ) -> Option<ConstantId> {
     let lookup = |operand| match operand {
         Operand::Constant(constant) => Some(constant),
@@ -118,7 +118,7 @@ fn case_results(
 ) -> (bool, Vec<(InstId, ConstantId)>) {
     // The block from which the common destination is entered.
     let mut pred = function.parent(switch).expect("a placed switch");
-    let mut pool: HashMap<ValueId, ConstantId> = HashMap::default();
+    let mut pool: IdMap<ValueId, ConstantId> = IdMap::new();
     if let (Some(case), Operand::Value(cond)) = (case, function.instruction(switch).operands[0]) {
         pool.insert(cond, case);
     }
@@ -127,10 +127,15 @@ fn case_results(
         let instruction = function.instruction(inst);
         if instruction.opcode.is_terminator() {
             // A simple branch continues to the next block.
-            let mut successors = instruction.operands.iter().filter_map(|operand| match operand {
-                Operand::Block(block) => Some(*block),
-                _ => None,
-            });
+            let mut successors = instruction
+                .operands
+                .iter()
+                .filter_map(
+                    |operand| match operand {
+                        Operand::Block(block) => Some(*block),
+                        _ => None,
+                    },
+                );
             let (Some(next), None) = (successors.next(), successors.next()) else { return (false, Vec::new()) };
             if !matches!(instruction.opcode, Opcode::Br | Opcode::Switch) {
                 return (false, Vec::new());

@@ -219,6 +219,15 @@ impl Declared {
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
     }
 
+    /// `Module::getFunction`: the global `name`, declared by the module or by
+    /// this pass, without declaring it.
+    pub fn find(
+        &mut self,
+        name: &str,
+    ) -> Option<GlobalId> {
+        self.names().get(name).copied()
+    }
+
     /// The function `name` of type `ty`, declared where the module has none.
     pub fn declare(
         &mut self,
