@@ -467,6 +467,17 @@ impl<'a> BasicAA<'a> {
         !self.captures_before(object, None, true, true, aaqi).captures_nothing()
     }
 
+    /// Whether the address of `object` may be captured before `at` (anywhere
+    /// when `at` is none), a return not counted.
+    pub(crate) fn is_captured_before(
+        &self,
+        object: Operand,
+        at: Option<llrm_mir::module::InstId>,
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        !self.captures_before(object, at, true, false, aaqi).captures_nothing()
+    }
+
     /// `capturesNothing(getCapturesBefore(O, dyn_cast<Instruction>(Source),
     /// /*OrAt=*/true, /*ReturnCaptures=*/false))`.
     fn not_captured_before(

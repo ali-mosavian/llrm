@@ -211,7 +211,7 @@ impl<'a> AliasQuery<'a> {
         let found = if writes.is_none() {
             self.unknown_call_mod_ref(def, loc).writes
         } else {
-            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written))
+            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written, Some(def)))
         };
         self.cache.borrow_mut().insert(key, found);
         found
@@ -230,7 +230,7 @@ impl<'a> AliasQuery<'a> {
         }
         let touched = |list: Option<&[MemRef]>| match list {
             None => true,
-            Some(list) => list.iter().any(|one| writes.iter().any(|w| self.may_overlap(one, w))),
+            Some(list) => list.iter().any(|one| writes.iter().any(|w| self.may_overlap(one, w, Some(def)))),
         };
         touched(self.accesses.reads(call)) || touched(self.accesses.writes(call))
     }
@@ -310,14 +310,20 @@ impl<'a> AliasQuery<'a> {
         ModRef { reads: found.is_ref_set(), writes: found.is_mod_set() }
     }
 
-    /// Whether the address of the alloca `alloca` may be captured, a return
-    /// included (`PointerMayBeCaptured`), remembered in the batch.
+    /// Whether the address of the alloca `alloca` may be captured before `at`
+    /// (`EarliestEscapeInfo`; anywhere, a return included, where `at` is none),
+    /// remembered in the batch.
     fn captured(
         &self,
         alloca: llrm_mir::module::ValueId,
+        at: Option<InstId>,
     ) -> bool {
-        crate::basicaa::BasicAA::new(self.unit)
-            .is_captured(llrm_mir::module::Operand::Value(alloca), &mut self.basic.borrow_mut())
+        let basic = crate::basicaa::BasicAA::new(self.unit);
+        let object = llrm_mir::module::Operand::Value(alloca);
+        match at {
+            Some(at) => basic.is_captured_before(object, Some(at), &mut self.basic.borrow_mut()),
+            None => basic.is_captured(object, &mut self.basic.borrow_mut()),
+        }
     }
 
     /// Whether `pointer` is derived only from objects other than the alloca
@@ -361,10 +367,11 @@ impl<'a> AliasQuery<'a> {
         &self,
         local: &MemRef,
         other: &MemRef,
+        at: Option<InstId>,
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
-        if self.captured(alloca) {
+        if self.captured(alloca, at) {
             return false;
         }
         other.pointer.is_some_and(|pointer| self.derived_from_elsewhere(pointer, alloca, 0))
@@ -377,6 +384,7 @@ impl<'a> AliasQuery<'a> {
         &self,
         one: &MemRef,
         other: &MemRef,
+        at: Option<InstId>,
     ) -> bool {
         if one.space == other.space
             && let (Some(left), Some(right)) = (self.identified_object(one), self.identified_object(other))
@@ -384,7 +392,7 @@ impl<'a> AliasQuery<'a> {
         {
             return false;
         }
-        if self.unreachable_from(one, other) || self.unreachable_from(other, one) {
+        if self.unreachable_from(one, other, at) || self.unreachable_from(other, one, at) {
             return false;
         }
         // The cheap tests first: BasicAA is asked only of what they leave.
@@ -432,7 +440,7 @@ impl<'a> AliasQuery<'a> {
         one: &Location,
         other: &Location,
     ) -> AliasResult {
-        if !self.may_overlap(&one.effective, &other.effective) {
+        if !self.may_overlap(&one.effective, &other.effective, None) {
             return AliasResult::No;
         }
         let (a, b) = (&one.reference, &other.reference);
@@ -462,7 +470,7 @@ impl<'a> AliasQuery<'a> {
         loc: &Location,
     ) -> ModRef {
         let touches =
-            |list: Option<&[MemRef]>| list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective)));
+            |list: Option<&[MemRef]>| list.map(|list| list.iter().any(|one| self.may_overlap(one, &loc.effective, Some(inst))));
         let (reads, writes) = (touches(self.accesses.reads(inst)), touches(self.accesses.writes(inst)));
         if reads.is_some() && writes.is_some() {
             return ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
@@ -541,7 +549,7 @@ impl<'a> AliasQuery<'a> {
             };
             return !(nothing(first) || nothing(second));
         };
-        first_touched.iter().any(|one| second_touched.iter().any(|other| self.may_overlap(one, other)))
+        first_touched.iter().any(|one| second_touched.iter().any(|other| self.may_overlap(one, other, Some(first))))
     }
 
     /// [`isUseTriviallyOptimizableToLiveOnEntry`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L364):
