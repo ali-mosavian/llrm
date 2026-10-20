@@ -114,7 +114,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `version` | `version` (off by default; on at -O3 and -Omax) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
@@ -153,8 +153,8 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopdistribute, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit, loopunrollpass, loopversion,
-    mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    loopdistribute, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, loopversion, mem2reg,
+    memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
     trivialunswitch, unroll, unroll_jam, window,
 };
 
@@ -204,10 +204,6 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// A loop with a test of its counter against an invariant becomes two,
-    /// one either side of where it flips (gcc's `-fsplit-loops`, -O3; -Omax
-    /// too).
-    pub split: bool,
     /// A loop whose stores do not need each other's trips becomes a loop
     /// for each (gcc's `-ftree-loop-distribution`, -O3; -Omax too).
     pub distribute: bool,
@@ -307,7 +303,6 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
-            split: false,
             distribute: false,
             version: false,
             unroll_jam: false,
@@ -360,7 +355,6 @@ impl Options {
             sibcalls: false,
             peel: false,
             unswitch: false,
-            split: false,
             distribute: false,
             version: false,
             expensive: false,
@@ -378,7 +372,6 @@ impl Options {
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
-            split: false,
             distribute: false,
             version: false,
             ..Self::default()
@@ -399,7 +392,6 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            split: true,
             distribute: true,
             version: true,
             unroll_jam: true,
@@ -418,7 +410,6 @@ impl Options {
             limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            split: true,
             distribute: true,
             version: true,
             unroll_jam: true,
@@ -1252,7 +1243,6 @@ pub struct Fixed {
     /// Once, after everything else.
     last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
-    split: Option<loopsplit::Split>,
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
     interchange: Option<loopinterchange::Interchange>,
@@ -1269,7 +1259,6 @@ pub struct Fixed {
 fn without_candidates(options: &Options) -> Options {
     Options {
         unswitch: false,
-        split: false,
         distribute: false,
         version: false,
         unroll_jam: false,
@@ -1328,7 +1317,6 @@ impl Fixed {
             peelers,
             last,
             unswitch,
-            split: (applied.options.split && only.is_none()).then_some(loopsplit::Split),
             distribute: distribute.filter(|_| only.is_none()),
             version: version.filter(|_| only.is_none()),
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
@@ -1396,7 +1384,6 @@ impl Fixed {
         linear.unswitch = None;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
-            linear.split = None;
             linear.distribute = None;
             linear.version = None;
             linear.interchange = None;
@@ -1441,15 +1428,6 @@ impl Fixed {
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
         }
-        // After unswitching, before jamming, as gcc's pass order has it. Each
-        // half is cleaned as a peeled loop is.
-        if let Some(split) = &mut self.split {
-            if run.step(split, "split", unit, analyses) {
-                self.scalarized(unit, analyses, run, "split");
-                self.fixed(unit, analyses, run, "split-")?;
-            }
-        }
-        // The pipeline that judged a split has cleaned it.
         if let Some(distribute) = &mut self.distribute {
             run.step(distribute, "distribute", unit, analyses);
         }
