@@ -491,7 +491,8 @@ impl Facts {
     /// `Never` outranks the other ways to state inlining, whichever came first
     /// (`noinline alwaysinline` and `alwaysinline noinline` agree).
     fn keeping_the_strongest_inlining(mut facts: Vec<Fact>) -> Facts {
-        let strongest = facts.iter().filter_map(|fact| if let Fact::Inline(how) = fact { Some(*how) } else { None }).min();
+        let strongest =
+            facts.iter().filter_map(|fact| if let Fact::Inline(how) = fact { Some(*how) } else { None }).min();
         facts.retain(|fact| !matches!(fact, Fact::Inline(how) if Some(*how) != strongest));
         Facts(facts)
     }
@@ -725,9 +726,9 @@ mod tests {
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }
 
-    /// Two ways stated at once: the stronger wins in either order. `alwaysinline
-    /// noinline` read as `Always`, so a routine the language said never to
-    /// inline was copied.
+    /// Two ways stated at once: the stronger wins in either order.
+    /// `alwaysinline noinline` read as `Always`, so a routine the language
+    /// said never to inline was copied.
     #[test]
     fn never_outranks_always_in_either_order() {
         let flags = |names: &[&str]| -> Vec<Attribute> {

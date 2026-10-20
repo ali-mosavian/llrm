@@ -85,8 +85,11 @@ fn mir_has_no_binary_constant_expressions_and_no_inrange() {
 }
 
 #[test]
-fn mir_has_no_ptrtoaddr_and_no_bytes() {
-    assert!(rejects("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n"));
+fn mir_reads_ptrtoaddr_as_ptrtoint_and_has_no_bytes() {
+    let module = parse::module("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n")
+        .expect("ptrtoaddr is read");
+    let text = crate::print::module(&module);
+    assert!(text.contains("ptrtoint ptr %p to i64") && !text.contains("ptrtoaddr"), "{text}");
     assert!(rejects("define void @f(b8 %p) {\n  ret void\n}\n"));
 }
 
