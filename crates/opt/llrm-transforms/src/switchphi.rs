@@ -7,6 +7,13 @@
 //! switched value; so is the input of a phi behind an empty block the case
 //! jumps to, when that makes two inputs alike or the phi already has the value.
 //!
+//! # How it works
+//! For each case, a phi of its destination whose one input from the switch's
+//! block is the case's constant takes the switched value instead. A phi behind
+//! an empty block that only the switch enters, whose input from that block is
+//! the constant, is collected; once all cases are seen, such a phi is changed
+//! if two of its inputs are collected or it already has the switched value.
+//!
 //! # Example
 //! ```text
 //!   switch i16 %x, label %d [ i16 1, label %m ]        m:

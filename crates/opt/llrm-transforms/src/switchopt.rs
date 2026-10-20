@@ -57,5 +57,5 @@ pub fn simplified(
             && switchlookup::folded(options, context, spec, function, block))
         || switchpow2::folded(options, context, spec, function, block)
         || switchreduce::folded(options, context, spec, declared, function, block)
-        || switcharms::folded(options, context, spec, function, block)
+        || switcharms::folded(options, context, spec, declared, function, block)
 }
