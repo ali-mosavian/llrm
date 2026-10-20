@@ -107,6 +107,7 @@ mod combine_dispatch_tests;
 mod combine_semantics_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
