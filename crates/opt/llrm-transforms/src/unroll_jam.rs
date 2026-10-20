@@ -21,9 +21,8 @@
 //! `unroll-jam-max-unroll`) and `min_percent` (1, `unroll-jam-min-percent`),
 //! which bounds N by the dependence distances and refuses a nest where fewer
 //! than `min_percent` percent of the accesses go away. The outer loop needs an
-//! exact trip count (ScalarEvolution's `getSmallConstantTripCount`;
-//! `LLRM_NO_SCEV_TRIPS` asks `induction::trip_count`); N is the largest factor
-//! from 2 up to the bound that divides it.
+//! exact trip count (ScalarEvolution's `getSmallConstantTripCount`); N is the
+//! largest factor from 2 up to the bound that divides it.
 //!
 //! The outer loop is unrolled by `loopclone::chained` into N bodies. In each
 //! copy the work between the loops moves ahead of the first inner loop, the
@@ -139,13 +138,12 @@ use std::collections::BTreeSet;
 use llrm_analysis::dependence;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::{cfg, induction, memory};
+use llrm_analysis::{cfg, memory};
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use num_traits::ToPrimitive;
 
 use crate::lcssa::{arms, from_arms};
 use crate::loopclone::chained;
@@ -242,22 +240,12 @@ fn one(
         let memory_unit = memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
             .with_registers(facts)
             .with_shape(&shape);
-        let scev = crate::profit::scev_trips_enabled().then(|| {
-            scevs.get_or_insert_with(|| {
-                ScevSession::within(unit.context, &analyses.outer().globals, &analyses.outer().metadata, unit.function)
-            })
+        let session = scevs.get_or_insert_with(|| {
+            ScevSession::within(unit.context, &analyses.outer().globals, &analyses.outer().metadata, unit.function)
         });
         let planned = (|| {
-            let (trips, inner_trips) = match scev {
-                Some(session) => (
-                    crate::profit::scev_trips(session, &memory_unit, outer)?,
-                    crate::profit::scev_trips(session, &memory_unit, inner),
-                ),
-                None => (
-                    induction::trip_count(&memory_unit, outer, facts)?.to_i64()?,
-                    induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64()),
-                ),
-            };
+            let trips = crate::profit::scev_trips(session, &memory_unit, outer)?;
+            let inner_trips = crate::profit::scev_trips(session, &memory_unit, inner);
             let list = accesses(&memory_unit, &nest)?;
             if list.is_empty() {
                 return None;
