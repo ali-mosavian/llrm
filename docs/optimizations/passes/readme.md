@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 153 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 154 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -37,6 +37,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
+| combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. |  | [condstores](condstores.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |

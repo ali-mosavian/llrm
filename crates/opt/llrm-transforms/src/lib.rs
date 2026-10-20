@@ -112,6 +112,7 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;
 pub mod combine_shared;
+pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
