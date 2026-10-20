@@ -251,3 +251,50 @@ b0:
     assert_eq!(out.matches("alloca").count(), 1, "{out}");
     assert!(out.contains("align 8"), "{out}");
 }
+
+/// An alloca that two stores write and nothing reads was kept, with both
+/// stores: GORILLA's DRAWGORILLA wrote a statement's argument box twice (the
+/// box's second field never read) and the dead stores were 232 of its movs
+/// against main's 140. `visitStoreInst` erases a store to an alloca with one
+/// use only; `visitAllocSite` erases the alloca and every store.
+#[test]
+fn an_alloca_only_written_goes_with_all_its_stores() {
+    let out = combined(
+        "define void @f(i16 %x) {
+b0:
+  %a = alloca i16
+  %b = alloca [2 x i16]
+  store i16 0, ptr %a
+  %g = getelementptr [2 x i16], ptr %b, i16 0, i16 1
+  store i16 %x, ptr %g
+  store i16 %x, ptr %a
+  store i16 1, ptr %b
+  ret void
+}
+",
+    );
+    assert!(!out.contains("store") && !out.contains("alloca") && !out.contains("getelementptr"), "{out}");
+}
+
+/// A load, a call that is handed the pointer or a store of the pointer keeps
+/// the alloca and its stores.
+#[test]
+fn an_alloca_that_is_read_or_escapes_keeps_its_stores() {
+    for user in ["%v = load i16, ptr %a\n  store i16 %v, ptr @k", "call void @g(ptr %a)", "store ptr %a, ptr @h"] {
+        let out = combined(&format!(
+            "@h = global ptr null
+@k = global i16 0
+declare void @g(ptr)
+define void @f(i16 %x) {{
+b0:
+  %a = alloca i16
+  store i16 0, ptr %a
+  store i16 %x, ptr %a
+  {user}
+  ret void
+}}
+"
+        ));
+        assert!(out.contains("alloca i16") && out.contains("store i16 %x, ptr %a"), "{user}:\n{out}");
+    }
+}

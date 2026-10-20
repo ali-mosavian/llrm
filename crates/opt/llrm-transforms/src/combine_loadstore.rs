@@ -70,6 +70,9 @@ use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use crate::combine::{Combiner, Visit, defining};
 use crate::combine_shared::{has_one_use, replace_operand};
 
+/// `MaxAllocSiteRemovableUsers`.
+const MAX_ALLOC_SITE_REMOVABLE_USERS: usize = 128;
+
 /// How many instructions before a store the scan for an overwritten store
 /// looks at.
 const SCAN_INSTS: u32 = 6;
@@ -337,9 +340,64 @@ impl Combiner<'_> {
             }
         }
 
-        // DEVIATE 6 is here: isOnlyCopiedFromConstantMemory, then
-        // visitAllocSite.
-        Visit::None
+        // DEVIATE 6 is here: isOnlyCopiedFromConstantMemory.
+        self.visit_alloc_site(inst)
+    }
+
+    /// `InstCombinerImpl::visitAllocSite` of an alloca
+    /// ([InstructionCombining.cpp:3900](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L3900)):
+    /// an alloca that is only written is erased with its stores.
+    fn visit_alloc_site(
+        &mut self,
+        alloca: InstId,
+    ) -> Visit {
+        let Some(users) = self.alloc_site_removable(alloca) else { return Visit::None };
+        // Each user before the casts and GEPs it was reached through.
+        for user in users.into_iter().rev() {
+            self.erase(user);
+        }
+        self.erase(alloca);
+        Visit::Erased
+    }
+
+    /// `isAllocSiteRemovable`
+    /// ([InstructionCombining.cpp:3742](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L3742)):
+    /// the users of `alloca` and of the casts and GEPs of it, in the order they
+    /// were reached, when all of them are non-volatile stores to it.
+    ///
+    /// DEVIATE 7: loads (folded to undef where the allocation's initial value
+    /// is known), `icmp`s, `memset`/`memcpy`/`memmove`, `lifetime` and `assume`
+    /// users are not translated: an alloca with one stays. Exit: the next
+    /// slice of this file.
+    fn alloc_site_removable(
+        &self,
+        alloca: InstId,
+    ) -> Option<Vec<InstId>> {
+        let mut users: Vec<InstId> = Vec::new();
+        let mut work = vec![alloca];
+        while let Some(address) = work.pop() {
+            let value = self.function.instruction(address).result?;
+            for one in self.function.users(value).snapshot() {
+                if users.len() >= MAX_ALLOC_SITE_REMOVABLE_USERS {
+                    return None;
+                }
+                match self.function.instruction(one.user).opcode {
+                    Opcode::Cast(CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => {
+                        if !users.contains(&one.user) {
+                            users.push(one.user);
+                            work.push(one.user);
+                        }
+                    }
+                    Opcode::Store { volatile: false, .. } if one.index == 1 => {
+                        if !users.contains(&one.user) {
+                            users.push(one.user);
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        Some(users)
     }
 
     /// `eraseInstFromFunction(SI)` as what `visit*` returns.
