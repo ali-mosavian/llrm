@@ -1,3 +1,7 @@
+---
+architecture-index: Pre-RA MachineCSE: row losses
+architecture-order: 520
+---
 # Pre-RA MachineCSE: row losses (2026-10-19)
 
 Base: phi-placement merged with feat/parity (9dc9d6d0c, #2954). 820 C/QB/Nib objects, m16/m32, O2/Os. 52 differ.
