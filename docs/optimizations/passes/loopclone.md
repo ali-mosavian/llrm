@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopclone.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopclone.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:6ef9350f10c516cc85e590d4aa40190fc41d0a5033e36ef38eb330d63c4fcf63 -->
+<!-- src: crates/opt/llrm-transforms/src/loopclone.rs sha256:b0f77f2c339fe5aebf830b4af897913fd1f79925eba8c5b43b49b14774e52890 -->
 
 # loopclone
 
@@ -8,7 +8,7 @@ loop: `peeled` copies whole iterations ahead of a loop, `chained` copies
 bodies inside it, keeping the loop and every exit.
 
 ## How it works
-This is the mechanism for peeling, unswitching and unroll-and-jam; it makes
+This is the mechanism for peeling and unswitching; it makes
 no profitability decision. Both functions return each copy's map from an
 original block to its clone, or `None` having changed nothing when the loop
 is not one they can clone. Both need
@@ -137,9 +137,7 @@ From the fixture of unit test
 peeled once where the test peels twice.
 
 ## Runs
-Called by [`crate::peel`](peel.md) (`peeled`),
-[`crate::unroll_jam`](unroll_jam.md) (`chained`) and [`crate::loopdistribute`](loopdistribute.md) (`copied`);
-not a pass.
+Called by [`crate::peel`](peel.md) (`peeled`); not a pass.
 
 ## Needs
 LCSSA ([`crate::lcssa`](lcssa.md)) and a simplified loop ([`crate::loopsimplify`](loopsimplify.md)).

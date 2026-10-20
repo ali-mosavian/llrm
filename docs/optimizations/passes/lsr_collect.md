@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_collect.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_collect.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:078a25154fae547678d5edee448290e81f0aba6f8e3405e31193903afd88c39d -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_collect.rs sha256:b13b00aa8a16495eb3faf4349a6154224876e270e566f19eaa25de39cd47e95d -->
 
 # lsr_collect
 
@@ -36,9 +36,9 @@ DEVIATE:
    of a compare's operands (`setOperand`) is recorded in `swapped_compares`
    for the caller to make: the analyses hold the function shared.
 2. A callee is named from the module's globals the pass was handed, not the
-   live module: a function declared during the compile (`runtime.nib` cut
-   to a program, #3140) has no name there, so an `llvm.lifetime` call
-   declared that way is not skipped by `collect_loop_invariant_fixups_and_formulae` and
-   stays a use (worse code at most; the pin reads the callee's intrinsic
+   live module: a function declared during the compile (`runtime.nib` cut to
+   a program, #3140) has no name there, so an `llvm.lifetime` call declared
+   that way is not skipped by `collect_loop_invariant_fixups_and_formulae`
+   and stays a use (worse code at most; the pin reads the callee's intrinsic
    id). Exit: the snapshot sees declarations added during the compile.
    Boundary: `a_call_to_a_global_the_outer_snapshot_lacks_is_no_intrinsic`.
