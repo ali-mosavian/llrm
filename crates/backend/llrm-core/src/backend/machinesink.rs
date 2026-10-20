@@ -232,10 +232,42 @@ fn post_dominators(cfg: &Cfg) -> DomTree {
 }
 
 impl Sinker {
+    /// The walk of `body`. Where `before` is the previous round's, and it broke
+    /// no edge, the graph is the same and its analyses are taken from it (the
+    /// pin computes them once and updates them after a split).
     fn new(
         body: &LirBody,
         size: bool,
+        before: Option<Sinker>,
     ) -> Self {
+        let mut owner = HashMap::default();
+        let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
+        for (number, block) in body.blocks.iter().enumerate() {
+            for one in block.insns.iter() {
+                owner.insert(one.id(), number);
+                for value in &one.uses {
+                    uses.entry(*value).or_default().push(Use::Insn(one.id()));
+                }
+            }
+            for phi in block.phis.iter() {
+                for &(from, value) in &phi.incoming {
+                    uses.entry(value).or_default().push(Use::Phi { block: number, from });
+                }
+            }
+        }
+        let insns = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
+        if let Some(before) = before {
+            return Self {
+                insns,
+                owner,
+                uses,
+                considered: HashSet::default(),
+                merged: HashMap::default(),
+                to_split: Vec::new(),
+                changed: false,
+                ..before
+            };
+        }
         let cfg = Cfg::of(body);
         let dom = DomTree::of(&cfg);
         let post = post_dominators(&cfg);
@@ -255,24 +287,9 @@ impl Sinker {
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
-        let mut owner = HashMap::default();
-        let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
-        for (number, block) in body.blocks.iter().enumerate() {
-            for one in block.insns.iter() {
-                owner.insert(one.id(), number);
-                for value in &one.uses {
-                    uses.entry(*value).or_default().push(Use::Insn(one.id()));
-                }
-            }
-            for phi in block.phis.iter() {
-                for &(from, value) in &phi.incoming {
-                    uses.entry(value).or_default().push(Use::Phi { block: number, from });
-                }
-            }
-        }
         let mut sinker = Self {
             size,
-            insns: body.blocks.iter().map(|block| block.insns.to_vec()).collect(),
+            insns,
             at: body.blocks.iter().map(|block| block.at).collect(),
             irreducible: body.blocks.iter().map(|block| hard.contains(&block.at)).collect(),
             depth: body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect(),
@@ -692,8 +709,9 @@ pub fn sunk(
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
     // when nothing moved and nothing was marked.
+    let mut before: Option<Sinker> = None;
     loop {
-        let mut sinker = Sinker::new(&body, size);
+        let mut sinker = Sinker::new(&body, size, before.take());
         for block in 0..sinker.cfg.len() {
             sinker.process_block(block);
         }
@@ -721,6 +739,9 @@ pub fn sunk(
         }
         if !broke && !sinker.changed {
             return body;
+        }
+        if !broke {
+            before = Some(sinker);
         }
     }
 }
