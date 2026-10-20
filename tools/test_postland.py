@@ -89,7 +89,7 @@ def test_a_tree_built_after_a_newer_one_is_still_newer_than_the_shared_targets_a
 
 def test_the_report_opens_with_what_ran_so_a_short_list_is_not_read_as_health():
     """A report of two failures said nothing of the 40 suites that never ran."""
-    text = postland.report("f" * 40, "e" * 40, [], ["tests/run m16+m32: 57 groups, 858 programs, 0 failing", "NOT RUN: fmt.sh"])
+    text = postland.report("f" * 40, "e" * 40, [], ["tests/run, both widths: 57 groups, 858 programs, 0 failing", "NOT RUN: fmt.sh"])
     assert text.index("COVERED SUITES") < text.index("No new failure") and "NOT RUN: fmt.sh" in text
 
 

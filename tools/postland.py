@@ -254,7 +254,7 @@ def combine_premise(at: Path, bins: Path, built: Path) -> str:
         for off in (False, True):
             out = HOME / ("premise-off.obj" if off else "premise-on.obj")
             env = {**os.environ, **({"LLRM_NO_COMBINE": "1"} if off else {})}
-            done = subprocess.run([str(bins / "llrm-c"), "-m32", "-march=i486", "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
+            done = subprocess.run([str(bins / "llrm-c"), "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
             objects.append(digest(out) if done.returncode == 0 and out.exists() else None)
         if objects[0] and objects[1] and objects[0] != objects[1]:
             seen = f"{source.name} differs"
@@ -263,11 +263,11 @@ def combine_premise(at: Path, bins: Path, built: Path) -> str:
 
 
 def check(sha: str, previous: str, emit=lambda covered, raw: None) -> tuple[set[str], list[str]]:
-    """Every failure of the head and the COVERED SUITES lines: tests/run at m16+m32 first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
+    """Every failure of the head and the COVERED SUITES lines: tests/run at both widths first (written out at once), the workspace lib tests, parity_smoke's checks and budget."""
     at = tree(sha)
     bins = dist(at, sha)
     runs, run_line, reasons = run_groups(at, bins)
-    covered = [combine_premise(at, bins, HOME / "target-dist" / "dist"), f"tests/run m16+m32 (run_groups): {run_line}"]
+    covered = [combine_premise(at, bins, HOME / "target-dist" / "dist"), f"tests/run, both widths (run_groups): {run_line}"]
     raw = [f"{name}: {why}" for name, why in reasons.items()]
     emit(covered, raw)
     if runs:
