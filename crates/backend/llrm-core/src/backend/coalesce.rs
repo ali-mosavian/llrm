@@ -81,7 +81,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
-use crate::model::ir::{self, Loc, Operation};
+use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, IndexMap};
@@ -146,7 +146,7 @@ impl Coalescer {
         let mut pins = body.pins.clone();
         pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
         let pins: IndexMap<u32, RegId> =
-            pins.into_iter().map(|(value, register)| (value, ir::root(register))).collect();
+            pins.into_iter().map(|(value, register)| (value, body.regs().root(register))).collect();
         let where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
         let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();

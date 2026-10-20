@@ -805,7 +805,7 @@ fn _contract_keeping(
 /// What a call of a function no runtime table describes is: stack-only, the
 /// cleanup its verified call site has, the registers the calling convention
 /// gives, memory conservative.
-fn ordinary(
+pub(crate) fn ordinary(
     name: &str,
     cleanup: model::StackCleanup,
     pushed: i64,

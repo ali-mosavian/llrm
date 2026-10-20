@@ -1332,11 +1332,11 @@ fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() 
 }
 
 /// -O1 inlined small functions called more than once, searched allocations and
-/// made the spiller's second route, none of which gcc's -O1 does: 34% of
-/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
-/// called once still goes in (`-finline-functions-called-once`).
+/// made the spiller's second route: 34% of d_faces' -O1 compile (5,643 -> 3,718
+/// Minstr). clang's -O1 runs the always-inliner alone
+/// (`OnlyAlwaysInlining`), so a function called once stays a call too.
 #[test]
-fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+fn o1_inlines_nothing_and_has_no_allocation_search_or_second_route() {
     let text = "
 define internal i16 @twice(i16 %x) {
 entry:
@@ -1368,7 +1368,7 @@ entry:
         2,
         "-O1 inlined a function called twice:\n{kept}"
     );
-    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    assert!(kept.contains("@once"), "@once is inlined at -O1, which clang's always-inliner does not:\n{kept}");
     let (gone, _) = pipelined(text, o2);
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
 }
@@ -1489,7 +1489,10 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -2219,16 +2222,14 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
 
-/// LoopRotate is off by default (it miscompiled with the passes after it,
-/// #2585; `LLRM_ROTATE` turns it on), and off where unroll-and-jam runs, whose
+/// LoopRotate is on by default (`LLRM_NO_ROTATE` turns it off; it was off
+/// while #2585 was open), and off where unroll-and-jam runs, whose
 /// nests are the header-tested form (RJ1).
 #[test]
 fn test_the_rotate_slot_is_off_by_default_and_off_where_unroll_jam_is() {
-    // Off until #2585 is fixed (`LLRM_ROTATE` sets it); the option still gates
-    // the slot.
     let on = pipeline::Options { rotate_slot: true, ..pipeline::Options::default() };
     assert!(on.rotating());
-    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_ROTATE").is_some());
+    assert_eq!(pipeline::Options::default().rotating(), std::env::var_os("LLRM_NO_ROTATE").is_none());
     assert!(!pipeline::Options { unroll_jam: true, ..on }.rotating());
     assert!(!pipeline::Options::speed().rotating());
     assert!(!pipeline::Options::aggressive().rotating());
@@ -2257,12 +2258,15 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@2376"]);
+    assert_eq!(
+        late,
+        ["simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+    );
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and

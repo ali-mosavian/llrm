@@ -231,6 +231,51 @@ impl llrm_target::Target for M32 {
         4
     }
 
+    fn huge_fill_routine(
+        &self,
+        cell: u32,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        llrm_x86::helpers::huge_fill(cell).map_err(|refused| refused.message)
+    }
+
+    fn huge_copy_routine(
+        &self,
+        down: bool,
+    ) -> Result<llrm_target::routines::HugeString, String> {
+        llrm_x86::helpers::huge_copy(down).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
+    }
+
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::register_bytes(width, 4)
+    }
+
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::shift_bytes(count, width, 4)
+    }
+
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::imul_immediate_bytes(number, width, 4)
+    }
+
     fn default_cpu(&self) -> &'static str {
         TIMINGS.default_cpu().expect("timings.times states a default CPU")
     }

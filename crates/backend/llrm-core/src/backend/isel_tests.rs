@@ -5667,6 +5667,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
         returns: Vec::new(),
         popped: 0,
         saved: Vec::new(),
+        stack_arguments: 0,
     };
     let found: Vec<(String, DebugPlace)> =
         isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default())
@@ -6288,7 +6289,7 @@ entry:
     let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
         .expect("a datalayout");
     let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
-    crate::backend::selects::lowered(&mut module, &pricing).expect("lowers selects");
+    crate::backend::selects::lowered(&mut module, &pricing, &|_| true).expect("lowers selects");
     let got = listing_on("486", &llrm_mir::print::module(&module), "f");
     assert!(!got.is_empty(), "{got:?}");
 }

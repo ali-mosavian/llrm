@@ -157,8 +157,8 @@ use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, dse, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopdistribute, loopfuse, loopidioms, loopinterchange, looprotate, loopsimplify, loopsplit, loopunrollpass,
-    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, unroll, unroll_jam, window,
+    loopversion, mem2reg, memcpyopt, peel, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower,
+    tailcallelim, trivialunswitch, unroll, unroll_jam, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -233,8 +233,8 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; off by
-    /// default (it miscompiles, #2585), `LLRM_ROTATE` turns it on. Not run
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
+    /// default, `LLRM_NO_ROTATE` turns it off. Not run
     /// where `unroll_jam` is (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
@@ -694,9 +694,9 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs.
+/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] is off.
 fn rotate_default() -> bool {
-    llrm_support::env_flag!("LLRM_ROTATE")
+    !llrm_support::env_flag!("LLRM_NO_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -800,10 +800,13 @@ pub(crate) fn llvm_order(
         // L1438 form, no date.
         Phase::Late => vec![
             // The slots' options, with the pin's lines,
-            // are `simplifycfg::Options::{L1438, L2376}`.
+            // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
+            // the pin, are not slots.
+            simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
@@ -1085,27 +1088,6 @@ pub fn recorded(
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
-        specialise: {
-            let mut alone = Fixed::new(&Applied { dump: None, ..applied.clone() });
-            Box::new(move |module, analyses, mut function| {
-                let layout = analyses.program().layout.clone();
-                let outer = analyses.outer_held(module);
-                let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
-                let Module { context, metadata, .. } = &mut *module;
-                // A specialised copy has no global of its own yet.
-                llrm_mir::passes::set_running_function("(specialised copy)");
-                let mut unit = Unit {
-                    context,
-                    layout: &layout,
-                    function: &mut function,
-                    id: None,
-                    metadata,
-                    declared: &mut declared,
-                };
-                alone.run(&mut unit, &mut Analyses::new(std::rc::Rc::clone(&outer)));
-                (function, declared)
-            })
-        },
         proved: None,
         inline: applied.options.inline,
         ranges: applied.options.ipa_ranges,
