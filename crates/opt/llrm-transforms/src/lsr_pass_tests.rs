@@ -447,3 +447,26 @@ fn an_outer_loop_without_a_preheader_gets_its_invariants_stepped() {
     assert!(after.contains(" = phi ptr"), "{after}");
     assert!(!after.contains(" = shl nuw nsw i32 %o, 3"), "{after}");
 }
+
+/// d_faces -O2 (25 loops): the expressions (exit counts included, 20.8 M of the
+/// pass's 45 M against the pin's 4 M) were dropped before every loop and
+/// attempt, edited or not. Loops left as they are keep them for the next.
+#[test]
+fn loops_left_as_they_are_keep_the_expressions_for_the_next() {
+    let one = |k: usize| {
+        format!(
+            "  br label %h{k}\nh{k}:\n  %s{k} = phi i32 [ 0, %e{k} ], [ %t{k}, %h{k} ]\n  %t{k} = xor i32 %s{k}, %n\n  %c{k} = icmp eq i32 %t{k}, 100\n  br i1 %c{k}, label %e{}, label %h{k}\ne{}:\n",
+            k + 1,
+            k + 1
+        )
+    };
+    let mut text = String::from("define i32 @f(i32 %n) {\ne0:\n");
+    for k in 0..4 {
+        text += &one(k);
+    }
+    text += "  ret i32 0\n}\n";
+    crate::lsr_pass::FORGETS.with(|made| made.set(0));
+    let (changed, after) = reduced_on(FLAT, &text, "i486", &[&[100]]);
+    assert!(!changed, "{after}");
+    assert_eq!(crate::lsr_pass::FORGETS.with(|made| made.get()), 0, "{after}");
+}

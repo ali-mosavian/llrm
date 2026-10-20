@@ -43,6 +43,8 @@ use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 thread_local! {
     /// How many sessions (dominator tree, loops and assumptions) the pass made.
     pub static SESSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times the expressions were dropped.
+    pub static FORGETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `MaxIVUsers`.
@@ -262,6 +264,9 @@ pub fn reduced_with(
         headers.reverse();
         headers
     };
+    // Whether the function was edited since the expressions were made: a loop
+    // left as it was leaves them valid for the next.
+    let mut stale = false;
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
         // The first look may find exit tests to edit, and the plan may split
@@ -269,7 +274,11 @@ pub fn reduced_with(
         let mut marked: Option<Vec<InstId>> = None;
         for _ in 0..6 {
             // The expressions of the loop as it was are not those of now.
-            session.forget_expressions();
+            if std::mem::take(&mut stale) {
+                #[cfg(test)]
+                FORGETS.with(|made| made.set(made.get() + 1));
+                session.forget_expressions();
+            }
             let split;
             {
                 let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
@@ -290,12 +299,14 @@ pub fn reduced_with(
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
                         changed = true;
+                        stale = true;
                         continue;
                     }
                     Outcome::Shadow(edit) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         lsr_prepare::apply_shadow(function, context, &edit);
                         changed = true;
+                        stale = true;
                         continue;
                     }
                     Outcome::Planned(Some(plan)) => {
@@ -313,6 +324,7 @@ pub fn reduced_with(
                     lp_blocks.contains(&block)
                 }) {
                     changed = true;
+                    stale = true;
                     split = true;
                 } else {
                     // Expand and rewrite.
@@ -336,6 +348,7 @@ pub fn reduced_with(
                     let mut dead = std::mem::take(&mut run.dead);
                     run.move_increments();
                     changed |= run.changed;
+                    stale = true;
                     if run.changed {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrRewritten);
                     }
