@@ -595,7 +595,6 @@ fn translated() -> Vec<Box<dyn FunctionPass>> {
         Box::new(crate::jumpthreading::JumpThreading::from_env()),
         Box::new(crate::dfajumpthreading::DfaJumpThreading::from_env()),
         Box::new(crate::tailcallelim::TailCallElim),
-        Box::new(crate::trunc_inst_combine::TruncInstCombine),
     ]
 }
 
@@ -809,6 +808,7 @@ pub(crate) fn llvm_order(
                 combine("combine@677"),
                 fold("fold@677"),
                 dead("dead@677"),
+                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.

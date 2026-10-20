@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trunc_inst_combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trunc_inst_combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trunc_inst_combine.rs sha256:2664a0e7b410b0cdf86c16448a9490ef896a00ab07f5c858b7f3c3a6ee5c35dd -->
+<!-- src: crates/opt/llrm-transforms/src/trunc_inst_combine.rs sha256:01bbee7233ce17ce0f8f226c82ef7dab74e2944b4f4d898ce72146fa83bc589d -->
 
 # trunc_inst_combine
 
@@ -44,7 +44,10 @@ DEVIATE (anything MIR or Rust lacks), numbered after `float2int`'s:
 The graph above is one `add i8`; see `trunc_inst_combine_tests.rs`.
 
 ## Runs
-Not in the pipeline yet.
+As `aggressive-instcombine@678`, after `instcombine` and before `tailrec`
+(`PassBuilderPipelines.cpp#L678`); not at -O1, whose simplification pipeline
+has none. The folds of `foldUnusualPatterns` are not translated yet: the
+slot is Partial.
 
 ## Needs
 The dominator tree, to leave unreachable blocks alone.

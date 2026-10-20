@@ -142,6 +142,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
+    partial(
+        "aggressive-instcombine@678",
+        Simplify,
+        "aggressive-instcombine",
+        "TruncInstCombine runs here; criterion: the trunc graphs of tools/difftest/difftest.py pair on synthetic inputs match opt -passes=aggressive-instcombine; exit: foldUnusualPatterns translated (the folds of AggressiveInstCombine.cpp: bit-pattern, popcount, funnel shift, table, load and store merging, lib calls), no date; L2194 is the LTO pipeline's and not a slot",
+    ),
     entry("tailrec@688", Simplify, "tailcallelim", Translated, ""),
     partial(
         "decide@690",
@@ -622,8 +628,14 @@ impl Level {
 /// Registry slots the pin's `default<O1>` does not have (no GVN, JumpThreading
 /// or TailCallElim at -O1: `buildO1FunctionSimplificationPipeline`), so a
 /// Translated one is not required in a -O1 list.
-pub const ABSENT_AT_O1: &[&str] =
-    &["gvn@787", "jumpthreading@668", "jumpthreading@809", "dfajumpthreading@806", "tailrec@688"];
+pub const ABSENT_AT_O1: &[&str] = &[
+    "gvn@787",
+    "jumpthreading@668",
+    "jumpthreading@809",
+    "dfajumpthreading@806",
+    "tailrec@688",
+    "aggressive-instcombine@678",
+];
 
 /// Run counts LLVM does not match yet, stated and not checked:
 /// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
