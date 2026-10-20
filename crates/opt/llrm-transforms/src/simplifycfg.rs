@@ -187,7 +187,7 @@ use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
 use crate::{
@@ -224,7 +224,7 @@ impl FunctionPass for SimplifyCfg {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified_with(&self.options, unit.context, &spec, unit.function) {
+        if simplified_with(&self.options, unit.context, &spec, unit.declared, unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -321,9 +321,10 @@ impl Default for Options {
 pub fn simplified(
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
 ) -> bool {
-    simplified_with(&Options::default(), context, spec, function)
+    simplified_with(&Options::default(), context, spec, declared, function)
 }
 
 /// `simplified` under `options`.
@@ -331,20 +332,21 @@ pub fn simplified_with(
     options: &Options,
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
 ) -> bool {
     let callees = spec.outer.callees();
     let mut folded = false;
     let mut ever = unreachable_removed(context, callees, function, &mut folded);
     ever |= tailmerge::merged(context, function);
-    ever |= iteratively_simplified(options, context, spec, function, &mut folded);
+    ever |= iteratively_simplified(options, context, spec, declared, function, &mut folded);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
     if unreachable_removed(context, callees, function, &mut folded) {
-        while iteratively_simplified(options, context, spec, function, &mut folded)
+        while iteratively_simplified(options, context, spec, declared, function, &mut folded)
             | unreachable_removed(context, callees, function, &mut folded)
         {}
     }
@@ -361,6 +363,7 @@ fn iteratively_simplified(
     options: &Options,
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     folded: &mut bool,
 ) -> bool {
@@ -377,7 +380,7 @@ fn iteratively_simplified(
         local = false;
         for block in function.layout().to_vec() {
             if function.is_placed(block)
-                && block_simplified(options, context, spec, function, block, folded, &headers, &form)
+                && block_simplified(options, context, spec, declared, function, block, folded, &headers, &form)
             {
                 local = true;
             }
@@ -393,6 +396,7 @@ fn block_simplified(
     options: &Options,
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
@@ -449,7 +453,7 @@ fn block_simplified(
     if function.is_placed(block) && stores_merged(context, spec, function, block) {
         return true;
     }
-    if function.is_placed(block) && crate::switchopt::simplified(options, context, spec, function, block) {
+    if function.is_placed(block) && crate::switchopt::simplified(options, context, spec, declared, function, block) {
         return true;
     }
     if function.is_placed(block)
