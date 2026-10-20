@@ -107,6 +107,17 @@ impl Fact {
         }
     }
 
+    /// Whether the fact states what makes an instruction undefined where it
+    /// should not run: what `dropUBImplyingAttrsAndMetadata` takes from a
+    /// call that is moved to where it may not run (`noundef`, `nonnull`,
+    /// `dereferenceable`, `align` and a range).
+    pub fn implies_ub(self) -> bool {
+        matches!(
+            self,
+            Fact::NoUndef | Fact::NonNull | Fact::Dereferenceable(_) | Fact::Align(_) | Fact::Range(_)
+        )
+    }
+
     /// Whether the fact still holds of an instruction run where it did not
     /// run. Every variant answers; see the module documentation.
     pub fn survives_speculation(self) -> bool {
@@ -330,6 +341,12 @@ mod tests {
             "combine_gep_index.rs",
             "combine_gep_merge.rs",
             "combine_gep_phi.rs",
+            // InstCombineShifts.cpp reads a shift's `nuw`/`nsw`/`exact` and the
+            // flags of the add, sub and mul it looks through (`visitShl`,
+            // `visitLShr`, `visitAShr`, `setShiftFlags`) to give the
+            // replacement the flags the operands prove; `getShiftedValue`
+            // drops an add's flags when it shifts the add left.
+            "combine_shifts.rs",
             // InstCombineMulDivRem.cpp's `visitMul` and its helpers read the
             // `nuw`/`nsw` of a multiply and of the add, sub and shift it looks
             // through (`hasNoUnsignedWrap`, `hasNoSignedWrap`, `foldMulOp...`)

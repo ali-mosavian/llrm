@@ -89,7 +89,7 @@ dialect is `vbdos`. `llrm-omf` takes every object of a program in LINK order, ig
 and event poll are there to debug against. `--own-frames` is accepted and does nothing.
 
 One loop in three languages, compiled with `-S` and compared: [examples/dot](examples/dot).
-[Loop strength reduction](docs/optimizations/passes/lsr.md) says what the backend does with it.
+[Loop strength reduction](docs/optimizations/passes/lsr_pass.md) says what the backend does with it.
 
 ## Example
 

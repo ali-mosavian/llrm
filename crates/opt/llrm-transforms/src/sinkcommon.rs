@@ -197,7 +197,7 @@ fn can_sink(
     }
     let first = insts[0];
     for &inst in &insts[1..] {
-        if !crate::hoistcommon::same_operation(function, first, inst)
+        if !crate::hoistcommon::same_operation(context, function, first, inst)
             || crate::hoistcommon::mmra(function, inst) != crate::hoistcommon::mmra(function, first)
         {
             return false;
@@ -354,13 +354,14 @@ pub fn sunk(
     block: BlockId,
 ) -> bool {
     let mut jumps = Vec::new();
+    let mut listed: IdSet<BlockId> = IdSet::new();
     let mut other = false;
     for &pred in function.predecessors(block).iter() {
         let jump = function.terminator(pred).is_some_and(|last| {
             function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 1
         });
         if jump {
-            if !jumps.contains(&pred) {
+            if listed.insert(pred) {
                 jumps.push(pred);
             }
         } else {
@@ -373,9 +374,10 @@ pub fn sunk(
     let mut phi_operands = PhiOperands::default();
     for phi in crate::edges::phis(function, block) {
         let arms = llrm_analysis::occurrence::arms(function, phi);
-        let at = |from: BlockId| arms.iter().position(|&(_, one)| one == from).expect("an arm");
-        let values: Vec<Operand> = jumps.iter().map(|&pred| arms[at(pred)].0).collect();
-        phi_operands.insert((phi, 2 * at(jumps[0])), values);
+        // Each arm by its block, once: a lookup per jump is then O(1).
+        let by_block: HashMap<BlockId, usize> = arms.iter().enumerate().map(|(at, &(_, from))| (from, at)).collect();
+        let values: Vec<Operand> = jumps.iter().map(|pred| arms[by_block[pred]].0).collect();
+        phi_operands.insert((phi, 2 * by_block[&jumps[0]]), values);
     }
     // The columns: the instruction `depth` before the terminator of each.
     let bodies: Vec<Vec<InstId>> = jumps
@@ -521,23 +523,24 @@ pub fn duplicate_predecessors_merged(
         })
         .collect();
     let mut changed = false;
+    // What each phi takes from each predecessor, once (`PhiPredIVs`).
     let phis = crate::edges::phis(function, block);
-    let values = |function: &Function, pred: BlockId| -> Vec<Operand> {
-        phis.iter()
-            .map(|&phi| {
-                llrm_analysis::occurrence::arms(function, phi)
-                    .iter()
-                    .find(|&&(_, one)| one == pred)
-                    .map(|&(value, _)| value)
-                    .expect("an arm")
-            })
-            .collect()
-    };
-    let mut kept: Vec<(BlockId, Vec<Operand>)> = Vec::new();
+    let taken: Vec<HashMap<BlockId, Operand>> = phis
+        .iter()
+        .map(|&phi| {
+            llrm_analysis::occurrence::arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect()
+        })
+        .collect();
+    let values = |pred: BlockId| -> Vec<Operand> { taken.iter().map(|by_block| by_block[&pred]).collect() };
+    // Candidates by what the phis take from them: the first of each kind stays.
+    let mut kept: HashMap<Vec<Operand>, BlockId> = HashMap::default();
     for &candidate in &candidates {
-        let seen = values(function, candidate);
-        match kept.iter().find(|(_, one)| *one == seen) {
-            Some(&(keep, _)) if keep != candidate => {
+        match kept.entry(values(candidate)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(candidate);
+            }
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                let keep = *slot.get();
                 // Everything that reached the duplicate reaches the kept one.
                 for source in function.predecessors(candidate).iter().copied().collect::<Vec<_>>() {
                     let last = function.terminator(source).expect("a terminated predecessor");
@@ -545,8 +548,6 @@ pub fn duplicate_predecessors_merged(
                 }
                 changed = true;
             }
-            Some(_) => {}
-            None => kept.push((candidate, seen)),
         }
     }
     changed

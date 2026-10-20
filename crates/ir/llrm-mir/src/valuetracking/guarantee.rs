@@ -555,7 +555,7 @@ pub fn implies_poison(
 /// `stripPointerCastsSameRepresentation()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
-pub(crate) fn strip_pointer_casts_same_representation(
+pub fn strip_pointer_casts_same_representation(
     q: &Query,
     v: Operand,
 ) -> Operand {

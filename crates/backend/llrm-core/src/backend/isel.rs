@@ -153,8 +153,8 @@ use std::sync::Arc;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ranges::{self, Facts};
-use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, STACK};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
@@ -259,6 +259,40 @@ pub struct Convention {
 /// How a calling convention pushes arguments and who pops them. C pushes
 /// right to left and its caller pops; BASIC pushes left to right and pops
 /// its own.
+
+/// A branch's condition taken apart: a compare, or an `and` (`conjunction`) or
+/// `or` of two such, as FindMergedConditions walks one.
+#[derive(Clone)]
+enum Merge {
+    /// An integer compare.
+    Leaf(InstId),
+    Node {
+        conjunction: bool,
+        /// The `and`, `or` or `select` that joins the two.
+        join: InstId,
+        left: Box<Merge>,
+        right: Box<Merge>,
+    },
+}
+
+impl Merge {
+    /// The instructions the tree's blocks stand for, to leave out of the one
+    /// block they were in.
+    fn consumed(
+        &self,
+        out: &mut impl Extend<InstId>,
+    ) {
+        match self {
+            Merge::Leaf(compare) => out.extend([*compare]),
+            Merge::Node { join, left, right, .. } => {
+                out.extend([*join]);
+                left.consumed(out);
+                right.consumed(out);
+            }
+        }
+    }
+}
+
 struct Passing {
     in_order: bool,
     pops: bool,
@@ -325,6 +359,17 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
         1 => Ok(true),
         other => refuse(format!("code in address space {other}")),
     }
+}
+
+/// A word of inline code that names a symbol: the byte it is at, how
+/// (`offset`, `segment`, `reloff`), the global by its place in the module's
+/// names, and the displacement from it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineSymbol {
+    pub at: usize,
+    pub kind: String,
+    pub global: (Space, i64),
+    pub addend: i64,
 }
 
 /// What a call calls: a named routine, far or near, the code a pointer
@@ -602,6 +647,8 @@ pub struct Selected {
     /// Where the frame places an inline site's code names were patched in, by
     /// site: (byte, displacement, addend).
     pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    /// The symbols the inline code of a site names, by site.
+    pub inline_symbols: IndexMap<i64, Vec<InlineSymbol>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops as it returns, where
     /// it does.
@@ -996,6 +1043,7 @@ pub fn selected_with<'c>(
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         inline_places: IndexMap::default(),
+        inline_symbols: IndexMap::default(),
         far: BTreeSet::new(),
         pops: IndexMap::default(),
         landing: None,
@@ -1052,6 +1100,7 @@ pub fn selected_with<'c>(
         calls: selector.calls,
         inline: selector.inline,
         inline_places: selector.inline_places,
+        inline_symbols: selector.inline_symbols,
         far: selector.far,
         pops: selector.pops,
         depth: selector.depth,
@@ -1582,9 +1631,9 @@ pub struct Selector<'m, 'c, 'p> {
     edges: IndexMap<(BlockId, BlockId), Vec<i64>>,
     /// The blocks a switch's compare chain adds after its own.
     chains: IndexMap<InstId, Vec<i64>>,
-    /// Branches on the `and` (true) or `or` of two compares: a compare and
-    /// a branch each, the second in the block of `chains`.
-    merges: IndexMap<InstId, (bool, InstId, InstId)>,
+    /// Branches on a tree of `and`s or of `or`s of compares: a compare and a
+    /// branch each, the blocks after the first those of `chains`.
+    merges: IndexMap<InstId, Merge>,
     /// The frame starts its locals zeroed, as B$ENRA zero-fills them.
     zeroed: bool,
     pins: IndexMap<u32, RegId>,
@@ -1596,6 +1645,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
     inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    inline_symbols: IndexMap<i64, Vec<InlineSymbol>>,
     far: BTreeSet<i64>,
     pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
@@ -1763,21 +1813,15 @@ impl Selector<'_, '_, '_> {
                     }
                 }
                 self.edge(block, default, leaving);
-            } else if let Some((conjunction, join, a, b)) = self.merged_condition(terminator) {
+            } else if let Some(merge) = self.merged_condition(terminator) {
                 let [_, Operand::Block(taken), Operand::Block(otherwise)] =
                     function.instruction(terminator).operands[..]
                 else {
                     unreachable!("a branch")
                 };
-                let second = at;
-                at += 1;
-                self.chains.entry(terminator).or_default().push(second);
-                self.merges.insert(terminator, (conjunction, a, b));
-                self.consumed.extend([a, b, join]);
-                let first = if conjunction { otherwise } else { taken };
-                self.edge(block, first, from);
-                self.edge(block, taken, second);
-                self.edge(block, otherwise, second);
+                merge.consumed(&mut self.consumed);
+                self.merge_edges(block, terminator, &merge, from, Some(taken), Some(otherwise), &mut at);
+                self.merges.insert(terminator, merge);
             } else {
                 for successor in self.successors(block) {
                     self.edge(block, successor, from);
@@ -2697,112 +2741,203 @@ impl Selector<'_, '_, '_> {
         (zero(value) && matches!(function.instruction(alloca).opcode, Opcode::Alloca { .. })).then_some(local)
     }
 
-    /// The branch `inst`'s condition as the `and` (true) or `or` of two
-    /// integer compares only it reads, from its own block, as LLVM's
-    /// FindMergedConditions takes a condition apart. A call's flags must be
-    /// read beside the call, so a compare of a call's value is left whole.
+    /// The branch `inst`'s condition as a tree of `and`s (or of `or`s) of
+    /// integer compares each read only by its parent, all from its own block,
+    /// as LLVM's FindMergedConditions takes a condition apart. A call's
+    /// flags must be read beside the call, so a compare of a call's value
+    /// is left whole.
     fn merged_condition(
         &self,
         inst: InstId,
-    ) -> Option<(bool, InstId, InstId, InstId)> {
+    ) -> Option<Merge> {
         let function = self.function;
         let branch = function.instruction(inst);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else {
+        let [condition, Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else {
             return None;
         };
         if branch.opcode != Opcode::Br || taken == otherwise {
             return None;
         }
-        let block = function.parent(inst)?;
-        let only_in_block = |value: ValueId, reader: InstId| -> Option<InstId> {
-            let ValueDef::Instruction(def) = function.value(value).def else { return None };
-            (function.parent(def) == Some(block)
-                && function.users(value).only().is_some_and(|only| only.user == reader))
-            .then_some(def)
-        };
-        let join = only_in_block(condition, inst)?;
-        // `m_LogicalAnd` and `m_LogicalOr`: the two operands that are compared,
-        // for an `and` or `or` of them or for the `select` form of either.
-        let operands = &function.instruction(join).operands;
+        match self.merge_of(function.parent(inst)?, condition, inst, None, 0)? {
+            Merge::Leaf(_) => None,
+            tree => Some(tree),
+        }
+    }
+
+    /// `operand`, read by `reader` alone, as a node of the tree: an `and` or
+    /// `or` of the kind `within` (any at the root), or a compare.
+    fn merge_of(
+        &self,
+        block: BlockId,
+        operand: Operand,
+        reader: InstId,
+        within: Option<bool>,
+        depth: usize,
+    ) -> Option<Merge> {
+        // The pin recurses without a bound; a body with a condition this deep
+        // keeps it whole.
+        const MAX_DEPTH: usize = 64;
+        let function = self.function;
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        if function.parent(def) != Some(block) || !function.users(value).only().is_some_and(|only| only.user == reader)
+        {
+            return None;
+        }
+        let instruction = function.instruction(def);
+        let operands = &instruction.operands;
+        // `m_LogicalAnd` and `m_LogicalOr`: the two operands, for an `and` or
+        // `or` of them or for the `select` form of either.
         let one = |operand: Operand, value: u128| {
             matches!(
                 operand,
                 Operand::Constant(id) if self.module.context.get(id).kind == ConstantKind::Int(value)
             )
         };
-        let (conjunction, first, second) = match function.instruction(join).opcode {
+        let (conjunction, first, second) = match instruction.opcode {
             Opcode::Binary(BinaryOp::And) => (true, operands[0], operands[1]),
             Opcode::Binary(BinaryOp::Or) => (false, operands[0], operands[1]),
             Opcode::Select if one(operands[1], 1) => (false, operands[0], operands[2]),
             Opcode::Select if one(operands[2], 0) => (true, operands[0], operands[1]),
+            Opcode::ICmp(_) => {
+                let narrow = operands
+                    .iter()
+                    .all(
+                        |&one| {
+                            let ty = function.operand_type(&self.module.context, one).expect("a typed operand");
+                            matches!(self.types().int_bits(ty), Some(8 | 16 | 32))
+                                || matches!(self.types().get(ty), Type::Pointer(0))
+                        },
+                    );
+                let called = operands
+                    .iter()
+                    .any(
+                        |&one| matches!(
+                            one,
+                            Operand::Value(value) if matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Call(_)))
+                        ),
+                    );
+                return (narrow && !called).then_some(Merge::Leaf(def));
+            }
             _ => return None,
         };
-        let compare = |operand: Operand| -> Option<InstId> {
-            let Operand::Value(value) = operand else { return None };
-            let def = only_in_block(value, join)?;
-            let compared = function.instruction(def);
-            let narrow = compared
-                .operands
-                .iter()
-                .all(
-                    |&one| {
-                        let ty = function.operand_type(&self.module.context, one).expect("a typed operand");
-                        matches!(self.types().int_bits(ty), Some(8 | 16 | 32))
-                            || matches!(self.types().get(ty), Type::Pointer(0))
-                    },
-                );
-            let called = compared
-                .operands
-                .iter()
-                .any(
-                    |&one| matches!(
-                        one,
-                        Operand::Value(value) if matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Call(_)))
-                    ),
-                );
-            (matches!(compared.opcode, Opcode::ICmp(_)) && narrow && !called).then_some(def)
-        };
-        Some((conjunction, join, compare(first)?, compare(second)?))
+        // A node of the other kind is a leaf of the pin's, a branch on its
+        // value; the whole condition is kept whole here.
+        if within.is_some_and(|kind| kind != conjunction) || depth >= MAX_DEPTH {
+            return None;
+        }
+        Some(Merge::Node {
+            conjunction,
+            join: def,
+            left: Box::new(self.merge_of(block, first, def, Some(conjunction), depth + 1)?),
+            right: Box::new(self.merge_of(block, second, def, Some(conjunction), depth + 1)?),
+        })
     }
 
-    /// A branch on two compares as a compare and a branch each: the first
-    /// leaves for the second's block, or for the target the first alone
+    /// The edges of a merged condition's blocks, a block of `chains` for the
+    /// second operand of each node: where `merge`, started in `cur`, goes to
+    /// `taken` or `otherwise` (a block `merge` makes, None). LLVM's
+    /// FindMergedConditions.
+    #[allow(clippy::too_many_arguments)]
+    fn merge_edges(
+        &mut self,
+        block: BlockId,
+        terminator: InstId,
+        merge: &Merge,
+        cur: i64,
+        taken: Option<BlockId>,
+        otherwise: Option<BlockId>,
+        at: &mut i64,
+    ) {
+        match merge {
+            Merge::Leaf(_) => {
+                for target in [taken, otherwise].into_iter().flatten() {
+                    self.edge(block, target, cur);
+                }
+            }
+            Merge::Node { conjunction, left, right, .. } => {
+                let next = *at;
+                *at += 1;
+                self.chains.entry(terminator).or_default().push(next);
+                if *conjunction {
+                    self.merge_edges(block, terminator, left, cur, None, otherwise, at);
+                } else {
+                    self.merge_edges(block, terminator, left, cur, taken, None, at);
+                }
+                self.merge_edges(block, terminator, right, next, taken, otherwise, at);
+            }
+        }
+    }
+
+    /// A branch on a tree of compares as a compare and a branch each: a node's
+    /// first operand leaves for its second's block, or for the target it alone
     /// decides.
     fn merged(
         &mut self,
         inst: InstId,
         block_at: &IndexMap<BlockId, i64>,
         from: i64,
-        mut insns: Vec<Arc<Insn>>,
+        insns: Vec<Arc<Insn>>,
         phis: Vec<Phi>,
         blocks: &mut Vec<Block>,
     ) -> Result<(), Unselected> {
         let at = self.ats[&inst];
-        let (conjunction, a, b) = self.merges[&inst];
+        let merge = self.merges[&inst].clone();
         let [_, Operand::Block(taken), Operand::Block(otherwise)] = self.function.instruction(inst).operands[..] else {
             unreachable!("a branch")
         };
-        let (taken, otherwise, second) = (block_at[&taken], block_at[&otherwise], self.chains[&inst][0]);
-        let (target, other) = if conjunction { (second, otherwise) } else { (taken, second) };
-        let branched =
-            |this: &mut Self, compare: InstId, target: i64, insns: &mut Vec<Arc<Insn>>| -> Result<(), Unselected> {
-                let Test::One(code) = this.compare(compare, at, insns)? else {
+        let chain = self.chains[&inst].clone();
+        let mut first = Some((insns, phis));
+        self.merged_blocks(
+            &merge,
+            at,
+            from,
+            block_at[&taken],
+            block_at[&otherwise],
+            &mut chain.iter().copied(),
+            &mut first,
+            blocks,
+        )
+    }
+
+    /// The blocks of `merge` started in `cur`, in the order of `merge_edges`:
+    /// `first` is what block `from` holds before the compare, which only the
+    /// leftmost leaf's block takes.
+    #[allow(clippy::too_many_arguments)]
+    fn merged_blocks(
+        &mut self,
+        merge: &Merge,
+        at: i64,
+        cur: i64,
+        taken: i64,
+        otherwise: i64,
+        chain: &mut impl Iterator<Item = i64>,
+        first: &mut Option<(Vec<Arc<Insn>>, Vec<Phi>)>,
+        blocks: &mut Vec<Block>,
+    ) -> Result<(), Unselected> {
+        match merge {
+            Merge::Leaf(compare) => {
+                let (mut insns, phis) = first.take().unwrap_or_default();
+                let Test::One(code) = self.compare(*compare, at, &mut insns)? else {
                     unreachable!("an integer compare is one condition")
                 };
                 insns.push(insn(
                     at,
-                    Semantics { target: Some(target), ..semantics(Operation::Branch, code, vec![], vec![]) },
+                    Semantics { target: Some(taken), ..semantics(Operation::Branch, code, vec![], vec![]) },
                 ));
+                blocks.push(
+                    LirBlock { succ: vec![taken, otherwise].into(), phis: phis.into(), ..LirBlock::new(cur, insns) }
+                        .into(),
+                );
                 Ok(())
-            };
-        branched(self, a, target, &mut insns)?;
-        blocks.push(
-            LirBlock { succ: vec![target, other].into(), phis: phis.into(), ..LirBlock::new(from, insns) }.into(),
-        );
-        let mut tail = Vec::new();
-        branched(self, b, taken, &mut tail)?;
-        blocks.push(LirBlock { succ: vec![taken, otherwise].into(), ..LirBlock::new(second, tail) }.into());
-        Ok(())
+            }
+            Merge::Node { conjunction, left, right, .. } => {
+                let next = chain.next().expect("a block for each node");
+                let (left_taken, left_otherwise) = if *conjunction { (next, otherwise) } else { (taken, next) };
+                self.merged_blocks(left, at, cur, left_taken, left_otherwise, chain, first, blocks)?;
+                self.merged_blocks(right, at, next, taken, otherwise, chain, first, blocks)
+            }
+        }
     }
 
     /// A switch the middle end made a table of: the index, in a register of
@@ -3235,14 +3370,43 @@ impl Selector<'_, '_, '_> {
             return refuse("va_start with no parameter before the variadic arguments");
         };
         self.unsealed = true;
-        // The list holds a near data pointer.
-        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let width = self.va_list_bytes();
         let held = Held { value: self.fresh(), width };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
             at,
             semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, list, width))], vec![Loc::Held(held)]),
+        ));
+        Ok(())
+    }
+
+    /// The bytes a `va_list` takes: a near data pointer.
+    fn va_list_bytes(&self) -> u32 {
+        self.layout.pointer(self.spaces.data).bits / 8
+    }
+
+    /// `llvm.va_copy`: the list read from the second argument's address
+    /// stored at the first's, as `TargetLowering::expandVACopy` does for a list
+    /// that is a pointer.
+    fn va_copy(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let regs = self.regs();
+        let width = self.va_list_bytes();
+        let held = Held { value: self.fresh(), width };
+        let from = self.pointer(arguments[1])?;
+        out.push(insn(
+            at,
+            semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(regs, from, width))]),
+        ));
+        let to = self.pointer(arguments[0])?;
+        out.push(insn(
+            at,
+            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(regs, to, width))], vec![Loc::Held(held)]),
         ));
         Ok(())
     }
@@ -3257,7 +3421,7 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let value = self.function.instruction(inst).result.expect("a saved stack pointer");
         let saved = Held { value: self.value(value), width };
-        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        let sp = Loc::Reg(Reg { register: STACK, width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
         Ok(())
     }
@@ -3273,7 +3437,7 @@ impl Selector<'_, '_, '_> {
         let width = self.address_bytes();
         let ty = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
         let saved = self.held(arguments[0], ty, at, out)?;
-        let sp = Loc::Reg(Reg { register: RegId::SP, width });
+        let sp = Loc::Reg(Reg { register: STACK, width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![sp], vec![Loc::Held(saved)])));
         Ok(())
     }
@@ -5498,11 +5662,40 @@ impl Selector<'_, '_, '_> {
                     let Some(block) = llrm_mir::intrinsics::asm(&name) else {
                         return refuse(format!("@{name} does not parse"));
                     };
+                    // The symbols the block names come first, as addresses.
+                    let (symbols, arguments) = arguments.split_at(block.fixups.len());
+                    let mut named = Vec::new();
+                    for (operand, fixup) in symbols.iter().zip(&block.fixups) {
+                        // The constant, seen through a cast of its address
+                        // space.
+                        let mut operand = *operand;
+                        while let Operand::Value(value) = operand
+                            && let ValueDef::Instruction(inst) = self.function.value(value).def
+                            && self.function.instruction(inst).opcode == Opcode::Cast(CastOp::AddrSpaceCast)
+                        {
+                            operand = self.function.instruction(inst).operands[0];
+                        }
+                        let Operand::Constant(id) = operand else {
+                            return refuse(format!("@{name} names a symbol by a computed address"));
+                        };
+                        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
+                            .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
+                        named.push(InlineSymbol {
+                            at: fixup.at,
+                            kind: fixup.kind.clone(),
+                            global: (crate::backend::globals::space(self.module, global), i64::from(global.0)),
+                            addend: offset as i64 + fixup.addend,
+                        });
+                    }
+                    self.inline_symbols.insert(at, named);
                     self.called(inst, convention, Callee::Inline(name, block.code), arguments, at, out)
                 }
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                // A list that is a pointer owns nothing to release.
+                Some(Intrinsic::VaEnd) => Ok(()),
+                Some(Intrinsic::VaCopy) => self.va_copy(arguments, at, out),
                 Some(Intrinsic::StackSave) => self.stack_save(inst, at, out),
                 Some(Intrinsic::StackRestore) => self.stack_restore(arguments, at, out),
                 // Where a local's bytes are live: read by the frame layout, no
