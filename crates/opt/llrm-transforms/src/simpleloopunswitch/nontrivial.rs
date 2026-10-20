@@ -31,9 +31,7 @@
 //!   loop forest gives them.
 //! - SU8 LCSSA and loop-simplify form are made again for the whole function
 //!   (`formLCSSA`, `formDedicatedExitBlocks` do it for the loops reached).
-//! - SU9 No guards (MIR has none), no partially invariant conditions
-//!   (`hasPartialIVCondition` needs MemorySSA) and no injected invariant
-//!   conditions. No MemorySSA, `make.implicit` or profile update.
+//! - SU9 See `simpleloopunswitch.rs`.
 //! - SU10 New blocks go at the end of the layout (SU3), not before the
 //!   preheader.
 //! - SU11 `CanProveNotTakenFirstIteration` compares two constants only

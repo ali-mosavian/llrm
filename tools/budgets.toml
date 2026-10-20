@@ -430,15 +430,6 @@ why = "measured 26.2 -> 93.5 Minstr (x3.57)"
 [[debt]]
 kind = "steps"
 axis = "branches"
-name = "mir jumpthread"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 12.1 -> 44.5 Minstr (x3.67)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
 name = "mir lsr"
 ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"

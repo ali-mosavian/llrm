@@ -110,3 +110,78 @@ fn test_a_body_cloned_for_a_constant_does_not_rerun_the_list() {
         lines.iter().filter(|line| line.starts_with("body ")).map(|line| &line[..50.min(line.len())]).collect();
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?} {bodies:?}");
 }
+
+/// `@eq` loops 40 times over a body of 60 operations: inlined in `@top`'s
+/// 8-trip loop, it is too big to unroll.
+fn loop_around_a_call() -> String {
+    let body: String = (0..60)
+        .map(|at| {
+            let before = if at == 0 { "%acc".to_owned() } else { format!("%t{}", at - 1) };
+            format!("  %t{at} = {} i16 {before}, {}\n", if at % 2 == 0 { "mul" } else { "xor" }, 3 + at)
+        })
+        .collect();
+    format!(
+        "define internal i16 @eq(i16 %x) {{
+b0:
+  br label %head
+
+head:
+  %j = phi i16 [ 0, %b0 ], [ %j1, %body ]
+  %acc = phi i16 [ %x, %b0 ], [ %t59, %body ]
+  %go = icmp slt i16 %j, 40
+  br i1 %go, label %body, label %done
+
+body:
+{body}  %j1 = add nsw i16 %j, 1
+  br label %head
+
+done:
+  ret i16 %acc
+}}
+
+define i16 @top(i16 %x) {{
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %sum = phi i16 [ 0, %b0 ], [ %sum1, %body ]
+  %go = icmp slt i16 %i, 8
+  br i1 %go, label %body, label %done
+
+body:
+  %a = add i16 %x, %i
+  %r = call i16 @eq(i16 %a)
+  %sum1 = add i16 %sum, %r
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 %sum
+}}
+"
+    )
+}
+
+/// The 8-trip loop around a call was unrolled before the call was inlined: 8
+/// calls, then 8 inlined copies (keybind's `_action_for`, 325 instructions
+/// against LLVM's 55). The loop is simplified with the callee in it, too big
+/// to unroll, and so stays a loop.
+#[test]
+fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
+    let mut module = parsed(&loop_around_a_call());
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let top = text.split("define i16 @top").nth(1).expect("top is kept").split("\n}\n").next().unwrap_or_default();
+    // The body has 30 multiplies: one copy, in a loop, and no call left.
+    let multiplies = top.matches("mul i16").count();
+    assert!(multiplies == 30 && !top.contains("@eq"), "top has {multiplies} multiplies:\n{top}");
+}

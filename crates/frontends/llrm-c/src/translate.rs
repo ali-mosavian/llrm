@@ -744,6 +744,9 @@ struct Open {
 struct Body<'a, 't> {
     /// The facts the language states of instructions, by instruction id.
     stated_instructions: Vec<(i64, Fact)>,
+    /// What the language states of an operand of an instruction: its id, the
+    /// operand's position and the fact.
+    stated_operands: Vec<(i64, i64, Fact)>,
     /// A scaled index's product, by value: its index and the element size.
     scales: HashMap<i64, (i64, i64)>,
     /// The places of each open block that marks its locals' lifetimes; and the
@@ -1163,6 +1166,7 @@ impl<'a, 't> Body<'a, 't> {
             done: HashMap::default(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
+            stated_operands: Vec::new(),
             scales: HashMap::default(),
             scopes: Vec::new(),
             opened: 0,
@@ -1197,6 +1201,7 @@ impl<'a, 't> Body<'a, 't> {
         body.finish()?;
         body.drop_unread_scales();
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
+        let body_operand_facts = std::mem::take(&mut body.stated_operands);
         let body_widths: HashMap<i64, i64> =
             parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
@@ -1249,6 +1254,9 @@ impl<'a, 't> Body<'a, 't> {
         };
         for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
             facts.state(Subject::Instruction { function: id, id: instruction }, fact);
+        }
+        for (instruction, operand, fact) in body_operand_facts {
+            facts.state(Subject::Operand { function: id, instruction, operand }, fact);
         }
         for (value, fact) in stated {
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
@@ -1445,6 +1453,7 @@ impl<'a, 't> Body<'a, 't> {
             block.instructions.retain(|one| !ids.contains(&one.id));
         }
         self.stated_instructions.retain(|(id, _)| !ids.contains(id));
+        self.stated_operands.retain(|(id, _, _)| !ids.contains(id));
         self.values.retain(|value| !unread.contains(&value.id));
     }
 
@@ -3769,6 +3778,9 @@ impl<'a, 't> Body<'a, 't> {
             .map(|(at, bytes)| (at as i64, *bytes))
             .collect();
         let result_pointer = result_at.filter(|_| convention.is_some());
+        let first_argument = operands.len() as i64 - count;
+        let stated: Vec<i64> =
+            in_memory.iter().enumerate().filter(|(_, memory)| !**memory).map(|(at, _)| at as i64).collect();
         self.call_site(
             name.as_deref(),
             result,
@@ -3781,6 +3793,10 @@ impl<'a, 't> Body<'a, 't> {
             byval,
             result_pointer,
         );
+        // CGCall.cpp `DetermineNoUndef`: a scalar argument, and an indirect
+        // one, is `noundef`; a struct's words passed in memory are not.
+        let call_id = self.calls.last().expect("the call just made").instruction;
+        self.stated_operands.extend(stated.into_iter().map(|at| (call_id, first_argument + at, Fact::NoUndef)));
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
         if let (Some(width), Some(value)) = (returned_as_integer(self.shared.calling, &convention, size), result) {
@@ -4222,6 +4238,21 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
+    }
+
+    /// CGCall.cpp `DetermineNoUndef`: a scalar argument of a call is
+    /// `noundef`, as the parameter is. None was stated at a call site, so a
+    /// callee's `noundef` parameter had no argument to match (a branch more
+    /// where SimplifyCFG asks if an argument may be undef).
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_scalar_call_arguments_are_noundef() {
+        let text = raised_c(
+            "extern int __cdecl g(int a, short *p);\nint __cdecl f(int n, short *q) { return g(n, q); }\n",
+            false,
+        );
+        let call = text.lines().find(|line| line.contains("call ")).expect("a call");
+        assert_eq!(call.matches("noundef").count(), 2, "{text}");
     }
 
     const ARRAYS: &str = "short a[100]; int b[100];\n\

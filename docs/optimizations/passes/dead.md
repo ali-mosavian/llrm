@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:30e8465713137297beee8131b35c56f15895ace12007985b295c3063ca4dcc83 -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:488db39456df3adf28397e7763bd38cdf671bd305ddaac9f52a44dd6d3829aa2 -->
 
 # dead
 
@@ -58,8 +58,8 @@ in `dead_tests.rs`.
 
 ## Runs
 Once per pass of the function fixed point, after `algebraic`, and again
-after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-`jumpthread` call it on the code they leave. `markers_dropped` runs once
+after the loop-header copy (`-ftree-ch`). `lsr`, `window` and `indvars`
+call it on the code they leave. `markers_dropped` runs once
 after the whole pipeline, before exception-handling preparation and
 selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 off the pass only, not those calls; nothing runs at -O0.

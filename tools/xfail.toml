@@ -133,14 +133,9 @@ owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_affine_terms_of_one_counter_share_its_scaled_value"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-qb::test_hir_part3::test_bases_past_the_registers_are_not_stepped_as_pointers"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
+issue = 3075
+owner = "hir-branch-icmp-2211"
+date = "2026-10-23"
 [[xfail]]
 id = "unit llrm-qb::test_hir_part3::test_element_stores_leave_descriptors_unread"
 issue = 2848
@@ -150,11 +145,6 @@ date = "2026-10-19"
 id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_dividend"
 issue = 2848
 owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-transforms::jumpthread::tests::test_a_way_in_found_twice_is_copied_once"
-issue = 3018
-owner = "parity-pipeline"
 date = "2026-10-19"
 [[xfail]]
 id = "unit llrm-c::compile::tests::test_m32_adds_into_a_new_register_with_lea"
