@@ -167,10 +167,11 @@ pub struct ScalarEvolution {
     pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
-    /// `LoopDispositions`.
-    pub(super) loop_dispositions: HashMap<(Scev, Option<BlockId>), disposition::LoopDisposition>,
+    /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
+    /// does not scan them all.
+    pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
     /// `BlockDispositions`.
-    pub(super) block_dispositions: HashMap<(Scev, BlockId), disposition::BlockDisposition>,
+    pub(super) block_dispositions: HashMap<Scev, Vec<(BlockId, disposition::BlockDisposition)>>,
     /// `ValueExprMap`: the SCEV of each value that has one. Constants are not
     /// held: their SCEV is a constant node, made again for the price of a
     /// lookup.
