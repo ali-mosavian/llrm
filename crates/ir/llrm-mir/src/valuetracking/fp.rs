@@ -19,9 +19,10 @@
 //! - DEVIATE 1: scalars only. A vector value, and the vector cases (constant
 //!   vectors and data sequences, `extractelement`, `insertelement`,
 //!   `shufflevector`, `extractvalue`) are unknown.
-//! - DEVIATE 2: `computeKnownFPClassFromContext` (`llvm.assume` and dominating
-//!   conditions) and `adjustKnownFPClassForSelectArm` are not translated, so a
-//!   `select` arm is not narrowed by its condition. Exit: the context slice.
+//! - DEVIATE 2: `computeKnownFPClassFromContext` reads no `Q.CC` beyond the
+//!   query's condition context and no `DomConditionCache` unless the query has
+//!   one, as the pin does; the exponent-range query
+//!   (`computeKnownExponentRangeFromContext`) is not translated.
 //! - DEVIATE 3: a function's `denormal-fp-math` is not read; every function is
 //!   IEEE (`DenormalMode::getIEEE`), as `getDenormalMode` answers for a
 //!   function with no attribute.
@@ -33,19 +34,29 @@
 //!   `vector.reverse` or `convert.from.arbitrary.fp`, and no `ppc_fp128`
 //!   (`isMultiUnitFPType` is false): MIR has none of them.
 //!
+//! COVERED: the oracle (`tests/vt/fp`, `tools/llvmport/fpdump.sh`, with and
+//! without the `DomConditionCache`) matches LLVM on all 2,298 float and double
+//! values of the 70 files of `Transforms/InstSimplify` and
+//! `Transforms/InstCombine` that llrm reads. The other 249 of the 319 files
+//! that mention a floating operation do not parse (#3180): 66 use vectors,
+//! deferred until MIR has vector types (not forbidden: nothing here assumes a
+//! scalar but the `Type::Float` test at the entry), the rest are reader gaps or
+//! types outside MIR's subset (`half`, `fp128`).
+//!
 //! # Example
 //! `uitofp i32 %x to float` is never a NaN, a negative or a subnormal.
 //!
 //! # Used by
 //! Not yet: the folds that read it follow.
 
+use super::fpredicate;
 use super::pattern::{self, IntrinsicId};
 use super::query::Query;
 use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, range};
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem, semantics_of};
 use crate::constantrange::ConstantRange;
 use crate::context::ConstantKind;
-use crate::context::signed;
+use crate::context::{mask, signed};
 use crate::fpclass::{
     DenormalMode, FC_ALL_FLAGS, FC_FINITE, FC_INF, FC_NAN, FC_NEG_FINITE, FC_NEG_INF, FC_NEG_NORMAL, FC_NEG_SUBNORMAL,
     FC_NEG_ZERO, FC_NEGATIVE, FC_NONE, FC_NORMAL, FC_POS_FINITE, FC_POS_INF, FC_POS_NORMAL, FC_POS_SUBNORMAL,
@@ -53,7 +64,7 @@ use crate::fpclass::{
 };
 use crate::knownfpclass::{KnownFpClass, MinMaxKind};
 use crate::module::{InstId, Instruction, Operand};
-use crate::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{FloatKind, Type};
 
 /// `computeKnownFPClass(V, InterestedClasses, Q, Depth)`.
@@ -148,24 +159,199 @@ fn compute_into(
         }
         return;
     }
-    let Some((inst, instruction)) = q.instruction_of(v) else { return };
+    let operator = q.instruction_of(v);
 
     // The classes the flags rule out.
     let mut not_from_flags = FC_NONE;
-    if instruction.flags.contains(Flags::NNAN) {
-        not_from_flags |= FC_NAN;
+    if let Some((_, instruction)) = operator {
+        if instruction.flags.contains(Flags::NNAN) {
+            not_from_flags |= FC_NAN;
+        }
+        if instruction.flags.contains(Flags::NINF) {
+            not_from_flags |= FC_INF;
+        }
     }
-    if instruction.flags.contains(Flags::NINF) {
-        not_from_flags |= FC_INF;
-    }
-    // We no longer need to find out about these bits from inputs.
+    let assumed = known_from_context(q, v);
+    not_from_flags |= !assumed.get_known_fp_classes();
+    // We no longer need to find out about these bits from inputs if we can
+    // assume this from flags.
     interested &= !not_from_flags;
 
     // All recursive calls that increase depth must come after this.
-    if depth < MAX_ANALYSIS_RECURSION_DEPTH {
+    if let Some((inst, instruction)) = operator
+        && depth < MAX_ANALYSIS_RECURSION_DEPTH
+    {
         of_operator(q, inst, instruction, kind, interested, not_from_flags, known, depth);
     }
     known.known_not(not_from_flags);
+    if known.get_sign_bit().is_none()
+        && let Some(sign) = assumed.get_sign_bit()
+    {
+        if sign {
+            known.sign_bit_must_be_one();
+        } else {
+            known.sign_bit_must_be_zero();
+        }
+    }
+}
+
+/// `isSignBitCheck`
+/// ([L4947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L4947)):
+/// whether `icmp pred x, rhs` (`rhs` of `width` bits) only checks the sign
+/// bit, and if so whether it is true for a negative `x`.
+fn is_sign_bit_check(
+    pred: IntPredicate,
+    rhs: u128,
+    width: u32,
+) -> Option<bool> {
+    let all_ones = mask(width);
+    let max_signed = all_ones >> 1;
+    let min_signed = max_signed + 1;
+    match pred {
+        // True if LHS s< 0.
+        IntPredicate::Slt => (rhs == 0).then_some(true),
+        // True if LHS s<= -1.
+        IntPredicate::Sle => (rhs == all_ones).then_some(true),
+        // True if LHS s> -1.
+        IntPredicate::Sgt => (rhs == all_ones).then_some(false),
+        // True if LHS s>= 0.
+        IntPredicate::Sge => (rhs == 0).then_some(false),
+        // True if LHS u> RHS and RHS == sign-bit-mask - 1.
+        IntPredicate::Ugt => (rhs == max_signed).then_some(true),
+        // True if LHS u>= RHS and RHS == sign-bit-mask.
+        IntPredicate::Uge => (rhs == min_signed).then_some(true),
+        // True if LHS u< RHS and RHS == sign-bit-mask.
+        IntPredicate::Ult => (rhs == min_signed).then_some(false),
+        // True if LHS u<= RHS and RHS == sign-bit-mask - 1.
+        IntPredicate::Ule => (rhs == max_signed).then_some(false),
+        _ => None,
+    }
+}
+
+/// `computeKnownFPClassFromCond`
+/// ([L4971](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L4971)).
+fn known_from_cond(
+    q: &Query,
+    v: Operand,
+    cond: Operand,
+    cond_is_true: bool,
+    known: &mut KnownFpClass,
+    depth: u32,
+) {
+    if depth < MAX_ANALYSIS_RECURSION_DEPTH {
+        let pair = if cond_is_true { pattern::logical_and(q, cond) } else { pattern::logical_or(q, cond) };
+        if let Some((a, b)) = pair {
+            known_from_cond(q, v, a, cond_is_true, known, depth + 1);
+            known_from_cond(q, v, b, cond_is_true, known, depth + 1);
+            return;
+        }
+        if let Some(a) = pattern::not(q, cond) {
+            known_from_cond(q, v, a, !cond_is_true, known, depth + 1);
+            return;
+        }
+    }
+    let Some((_, instruction)) = q.instruction_of(cond) else { return };
+    match &instruction.opcode {
+        Opcode::FCmp(pred) => {
+            let lhs = instruction.operands[0];
+            let Some(crhs) = fpredicate::match_constant_float(q, instruction.operands[1]) else { return };
+            let implied = fpredicate::fcmp_implies_class_of(q, *pred, lhs, &crhs, lhs != v);
+            if implied.value == Some(v) {
+                known.known_not(!(if cond_is_true { implied.if_true } else { implied.if_false }));
+            }
+        }
+        Opcode::ICmp(pred) => {
+            // `m_ICmp(Pred, m_ElementWiseBitCast(m_Specific(V)),
+            // m_APInt(RHS))`.
+            let Some((_, cast)) = q.instruction_of(instruction.operands[0]) else { return };
+            if cast.opcode != Opcode::Cast(CastOp::BitCast) || cast.operands[0] != v {
+                return;
+            }
+            let Some((rhs, width)) = q.int_constant(instruction.operands[1]) else { return };
+            let Some(true_if_signed) = is_sign_bit_check(*pred, rhs, width) else { return };
+            if true_if_signed == cond_is_true {
+                known.sign_bit_must_be_one();
+            } else {
+                known.sign_bit_must_be_zero();
+            }
+        }
+        Opcode::Call(_) => {
+            let Some((inst, call)) = q.instruction_of(cond) else { return };
+            let _ = inst;
+            let arguments = pattern::call_arguments(call);
+            if pattern::intrinsic(q, cond, IntrinsicId::IsFpclass).is_some()
+                && arguments[0] == v
+                && let Some((class, _)) = q.int_constant(arguments[1])
+            {
+                let class = FpClassTest(class as u32);
+                known.known_not(if cond_is_true { !class } else { class });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `computeKnownFPClassFromContext`
+/// ([L5079](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L5079)).
+fn known_from_context(
+    q: &Query,
+    v: Operand,
+) -> KnownFpClass {
+    let mut known = KnownFpClass::default();
+    if let Some(cc) = q.cond_context
+        && cc.affected_values.contains(&v)
+    {
+        known_from_cond(q, v, cc.cond, !cc.invert, &mut known, 0);
+    }
+    let Some(cxt) = q.cxt else { return known };
+    if let (Some(conditions), Some(_)) = (q.dom_conditions, q.dt) {
+        let cxt_block = q.block_of(cxt);
+        for &branch in conditions.conditions_for(v) {
+            let instruction = q.function.instruction(branch);
+            let (Some(start), Some(cxt_block), Operand::Block(taken), Operand::Block(otherwise)) =
+                (q.block_of(branch), cxt_block, instruction.operands[1], instruction.operands[2])
+            else {
+                continue;
+            };
+            if context::edge_dominates(q, start, taken, cxt_block) {
+                known_from_cond(q, v, instruction.operands[0], true, &mut known, 0);
+            }
+            if context::edge_dominates(q, start, otherwise, cxt_block) {
+                known_from_cond(q, v, instruction.operands[0], false, &mut known, 0);
+            }
+        }
+    }
+    let Some(assumptions) = q.assumptions else { return known };
+    // Try to restrict the floating-point classes based on information from
+    // assumptions.
+    for &assume in assumptions.assumptions_for(v) {
+        if !context::is_valid_assume_for_context(q, assume, cxt, false) {
+            continue;
+        }
+        known_from_cond(q, v, q.function.instruction(assume).operands[0], true, &mut known, 0);
+    }
+    known
+}
+
+/// `adjustKnownFPClassForSelectArm`
+/// ([L5128](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L5128)).
+fn adjust_for_select_arm(
+    q: &Query,
+    known: &mut KnownFpClass,
+    cond: Operand,
+    arm: Operand,
+    invert: bool,
+    depth: u32,
+) {
+    let mut known_src = KnownFpClass::default();
+    known_from_cond(q, arm, cond, !invert, &mut known_src, depth + 1);
+    known_src = known_src.union_with(known);
+    if known_src.is_unknown() {
+        return;
+    }
+    if guarantee::is_guaranteed_not_to_be_undef(q, arm, depth + 1) {
+        *known = known_src;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -186,9 +372,15 @@ fn of_operator(
             *known = again(op.operands[0], interested);
             known.fneg();
         }
-        // L5352: DEVIATE 2, no arm adjustment.
+        // L5352
         Opcode::Select => {
-            *known = again(op.operands[1], interested).intersect_with(&again(op.operands[2], interested));
+            let for_arm = |arm: Operand, invert: bool| {
+                let mut res = again(arm, interested);
+                adjust_for_select_arm(q, &mut res, op.operands[0], arm, invert, depth);
+                res
+            };
+            // Only known if known in both the LHS and RHS.
+            *known = for_arm(op.operands[1], false).intersect_with(&for_arm(op.operands[2], true));
         }
         Opcode::Call(_) => of_call(q, inst, op, kind, interested, not_from_flags, known, depth),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) => fadd_fsub(q, op, interested, known, depth),
@@ -798,7 +990,10 @@ fn is_undef(
 /// What `tools/llvmport/fpdump.cpp` prints of every float and double scalar of
 /// `module`: the known classes (hex) and sign (`0`, `1`, `?`) asked of
 /// `fcAllFlags`, `fcNan` and `fcNegative`.
-pub fn dump(module: &crate::module::Module) -> String {
+pub fn dump(
+    module: &crate::module::Module,
+    dom: bool,
+) -> String {
     use super::AssumptionCache;
     use crate::datalayout::DataLayout;
     use crate::domtree::DomTree;
@@ -823,6 +1018,7 @@ pub fn dump(module: &crate::module::Module) -> String {
         let name = global.name.clone().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(module, function);
+        let conditions = dom.then(|| super::DomConditionCache::new(module, function));
         let first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|parameter| (Operand::Value(*parameter), first)).collect();
@@ -836,6 +1032,7 @@ pub fn dump(module: &crate::module::Module) -> String {
             let mut query = Query::new(module, function, &layout).with_cxt(cxt);
             query.dt = Some(&dt);
             query.assumptions = Some(&assumptions);
+            query.dom_conditions = conditions.as_ref();
             if !matches!(
                 float_kind(&query, value),
                 Some(FloatKind::Float | FloatKind::Double)
