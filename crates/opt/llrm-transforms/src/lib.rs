@@ -277,8 +277,18 @@ pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
+pub mod switcharms;
 pub mod switchcg;
+pub mod switchdead;
+pub mod switchlookup;
 pub mod switchlower;
+pub mod switchopt;
+pub mod switchphi;
+pub mod switchpow2;
+pub mod switchrange;
+pub mod switchreduce;
+pub mod switchselect;
+pub mod switchvalue;
 pub mod tailcallelim;
 pub mod tailmerge;
 #[cfg(test)]
