@@ -120,7 +120,7 @@
 //! `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
 //! [`crate::memory`] (a `Unit`'s lazily built `annotated` and `points_to`),
 //! [`crate::memoryssa`] (`calls_annotated`), [`crate::avail`]
-//! (`EscapedBefore`), [`crate::observers`], [`crate::induction`]
+//! (`EscapedBefore`), [`crate::induction`]
 //! (`congruences`), [`crate::globalsaa`], [`crate::interprocedural`], and
 //! `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
 //!

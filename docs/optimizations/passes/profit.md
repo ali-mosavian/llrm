@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:fd786be71033025bb4d7c9ef6a2a1f94b54210ce01dadebcde32691ea7dea870 -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:01c47bc8ebe6e90fcca759c4430eb5e764a54f7aa1104e4438ef027f3a56504a -->
 
 # profit
 
@@ -82,7 +82,7 @@ From unit test `an_unpriced_instruction_makes_the_body_unpriced` in
 
 ## Used by
 Each of [`crate::lsr_pass`](lsr_pass.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md),
-[`crate::unroll`](unroll.md), [`crate::peel`](peel.md),
+[`crate::loopunrollpass`](loopunrollpass.md), [`crate::looppeel`](looppeel.md),
 [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md), [`crate::gepoffset`](gepoffset.md),
 [`crate::indvars`](indvars.md), [`crate::ipacp`](ipacp.md), [`crate::inline`](inline.md)
 and [`crate::interprocedural`](../analyses/interprocedural.md) asks it, before a rewrite that trades code

@@ -591,7 +591,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "vt-constantfolding (floating-point InstSimplify) and mssa",
     ),
     old_analysis("table-loads", "TableLoads", "none", "none: DEVIATE or delete candidate (consts::is_table_load)"),
-    old_analysis("published", "Published", "none", "none: DEVIATE or delete candidate (observers.rs)"),
     old_analysis(
         "loop-products",
         "Products",

@@ -6340,10 +6340,7 @@ entry:
     // DAG does.
     let mut module = llrm_mir::parse::module(text).expect("parses");
     crate::backend::legalize::legalized(&mut module).expect("legalizes");
-    let layout = llrm_mir::datalayout::DataLayout::parse(&llrm_target::Target::layout(&llrm_x86_m16::M16).datalayout)
-        .expect("a datalayout");
-    let pricing = crate::backend::selects::Pricing { target: None, layout: &layout, tti: &llrm_mir::tti::Basic };
-    crate::backend::selects::lowered(&mut module, &pricing, &|_| true).expect("lowers selects");
+    crate::backend::selects::lowered(&mut module, &llrm_mir::tti::Basic, &|_| true).expect("lowers selects");
     let got = listing_on("486", &llrm_mir::print::module(&module), "f");
     assert!(!got.is_empty(), "{got:?}");
 }

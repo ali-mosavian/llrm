@@ -18,8 +18,8 @@
 //! unrolled by [`crate::loopunroll::unroll_loop_blocks`].
 //!
 //! # Deviations
-//! - U3 `computePeelCount` is not translated: peeling is the plan's stage S2
-//!   (`PP.PeelCount` stays 0), and `peel` still runs where it did.
+//! - U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
+//!   there.
 //! - U4 The pragma metadata (`llvm.loop.unroll.*`) is read from the loop ID on
 //!   the latch's branch; no frontend of llrm writes it yet. Remarks (the
 //!   `OptimizationRemarkEmitter`), `UniformityInfo` and profile data are left
@@ -112,7 +112,7 @@ pub struct Run<'a> {
     /// Blocks an unroll merged away, erased when the pass is done.
     pub emptied: Vec<BlockId>,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
-    pub peeled: std::collections::BTreeMap<BlockId, u32>,
+    pub peeled: IdMap<BlockId, u32>,
 }
 
 /// `TransformationMode`.
@@ -1344,7 +1344,8 @@ fn try_to_unroll_loop(
         let loop_ = peelable(run.function, lp);
         return match crate::loopclone::peeled_any_latch(run.function, &loop_, i64::from(pp.peel_count)) {
             Ok(Some(_)) => {
-                *run.peeled.entry(header).or_insert(0) += pp.peel_count;
+                let so_far = run.peeled.get(&header).copied().unwrap_or(0);
+                run.peeled.insert(header, so_far + pp.peel_count);
                 Unrolled::Peeled
             }
             Ok(None) => Unrolled::Unmodified,
@@ -1607,6 +1608,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
 pub struct LoopFullUnroll {
     pub opt_level: u32,
     pub opt_size: bool,
+    /// `OnlyWhenForced`: only a loop that asks to be unrolled is
+    /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
+    pub only_when_forced: bool,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -1640,7 +1644,7 @@ impl FunctionPass for LoopFullUnroll {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
                 min_size: false,
-                only_when_forced: false,
+                only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
             },
         };

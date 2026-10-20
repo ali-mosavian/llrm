@@ -67,8 +67,7 @@
 //!
 //! # Runs
 //! In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off,
-//! and again after header copying. `peel` calls [`closed`] on its
-//! candidates.
+//! and again after header copying. The unroller calls it first.
 //!
 //! # Keeps
 //! Dominators and loops stay valid; all other analyses are invalidated when
