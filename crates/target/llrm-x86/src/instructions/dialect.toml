@@ -1,7 +1,7 @@
 # What the reader of x86.instr must know: see llrm_instr::Dialect.
 file = "x86.instr"
 registers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs", "ss", "ah"]
-widths = [8, 16, 32]
+widths = [8, 16, 32, 64]
 # Each row ends in iced's Code name.
 assembler_column = true
 # What a rule's `any` flag reads.

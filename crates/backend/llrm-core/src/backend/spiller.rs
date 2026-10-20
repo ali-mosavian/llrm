@@ -1623,7 +1623,7 @@ pub fn slots_colored(
     }
     let mut ranked: Vec<usize> = (0..shared.len()).collect();
     ranked.sort_by_key(|color| (std::cmp::Reverse(uses[*color]), *color));
-    if body.bits == 32 {
+    if body.bits >= 32 {
         ranked.reverse();
     }
     let mut again = Frame { slots: IndexMap::default(), capacities: IndexMap::default(), ..frame.clone() };
