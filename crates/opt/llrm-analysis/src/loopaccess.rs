@@ -17,7 +17,7 @@ use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 
 use crate::scev::{Cx, ScalarEvolution};
 
-fn address_space(
+pub(crate) fn address_space(
     cx: &Cx,
     pointer: Operand,
 ) -> Option<u32> {
@@ -118,7 +118,7 @@ fn load_store_pointer_operand(
 }
 
 /// `getLoadStoreType`.
-fn load_store_type(
+pub(crate) fn load_store_type(
     cx: &Cx,
     inst: InstId,
 ) -> Option<TypeId> {
