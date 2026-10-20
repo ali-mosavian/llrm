@@ -231,6 +231,8 @@ pub struct Candidate {
     /// Where the body calls itself: the calls it makes of itself per call,
     /// the sum of those calls' frequencies over the entry's.
     pub self_calls: Option<f64>,
+    /// How many calls of itself the body has.
+    pub self_sites: usize,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.
@@ -730,9 +732,14 @@ impl<'a> Plan<'a, '_> {
             // made the outermost copy: the calls to itself per call, to the
             // power of the copies it is deep.
             let reached = parent.and_then(|one| one.self_calls).unwrap_or(1.0).powi(level as i32);
+            // The squaring bounds the copies, which are `sites` to the power of
+            // the depth: with one call the copies grow by one a level and the
+            // limit stays (hanoi: 133 clocks with it squared, 103 without).
             let mut limit = 1.0 - 1.0 / MAX_INLINE_RECURSIVE_DEPTH_GCC as f64;
-            for _ in 1..level {
-                limit *= limit;
+            if parent.is_some_and(|one| one.self_sites > 1) {
+                for _ in 1..level {
+                    limit *= limit;
+                }
             }
             let grown = gcc_insns(callee) - 1;
             // DEVIATE: gcc has no cap on peeling; the copies of one call add at

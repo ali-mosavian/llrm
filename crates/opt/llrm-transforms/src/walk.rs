@@ -407,6 +407,7 @@ impl SelfInline {
                         moved: false,
                         callee: None,
                         self_calls: None,
+                    self_sites: 0,
                     };
                     let available = [(id, itself)].into_iter().collect();
                     let by = crate::inline::Caller {
