@@ -146,7 +146,7 @@ impl FunctionPass for IndVars {
         // A step that changed the body drops the expressions; the blocks and
         // edges stay, so the tree and the loops do not.
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
-        let mut settled = |session: &mut ScevSession, changed: bool| {
+        let settled = |session: &mut ScevSession, changed: bool| {
             if changed {
                 session.forget_expressions();
             }
