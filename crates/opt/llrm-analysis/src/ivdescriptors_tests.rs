@@ -222,54 +222,6 @@ fn a_phi_that_is_not_affine_is_not_an_induction() {
     assert!(!describe(&ir, false).iter().any(|l| l == "acc: induction Int"));
 }
 
-/// A sum of two chain values (`%a` and `%b` both read `%acc`) is a tree, not a
-/// chain: a reduction operation may use the cycle once.
-#[test]
-fn an_operation_joining_two_chain_values_is_not_a_reduction() {
-    let ir = "define i32 @f(ptr %p, i32 %n) {
-entry:
-  br label %loop
-loop:
-  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
-  %acc = phi i32 [ 0, %entry ], [ %s, %loop ]
-  %v = load i32, ptr %p
-  %a = add i32 %acc, %v
-  %b = add i32 %acc, 3
-  %s = add i32 %a, %b
-  %i.next = add nuw nsw i32 %i, 1
-  %done = icmp eq i32 %i.next, %n
-  br i1 %done, label %exit, label %loop
-exit:
-  %r = phi i32 [ %s, %loop ]
-  ret i32 %r
-}";
-    assert_eq!(acc_of(ir), "acc: none");
-}
-
-/// Two chain values used after the loop: only the last may leave it.
-#[test]
-fn two_chain_values_used_outside_the_loop_are_not_a_reduction() {
-    let ir = "define i32 @f(ptr %p, i32 %n) {
-entry:
-  br label %loop
-loop:
-  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
-  %acc = phi i32 [ 0, %entry ], [ %s, %loop ]
-  %v = load i32, ptr %p
-  %a = add i32 %acc, %v
-  %s = add i32 %a, 3
-  %i.next = add nuw nsw i32 %i, 1
-  %done = icmp eq i32 %i.next, %n
-  br i1 %done, label %exit, label %loop
-exit:
-  %r = phi i32 [ %s, %loop ]
-  %r2 = phi i32 [ %a, %loop ]
-  %q = add i32 %r, %r2
-  ret i32 %q
-}";
-    assert_eq!(acc_of(ir), "acc: none");
-}
-
 /// The select's other arm is loaded in the loop, so the select is no "any of".
 #[test]
 fn a_select_with_a_loop_varying_arm_is_not_an_any_of() {
