@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_phi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_phi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_phi.rs sha256:a061bc7ad10edc7be5bfc5e81a6c129ac2d3b1a6033e0778f6011831bf56aaf0 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_phi.rs sha256:84bb786f92d6cde207bdc467cf8c1a977db3625f741e95551828269eadffbd41 -->
 
 # combine_phi
 
@@ -25,6 +25,18 @@ DEVIATE 2: the implied-condition test takes the compare's predicate without
 
 DEVIATE 3: no debug-use rewrite (`replaceAllDbgUsesWith`): `replace_value`
 moves debug records of the phi with its uses.
+
+`foldBinopWithPhiOperands` (:2215) and `foldBinopWithRecurrence` (:2100):
+a binary operator of two phis of one block.
+
+MIRROR: two simple recurrences of one operation, with constant starts and
+steps, become one recurrence (`reduced.phi`); an identity constant on one
+side of every incoming pair leaves the other side; a pair of constants for
+one predecessor folds there and the operation moves to the other
+predecessor, which must jump straight here.
+
+DEVIATE 4: `IRBuilder` here simplifies what it makes (`create_binop`), not
+just constant-folds, as everywhere in `combine_build`.
 
 ## Used by
 The `visit*` of the families that fold an operation into a phi

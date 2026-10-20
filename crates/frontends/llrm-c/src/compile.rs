@@ -717,34 +717,37 @@ mod tests {
             .collect()
     }
 
-    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other
-    /// passes to settle, it kept two pointers and a counter, three steps
-    /// per iteration.
+    /// `dot` indexes `a[i]` and `b[i]`: both arrays share one stepped offset
+    /// beside the counter, as `opt -passes=loop-reduce` + `llc -mcpu=i486`
+    /// list it (`inc; add 2; cmp`), not a pointer per array.
     #[test]
     fn test_addresses_differing_by_base_share_one_stepped_offset() {
-        assert_eq!(loop_counting("dot"), ["add bx, 2"]);
+        assert_eq!(loop_counting("dot"), ["inc dx", "cmp dx, cx"]);
     }
 
     /// `bytes` indexes by `i` itself, with a bound only known at run time: the
-    /// counter never counted to zero, so each iteration compared it with `n` in
-    /// memory.
+    /// counter is the offset and is compared with `n`, as llc lists it
+    /// (`inc; cmp`).
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
-        assert_eq!(loop_counting("bytes"), ["inc bx"]);
+        assert_eq!(loop_counting("bytes"), ["inc bx", "cmp bx, cx"]);
     }
 
-    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root
-    /// beside `i * 2`, so each array stepped its own pointer beside a
-    /// counter.
+    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` folds into the
+    /// displacement (`[bx+di-2]`), so both arrays index off `i * 2` beside
+    /// one counter, as `opt` + `llc -mcpu=i486` list it.
     #[test]
     fn test_subscripts_of_one_stride_share_one_offset() {
-        assert_eq!(loop_counting("from1"), ["add bx, 2"]);
+        assert_eq!(loop_counting("from1"), ["inc dx", "cmp dx, cx"]);
         let loop_ = innermost("from1");
         let two_registers = |one: &String| {
             let inside = one.split_once("ptr [").map_or("", |(_, inside)| inside).as_bytes();
             inside.len() > 4 && inside[2] == b'+' && inside[3].is_ascii_alphabetic()
         };
-        assert!(loop_.iter().filter(|one| one.contains("ptr [")).all(two_registers), "{loop_:#?}");
+        assert!(
+            loop_.iter().filter(|one| one.starts_with("movsx") && one.contains("ptr [")).all(two_registers),
+            "{loop_:#?}"
+        );
     }
 
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
@@ -776,7 +779,10 @@ mod tests {
     fn test_restrict_reaches_mir_as_distinct_noalias_roots() {
         let text = emitted("tests/test_restrict_reaches_mir_as_distinct_noalias_roots");
         let define = text.lines().find(|line| line.starts_with("define ")).expect("a definition");
-        assert_eq!(define.matches("ptr noalias").count(), 3, "{text}");
+        // The attribute order is the printer's; each pointer is also `noundef`
+        // (CGCall.cpp `DetermineNoUndef`: a scalar parameter).
+        let on_pointers = |attribute: &str| define.split(", ").filter(|one| one.contains(attribute)).count();
+        assert_eq!((on_pointers("noalias"), on_pointers("noundef")), (3, 3), "{text}");
     }
 
     /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was
@@ -1159,6 +1165,111 @@ mod tests {
             llrm_core::backend::masm::text(&super::selected(&text, "brackets", None, &args.codegen).unwrap()).unwrap();
         let order: Vec<&str> = asm.lines().filter_map(|one| one.strip_suffix(" segment word public 'DATA'")).collect();
         assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
+    }
+
+    /// The address of a function the unit only declares, taken in code and
+    /// not in a table, stopped the compile ("@name undeclared"): the call
+    /// declares its callee and the address did not.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_address_of_an_extern_function_taken_in_code_is_compiled() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("addr.c");
+        std::fs::write(&source, "extern unsigned other(void);\nunsigned (*get(void))(void) { return other; }\n")
+            .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records addr.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let built = super::selected(&text, "addr", None, &options);
+        let asm = llrm_core::backend::masm::text(&built.unwrap()).unwrap();
+        assert!(asm.contains("mov ax, offset other_") && asm.contains("extern other_:far"), "{asm}");
+    }
+
+    /// Inline code with registers that names a symbol (`"call __doserror1_"`,
+    /// `"mov ax,offset table"`) was refused, which left clib's DOS calls to the
+    /// reference compiler. A near call is spelled as the instruction, a far
+    /// one and an offset as their words.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_with_registers_may_name_symbols() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sym.c");
+        std::fs::write(
+            &source,
+            "extern void __near fixed(void);\nextern void __far reach(void);\nextern int table[4];\n\
+             extern int step(int n);\n\
+             #pragma aux step = \"int 21h\" \"call fixed\" \"call reach\" \"mov dx,offset table\" \
+             __parm __caller [__ax] __value [__ax] __modify __exact [__ax __dx]\n\
+             int run(int n) { return step(n); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records sym.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "sym", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("call near ptr fixed_"), "{asm}");
+        assert!(asm.contains("dw offset reach_") && asm.contains("dw seg reach_"), "{asm}");
+        assert!(asm.contains("dw offset _table"), "{asm}");
+        assert!(asm.contains("extern fixed_:near") && asm.contains("extern reach_:far"), "{asm}");
+    }
+
+    /// Every module's code was in `<MODULE>_TEXT`, so a near call between
+    /// modules (clib's `__set_errno_dos`, declared near) reached into another
+    /// segment. `-mcode-segment=_TEXT` puts them all in one.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_segment_may_be_named_for_every_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.c");
+        std::fs::write(&source, "int one(void) { return 1; }\n").unwrap();
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "one.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records one.c");
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "one", None, &args.codegen).unwrap()).unwrap();
+        assert!(asm.lines().any(|one| one == ".code _TEXT"), "{asm}");
+    }
+
+    /// A register list that spells the default convention's own assignment
+    /// (`__parm [__ax] [__dx] [__bx]`, the heap's `__MemAllocator`) was refused
+    /// as "has a register calling convention", and clib's malloc and free with
+    /// it. A list that differs still is.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_register_list_that_is_the_default_assignment_is_the_default_convention() {
+        let directory = tempfile::tempdir().unwrap();
+        let build = |pragma: &str| {
+            let source = directory.path().join("alloc.c");
+            std::fs::write(
+                &source,
+                format!(
+                    "extern void *allocator(unsigned a, void *b, unsigned c);\n{pragma}\n\
+                     void *use(unsigned n) {{ return allocator(n, 0, 3); }}\n"
+                ),
+            )
+            .unwrap();
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+            let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records alloc.c");
+            let options = llrm_core::driver::Options {
+                abi: Some("watcom".to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            super::selected(&text, "alloc", None, &options).map(|built| llrm_core::backend::masm::text(&built).unwrap())
+        };
+        let same = build("#pragma aux allocator \"*\" __parm [__ax] [__dx] [__bx]").expect("the default's own list");
+        assert!(same.contains("mov bx, 3") && same.contains("call far ptr allocator"), "{same}");
+        let other = build("#pragma aux allocator \"*\" __parm [__dx] [__ax] [__bx]").expect_err("another list");
+        assert!(format!("{other:?}").contains("register calling convention"), "{other:?}");
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object
@@ -2003,7 +2114,9 @@ mod tests {
 
     /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest
     /// from the stack, lowest first, popped with `retf 4`; the stack
-    /// convention read all six from [bp+6]...
+    /// convention read all six from [bp+6]... Reassociate puts the product's
+    /// operands highest rank first (`imul cx, bx`): same instructions as
+    /// before, commuted.
     #[test]
     fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
         let body = watcall16("six_");
@@ -2014,8 +2127,8 @@ mod tests {
                 "mov bp, sp",
                 "L0_0:",
                 "sub ax, dx",
-                "imul bx, cx",
-                "add ax, bx",
+                "imul cx, bx",
+                "add ax, cx",
                 "sub ax, word ptr [bp+6]",
                 "add ax, word ptr [bp+8]",
                 "pop bp",
@@ -2440,11 +2553,12 @@ mod tests {
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let calls: Vec<usize> =
             body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
-        // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
+        // `s`, by the address passed to `animate`: `lea r, [bp-N]`, made once
+        // for both calls.
         let base: i64 = body[..calls[1]]
             .iter()
             .rev()
-            .find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok())
+            .find_map(|one| one.strip_prefix("lea ")?.split_once(", [bp-")?.1.strip_suffix(']')?.parse().ok())
             .expect("&s");
         // Every byte the stores between the calls write, by frame offset.
         let mut written = std::collections::BTreeSet::new();
@@ -2479,6 +2593,9 @@ mod tests {
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
+        if std::env::var_os("SHOWASM").is_some() {
+            eprintln!("{}", &asm[from..]);
+        }
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let stored: Vec<&&str> = body
             .iter()
@@ -2521,6 +2638,10 @@ mod tests {
     /// which nothing writes, is read again instead.
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
+        // RFP-3, a row loss under RFP: greedy spills the argument to a slot of
+        // its own across the call (`sub sp, 20`), where floatassign
+        // re-read its cell.
+        let _old = llrm_core::backend::allocate::RfpOn::off();
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
         let options = llrm_core::driver::Options {
@@ -2704,7 +2825,9 @@ mod tests {
     /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4]
     /// and [esp+8] (EBP is no frame where nothing needs one), the result in
     /// EAX. It listed `bp`, `[bp+4]` and a DX:AX result, and never reached
-    /// the allocator, before the target stated them.
+    /// the allocator, before the target stated them. The operands are added
+    /// highest rank first, as Reassociate has them: the pinned clang -m32
+    /// -march=i486 -O2 lists `mov eax, [esp+8]; add eax, [esp+4]; ret`.
     #[test]
     fn test_m32_lists_add_as_flat_cdecl32() {
         let lines = flat_listing("add");
@@ -2716,7 +2839,7 @@ mod tests {
             .take_while(|line| *line != "_add endp")
             .map(String::as_str)
             .collect();
-        assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret"]);
+        assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+8]", "add eax, dword ptr [esp+4]", "ret"]);
     }
 
     /// The body of `name`'s procedure in the flat listing of `regs.c`, as the
@@ -2832,7 +2955,7 @@ mod tests {
         assert_eq!(regs_body("small_"), ["L4_0:", "movsx eax, al", "add eax, edx", "ret"]);
         let body = regs_body("by_value_");
         assert!(
-            body.contains(&"mov eax, dword ptr [esp+4]".to_owned())
+            body.contains(&"mov eax, dword ptr [esp+12]".to_owned())
                 && body.contains(&"add eax, dword ptr [esp+16]".to_owned()),
             "{body:?}"
         );
@@ -2942,7 +3065,7 @@ mod tests {
         );
         assert!(records[2].1[0] & 1 == 1 && records[3].1[0] & 1 == 1, "both segments are USE32: {records:?}");
         let code = &records[5].1;
-        assert_eq!(hex(&code[5..]), "8b44240403442408c3", "mov eax,[esp+4]; add eax,[esp+8]; ret");
+        assert_eq!(hex(&code[5..]), "8b44240803442404c3", "mov eax,[esp+8]; add eax,[esp+4]; ret");
     }
 
     /// A near procedure that pops its own arguments returns `ret 8` (`c2
@@ -3164,15 +3287,16 @@ mod tests {
             .take_while(|line| *line != "sum_ endp")
             .map(String::as_str)
             .collect();
-        // The load is the add's operand, and the add of the stride sets the
-        // flags the branch reads.
+        // The load is the add's operand, indexed `[base+index*4]`; the counter
+        // steps by one and the compare ends the loop, as llc lists it.
+        let at = body
+            .iter()
+            .position(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("*4]"));
+        let at = at.unwrap_or_else(|| panic!("{body:#?}"));
         assert!(
-            body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")),
+            body[at + 1].starts_with("inc e") && body[at + 2].starts_with("cmp e") && body[at + 3].starts_with("jl "),
             "{body:#?}"
         );
-        assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
-        let jump = body.iter().position(|line| line.starts_with("jne ")).expect("the loop ends on jne");
-        assert!(body[jump - 1].starts_with("add e") && body[jump - 1].ends_with(", 4"), "{body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

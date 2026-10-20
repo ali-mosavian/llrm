@@ -56,6 +56,14 @@
 //! DEVIATE 5: only stores and constant-length memsets are candidates, and
 //! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
 //! and friends). Exit: stage 2.
+//! DEVIATE 6: a call that initializes an object keeps the earlier writes to it
+//! when a pointer into the object also reaches the call through another
+//! argument (the pin trusts `initializes`: the callee reads before it writes
+//! through that alias). Exit: none, while a pointer can be passed twice.
+//! DEVIATE 7: a load through an unknown pointer is taken to read a local that
+//! is captured anywhere in the function, where BasicAA's `isNotCapturedBefore`
+//! asks at the instruction; a store a later escape follows stays. Exit:
+//! basicaa-port's captured-before query in the alias stand-in (10-23).
 //!
 //! # Example
 //! A local written and never read:
@@ -128,12 +136,30 @@ impl FunctionPass for DeadStoreElimination {
         "dse"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("dse")
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        // Only a store, or a call that fills bytes, can be dead: a body with
+        // neither builds nothing.
+        let writes = {
+            let probe = View::within(unit.context, unit.layout, unit.function, &outer);
+            unit.function
+                .walk()
+                .any(
+                    |(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
+                        || llrm_analysis::memory::MemRef::filled(&probe, inst).is_some(),
+                )
+        };
+        if !writes {
+            return PreservedAnalyses::all();
+        }
         let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
             Ok(accesses) => accesses,
             Err(error) => panic!("dse: {error}"),
@@ -382,6 +408,11 @@ impl<'a> Dse<'a> {
         if let Some(&(length, skip)) = self.shortened.get(&inst) {
             reference.disp += skip;
             reference.width = length as u32;
+            // The destination is still the old address: a walk that reads
+            // `pointer` would see the bytes where they were.
+            if skip != 0 {
+                reference.pointer = None;
+            }
         }
         Some(self.aa.location_for(&reference, false))
     }
@@ -475,6 +506,39 @@ impl<'a> Dse<'a> {
     ) -> bool {
         let Some(term_loc) = self.terminated(term) else { return false };
         self.same_object(loc, &term_loc) && self.is_overwrite(term, access, &term_loc, loc) == Overwrite::Complete
+    }
+
+    /// Whether the call reaches the object of `loc` through its filled
+    /// arguments alone: a pointer into it passed another way (a source
+    /// argument) reads it before the fill.
+    fn reaches_only_through_fills(
+        &self,
+        call: InstId,
+        loc: &Location,
+    ) -> bool {
+        let unit = self.aa.unit();
+        let Some(pointer) = loc.reference.pointer else { return false };
+        let target = llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, pointer).0;
+        let reaching = self
+            .function
+            .instruction(call)
+            .operands
+            .iter()
+            .filter(|&&one| {
+                llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, one).0 == target
+            })
+            .count();
+        let filled = self
+            .accesses
+            .fills(call)
+            .iter()
+            .filter(|fill| {
+                fill.pointer.is_some_and(|one| {
+                    llrm_mir::valuetracking::underlying(unit.context, unit.layout, self.function, one).0 == target
+                })
+            })
+            .count();
+        reaching <= filled
     }
 
     /// `isRemovable`: not a volatile store or memset.
@@ -967,7 +1031,10 @@ impl<'a> Dse<'a> {
             // eliminated.
             // A call that initializes the object reads it only after writing:
             // its own read is no read of the dead def.
-            let own_read = init && use_inst == killing_inst && self.same_object(killing_loc, &maybe_dead_loc);
+            let own_read = init
+                && use_inst == killing_inst
+                && self.same_object(killing_loc, &maybe_dead_loc)
+                && self.reaches_only_through_fills(use_inst, &maybe_dead_loc);
             if self.is_read_clobber(&maybe_dead_loc, use_inst) && !own_read {
                 return None;
             }
@@ -1074,8 +1141,10 @@ impl<'a> Dse<'a> {
         def: InstId,
         user: InstId,
     ) -> bool {
+        // An instruction does not dominate itself: the killing call's own read
+        // is looked at.
         if def == user {
-            return true;
+            return false;
         }
         let (Some(a), Some(b)) = (self.function.parent(def), self.function.parent(user)) else { return false };
         if a != b {

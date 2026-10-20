@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/capturetracking.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/capturetracking.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/capturetracking.rs sha256:b97169662064e956546c1bc1474b9308df855b4db0211e0824d4b7da01e8ba92 -->
+<!-- src: crates/opt/llrm-analysis/src/capturetracking.rs sha256:6ad93ae17e4336a609e701c1731595bf24ef2bb37d3e778a37460c2bdc235f1f -->
 
 # capturetracking
 
@@ -23,7 +23,9 @@ DEVIATE C1: MIR has no `captures(...)` attribute: `nocapture` is
 pointer-returning intrinsics (`launder.invariant.group`, `ptrmask`,
 `threadlocal.address`), atomics, `va_arg`, `ptrtoaddr`, volatile memory
 intrinsics or `!captures` metadata exist in MIR, so those cases are absent.
-`PointerMayBeCapturedBefore` and `FindEarliestCapture` are not translated.
+`PointerMayBeCapturedBefore` is not translated; `FindEarliestCapture` is
+(`find_earliest_capture`), and [`crate::captureanalysis`](captureanalysis.md) answers
+`getCapturesBefore` with it.
 
 ## Example
 `%p` is stored to memory, so it is captured; `%q` is only loaded through:
@@ -44,7 +46,7 @@ From unit test
 ## Provides
 `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`,
 `determine_use_capture_kind`, `pointer_may_be_captured_by`,
-`pointer_may_be_captured`.
+`pointer_may_be_captured`, `find_earliest_capture`.
 
 ## See also
 LLVM `CaptureTracking.cpp`, `Support/ModRef.h` (`CaptureComponents`).

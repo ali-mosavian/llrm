@@ -576,7 +576,12 @@ b:
 ",
     );
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-        pipeline::applied(program, &Applied::default())
+        // The clocks' budget; the walk decides as LLVM does, and LLVM inlines
+        // all three.
+        pipeline::applied(
+            program,
+            &Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Default::default() },
+        )
     })
     .and_then(|done| done)
     .unwrap();
@@ -1147,7 +1152,8 @@ fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
 fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
     let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
     let text = format!(
-        "@p = global [100 x i16] [{}]
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@p = global [100 x i16] [{}]
 @v = global [100 x i16] [{}]
 
 define i16 @main() {{
@@ -1451,6 +1457,8 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
                 applied.options.sroa,
                 applied.options.mem2reg,
                 applied.options.rotating(),
+                &[],
+                &[],
             );
             assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
         }
@@ -1481,7 +1489,7 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
-    assert_eq!(late, ["instsimplify@1662"]);
+    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
@@ -1503,6 +1511,25 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
+
+/// Turning a pass off (`unroll: false`) left its Translated slot out of the
+/// order, and the parity check panicked ("slot unroll@753 is Translated and
+/// not run in Simplify") in the sixteen nib tests that build such options.
+#[test]
+fn test_a_switched_off_pass_does_not_fail_the_slot_check() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  ret i16 %n\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, unroll: false, ..Default::default() },
+        ..Applied::default()
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// #2194, x_hanoi2's `mv`: the loop `tailrec` makes of the second call has the
@@ -1543,12 +1570,15 @@ done:
         let printed =
             crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
         let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
-        (entry.contains("mul i16"), printed)
+        (entry.contains("mul i16") || entry.contains("shl i16"), printed)
     };
     let (without, plain) = entry_has_mul(false);
-    assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
+    assert!(
+        without,
+        "premise: without the rotate slot the mul (or the shift it becomes) is in the entry block\n{plain}"
+    );
     let (with, rotated) = entry_has_mul(true);
-    assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+    assert!(!with, "the mul (or shift) is behind the guard, not in the entry block\n{rotated}");
 }
 
 /// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
@@ -2073,8 +2103,8 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 /// dropped one. LLVM keeps it past every function pass, so the stages add no
 /// computation. What is left are the program passes (the first ask, `ports`,
 /// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
-/// Simplify list, a module pass LLVM's GlobalsAA does not survive either); 7
-/// here, which this holds at.
+/// Simplify list, and `Walk` after Cleanup, module passes LLVM's GlobalsAA does
+/// not survive either); 10 here, which this holds at.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     let mut files = corpus_files();
@@ -2095,7 +2125,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 7, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert!(made <= 10, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once
@@ -2165,7 +2195,8 @@ b2:
     );
     let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
     fixed.only = false;
-    fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
+    fixed.passes =
+        vec![Box::new(crate::simplifycfg::SimplifyCfg::default()), Box::new(crate::loopsimplify::LoopSimplify)];
     crate::testing::managed(&mut module, fixed);
 }
 /// d_faces -O2: the interprocedural stage ran body 32 again (`_clip_w`) and its
@@ -2183,7 +2214,7 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     // The manager's loop last set `g`.
     llrm_mir::passes::set_running_function("g");
     let (_, lines) = pipeline::capturing_runs(|| {
-        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed).unwrap()
+        super::rerun(&mut module, &mut analyses, llrm_mir::context::GlobalId(0), &mut fixed, false).unwrap()
     });
     assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
@@ -2217,6 +2248,21 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
     assert!(!pipeline::slot_built(&o2, "gvn"), "a pass name is no slot");
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     assert!(!pipeline::slot_built(&o1, "gvn@787"), "-O1 has no GVN");
+}
+
+/// The order had no SimplifyCFG after the Simplify stage: L1438 (hoist and
+/// sink common code, loops need not stay canonical) and L2376 (hoist) were
+/// Missing. Their slots are built, in the pin's order around
+/// `instsimplify@1662`.
+#[test]
+fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
+    let o2 = Applied::default();
+    for slot in ["simplifycfg@1438", "simplifycfg@2376"] {
+        assert!(pipeline::slot_built(&o2, slot), "{slot}");
+    }
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
+    assert_eq!(late, ["simplifycfg@1438", "instsimplify@1662", "simplifycfg@2376"]);
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
@@ -2279,4 +2325,230 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
     }
+}
+
+/// `llrm-pass -O3 --order SLOT` ran the peeler in the slot's place:
+/// `transacted` runs a peeler first when `only`, and `Fixed::slot` kept it.
+/// Every oracle comparing a Simplify-phase slot at -O3 or -Omax compared the
+/// peeler's output.
+#[test]
+fn test_a_slot_run_alone_at_o3_is_the_slot_and_not_the_peeler() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ %m, %b0 ], [ %next, %body ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %body ]
+  br i1 %z, label %out, label %test
+
+test:
+  %done = icmp eq i16 %i, 0
+  br i1 %done, label %out, label %body
+
+body:
+  %next = sub i16 %i, 1
+  %sum = add i16 %acc, %i
+  br label %head
+
+out:
+  %r = phi i16 [ %acc, %head ], [ %acc, %test ]
+  ret i16 %r
+}
+";
+    let entry_branches = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("trivialunswitch@732".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "trivialunswitch@732"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        let after = llrm_mir::print::module(&module);
+        after[after.find("b0:").expect("b0")..].split("\n\n").next().expect("a block").contains("br i1 %z")
+    };
+    // -O1 to -Omax: the ones with `peel` on ran the peeler in the slot's place.
+    for (level, options) in [
+        ("-O1", pipeline::Options::basic()),
+        ("-O2", pipeline::Options::standard()),
+        ("-Os", pipeline::Options::size()),
+        ("-O3", pipeline::Options::speed()),
+        ("-Omax", pipeline::Options::aggressive()),
+    ] {
+        assert!(entry_branches(options), "{level}: the slot did not unswitch the header test");
+    }
+}
+
+/// Drops one of the two inputs of the phi that two edges feed (#3016).
+struct ShortPhi;
+
+impl llrm_mir::passes::FunctionPass for ShortPhi {
+    fn name(&self) -> &'static str {
+        "short-phi"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let function = &mut *unit.function;
+        let block = function.layout()[1];
+        let phi = function.iter_block(block).next().unwrap();
+        let first = function.instruction(phi).operands[..2].to_vec();
+        function.set_operands(phi, first);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// A slot of several passes names the member that left a phi short of an
+/// edge, not the slot: SROA's `Promote` and not "sroa@646".
+#[test]
+#[cfg(debug_assertions)]
+fn a_slot_names_the_member_that_left_a_phi_short() {
+    let text = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, label %b\nb:\n  %x = phi i16 [ 1, %entry ], [ 1, %entry ]\n  ret i16 %x\n}\n";
+    let mut module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(super::Together { name: "slot@1", parts: vec![Box::new(ShortPhi)] });
+    let error = passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_err();
+    assert!(error.starts_with("after short-phi: "), "{error}");
+}
+
+/// `ret` took `frame` in, and `selftest` was then given the body `ret` had
+/// before, with its calls to `frame`, which had no body left: the load of
+/// `b.draw` was folded past them and `selftest` returned 0, not 1.
+#[test]
+fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
+    let mut module = llrm_analysis::testing::parsed(
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+
+define internal cc 1005 void @"_frame@3"(ptr addrspace(1) nocapture %0, i16 %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  %2 = icmp ne i16 %1, 0
+  br i1 %2, label %b3, label %b2
+
+b2:
+  %3 = load i16, ptr addrspace(1) %0, !tbaa !9
+  %4 = and i16 %3, -3
+  store i16 %4, ptr addrspace(1) %0, !tbaa !9
+  br label %b4
+
+b3:
+  %5 = load i16, ptr addrspace(1) %0, !tbaa !9
+  %6 = or i16 %5, 2
+  store i16 %6, ptr addrspace(1) %0, !tbaa !9
+  br label %b4
+
+b4:
+  ret void
+}
+
+define internal cc 1005 void @"_ret@3"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  store i16 3, ptr addrspace(1) %0, !tbaa !9
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %1, i16 0)
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %1, i16 0)
+  ret void
+}
+
+define internal cc 1005 range(i16 0, 2) i16 @"_selftest@3"() memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
+b1:
+  %0 = alloca [2 x i8]
+  %1 = alloca [2 x i8]
+  store i16 1, ptr %1, !tbaa !9
+  %2 = addrspacecast ptr %1 to ptr addrspace(1)
+  call cc 1005 void @"_frame@3"(ptr addrspace(1) %2, i16 -1)
+  %3 = addrspacecast ptr %0 to ptr addrspace(1)
+  call cc 1005 void @"_ret@3"(ptr addrspace(1) %3, ptr addrspace(1) %2)
+  %4 = load i16, ptr %0, !tbaa !9
+  %5 = icmp eq i16 %4, 3
+  %6 = load i16, ptr %1
+  %7 = icmp eq i16 %6, 1
+  %or.cond = select i1 %5, i1 %7, i1 false
+  br i1 %or.cond, label %b5, label %b3
+
+b3:
+  %8 = phi i16 [ 1, %b5 ], [ 0, %b1 ]
+  ret i16 %8
+
+b5:
+  br label %b3
+}
+
+define i16 @_main() addrspace(1) {
+b1:
+  %0 = call cc 1005 i16 @"_selftest@3"()
+  %1 = sext i16 %0 to i32
+  %2 = call cc 1005 addrspace(1) i16 @"_report@3"(i32 %1)
+  ret i16 0
+}
+
+declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
+
+!5 = !{!"Simple C/C++ TBAA"}
+!6 = !{!"omnipotent char", !5, i64 0}
+!8 = !{!"int2", !6, i64 0}
+!9 = !{!8, !8, i64 0}
+"#,
+    );
+    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("_main".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("@\"_report@3\"(i32 1)"), "selftest returned 0, not 1:\n{printed}");
+}
+
+/// The pin builds `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`: the slot
+/// copied a loop for each way of an invariant branch at -O3 only, where
+/// the old `unswitch` pass ran after the fixed point and judged candidates on
+/// a pipeline of its own.
+#[test]
+fn test_the_unswitch_slot_copies_a_loop_for_an_invariant_branch_at_o3_only() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %latch ]
+  br i1 %z, label %then, label %else
+
+then:
+  %a = add i16 %acc, %i
+  br label %latch
+
+else:
+  %b = mul i16 %acc, 3
+  br label %latch
+
+latch:
+  %sum = phi i16 [ %a, %then ], [ %b, %else ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %m
+  br i1 %done, label %out, label %head
+
+out:
+  %r = phi i16 [ %sum, %latch ]
+  ret i16 %r
+}
+";
+    let loops = |unswitch: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied {
+            only: Some("trivialunswitch@732".to_owned()),
+            options: pipeline::Options { unswitch, ..Default::default() },
+            ..Applied::default()
+        };
+        assert!(pipeline::slot_built(&applied, "trivialunswitch@732"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module).matches("icmp eq i16").count() - 1
+    };
+    assert_eq!((loops(false), loops(true)), (1, 2));
 }

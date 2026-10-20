@@ -33,6 +33,7 @@ use super::query::Query;
 use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
 use crate::dense::IdSet;
+use crate::facts::Facts;
 use crate::hash::HashSet;
 use crate::loopinfo::Loop;
 use crate::module::{BlockId, InstId, Instruction, Operand, ValueDef};
@@ -554,7 +555,7 @@ pub fn implies_poison(
 /// `stripPointerCastsSameRepresentation()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
-pub(crate) fn strip_pointer_casts_same_representation(
+pub fn strip_pointer_casts_same_representation(
     q: &Query,
     v: Operand,
 ) -> Operand {
@@ -642,7 +643,7 @@ fn is_guaranteed_not_to_be_undef_or_poison_kind(
     if let Operand::Value(value) = v
         && let ValueDef::Argument(index) = q.function.value(value).def
         && let Some(attrs) = q.function.parameter_attrs.get(index as usize)
-        && (has(attrs, "noundef") || has(attrs, "dereferenceable") || has(attrs, "dereferenceable_or_null"))
+        && (Facts::of(attrs).no_undef() || has(attrs, "dereferenceable") || has(attrs, "dereferenceable_or_null"))
     {
         return true;
     }
@@ -1079,7 +1080,7 @@ fn handle_guaranteed_well_defined_ops(
             }
         }
         Opcode::Ret => {
-            if has(&q.function.return_attrs, "noundef")
+            if Facts::of(&q.function.return_attrs).no_undef()
                 && let Some(value) = instruction.operands.first()
                 && handle(*value)
             {
