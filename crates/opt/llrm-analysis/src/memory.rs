@@ -1740,7 +1740,27 @@ impl<'h> Standing<'h> {
 /// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
     llrm_mir::counts::bump(llrm_mir::counts::Event::ExposedFrames);
-    crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
+    // MEASUREMENT ONLY, not for feat/parity: one PointerMayBeCaptured walk per
+    // alloca in place of the one-pass frameescape walk.
+    use crate::capturetracking::{CaptureComponents, DEFAULT_MAX_USES_TO_EXPLORE, pointer_may_be_captured};
+    let mut found = BTreeSet::new();
+    for (_, inst) in unit.function.walk() {
+        let instruction = unit.function.instruction(inst);
+        let (Opcode::Alloca { .. }, Some(result)) = (&instruction.opcode, instruction.result) else { continue };
+        let captured = pointer_may_be_captured(
+            unit.function,
+            unit.globals,
+            unit.context,
+            result,
+            CaptureComponents::ALL,
+            |cc| cc != CaptureComponents::NONE,
+            DEFAULT_MAX_USES_TO_EXPLORE,
+        );
+        if !captured.with_ret.captures_nothing() {
+            found.insert(result);
+        }
+    }
+    found
 }
 
 /// The object `root` is the address of, where it is an object's own: an
