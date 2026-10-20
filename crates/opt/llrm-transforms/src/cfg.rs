@@ -59,7 +59,7 @@
 //!
 //! # Runs
 //! A library function, called by `decide` after it decides branches and by
-//! `phiopt`, `rotate` and `lsr` after their rewrites. The pass `Merged` wraps
+//! `rotate` and `lsr` after their rewrites. The pass `Merged` wraps
 //! it; no pipeline stage runs it alone.
 //!
 //! # Keeps
