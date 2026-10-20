@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:e6ab31838524f191805d32b6be6c74995cedf790e2b88078e69d84569e4fb1de -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c14b5df401c40fc6f9e5ea296bafcb3e6bb14decf35c1116f35feb3c151a6b2e -->
 
 # memcpyopt
 
@@ -58,8 +58,9 @@ A copy of a copy reads the first source:
    `CreateMemCpyInline` has no counterpart here.
 9. `getOrEnforceKnownAlignment` is `known_alignment`: it never raises an
    alloca's or global's alignment, so a source aligned less than the byval
-   or the alloca needs ends the forwarding. Exit: the alignment-raising
-   helper (needs the writer of alloca alignment shared with call slot).
+   or the alloca needs ends the forwarding. Exit: the helper is translated
+   with `InferAlignment`, which uses the same mechanism (owner: this port,
+   due 2026-10-29).
 6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
    what the lifted ones touch): a call between the load and the store ends
    the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model

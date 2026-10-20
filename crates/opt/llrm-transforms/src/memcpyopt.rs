@@ -53,8 +53,9 @@
 //!    `CreateMemCpyInline` has no counterpart here.
 //! 9. `getOrEnforceKnownAlignment` is `known_alignment`: it never raises an
 //!    alloca's or global's alignment, so a source aligned less than the byval
-//!    or the alloca needs ends the forwarding. Exit: the alignment-raising
-//!    helper (needs the writer of alloca alignment shared with call slot).
+//!    or the alloca needs ends the forwarding. Exit: the helper is translated
+//!    with `InferAlignment`, which uses the same mechanism (owner: this port,
+//!    due 2026-10-29).
 //! 6. `moveUp` does not lift a call (LLVM does when it neither reads nor writes
 //!    what the lifted ones touch): a call between the load and the store ends
 //!    the attempt. Fact: `getModRefInfo(Instruction, CallBase)` has no model
