@@ -43,6 +43,7 @@ use llrm_mir::valuetracking::power2::is_known_to_be_a_power_of_two;
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_and_select::fold_and_select;
 use crate::combine_shared::{
     binop, commutative, has_one_use, inst_def, parts, query, simplify_associative_or_commutative, simplify_visited,
     width,
@@ -434,7 +435,10 @@ pub fn visit_and(
         fold_shifted_power_of_two,
     ];
     // DEVIATE 3 and 4: the rest of visitAnd.
-    steps.iter().find_map(|step| step(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
+        return found;
+    }
+    fold_and_select(c, inst, op0, op1).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]

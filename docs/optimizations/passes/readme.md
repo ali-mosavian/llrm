@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 160 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 162 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -25,6 +25,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_add_idioms | `visitAdd` after `x + x`: the negation and not identities, the reassociations of an add with an add or sub, and the bitwise identities. | `combine_addsub::visit_add`. | [combine_add_idioms](combine_add_idioms.md) |
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_and | `InstCombinerImpl::visitAnd`: the integer `and` folds. | `combine::visit` (the `And` arm, once wired). | [combine_and](combine_and.md) |
+| combine_and_select | `visitAnd` after the constant-mask folds: the xor/not identities and the folds of an `and` with a boolean extension, which become selects. | `combine_and::visit_and`. | [combine_and_select](combine_and_select.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_casts | InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they call, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
