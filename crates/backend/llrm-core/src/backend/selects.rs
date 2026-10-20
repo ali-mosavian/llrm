@@ -157,10 +157,13 @@ pub fn lowered(
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         loop {
-            let found = function.walk().map(|(_, inst)| inst).find(|&inst| {
-                function.instruction(inst).opcode == Opcode::Select
-                    && wanted(&context.types.display(function.instruction(inst).ty).to_string())
-            });
+            let found = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(
+                    |&inst| function.instruction(inst).opcode == Opcode::Select
+                        && wanted(&context.types.display(function.instruction(inst).ty).to_string()),
+                );
             let Some(select) = found else { break };
             // Arithmetic on the condition where the constants allow it, as the
             // DAG combiner makes it before any conditional move.

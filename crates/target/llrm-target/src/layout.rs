@@ -83,14 +83,18 @@ impl Layout {
         self.expand.iter().any(|one| one == operation)
     }
 
-    /// Whether the machine lacks an instruction for `operation` on values of the type `ty` (`select.i8`), or on any
-    /// type (`select`).
+    /// Whether the machine lacks an instruction for `operation` on values of
+    /// the type `ty` (`select.i8`), or on any type (`select`).
     pub fn expands_for(
         &self,
         operation: &str,
         ty: &str,
     ) -> bool {
-        self.expands(operation) || self.expand.iter().any(|one| one.strip_prefix(operation).is_some_and(|rest| rest.strip_prefix('.') == Some(ty)))
+        self.expands(operation)
+            || self
+                .expand
+                .iter()
+                .any(|one| one.strip_prefix(operation).is_some_and(|rest| rest.strip_prefix('.') == Some(ty)))
     }
 
     /// Whether any value type of `operation` is expanded.
@@ -98,7 +102,9 @@ impl Layout {
         &self,
         operation: &str,
     ) -> bool {
-        self.expand.iter().any(|one| one == operation || one.strip_prefix(operation).is_some_and(|rest| rest.starts_with('.')))
+        self.expand
+            .iter()
+            .any(|one| one == operation || one.strip_prefix(operation).is_some_and(|rest| rest.starts_with('.')))
     }
 
     /// Whether the machine would rather run `operation` at the native width
