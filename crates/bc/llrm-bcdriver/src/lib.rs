@@ -86,7 +86,7 @@ fn recompiled(
     let llrm_x86_bc::Raised { module, runtime, placement, .. } =
         llrm_x86_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
     let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
-    let named = |id: GlobalId| module.global(id).name.clone().ok_or("an unnamed global");
+    let named = |id: GlobalId| module.global(id).name.owned().ok_or("an unnamed global");
     let mut symbols = BTreeMap::new();
     for (&segment, &global) in &placement.bases {
         if segment != code_segment {

@@ -85,14 +85,14 @@
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand};
+use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
 /// as LLVM expands ISD::SMAX where the target has no such instruction.
 pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
-    let names: Vec<Option<String>> = module.globals.iter().map(|global| global.name.clone()).collect();
+    let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -102,8 +102,7 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 let instruction = function.instruction(inst);
                 let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
                 let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
-                let name = names[callee.0 as usize].as_deref()?;
-                match (matches!(instruction.opcode, Opcode::Call(_)), Intrinsic::named(name)) {
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
                     (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, signed, max)),
                     _ => None,
                 }

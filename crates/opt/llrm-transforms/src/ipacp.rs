@@ -290,7 +290,7 @@ pub fn cloned(
             }
         }
         let mut number = state.made.get(&origin).copied().unwrap_or(0);
-        let origin_name = module.global(origin).name.clone().unwrap_or_else(|| "f".to_owned());
+        let origin_name = module.global(origin).name.owned().unwrap_or_else(|| "f".to_owned());
         let called = loop {
             number += 1;
             let candidate = format!("{origin_name}.constprop.{number}");
@@ -305,7 +305,7 @@ pub fn cloned(
             .globals
             .push(
                 GlobalValue {
-                    name: Some(called),
+                    name: called.into(),
                     linkage: Linkage::Internal,
                     unnamed_addr: unnamed,
                     address_space: space,

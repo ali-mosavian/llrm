@@ -71,7 +71,7 @@ fn name(
     module: &Module,
     global: GlobalId,
 ) -> String {
-    module.global(global).name.clone().unwrap_or_default()
+    module.global(global).name.owned().unwrap_or_default()
 }
 
 /// Writes `hir`'s debug information into `module`, `data` and `functions`

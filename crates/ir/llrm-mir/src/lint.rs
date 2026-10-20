@@ -227,7 +227,7 @@ fn is_memset(
 ) -> bool {
     let Some(&Operand::Constant(callee)) = function.instruction(inst).operands.last() else { return false };
     let ConstantKind::Global(callee) = module.context.get(callee).kind else { return false };
-    module.global(callee).name.as_deref().and_then(Intrinsic::named) == Some(Intrinsic::MemSet)
+    module.global(callee).intrinsic() == Some(Intrinsic::MemSet)
 }
 
 /// Whether `at` is a store's pointer operand, storing a whole `ty`.
@@ -255,7 +255,7 @@ fn is_fill_of(
     let (Opcode::Call(_), Some(layout)) = (&instruction.opcode, layout) else { return false };
     let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return false };
     let ConstantKind::Global(callee) = module.context.get(callee).kind else { return false };
-    let kind = module.global(callee).name.as_deref().and_then(Intrinsic::named);
+    let kind = module.global(callee).intrinsic();
     let memset = matches!(kind, Some(Intrinsic::MemSet | Intrinsic::MemSetPattern));
     let cell =
         match (kind, instruction.operands.get(1).and_then(|&value| function.operand_type(&module.context, value))) {

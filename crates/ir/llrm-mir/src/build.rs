@@ -24,7 +24,7 @@ impl Module {
         }
         let id = GlobalId(self.globals.len() as u32);
         self.globals.push(GlobalValue {
-            name: Some(name.to_owned()),
+            name: name.to_owned().into(),
             linkage,
             unnamed_addr: Default::default(),
             address_space: 0,

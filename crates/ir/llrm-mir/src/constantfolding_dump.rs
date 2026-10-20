@@ -25,7 +25,7 @@ pub fn dump(text: &str) -> Result<String, String> {
         if function.is_declaration() {
             continue;
         }
-        let name = global.name.clone().unwrap_or_default();
+        let name = global.name.owned().unwrap_or_default();
         let mut n = 0;
         for (_, inst) in function.walk() {
             let instruction = function.instruction(inst);
@@ -74,7 +74,7 @@ fn show(
         ConstantKind::Zero if matches!(context.types.get(constant.ty), Type::Pointer(_)) => format!("{t} null"),
         ConstantKind::Zero => format!("{t} zeroinitializer"),
         ConstantKind::Global(global) => {
-            format!("{t} @{}", globals[global.0 as usize].name.clone().unwrap_or_default())
+            format!("{t} @{}", globals[global.0 as usize].name.owned().unwrap_or_default())
         }
         ConstantKind::Bytes(bytes) => {
             if is_null_value(context, c) {
