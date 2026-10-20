@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lftr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lftr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lftr.rs sha256:3d4ed851f7567d0b9d47f27bc7045013a8f9bbcd026592a40610e083d0a5f59c -->
+<!-- src: crates/opt/llrm-transforms/src/lftr.rs sha256:45dedd1629a5f068a908be9ece8c06b62d701c2c2ec34f9ad1fcd22f8b21c75d -->
 
 # lftr
 
@@ -31,8 +31,8 @@ The test it replaces is left to `dead`.
 `%exitcond = icmp ne i32 %i.next, %n` in the latch.
 
 ## Used by
-Not wired in: [`crate::indvars`](indvars.md) will run `replaced` after
-`exitfold`, as `IndVarSimplify::run` does.
+[`crate::indvars`](indvars.md) runs `replaced` after the exit steps, as
+`IndVarSimplify::run` does.
 
 ## See also
 `linearFunctionTestReplace`, `FindLoopCounter`, `genLoopLimit`,

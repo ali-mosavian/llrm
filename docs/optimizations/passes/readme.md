@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 156 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 155 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -55,12 +55,11 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
-| exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
 | exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
 | exitpredicate | A read-only loop's exits are rewritten to tests on the loop's trip count made before it. | Not wired in: [`crate::indvars`](indvars.md) will run `predicated` after | [exitpredicate](exitpredicate.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
-| expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr_pass`](lsr_pass.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
+| expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr_pass`](lsr_pass.md), while it rewrites a loop, and | [expand](expand.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
 | floatfold | Replaces floating values [`llrm_analysis::floatfacts`] proves exact by their constants, and applies the algebraic freedoms an operation's fast-math flags give. | Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's | [floatfold](floatfold.md) |
 | floatloop | Runs a counted loop of exact float work in memory as its last trip alone, from the memory the earlier trips leave, which [`llrm_analysis::floatfacts`] proves. | Per-body pipeline, after `lcssa` and before `hoist`: LICM may move an | [floatloop](floatloop.md) |
@@ -86,7 +85,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | knownpred | A branch on a value known in some predecessors, threaded: LLVM's [`SimplifyCFGOpt::foldCondBranchOnValueKnownInPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3814) and its `Impl` ([L3624](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3624)). |  | [knownpred](knownpred.md) |
 | lcssa | Puts every natural loop in loop-closed SSA form, so loop passes can change a loop without rewriting the readers of its values elsewhere. | In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off, | [lcssa](lcssa.md) |
 | lcssamerges | Close a loop with several exits: a phi at each exit, merged by phis where the exits' paths join. | Called from [`crate::lcssa`](lcssa.md) for each multi-exit loop, so wherever `lcssa` | [lcssamerges](lcssamerges.md) |
-| lftr | A loop's exit test is rewritten to compare a counter with the value it has when the loop's trip count is spent. | Not wired in: [`crate::indvars`](indvars.md) will run `replaced` after | [lftr](lftr.md) |
+| lftr | A loop's exit test is rewritten to compare a counter with the value it has when the loop's trip count is spent. | [`crate::indvars`](indvars.md) runs `replaced` after the exit steps, as | [lftr](lftr.md) |
 | local | The utilities GVN calls on a CSE: patching the surviving instruction, replacing the uses a dominator tree allows, dead and duplicate-phi cleanup, block merging, and the pointer-equality replacement checks. | Nothing yet; `gvn` is the caller this is for. | [local](local.md) |
 | loopclone | Clones loop iterations as CFG, for the passes that peel, unswitch or jam a loop: `peeled` copies whole iterations ahead of a loop, `chained` copies bodies inside it, keeping the loop and every exit. | Called by [`crate::peel`](peel.md) and [`crate::loopsplit`](loopsplit.md) (`peeled`), | [loopclone](loopclone.md) |
 | loopdeletion | `LoopDeletion`: a loop that computes nothing the rest of the function reads is removed, and a loop whose backedge is never taken is made straight code. |  | [loopdeletion](loopdeletion.md) |

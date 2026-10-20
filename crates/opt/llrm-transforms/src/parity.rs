@@ -189,7 +189,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "indvars@738",
         Simplify,
         "indvars",
-        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: exitfold, congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; the old widen path is deleted",
+        "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR behind LLRM_LFTR (D22); criterion: identical to opt on d_faces -O2 with LLRM_LFTR=1, D22 deleted when the translated LSR lands; exit: congruent/twin_phis (rows pair on #2773 first), rewound/exitsink deleted or DEVIATE-numbered; exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
