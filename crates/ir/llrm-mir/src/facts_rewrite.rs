@@ -107,6 +107,17 @@ impl Fact {
         }
     }
 
+    /// Whether the fact states what makes an instruction undefined where it
+    /// should not run: what `dropUBImplyingAttrsAndMetadata` takes from a
+    /// call that is moved to where it may not run (`noundef`, `nonnull`,
+    /// `dereferenceable`, `align` and a range).
+    pub fn implies_ub(self) -> bool {
+        matches!(
+            self,
+            Fact::NoUndef | Fact::NonNull | Fact::Dereferenceable(_) | Fact::Align(_) | Fact::Range(_)
+        )
+    }
+
     /// Whether the fact still holds of an instruction run where it did not
     /// run. Every variant answers; see the module documentation.
     pub fn survives_speculation(self) -> bool {
@@ -115,6 +126,7 @@ impl Fact {
             | Fact::ReadOnly
             | Fact::ReadNone
             | Fact::NonNull
+            | Fact::NoUndef
             | Fact::NoCapture
             | Fact::NoRetain
             | Fact::Releases
@@ -348,9 +360,42 @@ mod tests {
             // proves; `narrowBinOp` keeps an add's or sub's flags only where
             // they still hold.
             "combine_casts.rs",
+            // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
+            // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
+            // tree keeps them only if all had them; `ConvertShiftToMul` and
+            // `NegateValue` read a shift's and an add's, and clear or give
+            // them where LLVM does.
+            "reassociate_forms.rs",
+            "reassociate_negate.rs",
+            "reassociate_tree.rs",
             // MemCpyOptimizer.cpp's `CreateInBoundsPtrAdd` makes an inbounds
             // GEP; it reads no flag.
             "memcpyopt.rs",
+            // SimplifyCFG.cpp's `passingValueIsAlwaysUndefined` reads the
+            // `inbounds` of the `getelementptr` that is the first witnessing
+            // use of a phi, in the phi's block with nothing in between that may
+            // not come back, so it runs wherever the phi's value does; it
+            // concludes only about the value that flows in.
+            "alwaysundef.rs",
+            // InstCombineSimplifyDemanded.cpp reads the `nuw`/`nsw` of the
+            // instruction it simplifies (`SimplifyDemandedUseBits`, the
+            // known bits of an add, a sub and a shift) to conclude about that
+            // instruction's result, and drops them
+            // (`dropPoisonGeneratingFlags`) when an operand it changed no
+            // longer licenses them;
+            // `simplifyShrShlDemandedBits` gives the new shift the flags its
+            // `shl` had.
+            "combine_demanded.rs",
+            // SimplifyCFG.cpp's `ConstantComparesGatherer::matchInstruction`
+            // reads a `trunc nuw` (`m_NUWTrunc`, L646) of the chain it turns
+            // into a switch: the trunc is an operand of the branch condition,
+            // so it ran wherever the branch does, and a value the flag makes
+            // poison made the branch undefined before.
+            "icmpchain.rs",
+            // LICM.cpp's `hoistGEP` makes the swapped GEPs `inbounds` when both
+            // were and no index is negative (L2373); `apply` gives the GEP it
+            // builds the flag `hoist` decided.
+            "apply.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

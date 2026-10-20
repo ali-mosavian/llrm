@@ -453,6 +453,13 @@ impl InlineSpiller<'_> {
     /// writes it. DEVIATE D-RFP1: the cell is a qword, floatassign's spill
     /// format, not the class width (`RFP80` would be m80). Exit: the class
     /// width once floatassign is gone and the rows are compared.
+    ///
+    /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
+    /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
+    /// with no `fld`. Fact: X86GenFoldTables.inc has no x87 arithmetic entry,
+    /// so LLVM reloads; floatassign folded, and nbody -O3 ran 36% more
+    /// instructions without it. Exit: remove if a clang-parity row shows it
+    /// unnecessary, or when the pin gains the fold.
     fn spill_float_unit(
         &mut self,
         lis: &mut LiveIntervals,
@@ -462,6 +469,15 @@ impl InlineSpiller<'_> {
         old: &[Arc<Insn>],
     ) -> Option<Vec<u32>> {
         let cell = self.frame.cell(reg, 8).ok()?;
+        if let [one] = old
+            && one.group.is_none()
+            && !one.defines.contains(&reg)
+            && let Some(folded) = crate::backend::floatfold::read_from_cell(one, reg, &cell)
+        {
+            lis.rewrite_instr(block, members[0], Arc::new(folded));
+            self.folded += 1;
+            return Some(Vec::new());
+        }
         let new = lis.next_virtual_register();
         lis.reserve_virtual_register(new);
         let reads = old.iter().any(|one| one.uses.contains(&reg));

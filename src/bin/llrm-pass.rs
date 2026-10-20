@@ -39,37 +39,20 @@ fn main() -> ExitCode {
     let mut machine: Rc<dyn llrm_mir::target::Machine> = Rc::new(llrm_mir::target::Neutral);
     let mut described = "neutral".to_owned();
     if arguments.first().is_some_and(|one| one == "--mode") {
-        let found = arguments
-            .get(1)
-            .and_then(|n| n.parse::<u32>().ok())
-            .and_then(|mode| llrm_driver::all().into_iter().find(|one| one.layout().mode == mode));
-        let Some(target) = found else {
-            eprintln!("llrm-pass: --mode N: no target with that mode");
-            return ExitCode::from(2);
-        };
-        layout = Some(target.layout().datalayout.clone());
-        // The slots that price with the target's TTI (unroll, licm, rotate,
-        // indvars, loopidiom) read this machine, not Neutral.
-        let cpu = target.default_cpu();
-        let profile = match llrm_core::backend::cpu::tuned_for(
-            &*target,
-            cpu,
-            matches!(
-                level,
-                llrm_core::driver::flags::Level::Os | llrm_core::driver::flags::Level::Oz
-            ),
-        ) {
-            Ok(profile) => profile,
+        let size = matches!(
+            level,
+            llrm_core::driver::flags::Level::Os | llrm_core::driver::flags::Level::Oz
+        );
+        let target = match llrm_driver::mode_target(arguments.get(1).map_or("", String::as_str), size) {
+            Ok(target) => target,
             Err(error) => {
                 eprintln!("llrm-pass: {error}");
                 return ExitCode::from(2);
             }
         };
-        machine = profile.target();
-        // m16 states no TTI: llrm-c prices there by the generic rules, and so
-        // does this.
-        let tti = machine.tti().map_or("none", |tti| tti.name());
-        described = format!("{} cpu {cpu} tti {tti} datalayout {}", target.name(), target.layout().datalayout);
+        layout = Some(target.datalayout);
+        machine = target.machine;
+        described = target.described;
         arguments.drain(..2);
     }
     let ordered = arguments.first().is_some_and(|one| one == "--order");

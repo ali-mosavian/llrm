@@ -806,7 +806,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
         Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
             .to_owned();
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
-    assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
+    assert!(Regex::new(r"    mov (?:[a-z]+|word ptr \[bp-\d+\]), ss\n").unwrap().is_match(main), "{main}");
     assert!(main.contains("call _bump"));
     // `bump` is internal and called directly: the view, a stack pointer of one
     // word, is its first argument, in AX, and nothing is pushed or popped.
@@ -1097,15 +1097,15 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let source = written(
         &directory,
         "field_runs.nib",
-        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    let g = relay(4)\n    return f.handle + g.handle + i16(f.buffer[5])\n",
     );
-    // `opened` is inlined into `relay`: its fill and relay's copies are both
-    // there.
+    // `opened` is inlined into `relay`; two calls keep `relay` a function.
     let assembly = listing(&parsed(&source), "main", &O2());
     let relay = between(&assembly, "_relay proc", "_relay endp");
 
     assert!(relay.contains("rep stos"), "{relay}");
-    assert!(relay.contains("rep movs") || Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
+    // MemCpyOpt builds the fill in the returned struct, so no copy is left.
+    assert!(!relay.contains("movs") && !Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
     assert!(relay.matches("byte ptr").count() < 8, "{relay}");
 }
 
@@ -1271,8 +1271,9 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
 #[test]
 fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     // Copies were built for any trip count the simulation priced as folding:
-    // deedlines' 16384-trip loops became 360K operations. gcc's
-    // max-completely-peel-times is 16; past that nothing is copied.
+    // deedlines' 16384-trip loops became 360K operations. LLVM's full unroll
+    // is priced against its threshold (the loop below stays rolled from about
+    // 100 trips at -O3), not gcc's cap of 16 trips.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
         // `total * 3 + i` has no closed form, so only peeling removes the loop.
@@ -1281,8 +1282,8 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
         );
         optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O3()).contains(" = phi ")
     };
-    assert!(!rolled(16), "within the cap the loop is copied out");
-    assert!(rolled(17));
+    assert!(!rolled(16), "a short loop is copied out");
+    assert!(rolled(16384));
 }
 
 /// `_sum_three proc near` .. `endp` for the 486.
@@ -1327,8 +1328,7 @@ fn column(m: &[i32, 2], j: i16) -> i32:
 
 fn main() -> i16:
     let m: i32[4, 4] = [[1] * 4] * 4
-    column(&m, 1)
-    return 0
+    return i16(column(&m, 1))
 ";
 
 fn column_loop() -> String {
@@ -1680,7 +1680,7 @@ fn a_float_converts_to_every_integer_width() {
 /// test waited a minute for a release rebuild and every other one for its lock.
 #[test]
 fn test_parsing_runs_no_cargo() {
-    if std::env::var_os("LLRM_NO_CARGO").is_some() {
+    if llrm_core::support::env_set("LLRM_NO_CARGO") {
         parsed(&fixture("fixed.nib"));
         return;
     }
@@ -1938,7 +1938,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
 #[test]
 /// An interrupt16 handler may interrupt anything: it saves every register,
 /// runs with DGROUP in DS and ES and the direction flag clear, and leaves
-/// by `iret`. Its name is its far address, a `dd` the linker fills.
+/// by `iret`.
 fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     let source = root().join("examples/ticker.nib");
     let program = parsed(&source);
@@ -1952,7 +1952,8 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
         "{text}"
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
-    assert!(text.contains("dd _tick"), "{text}");
+    // Its name is a far address the linker fills, as segment and offset.
+    assert!(text.contains("pushw seg _tick") && text.contains("push offset _tick"), "{text}");
     object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
         .expect("encodes");
 }
@@ -2319,16 +2320,18 @@ fn test_a_program_compiles_through_the_rich_mir() {
     );
 }
 
-/// The rich route priced every CPU as a 486, so a 386's dearer far call
-/// did not make evaluating `logic`'s calls pay. The body is one too dear to
-/// evaluate on a 486 after a complemented boolean folds to one compare.
+/// The rich route priced every CPU as a 486, so a P5's prices did not change
+/// what `logic`'s calls become. Now a body of products is folded into `main`
+/// on the 486 and 386 (no call left) and kept as four calls on the P5. (The
+/// 486/386 pair this test began with no longer differs: LLVM's inliner takes
+/// the call of the short boolean body on both.)
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "logic.nib",
-        "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
+        "fn logic(a: i16, b: i16) -> bool:\n    return a * b + a * 3 + b * 5 == 17\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
     );
     let calls = |cpu: &'static str| {
         let module = nib_compile::assembled(
@@ -2347,7 +2350,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
             .filter(|line| line.contains("call") && line.contains("_logic"))
             .count()
     };
-    assert_eq!((calls("486"), calls("386")), (4, 0));
+    assert_eq!((calls("486"), calls("386"), calls("P5")), (0, 0, 4));
 }
 
 /// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own
@@ -2532,7 +2535,7 @@ fn test_the_level_reaches_the_rich_route() {
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
-    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n";
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    let c = P(x=0, y=4)\n    bump(a, b, 4)\n    bump(a, c, 5)\n    return a.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
@@ -2556,7 +2559,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
             .expect("a loop");
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
-    // Unrolled, the 4-trip loop is gone and there is nothing to count.
+    // Two calls with different arguments keep the loop from being folded.
     let pipeline = llrm_transforms::pipeline::Options {
         inline: llrm_transforms::inline::Threshold::none(),
         unroll: false,
@@ -2568,7 +2571,8 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
         ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
-    assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
+    // The store to `dst.x` is promoted too: the loop touches no memory.
+    assert_eq!(looped(&masm::text(&module).expect("prints")), 0);
 }
 
 /// examples/league.nib's `main` was refused after #127 made every spiller
@@ -2649,12 +2653,12 @@ fn test_mir_infers_what_a_nib_function_touches() {
 
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
-/// in the loop. Two callers pass different bounds: with one, the bound is a
-/// constant of the body, and the loop (which leaves by its bounds check as
-/// well) is copied out by it.
+/// in the loop. Three callers pass 5, 6 and 1000: with one, or with 5 and 6
+/// (a range IPSCCP knows), the bound is known to the body, and the loop (which
+/// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =
