@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 68 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -32,6 +32,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | dependence | Data dependence distances over a two-deep loop nest, and whether its two loops may swap. | `distances`, `interchangeable`, `walk_cost`. Consumer: `loopinterchange`. | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |
+| equivalence | `EquivalenceClasses`: disjoint sets of values with a stable member order. |  | [equivalence](equivalence.md) |
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
 | floatfacts | Exact finite values of floating-point operations, and the memory they pass through. | `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`, | [floatfacts](floatfacts.md) |
 | frameescape | Which frame objects' addresses reach where, and which are exposed. | `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers: | [frameescape](frameescape.md) |
@@ -66,6 +67,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 66 documented, 0 undoc
 | reachability | `isPotentiallyReachable` of `CFG.cpp` at d1106deb71cc: whether a path may lead from one instruction or block to another. | `is_potentially_reachable`, `is_potentially_reachable_blocks`, | [reachability](reachability.md) |
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
+| runtimecheck | `RuntimePointerChecking`: the bounds a loop's pointers walk, grouped so a few comparisons prove that the writes do not overlap the other accesses. |  | [runtimecheck](runtimecheck.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
