@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a8132f86c3b932ecdd5aa0e30dba8665351d976933b3d80d7d28c4e29c9c07bb -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6f2a77af472fee6676d681e49386f40bb6e7370a8017c9bb31f28271abe59d37 -->
 
 # pipeline
 
@@ -32,7 +32,6 @@ flowchart TB
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
-    dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
@@ -45,8 +44,7 @@ flowchart TB
   sroa --> rnd
   rnd --> peel
   peel --> unsw
-  unsw --> dist
-  dist --> ver
+  unsw --> ver
   ver --> swap
   swap --> mrg
   mrg --> c
@@ -118,7 +116,6 @@ LLVM counterpart of each limit, is
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
-| `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 | `version` | `version` (off by default; on at -O3 and -Omax) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
