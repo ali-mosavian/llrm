@@ -97,6 +97,29 @@ impl llrm_target::Target for M16 {
         2
     }
 
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::register_bytes(width, 2)
+    }
+
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::shift_bytes(count, width, 2)
+    }
+
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64 {
+        llrm_x86::encoding::imul_immediate_bytes(number, width, 2)
+    }
+
     fn default_cpu(&self) -> &'static str {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }
@@ -237,6 +260,28 @@ impl llrm_target::Target for M16 {
     /// A Borland caller keeps SI and DI, not their upper halves.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
+    }
+
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        llrm_x86::calling::register(name)
+    }
+
+    fn convention_results(
+        &self,
+        convention: &llrm_target::calling::Convention,
+        width: u32,
+    ) -> Vec<RegId> {
+        llrm_x86::calling::results(convention, width)
+    }
+
+    fn convention_callee_saved(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Vec<(RegId, RegId)> {
+        llrm_x86::calling::callee_saved(convention)
     }
 
     /// Where a routine with no convention of its own answers (BASIC's, the

@@ -72,7 +72,7 @@
 //!
 //! # Provides
 //! Guard facts and the implication queries above. Consumers: `decide`,
-//! `exitfold` and `jumpthread` in `llrm-transforms`, and
+//! `exitfold` and `jumpthreading` in `llrm-transforms`, and
 //! [`crate::induction`] (loop entry guards).
 //!
 //! # Needs

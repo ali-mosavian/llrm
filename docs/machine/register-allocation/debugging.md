@@ -6,7 +6,7 @@ Audience: an engineer who has a wrong or poor allocation and needs to see what t
 
 | Switch | Effect |
 |---|---|
-| `-fallocation-search` | try other shapes of a body after the first allocation; on at every level but -O0 ([assignment](assignment.md#search-over-shapes-of-the-body)) |
+| `-fallocation-search` | no effect on the allocator, which allocates once; still the default for `-fallocation-routes` |
 | `-fallocation-search-all` | try every shape, with and without splitting; -Omax |
 | `-fallocation-routes` | make each function by the allocator alone and by the SSA spiller's route and keep the cheaper; on at every level but -O0 ([ssa-spill-route](ssa-spill-route.md)) |
 | `-Os`, `-Oz` | candidates and routes are priced in bytes, each block counted once |

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:b6207f4cf7847bd127dd224d56d0a693df41ff11367c7cefc318a07fd4c8892f -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:26c606088c50fa7e305d7ccda32971b2541b7d6f8cf30d0023fde36d6c589d63 -->
 
 # indvars
 
@@ -98,10 +98,3 @@ the one that leaves (a number is a `mov` where the counter's register
 already holds it).
 
 ## Needs
-`llrm_analysis::scev`, [`crate::exitvalues`](exitvalues.md), [`crate::exitsink`](exitsink.md).
-
-## Keeps
-Nothing after steps 1 to 3; dominators and loops after the others.
-
-## See also
-LLVM `IndVarSimplify.cpp`. Tests: `indvars_tests.rs`.
