@@ -117,7 +117,7 @@
 //! # See also
 //! Implements gcc's `tree-ssa-loop-split.cc` (`split_loop`, `-fsplit-loops`).
 //! LLVM has no scalar counterpart (IRCE splits for range checks, #1194).
-//! [`crate::unswitch`] does the same for a test that does not change.
+//! [`crate::simpleloopunswitch`] does the same for a test that does not change.
 
 use std::collections::{BTreeMap, BTreeSet};
 

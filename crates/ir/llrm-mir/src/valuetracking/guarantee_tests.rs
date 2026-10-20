@@ -136,7 +136,7 @@ exit:
     else {
         panic!("a function");
     };
-    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let info = LoopInfo::analyze(&**function, || DomTree::of(function));
     let one = info.top_level_loops().next().expect("a loop");
     let query = Query::new(&module, function, &layout);
     let adds: Vec<_> = function

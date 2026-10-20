@@ -50,9 +50,9 @@ while true; do
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
-  ( cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
+  ( flock -x 9; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
-      | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log )
+      | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log ) 9>"${LAND_TMP:-/tmp/landing}/checkout.lock"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else echo "$m: REFUSED: batch $log: $(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' ' | cut -c1-400)"; fi

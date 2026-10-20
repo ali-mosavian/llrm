@@ -62,7 +62,7 @@
 //! Blocks and edges are unchanged; dominators and loops are preserved.
 //!
 //! # See also
-//! [`crate::exitfold`], [`crate::lcssa`]; LLVM LICM `sinkRegion`.
+//! [`crate::lcssa`]; LLVM LICM `sinkRegion`.
 
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;

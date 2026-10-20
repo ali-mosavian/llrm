@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:89dbfbea2ec837f78296f586cbed884a0711ca977b65c489010c78c11096582b -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:8de3428f9d78ef81f8f2e47b8de577614e85e1869b2d3aae446b0325e305febd -->
 
 # transform
 
 The helpers [`crate::gvn`](gvn.md), [`crate::dead`](dead.md), [`crate::decide`](decide.md),
-[`crate::unswitch`](unswitch.md) share: equal calls, liveness of
+share: equal calls, liveness of
 values, and cleanup of phis after an edge goes.
 
 ## How it works
@@ -25,15 +25,14 @@ function on its own. Read [`crate::gvn`](gvn.md) and its tests for them in use.
 
 ## Provides
 `equal_calls` ([`crate::gvn`](gvn.md)); `live` and `live_except` ([`crate::dead`](dead.md),
-[`crate::floatloop`](floatloop.md)); `_comparison` ([`crate::decide`](decide.md),
-[`crate::unswitch`](unswitch.md)); `_trivial_phis` ([`crate::decide`](decide.md),
-[`crate::unswitch`](unswitch.md)).
+[`crate::floatloop`](floatloop.md)); `_comparison` ([`crate::decide`](decide.md));
+`_trivial_phis` ([`crate::decide`](decide.md)).
 
 ## Used by
 [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers;
 [`crate::dead`](dead.md) and [`crate::floatloop`](floatloop.md) call `live` to decide what to
-delete; [`crate::decide`](decide.md) and
-[`crate::unswitch`](unswitch.md) call `_trivial_phis` after they drop an edge. Not a
+delete; [`crate::decide`](decide.md)
+calls `_trivial_phis` after it drops an edge. Not a
 pass: it runs only inside those.
 
 ## Needs

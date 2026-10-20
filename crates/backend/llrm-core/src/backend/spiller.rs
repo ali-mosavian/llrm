@@ -3936,60 +3936,6 @@ pub fn foldable_indexes(
         .collect()
 }
 
-/// Expose dying-base address adds so indexes may use any word register.
-pub fn unfolded_indexes(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> (LirBody, BTreeSet<u32>) {
-    if values.is_empty() {
-        return (body.clone(), BTreeSet::new());
-    }
-    let r#final = FinalUses::new(body);
-    let mut changed: BTreeSet<u32> = BTreeSet::new();
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut rewritten: IndexMap<i64, Arc<Insn>> = IndexMap::default();
-        let mut after: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-        let mut definitions: IndexMap<u32, i64> = IndexMap::default();
-        for (position, one) in block.insns.iter().enumerate() {
-            let position = position as i64;
-            definitions.extend(one.defines.iter().map(|value| (*value, position)));
-            let Some((base, index, _cells)) = _indexed_pattern(one, values, &r#final) else {
-                continue;
-            };
-            let (add, access) = _unfolded_index(one, base, index);
-            let mut placement = position - 1;
-            let latest_definition = [base.value, index.value]
-                .iter()
-                .map(|value| definitions.get(value).copied().unwrap_or(position - 1))
-                .max()
-                .expect("two values");
-            let crossed = &block.insns[(latest_definition + 1) as usize..position as usize];
-            if latest_definition < position
-                && _flags_overwritten(crossed)
-                && !crossed.iter().any(|item| item.uses.contains(&base.value))
-            {
-                placement = latest_definition;
-            }
-            rewritten.insert(position, access);
-            after.entry(placement).or_default().push(add);
-            changed.insert(index.value);
-        }
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
-        insns.extend(after.get(&-1).into_iter().flatten().cloned());
-        for (position, one) in block.insns.iter().enumerate() {
-            let position = position as i64;
-            insns.push(rewritten.get(&position).cloned().unwrap_or_else(|| Arc::clone(one)));
-            insns.extend(after.get(&position).into_iter().flatten().cloned());
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    if changed.is_empty() {
-        return (body.clone(), BTreeSet::new());
-    }
-    (body.with_blocks(blocks), changed)
-}
-
 /// Whether an early inserted add's flags die before anything can read them.
 fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
     for one in crossed {

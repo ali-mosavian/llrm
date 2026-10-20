@@ -134,12 +134,14 @@ pub mod arrival;
 pub mod asm;
 pub mod assemble;
 pub mod bitcounts;
+pub mod bytes;
 pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod coalesce;
 pub mod comparefold;
+pub mod compares;
 pub mod constpool;
 pub mod constrain;
 pub mod copysink;
@@ -151,6 +153,7 @@ pub mod effects;
 pub mod ehprepare;
 pub mod exactaddress;
 pub mod executed;
+pub mod expansion;
 pub mod farcall;
 pub mod farload;
 pub mod floatalloc;
@@ -167,6 +170,7 @@ pub mod globals;
 pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
+pub mod valuefacts;
 
 /// Every target's peephole rules, as its definition directory is named.
 pub mod targets {
