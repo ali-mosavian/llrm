@@ -7,11 +7,18 @@
 //! form `mul a, b; ashr s` is `imul r, r` and `sar`. The two are the same value
 //! where the 64-bit product never leaves 32 bits.
 //!
-//! The test is on the operands, from `ranges`' interval of each at the call's
-//! block, not on the result: `smul.fix(65536, 65536, 16)` is 65536, but its
-//! product is 2^32 and keeps the wide form. The product's bounds are
-//! `ranges::product` of the intervals; it must lie in `[-2^31, 2^31)`. Only
-//! 32-bit products with a constant scale below 32 are taken.
+//! The test is on the operands, from LazyValueInfo's `getConstantRange` of each
+//! at the call, not on the result: `smul.fix(65536, 65536, 16)` is 65536, but
+//! its product is 2^32 and keeps the wide form. The product's bounds are
+//! `ConstantRange::multiply` of the two ranges taken in 64 bits; it must lie
+//! in `[-2^31, 2^31)`. Only 32-bit products with a constant scale below 32 are
+//! taken.
+//!
+//! DEVIATE 1: not an LLVM pass. LazyValueInfo answers from definitions and
+//! the branches on the edges to the call, not from trip counts or from a
+//! test on a derived value, so a factor bounded only by a loop's escape test
+//! (`examples/mandel`: `zr^2 + zi^2 > 4`) keeps its wide form, where the
+//! `ranges` engine this replaced narrowed it.
 //!
 //! A factor `v << k` or `v + v` whose interval keeps it from wrapping leaves
 //! the product for the scale: `(v * 2^k * b) >> s` is `(v * b) >> (s - k)`, so
@@ -61,7 +68,7 @@
 //! shift inside an induction variable. Not at -O0.
 //!
 //! # Needs
-//! `ranges` (scoped intervals), `Registers` and the CFG shape.
+//! LazyValueInfo (`LviCache`).
 //!
 //! # Keeps
 //! Blocks and edges are unchanged; dominators and loops are preserved.
