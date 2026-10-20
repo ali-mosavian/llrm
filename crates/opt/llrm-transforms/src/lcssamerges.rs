@@ -267,9 +267,21 @@ pub fn _merged(
     };
     let replacements = supplier.keys().map(|&at| (at, result(function, at))).collect::<BTreeMap<_, _>>();
     for (&at, &phi) in &phis {
+        // One input per edge: a switch with two cases to `at` enters it twice.
         let incoming = predecessors[&at]
             .iter()
-            .map(|&parent| {
+            .flat_map(|&parent| {
+                let edges = function.terminator(cfg::block(parent)).map_or(1, |last| {
+                    function
+                        .instruction(last)
+                        .operands
+                        .iter()
+                        .filter(|one| **one == Operand::Block(cfg::block(at)))
+                        .count()
+                });
+                std::iter::repeat_n(parent, edges.max(1))
+            })
+            .map(|parent| {
                 (if exits.contains(&at) { Operand::Value(value) } else { replacements[&parent] }, cfg::block(parent))
             })
             .collect::<Vec<_>>();
