@@ -1408,7 +1408,7 @@ impl Fixed {
         // Again while a peel leaves fewer loops, as LLVM's loop pass manager
         // revisits a parent once its child is gone: a loop whose inner loop
         // was peeled may then be peeled itself.
-        let loops = |unit: &Unit| cfg::Shape::of(unit.function).loops.len();
+        let loops = |unit: &Unit| cfg::loops_of(unit.function).len();
         let mut before = loops(unit);
         while !self.peelers.is_empty() && run.step(&mut *self.peelers[0], "peel", unit, analyses) {
             self.scalarized(unit, analyses, run, "peeled");

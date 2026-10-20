@@ -74,14 +74,14 @@ use crate::edges;
 use crate::lcssa::{arms, exit_phi, from_arms, place_phi};
 
 /// Every add and subtract only an exit reads, moved there; whether any was.
-/// `shape` is the body's: a sink moves an instruction between blocks and
+/// `loops` are the body's: a sink moves an instruction between blocks and
 /// leaves the blocks and edges as they are.
 pub fn sunk(
     function: &mut Function,
-    shape: &cfg::Shape,
+    loops: &[Loop],
 ) -> bool {
     let mut changed = false;
-    while let Some((loop_, phi, op)) = _sinkable(function, shape) {
+    while let Some((loop_, phi, op)) = _sinkable(function, loops) {
         _sink(function, &loop_, phi, op);
         changed = true;
     }
@@ -92,9 +92,9 @@ pub fn sunk(
 /// extension in the loop that input is, which only exit phis read.
 fn _sinkable(
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[Loop],
 ) -> Option<(Loop, InstId, InstId)> {
-    for loop_ in shape.loops.iter().cloned() {
+    for loop_ in loops.iter().cloned() {
         for &block in function.layout().iter().filter(|&&block| !loop_.body.contains(&cfg::id(block))) {
             for phi in edges::phis(function, block) {
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };
