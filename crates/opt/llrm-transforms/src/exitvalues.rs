@@ -109,9 +109,7 @@ pub fn rewritten_in(
             let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
             let cx = env.cx(context, function);
             let Some(found) = cx.loops.get_loop_for(header) else { continue };
-            found.get_loop_preheader(function).is_some()
-                && found.get_loop_latch(function).is_some()
-                && found.has_dedicated_exits(function)
+            found.is_loop_simplify_form(function)
         };
         if !simple {
             continue;
