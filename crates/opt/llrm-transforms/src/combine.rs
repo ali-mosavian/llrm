@@ -49,6 +49,7 @@ use crate::combine_addsub::visit_add;
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::visit_mul;
 use crate::combine_sink::{droppable_uses, sink, sink_block, sinkable};
+use crate::combine_sub::visit_sub;
 use crate::instworklist::InstWorklist;
 
 /// `handleUseCountDecrement`: an operand that lost a user, and the one user it
@@ -391,6 +392,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
+        Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],

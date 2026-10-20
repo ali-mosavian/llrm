@@ -647,11 +647,8 @@ b1:
 }
 "#;
     let out = piped(TEXT);
-    // TRANSITIONAL: visitAdd turns `x*8 + 7` into `or disjoint` before the old
-    // pass distributes the constants, so the sum stays `(x - 5) * 8 | 7`.
-    // LLVM gets `(x << 3) + 15` from the distribution of `(x + C1) * C2`, which
-    // is not translated yet.
-    assert!(out.contains("or disjoint i16 %b, 7"), "{out}");
+    assert!(out.contains("add i16 %0, -33"), "{out}");
+    assert_eq!(out.matches("add").count(), 1, "{out}");
 }
 
 /// `icmp ne (zext x), 0` is `icmp ne x, 0` on the narrow type. (llrm-mir's
@@ -781,8 +778,9 @@ b3:
     let out = piped(TEXT);
     assert!(out.contains("i1 %0,") && out.matches("icmp").count() == 1 && !out.contains("sext"), "{out}");
     assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
-    // The add may carry `nuw`, inferred from the known bits of what it adds to.
-    assert!(out.contains("add ") && out.contains(", 3"), "{out}");
+    // `opt -O2` agrees: the sum has no common bits, so it is `or disjoint`
+    // (`getNoCommonBitsSetResult`).
+    assert!(out.contains("or disjoint i16") && out.contains(", 3"), "{out}");
 }
 
 /// A memset of a slot only written, and a store into it, go with it (llrm-mir's

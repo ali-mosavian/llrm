@@ -43,7 +43,7 @@ use llrm_mir::valuetracking::{known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_addsub::{add_to, factorize_math_with_shl_ops, will_not_overflow_signed_sub};
-use crate::combine_muldivrem::is_negated_power2;
+use crate::combine_muldivrem::number::is_negated_power2;
 use crate::combine_shared::{binop, commutative, fold_constants, has_one_use, parts, query, simplify_visited, width};
 
 /// The `nsw` of `flags` when `keep`.

@@ -176,7 +176,7 @@ fn is_not_min_signed(
 
 /// Arithmetic on `w`-bit two's-complement numbers held in a `u128` (the
 /// `APInt` operations the div and rem folds use).
-mod number {
+pub(crate) mod number {
     use llrm_mir::context::{mask, signed};
 
     /// `multiplyOverflows(C1, C2, Product, IsSigned)`: the product of two
