@@ -73,10 +73,6 @@
 //! block on the edge. A copy to leave is omitted if the piece never writes the
 //! value.
 //!
-//! `loop_bases` is a separate use of the same editor: a spilled address operand
-//! (base, index or selector) used inside a natural loop and outside it is
-//! carved into the loop as a piece, so the loop reads it from a register once.
-//!
 //! # Example
 //! None: the tests build bodies in code and assert on structure, and a stage
 //! dump does not say which copy a split made. Read the figures above for the
@@ -86,8 +82,7 @@
 //! Inside the register allocator ([`crate::backend::allocate`]), at the split
 //! stage of a value that no register took and no eviction made room for; the
 //! pieces and the rest compete again. A piece splits again only while its live
-//! blocks strictly shrink, so splitting ends. `loop_bases` runs only as a
-//! candidate body when the allocation search is on (`-fallocation-search`).
+//! blocks strictly shrink, so splitting ends.
 //!
 //! # See also
 //! LLVM's
@@ -103,7 +98,6 @@ use llrm_lir::registers::RegId;
 use llrm_mir::dense::IdSet;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
-use crate::analysis::loops;
 use crate::backend::liveunion::LiveUnion;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
@@ -112,58 +106,6 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 mod cost;
-
-/// Carve spilled address operands -- base, index, selector -- into the
-/// natural loops that reuse them.
-pub fn loop_bases(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> (LirBody, BTreeSet<u32>) {
-    if values.is_empty() {
-        return (body.clone(), BTreeSet::new());
-    }
-    let mut result = body.clone();
-    let mut kept: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&result.blocks, Some(result.entry)) {
-        let inside = &found.body;
-        let references = _references_of(&result, values);
-        let candidates: BTreeSet<u32> = references
-            .iter()
-            .filter(|(value, found)| {
-                found.keys().any(|at| inside.contains(at))
-                    && found.keys().any(|at| !inside.contains(at))
-                    && result
-                        .blocks
-                        .iter()
-                        .filter(|block| inside.contains(&block.at))
-                        .flat_map(|block| &block.insns)
-                        .filter_map(|one| one.what.as_ref())
-                        .flat_map(|what| what.dests.iter().chain(&what.sources))
-                        .any(|place| {
-                            matches!(
-                                place,
-                                Loc::Mem(cell) if [cell.base, cell.index, cell.selector] .iter() .flatten() .any(|operand| operand.value == **value)
-                            )
-                        })
-            })
-            .map(|(value, _found)| *value)
-            .collect();
-        for value in candidates {
-            let widths = _widths(&result);
-            let Some(width) = widths.get(&value).copied() else {
-                continue;
-            };
-            let fresh = _next_value(&result);
-            let Some(carved) = carved(&result, value, fresh, width, &Region::blocks(&result, inside.iter().copied()))
-            else {
-                continue;
-            };
-            result = carved;
-            kept.insert(fresh);
-        }
-    }
-    (result, kept)
-}
 
 /// `_references` of each of `values`, found in one pass over the body: the scan
 /// for each of d values over a body of d levels was d squared a loop.
@@ -2045,7 +1987,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{Region, carved, loop_bases};
+    use super::{Region, carved};
     use crate::analysis::frequency::Frequency;
     use crate::analysis::intervals::{self};
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
@@ -2592,58 +2534,6 @@ mod tests {
         }
         let cell = last.expect("a load");
         assert_eq!((cell.addr, cell.width, cell.offset, cell.disp_width), (Some(where_()), 2, 0, 2));
-    }
-
-    #[test]
-    fn test_a_loop_scoped_base_piece_enters_once_and_leaves_after_the_loop() {
-        let (cut, kept) = loop_bases(&_pointer_across_a_loop(), &BTreeSet::from([3]));
-        assert_eq!(kept.len(), 1);
-        let fresh = *kept.iter().next().expect("one");
-        let blocks: HashMap<i64, &Block> = cut.blocks.iter().map(|one| (one.at, one)).collect();
-        // v3 is a constant: the piece remakes it on entry rather than copy it.
-        assert!(blocks[&0].insns.iter().any(|one| one.defines == [fresh] && one.uses.is_empty()));
-        // The loop never writes v3, so v3 still holds it after: no copy back.
-        assert!(!cut.insns().iter().any(|one| one.defines == [3] && one.uses == [fresh]));
-        let loop_cells: Vec<&Mem> = blocks[&0x10]
-            .insns
-            .iter()
-            .filter_map(|one| one.what.as_ref())
-            .flat_map(|what| what.dests.iter().chain(&what.sources))
-            .filter_map(|place| if let Loc::Mem(cell) = place { Some(cell) } else { None })
-            .collect();
-        let bases: BTreeSet<u32> = loop_cells.iter().map(|one| one.base.expect("base").value).collect();
-        assert!(!loop_cells.is_empty() && bases == BTreeSet::from([fresh]));
-    }
-
-    /// Only bases were carved: FRACTALEFFECT reloaded a spilled selector every
-    /// trip.
-    #[test]
-    fn test_a_spilled_index_or_selector_is_carved_into_the_loop_like_a_base() {
-        for role in ["index", "selector"] {
-            let mut moved = _pointer_across_a_loop();
-            for block in &mut moved.blocks {
-                let mut insns = block.insns.to_vec();
-                for insn in &mut insns {
-                    let mut changed = (**insn).clone();
-                    if let Some(what) = changed.what.as_mut() {
-                        for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
-                            if let Loc::Mem(cell) = place {
-                                let operand = cell.base.take();
-                                if role == "index" {
-                                    cell.index = operand;
-                                } else {
-                                    cell.selector = operand;
-                                }
-                            }
-                        }
-                    }
-                    *insn = std::sync::Arc::new(changed);
-                }
-                block.insns = insns.into();
-            }
-            let (_cut, kept) = loop_bases(&moved, &BTreeSet::from([3]));
-            assert_eq!(kept.len(), 1, "{role}");
-        }
     }
 
     /// A meta instruction takes no slot, but a piece's slots were counted one

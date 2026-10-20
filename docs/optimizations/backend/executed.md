@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/executed.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:41d02ca56074bac39ab9b73f71d08190feba09bd9e1e4dbdf9a1b23be0127a8c -->
+<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:6446b581feedb2e9463049286eb32a444f0b49bd43b9493ab11df149fb807475 -->
 
 # executed
 
@@ -29,7 +29,7 @@ how many are `taken`; and `jumps`. x87 spills are left out. A
 body with an irreducible loop has no finite estimate: the result is none.
 
 `work` is `instructions + memory`, the number the allocator and the
-route choice compare alternatives by (`allocate::_emitted`, and the cost of
+route choice compares alternatives by (the cost of
 a candidate in `assemble.rs`, in bytes at -Os). `Executed::jump_cycles`
 prices the branches and jumps on a CPU profile: taken branches, untaken
 branches and short jumps each at their form's cost.
