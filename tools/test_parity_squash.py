@@ -620,3 +620,35 @@ def test_a_generated_only_conflict_pr_is_not_refused_at_the_squash(monkeypatch):
     comment = next(c for c in calls if c[:3] == ["gh", "pr", "comment"])
     assert "never force" in comment[-1] and "newsha"[:9] in comment[-1]
     assert not ps.squash("2872", info, "", run=run, update=lambda head, branch: "", settle=0)
+
+
+def named_assistant():
+    return "Co-Authored-By: " + "Clau" + "de <noreply@example.com>"
+
+
+def sub(tmp_path, name):
+    path = tmp_path / name
+    path.mkdir()
+    return path
+
+
+def pr_over_main(tmp_path, file_text="fn a() {}\n", message="feat: a"):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn base() {}\n", "base")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    head = commit(repo, "a.rs", file_text, message)
+    return repo, head
+
+
+def test_a_pr_that_names_the_assistant_is_refused_wherever_it_does(tmp_path):
+    """The user's rule: nothing in the repository, its PRs or its history names the assistant. The runner had no check; #3080's description did."""
+    repo, head = pr_over_main(tmp_path)
+    assert ps.refusals(head, "", base="main", cwd=repo, title="feat: a") == []
+    assert any("title" in w for w in ps.refusals(head, "", base="main", cwd=repo, title="feat: " + "Clau" + "de did it"))
+    assert any("description" in w for w in ps.refusals(head, "🤖 Generated with " + "Clau" + "de Code", base="main", cwd=repo))
+    repo2, head2 = pr_over_main(sub(tmp_path, "m"), message="feat: a\n\n" + named_assistant())
+    assert any("commit" in w for w in ps.refusals(head2, "", base="main", cwd=repo2))
+    repo3, head3 = pr_over_main(sub(tmp_path, "l"), file_text="// written by " + "Clau" + "de\nfn a() {}\n")
+    assert any("added line" in w for w in ps.refusals(head3, "", base="main", cwd=repo3))
