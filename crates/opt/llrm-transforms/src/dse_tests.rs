@@ -157,18 +157,23 @@ fn test_dse_keeps_an_observed_store() {
 }
 
 /// Without `Summaries` required the pass runs, as an LLVM function pass
-/// does without a cached outer result: every call unknown, so less
-/// precise. It panicked.
+/// does without a cached outer result. It panicked. What a callee does is its
+/// stated `memory(...)`: with it the call leaves `@g` alone and the first store
+/// goes, without it the call is unknown and the store stays.
 #[test]
 fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!(
-        "{}{}{}",
-        llrm_analysis::testing::DOS,
-        crate::testing::WRITES_ITS_ARGUMENT,
-        "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"
-    ));
-    let precise = crate::testing::summarized(&module, Dse, true, &[&[0], &[5]]);
-    let bare = crate::testing::summarized(&module, Dse, false, &[&[0], &[5]]);
+    let text = |h: &str| {
+        format!(
+            "{}{}{}",
+            llrm_analysis::testing::DOS,
+            crate::testing::WRITES_ITS_ARGUMENT.replace("define void @h(ptr %s) {", h),
+            "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"
+        )
+    };
+    let stated = crate::testing::parsed(&text("define void @h(ptr %s) memory(argmem: write) {"));
+    let unstated = crate::testing::parsed(&text("define void @h(ptr %s) {"));
+    let precise = crate::testing::summarized(&stated, Dse, true, &[&[0], &[5]]);
+    let bare = crate::testing::summarized(&unstated, Dse, false, &[&[0], &[5]]);
     assert!(precise.matches("store").count() == 1 && bare.matches("store").count() == 2, "{precise}\n{bare}");
 }
 
@@ -546,19 +551,23 @@ fn a_switch_asks_only_the_cells_its_arms_differ_in() {
 
 /// The cells of one array were compared in pairs, every cell with all of its
 /// object's: `joins` 256, `mir dse` 1,270 Minstr and 3.8x for twice the size. A
-/// cell at fixed bytes is compared with the cells whose bytes meet its own.
+/// walk now stops at `MemorySSAUpwardsStepLimit` (90, LLVM's), so the cost is linear;
+/// stores that far apart are not paired, as in LLVM.
 #[test]
-fn a_cell_of_an_array_is_compared_with_the_cells_that_meet_its_bytes_not_with_the_whole_array() {
-    let cells = 200;
-    let stores: String =
-        (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect();
-    let before = llrm_analysis::avail::related_pairs();
-    let after = dropped(&format!(
-        "@arr = global [400 x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{stores}{stores}  ret i16 0\n}}\n"
-    ));
-    let asked = llrm_analysis::avail::related_pairs() - before;
-    assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
-    assert!(asked <= 8 * cells, "{asked} pairs asked for {cells} cells of one array");
+fn a_walk_over_the_cells_of_one_array_stops_at_the_step_limit() {
+    let stores = |cells: usize| -> String {
+        (0..cells).map(|i| format!("  store i16 {i}, ptr getelementptr (i8, ptr @arr, i16 {})\n", 2 * i)).collect()
+    };
+    let kept = |cells: usize| {
+        let after = promoted(&format!(
+            "@arr = global [400 x i8] zeroinitializer\n\ndefine i16 @f() {{\nb0:\n{}{}  ret i16 0\n}}\n",
+            stores(cells),
+            stores(cells)
+        ));
+        after.matches("store").count()
+    };
+    assert_eq!(kept(40), 40, "the first of each pair of stores is dead, 40 apart");
+    assert!(kept(200) > 200, "pairs 200 apart are past the step limit");
 }
 
 /// The cells of one array at variable indices (`a[i]`, `a[j]`, `a[hi]` of each
