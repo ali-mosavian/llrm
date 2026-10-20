@@ -202,8 +202,133 @@ for row in rows:
     profile = "sse2" if cpu == "core2" else "nosse"
     key = (profile, kind, name)
     assert table.setdefault(key, cost) == cost, (key, cost, table[key])
+
+# The matrix: every opcode at every type the targets meet, with variable and constant operands, loads as cast sources and
+# stores of truncs, so that a price the corpus above does not hold cannot hide (`sext (load)` was 1 where the pin says 0).
+MATRIX_CPUS = ["i486", "pentium"]
+def matrix():
+    ints = ["i8", "i16", "i32", "i64"]
+    fls = ["float", "double", "x86_fp80"]
+    args = "i1 %c, i8 %i8, i16 %i16, i32 %i32, i64 %i64, float %float, double %double, x86_fp80 %x86_fp80, ptr %p, ptr %q, i32 %n"
+    fns = []
+    def f(name, body, decls=""):
+        fns.append(f"define void @{name}({args}) {{\n" + "\n".join("  " + l for l in body) + f"\n  ret void\n}}\n{decls}")
+    n = [0]
+    def v():
+        n[0] += 1
+        return f"%v{n[0]}"
+    for t in ints:
+        body = []
+        for op in ["add", "sub", "mul", "sdiv", "udiv", "srem", "urem", "shl", "lshr", "ashr", "and", "or", "xor"]:
+            for rhs in [f"%{t}", "8", "7", "-1"]:
+                body.append(f"{v()} = {op} {t} %{t}, {rhs}")
+        f(f"arith_{t}", body)
+    for t in fls:
+        body = []
+        for op in ["fadd", "fsub", "fmul", "fdiv", "frem"]:
+            for rhs in [f"%{t}", "2.0", "3.0"]:
+                body.append(f"{v()} = {op} {t} %{t}, {rhs}")
+        body.append(f"{v()} = fneg {t} %{t}")
+        f(f"farith_{t}", body)
+    for t in ints:
+        body = []
+        for pred in ["eq", "ne", "ugt", "uge", "ult", "ule", "sgt", "sge", "slt", "sle"]:
+            for rhs in [f"%{t}", "0", "5"]:
+                body.append(f"{v()} = icmp {pred} {t} %{t}, {rhs}")
+        f(f"icmp_{t}", body)
+    for t in fls:
+        body = []
+        for pred in ["oeq", "ogt", "oge", "olt", "ole", "one", "ord", "ueq", "ugt", "uge", "ult", "ule", "une", "uno"]:
+            body.append(f"{v()} = fcmp {pred} {t} %{t}, %{t}")
+        f(f"fcmp_{t}", body)
+    body = []
+    for t in ints + fls + ["ptr"]:
+        a = "%p" if t == "ptr" else f"%{t}"
+        body.append(f"{v()} = select i1 %c, {t} {a}, {t} {a}")
+        cmp = v()
+        body.append(f"{cmp} = icmp slt i32 %i32, %n")
+        body.append(f"{v()} = select i1 {cmp}, {t} {a}, {t} {a}")
+    f("selects", body)
+    body = []
+    allint = ["i1"] + ints
+    for src in allint:
+        for dst in allint:
+            sv = "%c" if src == "i1" else f"%{src}"
+            if dst == src: continue
+            op = "trunc" if int(dst[1:]) < int(src[1:]) else None
+            for o in (["trunc"] if op else ["zext", "sext"]):
+                body.append(f"{v()} = {o} {src} {sv} to {dst}")
+                if src != "i1":
+                    l = v(); body.append(f"{l} = load {src}, ptr %p")
+                    body.append(f"{v()} = {o} {src} {l} to {dst}")
+        if src != "i1":
+            for dst in [d for d in ints if int(d[1:]) < int(src[1:])]:
+                t = v(); body.append(f"{t} = trunc {src} %{src} to {dst}")
+                body.append(f"store {dst} {t}, ptr %q")
+    f("intcasts", body)
+    body = []
+    for src in ints:
+        for dst in fls:
+            for o in ["sitofp", "uitofp"]:
+                body.append(f"{v()} = {o} {src} %{src} to {dst}")
+                l = v(); body.append(f"{l} = load {src}, ptr %p")
+                body.append(f"{v()} = {o} {src} {l} to {dst}")
+    for src in fls:
+        for dst in ints:
+            for o in ["fptosi", "fptoui"]:
+                body.append(f"{v()} = {o} {src} %{src} to {dst}")
+    body += [f"{v()} = fpext float %float to double", f"{v()} = fpext float %float to x86_fp80", f"{v()} = fpext double %double to x86_fp80",
+             f"{v()} = fptrunc double %double to float", f"{v()} = fptrunc x86_fp80 %x86_fp80 to float", f"{v()} = fptrunc x86_fp80 %x86_fp80 to double",
+             f"{v()} = bitcast i32 %i32 to float", f"{v()} = bitcast float %float to i32", f"{v()} = bitcast i64 %i64 to double", f"{v()} = bitcast double %double to i64"]
+    for t in ["i16", "i32", "i64"]:
+        body += [f"{v()} = ptrtoint ptr %p to {t}", f"{v()} = inttoptr {t} %{t} to ptr"]
+    f("fpcasts", body)
+    body = []
+    for t in ints + fls + ["ptr"]:
+        a = "%p" if t == "ptr" else f"%{t}"
+        body.append(f"{v()} = load {t}, ptr %p")
+        body.append(f"store {t} {a}, ptr %q")
+        for idx in ["3", "%i32", "%i16", "%i64"]:
+            ity = {"3": "i32", "%i32": "i32", "%i16": "i16", "%i64": "i64"}[idx]
+            g = v(); body.append(f"{g} = getelementptr inbounds {t}, ptr %p, {ity} {idx}")
+            body.append(f"{v()} = load {t}, ptr {g}")
+            body.append(f"store {t} {a}, ptr {g}")
+    for t in ["i8", "i16", "i32"]:
+        body.append(f"store {t} 0, ptr %q")
+        body.append(f"store {t} 1, ptr %q")
+    body += [f"{v()} = getelementptr [8 x i32], ptr %p, i32 %i32, i32 %n", f"{v()} = getelementptr [8 x i32], ptr %p, i32 1, i32 2",
+             f"{v()} = getelementptr {{ i8, i32, [4 x i16] }}, ptr %p, i32 %i32, i32 2, i32 %n",
+             f"{v()} = getelementptr i8, ptr %p, i32 %i32"]
+    f("memops", body)
+    f("misc", [f"{v()} = freeze i32 %i32", f"{v()} = alloca i32", f"{v()} = alloca i32, i32 %n", f"{v()} = alloca [16 x i8]",
+               f"{v()} = call i32 @ext(i32 %i32)", f"call void @ext0()", f"{v()} = call double @ext_d(double %double)",
+               f"{v()} = call i32 @llvm.ctpop.i32(i32 %i32)", f"{v()} = call i16 @llvm.bswap.i16(i16 %i16)",
+               f"{v()} = call float @llvm.fabs.f32(float %float)", f"{v()} = call double @llvm.sqrt.f64(double %double)",
+               f"{v()} = call i32 @llvm.smax.i32(i32 %i32, i32 %n)", f"{v()} = call i64 @llvm.umin.i64(i64 %i64, i64 %i64)"],
+      "declare i32 @ext(i32)\ndeclare void @ext0()\ndeclare double @ext_d(double)\ndeclare i32 @llvm.ctpop.i32(i32)\ndeclare i16 @llvm.bswap.i16(i16)\n"
+      "declare float @llvm.fabs.f32(float)\ndeclare double @llvm.sqrt.f64(double)\ndeclare i32 @llvm.smax.i32(i32, i32)\ndeclare i64 @llvm.umin.i64(i64, i64)\n")
+    return HEAD + "".join(fns)
+
+MATRIX = matrix()
+open(os.path.join(HERE, "instructioncost_matrix.ll"), "w").write(MATRIX)
+mrows = []
+for cpu in MATRIX_CPUS:
+    for kind in KINDS:
+        r = subprocess.run([OPT, "-passes=print<cost-model>", "-disable-output", "-mtriple=i486-unknown-linux-gnu",
+                            f"-mcpu={cpu}", f"-cost-kind={kind}", os.path.join(HERE, "instructioncost_matrix.ll")],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr[:500]
+        current, index = None, 0
+        for line in r.stderr.splitlines():
+            m = re.match(r"Printing analysis 'Cost Model Analysis' for function '(\S+)'", line)
+            if m:
+                current, index = m.group(1), 0; continue
+            m = re.match(r"Cost Model: Found an estimated cost of (-?\d+|Invalid) for instruction:", line)
+            if m and current:
+                mrows.append(f"{cpu} {kind} {current} {index} {m.group(1)}"); index += 1
 version = subprocess.run([OPT, "--version"], capture_output=True, text=True).stdout.splitlines()[1].strip()
 open(os.path.join(HERE, "instructioncost_oracle.txt"), "w").write(f"# {version}; python3 instructioncost_oracle.py\n" + "\n".join(rows) + "\n")
 open(os.path.join(HERE, "tti_intrinsics.txt"), "w").write(
     f"# {version}; python3 instructioncost_oracle.py\n" + "\n".join(f"{p} {k} {n} {c}" for (p, k, n), c in sorted(table.items())) + "\n")
-print(len(rows), "rows", len(table), "intrinsic prices")
+open(os.path.join(HERE, "instructioncost_matrix.txt"), "w").write(f"# {version}; python3 instructioncost_oracle.py\n" + "\n".join(mrows) + "\n")
+print(len(rows), "rows", len(mrows), "matrix rows", len(table), "intrinsic prices")
