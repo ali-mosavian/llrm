@@ -813,8 +813,10 @@ impl Selector<'_, '_, '_> {
         let dividend = self.wide(left, at, out)?;
         let dword = self.constant(right, 8).is_some_and(|bits| bits >> 32 == 0);
         let divisor = self.wide(right, at, out)?;
-        let routine = llrm_x86::helpers::divide(signed, !dword, self.arch.object().bitness)
-            .map_err(|refused| Unselected(format!("the i64 divide: {}", refused.message)))?;
+        let routine = self
+            .arch
+            .divide_routine(signed, !dword)
+            .map_err(|refused| Unselected(format!("the i64 divide: {refused}")))?;
         let name = routine.name;
         let mut requires = vec![(dividend.0, routine.dividend[0]), (divisor.0, routine.divisor[0])];
         if !dword {
