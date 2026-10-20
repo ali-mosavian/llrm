@@ -471,12 +471,13 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 44] = [
+pub const FLAG_ATTRIBUTES: [&str; 45] = [
     "alwaysinline",
     "builtin",
     "cold",
     "convergent",
     "dead_on_unwind",
+    "frame_bound",
     "hot",
     "immarg",
     "inlinehint",

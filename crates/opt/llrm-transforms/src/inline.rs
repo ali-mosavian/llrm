@@ -225,6 +225,14 @@ pub struct Candidate {
     /// Admitted only as the last call of a body nothing else reaches, which it
     /// moves whatever its price: not a copy the price allows.
     pub moved: bool,
+    /// The function the body is of, where it is a recursive callee whose own
+    /// calls may be peeled.
+    pub callee: Option<GlobalId>,
+    /// Where the body calls itself: the calls it makes of itself per call,
+    /// the sum of those calls' frequencies over the entry's.
+    pub self_calls: Option<f64>,
+    /// How many calls of itself the body has.
+    pub self_sites: usize,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.
@@ -235,6 +243,9 @@ pub struct Caller<'a> {
     /// and this is the frequency of each call of the function's own body
     /// over its entry's (a call not in it counts 1).
     pub self_inlining: Option<&'a SparseIdMap<InstId, f64>>,
+    /// A recursive callee inlined here may have its own calls inlined in the
+    /// copy, gcc's peeling.
+    pub peeling: bool,
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
@@ -246,6 +257,13 @@ pub struct Caller<'a> {
 /// Owner: w-6. Exit: the copies are chosen by gcc's badness heap with its
 /// real growth limits (`inline-unit-growth`).
 pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
+
+/// gcc 13.3's depth (params.opt:573), which peeling keeps.
+const MAX_INLINE_RECURSIVE_DEPTH_GCC: usize = 8;
+
+/// gcc 13.3's `max-inline-insns-recursive-auto` (params.opt:553), which caps
+/// what the copies of one peeled call add.
+const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
 
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
@@ -261,6 +279,10 @@ pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
 /// body, exceeds this (`want_inline_self_recursive_call_p`,
 /// ipa-inline.cc:1067).
 pub const MIN_INLINE_RECURSIVE_PROBABILITY: f64 = 10.0;
+
+/// gcc 13.3 `--param max-inline-insns-auto` (params.opt:545), in `gcc_insns`:
+/// what a peeled copy may add.
+pub const MAX_INLINE_INSNS_AUTO: i64 = 15;
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
 fn semantic(
@@ -649,11 +671,26 @@ struct Plan<'a, 'c> {
     own: i64,
     /// The caller's size in `gcc_insns`, kept only to bound self-inlining.
     insns: i64,
+    /// What peeled copies have added, in `gcc_insns`.
+    peeled: i64,
     frame: u64,
     seq: usize,
 }
 
 impl<'a> Plan<'a, '_> {
+    /// Whether the call `target` names, inside the copy of `candidate`, is
+    /// inlined in turn: a function's call of itself only where peeling is on
+    /// (self-inlining, which has no callee set, bounds itself); the peeled
+    /// copy descends into nothing else.
+    fn descends(
+        &self,
+        target: &Candidate,
+        candidate: &Candidate,
+    ) -> bool {
+        let itself = target.callee.is_some() && target.callee == candidate.callee;
+        if self.caller.peeling { itself } else { !itself }
+    }
+
     /// `candidate` inlined at a call of `function_type` with `actuals`: the
     /// size and stack it adds are kept, and what is inlined in the copy.
     fn inline(
@@ -663,6 +700,7 @@ impl<'a> Plan<'a, '_> {
         candidate: &'a Candidate,
         site: InstId,
         depth: usize,
+        parent: Option<&'a Candidate>,
     ) -> Option<(Planned<'a>, Actual)> {
         if !fits_with(self.context, self.caller, function_type, |at| actuals[at].owned, candidate) {
             return None;
@@ -680,6 +718,42 @@ impl<'a> Plan<'a, '_> {
                 return None;
             }
             self.insns += grown;
+        } else if self.caller.peeling && depth > 1 {
+            // Peeling (`want_inline_self_recursive_call_p`, ipa-inline.cc:1033):
+            // the copy's own call, `depth - 1` copies deep, is inlined while
+            // the probability of recursing is below 1 - 1/8, squared once for
+            // each copy before it, and the copy adds a small function's
+            // growth. DEVIATE: gcc reads the probability of the one call's
+            // edge; here it is the calls of the function to itself per call,
+            // so a tree (fib: 1, bintree: 1.25) is not peeled, which doubles
+            // a copy at each level (bintree -O2 +0.13% clocks, 988 to 1276 B).
+            let level = depth - 1;
+            // The edge's frequency in the caller, over that of the call that
+            // made the outermost copy: the calls to itself per call, to the
+            // power of the copies it is deep.
+            let reached = parent.and_then(|one| one.self_calls).unwrap_or(1.0).powi(level as i32);
+            // The squaring bounds the copies, which are `sites` to the power of
+            // the depth: with one call the copies grow by one a level and the
+            // limit stays (hanoi: 133 clocks with it squared, 103 without).
+            let mut limit = 1.0 - 1.0 / MAX_INLINE_RECURSIVE_DEPTH_GCC as f64;
+            if parent.is_some_and(|one| one.self_sites > 1) {
+                for _ in 1..level {
+                    limit *= limit;
+                }
+            }
+            let grown = gcc_insns(callee) - 1;
+            // DEVIATE: gcc has no cap on peeling; the copies of one call add at
+            // most what gcc lets a function grow by recursive inlining, 450
+            // (recpow -O1: uncapped 32 copies and 8203 bytes; 150 left it at
+            // 486966 clocks against 475701 before; 450 is 454246 / 5547).
+            if level > MAX_INLINE_RECURSIVE_DEPTH_GCC
+                || reached >= limit
+                || grown > MAX_INLINE_INSNS_AUTO
+                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE_GCC
+            {
+                return None;
+            }
+            self.peeled += grown;
         }
         self.seq += 1;
         let seq = self.seq;
@@ -712,7 +786,9 @@ impl<'a> Plan<'a, '_> {
                     .collect();
                 let target = seen.last().and_then(|one| one.callee).and_then(|name| self.available.get(&name));
                 if let Some(target) = target
-                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target, inst, depth + 1)
+                    && self.descends(target, candidate)
+                    && let Some((planned, result)) =
+                        self.inline(info.function_type, &seen, target, inst, depth + 1, Some(candidate))
                 {
                     if instruction.result.is_some() {
                         results.insert(inst, result);
@@ -961,6 +1037,7 @@ pub fn expanded_all(
         available,
         own: start.0,
         insns: gcc_insns(function),
+        peeled: 0,
         frame: start.1,
         seq: 0,
     };
@@ -971,11 +1048,13 @@ pub fn expanded_all(
         let Opcode::Call(info) = &instruction.opcode else { continue };
         let scope = Scope { function, actuals: None, results: &results };
         let seen: Vec<Actual> = instruction.operands.iter().map(|&one| scope.actual(plan.context, one, 0)).collect();
-        let target = constant
-            .and_then(|sites| sites.get(&call))
-            .or_else(|| seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)));
+        let target = match constant {
+            Some(sites) => sites.get(&call),
+            None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
+        };
         let Some(target) = target else { continue };
-        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1) {
+        plan.peeled = 0;
+        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
             if instruction.result.is_some() {
                 results.insert(call, result);
             }

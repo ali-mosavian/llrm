@@ -70,6 +70,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// Whether a spill of a float rounds to the float's type (`Profile`'s
+    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    pub rounds_float_spills: bool,
     /// `-mcode-segment=`: the segment every module's code is in, where it is
     /// not its own `<MODULE>_TEXT`.
     pub code_segment: Option<String>,
@@ -95,6 +98,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            rounds_float_spills: false,
             code_segment: None,
         }
     }
@@ -142,6 +146,7 @@ impl Options {
             self.pipeline.optimize,
             self.float_store,
             self.pipeline.aggressive_codegen(),
+            self.rounds_float_spills,
         )
     }
 }
