@@ -189,6 +189,12 @@ pub struct Options {
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
     pub unroll: bool,
+    /// clang's `PTO.LoopUnrolling` (`UnrollLoops`, on above -O1,
+    /// [CompilerInvocation.cpp#L1936](https://github.com/llvm/llvm-project/blob/d1106deb71cc/clang/lib/Frontend/CompilerInvocation.cpp#L1936)):
+    /// off, the full unroll of the LLVM order only takes a loop that asks
+    /// (`OnlyWhenForced`). -Os keeps it on: the unroller's own size threshold
+    /// of 0 stops the copies.
+    pub loop_unrolling: bool,
     pub peel: bool,
     pub loopidioms: bool,
     pub sibcalls: bool,
@@ -276,6 +282,7 @@ impl Default for Options {
             strength: true,
             lsr: true,
             unroll: true,
+            loop_unrolling: true,
             peel: true,
             loopidioms: true,
             sibcalls: true,
@@ -328,6 +335,7 @@ impl Options {
             pre: false,
             sibcalls: false,
             peel: false,
+            loop_unrolling: false,
             unswitch: false,
             expensive: false,
             switch_conversion: false,
@@ -797,6 +805,7 @@ pub(crate) fn llvm_order(
                     Box::new(loopunrollpass::LoopFullUnroll {
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
+                        only_when_forced: !applied.options.loop_unrolling,
                     }),
                 ),
                 sroa("sroa@776"),
