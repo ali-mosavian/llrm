@@ -386,7 +386,7 @@ impl Combiner<'_> {
         let mut work = vec![alloca];
         while let Some(address) = work.pop() {
             let value = self.function.instruction(address).result?;
-            for one in self.function.users(value).snapshot() {
+            for one in self.function.users(value).iter() {
                 if users.len() >= MAX_ALLOC_SITE_REMOVABLE_USERS {
                     return None;
                 }
