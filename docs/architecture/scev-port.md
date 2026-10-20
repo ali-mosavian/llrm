@@ -179,6 +179,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 22 | (closed) LFTR runs in the pipeline as in the pin | it was opt-in while the old `lsr` could not reduce the counter LFTR leaves; the translated LSR is the default, and ring -O2 went 48154 → 41127 instructions, tile 5235 → 4235 (rows harness, m32) | none |
 | 23 | `RuntimePointerChecking`: no operand bundles, so `getKnowledgeForValue(.., Dereferenceable, ..)` in `evaluatePtrAddRecAtMaxBTCWillNotWrap` finds no assumption and the dereferenceable bytes are the value's own | MIR has no operand bundles; exit: operand bundles in MIR | `runtimecheck.rs` header; `runtimecheck_tests.rs` against the pin's `print<access-info>` |
 | 24 | `RuntimePointerChecking::insert` takes the loop's backedge-taken counts where LLVM takes a `PredicatedScalarEvolution` (no predicate is added; D1) | SCEV has no predicates; exit: `PredicatedScalarEvolution` with `replaceSymbolicStrideSCEV` | same |
+| 25 | `addDiffRuntimeChecks` takes `VF` as a count, not an `ElementCount`; `getElementCount` is `getConstant` | MIR has no scalable vectors (D2) | `runtimechecks.rs` header; `runtimechecks_tests.rs` against the pin's `loop-vectorize` |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 

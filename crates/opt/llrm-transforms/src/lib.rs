@@ -207,6 +207,7 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod runtimechecks;
 pub mod loopdeletion;
 pub mod loopidiom;
 pub mod loopidioms;
