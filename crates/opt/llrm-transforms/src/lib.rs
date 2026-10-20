@@ -285,6 +285,7 @@ pub mod tailmerge;
 pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
+pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod uncondicmp;
 pub mod undefpred;
