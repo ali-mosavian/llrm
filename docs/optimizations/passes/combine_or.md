@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_or.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_or.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:620684747eaeae2c7a333a6fda2864e5af7b23065170aea3771690d4c560f38a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:51dc3d86dafb167e9a7bf0ea7046e9caa87047975706e3696933f5ffa253076e -->
 
 # combine_or
 
@@ -22,10 +22,9 @@ each named where it stood: `SimplifyDemandedInstructionBits`
 `foldIntegerPackFromVector`, `foldOrOfInversions`,
 `foldUsingDistributiveLaws`, the `i1` select folds
 (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-`matchBSwapOrBitReverse`, `matchFunnelShift` and `matchOrConcat` (MIR has
-no `fshl`), `foldBinOpShiftWithShift`, `tryFoldInstWithCtpopWithNot`, the
-disjoint-`or` folds, the `trunc`/`lshr` mask fold, `matchSelectFromAndOr`
-and everything after it.
+`matchBSwapOrBitReverse`, `matchOrConcat`, `foldBinOpShiftWithShift`,
+`tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
+mask fold, `matchSelectFromAndOr` and everything after it.
 
 ## Example
 `(x & 12) | (y & -13)` with `y = x | 3` keeps one mask:

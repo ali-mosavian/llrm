@@ -689,8 +689,8 @@ b3:
 /// test stayed `ult`, LSR made no compare against zero, and its fill loop ran 6
 /// instructions where the pin's runs 4 (48154 against 40103 instructions).
 #[test]
-fn test_lftr_is_on_in_the_pipeline_unless_turned_off() {
-    assert_eq!(super::lftr_default(), std::env::var_os("LLRM_NO_LFTR").is_none());
+fn test_lftr_is_on_in_the_pipeline() {
+    assert!(super::lftr_default());
 }
 
 /// `loops` counted loops one after another, each in LoopSimplify form.

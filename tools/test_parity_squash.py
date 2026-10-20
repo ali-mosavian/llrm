@@ -697,3 +697,23 @@ def test_a_squash_that_deletes_a_page_a_doc_still_links_to_is_refused_naming_the
 def test_deleting_a_page_with_its_links_gone_or_to_another_file_of_that_name_passes(tmp_path):
     repo, head = deleted_page(tmp_path, "passes/deadstore.md", "[`x`](../elsewhere/dse.md) and [web](https://example.com/dse.md)\n")
     assert ps.refusals(head, "Deletes: docs/optimizations/passes/dse.md", base="main", cwd=repo) == []
+
+
+def test_a_perf_pr_without_a_rows_line_is_refused():
+    """#3251 (perf: GlobalsAA as a module use scan) landed with no rows pair and broke alias/farstruct.nib: a perf title needs a `Rows:` line."""
+    assert ps.perf_needs_rows("perf(analysis): one use scan", "TL;DR: faster\nOwner: x")
+    assert ps.perf_needs_rows("perf: faster", "")
+    assert not ps.perf_needs_rows("perf(analysis): one use scan", "Rows: pair p3251, base e26a479f1924, new 46f5a90986bc: no row above base, run diff clean")
+    assert not ps.perf_needs_rows("fix(analysis): a bug", "Owner: x")
+    assert not ps.perf_needs_rows("", "")
+
+
+def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
+    """A refactor( PR with a pass-code diff and no Rows line is refused; docs/test-only refactors, fix( and feat( are not."""
+    code = ["crates/opt/llrm-analysis/src/globalsaa.rs", "docs/x.md"]
+    assert ps.perf_needs_rows("refactor(analysis): one scan", "Owner: x", code)
+    assert not ps.perf_needs_rows("refactor(analysis): one scan", "Rows: pair p1 base a new b: clean", code)
+    assert not ps.perf_needs_rows("refactor(docs): move", "Owner: x", ["docs/x.md", "crates/opt/llrm-analysis/src/globalsaa_tests.rs"])
+    assert not ps.perf_needs_rows("fix(analysis): bug", "Owner: x", code)
+    assert not ps.perf_needs_rows("feat(analysis): new", "Owner: x", code)
+    assert ps.perf_needs_rows("perf(analysis): faster", "Owner: x", [])

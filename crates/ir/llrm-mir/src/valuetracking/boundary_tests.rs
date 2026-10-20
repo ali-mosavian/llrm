@@ -35,8 +35,11 @@ fn mir_has_no_operand_bundles() {
 }
 
 #[test]
-fn mir_has_no_ptrtoaddr() {
-    assert!(rejects("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n"));
+fn mir_reads_ptrtoaddr_as_ptrtoint() {
+    let module = parse::module("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n")
+        .expect("ptrtoaddr is read");
+    let text = crate::print::module(&module);
+    assert!(text.contains("ptrtoint ptr %p to i64") && !text.contains("ptrtoaddr"), "{text}");
 }
 
 #[test]

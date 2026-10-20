@@ -367,6 +367,22 @@ fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
     }
 }
 
+/// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
+/// each verifies. The verifier said "an intrinsic MIR does not have" of all
+/// three, and the funnel-shift and abs folds of InstCombine could not build
+/// them.
+#[test]
+fn funnel_shifts_and_abs_are_known_intrinsics() {
+    for text in [
+        "declare i16 @llvm.fshl.i16(i16, i16, i16)\ndefine i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %y, i16 3)\n  ret i16 %r\n}\n",
+        "declare i32 @llvm.fshr.i32(i32, i32, i32)\ndefine i32 @f(i32 %x, i32 %y) {\nb0:\n  %r = call i32 @llvm.fshr.i32(i32 %x, i32 %y, i32 3)\n  ret i32 %r\n}\n",
+        "declare i16 @llvm.abs.i16(i16, i1)\ndefine i16 @f(i16 %x) {\nb0:\n  %r = call i16 @llvm.abs.i16(i16 %x, i1 false)\n  ret i16 %r\n}\n",
+    ] {
+        let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(crate::verify::verify(&module), Vec::<String>::new(), "{text}");
+    }
+}
+
 fn dominance_problems(text: &str) -> Vec<String> {
     crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")))
         .into_iter()
