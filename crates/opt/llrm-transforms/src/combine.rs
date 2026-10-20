@@ -21,7 +21,7 @@
 //! `removeAllNonTerminatorAndEHPadInstructions` is a CFG edit this pass does
 //! not make); a call is never trivially dead here (`dead` knows what a call
 //! does not write); `visit` runs only the families translated so
-//! far (`visitors`: add, mul, div, rem, shifts,
+//! far (`visitors`: add, mul, and, div, rem, shifts,
 //! trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 //! rewrites are `algebraic`'s, to move in as they are translated.
 //!
@@ -47,6 +47,7 @@ use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
+use crate::combine_and::visit_and;
 use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
@@ -395,6 +396,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
     match opcode {
         Opcode::Binary(BinaryOp::Add) => &[visit_add],
         Opcode::Binary(BinaryOp::Mul) => &[visit_mul],
+        Opcode::Binary(BinaryOp::And) => &[visit_and],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
         Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],

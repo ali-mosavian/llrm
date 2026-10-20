@@ -35,14 +35,13 @@
 //! # Example
 //! `0 - (x + 1)` is `~x`; `0 - (a - b)` is `b - a`.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::range::{SelectOperand, is_known_negation};
 use llrm_mir::valuetracking::{Query, pattern};
+use llrm_support::hash::HashMap;
 
 use crate::combine::Combiner;
 use crate::combine_shared::{
@@ -59,7 +58,7 @@ impl Combiner<'_> {
         is_nsw: bool,
         root: Operand,
     ) -> Option<Operand> {
-        let mut negator = Negator { c: self, truly: lhs_is_zero, cache: HashMap::new(), created: Vec::new() };
+        let mut negator = Negator { c: self, truly: lhs_is_zero, cache: HashMap::default(), created: Vec::new() };
         let negated = negator.negate(root, is_nsw, 0);
         if negated.is_none() {
             // Erase what was made, to avoid endless combine looping.

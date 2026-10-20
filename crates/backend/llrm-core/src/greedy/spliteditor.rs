@@ -36,6 +36,16 @@
 //! DEVIATE D-SE4: `LRSplit` is not flagged on the copies: nothing here reads
 //! it.
 //!
+//! DEVIATE D-SE7: `rewriteAssigned` sets the register of a
+//! `MachineOperand` in place (`MO.setReg`); an `Insn` here is immutable and
+//! shared (`Arc`), so each rewritten instruction is rebuilt
+//! (`Insn::try_renamed`, then `LiveIntervals::rewrite_instr`). The fact:
+//! d_faces -O2, 746 rewrites cost 3.9 M of 1,330 M instructions (0.3%), about 5
+//! K each. Owner: splitkit-port. Exit: an isolated POC that prices in-place
+//! operand mutation of the LIR `Insn` (interior registers behind the `Arc`)
+//! before any structural change, by 2026-11-06; the deviation closes when the
+//! POC shows a gain over 1% of a compile or is dropped with its numbers.
+//!
 //! # Example
 //! A value live through `b1` with a use in it: `openIntv`; `enterIntvBefore`
 //! the use inserts `c1 = copy v`; `leaveIntvAfter` it inserts `c0 = copy v`;

@@ -156,7 +156,7 @@ pub fn has_fp(
     size: bool,
 ) -> bool {
     if !registers.optional
-        || body.bits != 32
+        || body.bits < 32
         || far
         || inline
         || landing
@@ -230,7 +230,7 @@ pub fn pinned_by(
                         Loc::Mem(cell) => i64::from(cell.width),
                         _ => return Some(Pinned::OpaqueSpAdjustment),
                     };
-                    if width != 2 && width != 4 {
+                    if !matches!(width, 2 | 4 | 8) {
                         return Some(Pinned::OpaqueSpAdjustment);
                     }
                     depth += sign * width;
