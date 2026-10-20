@@ -39,7 +39,8 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{
-    binop, commutative, has_one_use, parts, query, simplify_associative_or_commutative, simplify_visited, width,
+    binop, commutative, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited,
+    width,
 };
 
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
@@ -76,16 +77,6 @@ fn not_of(
     v: Operand,
 ) -> Option<Operand> {
     pattern::not(q, v)
-}
-
-/// `m_c_<op>(m_Specific(x), m_Value(Y))`: `Y`.
-fn other_of(
-    q: &Query,
-    v: Operand,
-    op: BinaryOp,
-    x: Operand,
-) -> Option<Operand> {
-    commutative(q, v, op, |s| s == x).map(|(_, other)| other)
 }
 
 /// `simplifyXorInst(a, b, SQ.getWithInstruction(&I))`.
