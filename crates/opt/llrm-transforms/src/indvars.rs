@@ -122,6 +122,21 @@ pub const fn lftr_default() -> bool {
     true
 }
 
+/// After a step: what its edits touched is dropped from the expressions.
+fn settled(
+    session: &mut ScevSession,
+    mark: &mut llrm_mir::module::Mark,
+    unit: &passes::Unit,
+    outer: &passes::Outer,
+    changed: bool,
+) -> bool {
+    if changed {
+        session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, *mark);
+        *mark = unit.function.mark();
+    }
+    changed
+}
+
 impl FunctionPass for IndVars {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -143,15 +158,10 @@ impl FunctionPass for IndVars {
         let outer = std::rc::Rc::clone(analyses.outer());
         // One session for the run, as LLVM holds one ScalarEvolution for the
         // pass: a loop's trip count is worked out once, not once for each step.
-        // A step that changed the body drops the expressions; the blocks and
-        // edges stay, so the tree and the loops do not.
+        // A step that changed the body drops the expressions its edits touched;
+        // the blocks and edges stay, so the tree and the loops do not.
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
-        let settled = |session: &mut ScevSession, changed: bool| {
-            if changed {
-                session.forget_expressions();
-            }
-            changed
-        };
+        let mut mark = unit.function.mark();
         let compared = crate::simplifyindvar::simplified_and_extended_in(
             &mut session,
             unit.context,
@@ -160,7 +170,7 @@ impl FunctionPass for IndVars {
             unit.declared,
             &outer,
         );
-        let compared = settled(&mut session, compared);
+        let compared = settled(&mut session, &mut mark, unit, &outer, compared);
         let rewrote = crate::exitvalues::enabled() && {
             let changed = crate::exitvalues::rewritten_in(
                 &mut session,
@@ -170,17 +180,17 @@ impl FunctionPass for IndVars {
                 unit.declared,
                 &outer,
             );
-            settled(&mut session, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed)
         };
         let merged = crate::congruentiv::enabled() && {
             let changed =
                 crate::congruentiv::replaced_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-            settled(&mut session, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed)
         };
         let canonical = crate::canonexit::enabled() && {
             let changed =
                 crate::canonexit::canonicalized_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-            settled(&mut session, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed)
         };
         let optimized = crate::exitopt::enabled() && {
             let changed = crate::exitopt::optimized_in(
@@ -191,7 +201,7 @@ impl FunctionPass for IndVars {
                 unit.declared,
                 &outer,
             );
-            settled(&mut session, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed)
         };
         let predicated = crate::exitpredicate::enabled() && {
             let changed = crate::exitpredicate::predicated_in(
@@ -202,7 +212,7 @@ impl FunctionPass for IndVars {
                 unit.declared,
                 &outer,
             );
-            settled(&mut session, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed)
         };
         let tested = self.lftr
             && crate::lftr::enabled()
