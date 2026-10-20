@@ -28,11 +28,13 @@
 //!   function with no attribute.
 //! - DEVIATE 4: no `nofpclass` on an argument, a call result or a load's
 //!   `!nofpclass`; an `x86_fp80` constant is held as the nearest double, so it
-//!   is unknown. `bitcast` and the `fma` recurrence of a phi are the next
-//!   slices.
+//!   is unknown. The `fma` recurrence of a phi
+//!   (`matchSimpleTernaryIntrinsicRecurrence`) is not translated.
 //! - DEVIATE 5: no `experimental.constrained.*`, `amdgcn.*`, `vector.reduce.*`,
 //!   `vector.reverse` or `convert.from.arbitrary.fp`, and no `ppc_fp128`
 //!   (`isMultiUnitFPType` is false): MIR has none of them.
+//! - DEVIATE 6: `m_c_MaxOrMin` of a `bitcast` finds the `select` form through
+//!   `matchSelectPattern`, where the C++ matches the compare in place.
 //!
 //! COVERED: the oracle (`tests/vt/fp`, `tools/llvmport/fpdump.sh`, with and
 //! without the `DomConditionCache`) matches LLVM on all 2,298 float and double
@@ -398,6 +400,8 @@ fn of_operator(
             int_to_fp(q, op, *cast == CastOp::SIToFP, kind, interested, known, depth);
         }
         Opcode::Phi => phi(q, inst, op, interested, known, depth),
+        // L6438
+        Opcode::Cast(CastOp::BitCast) => bitcast(q, op, kind, interested, known, depth),
         _ => {}
     }
 }
@@ -921,6 +925,80 @@ fn int_to_fp(
             known.known_not(FC_INF);
         }
     }
+}
+
+/// `m_c_MaxOrMin(L, R)`: an integer `smax`, `smin`, `umax` or `umin` of two
+/// values, as the intrinsic or as a `select` of a compare (found by
+/// `matchSelectPattern`: DEVIATE 6).
+fn max_or_min_operands(
+    q: &Query,
+    v: Operand,
+) -> Option<(Operand, Operand)> {
+    for id in [IntrinsicId::Smax, IntrinsicId::Smin, IntrinsicId::Umax, IntrinsicId::Umin] {
+        if let Some((_, call)) = pattern::intrinsic(q, v, id) {
+            let arguments = pattern::call_arguments(call);
+            return Some((arguments[0], arguments[1]));
+        }
+    }
+    let result = range::match_select_pattern(q, v);
+    if !matches!(
+        result.flavor,
+        range::SelectPatternFlavor::SMin
+            | range::SelectPatternFlavor::UMin
+            | range::SelectPatternFlavor::SMax
+            | range::SelectPatternFlavor::UMax
+    ) {
+        return None;
+    }
+    match (result.lhs?, result.rhs?) {
+        (range::SelectOperand::Value(lhs), range::SelectOperand::Value(rhs)) => Some((lhs, rhs)),
+        _ => None,
+    }
+}
+
+/// `BitCast`
+/// ([L6438](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L6438)).
+fn bitcast(
+    q: &Query,
+    op: &Instruction,
+    kind: FloatKind,
+    interested: FpClassTest,
+    known: &mut KnownFpClass,
+    depth: u32,
+) {
+    let src = op.operands[0];
+    if !matches!(
+        q.type_of(src).map(|ty| q.context().types.get(ty)),
+        Some(Type::Int(_))
+    ) {
+        return;
+    }
+    let ty = q.type_of(Operand::Value(op.result.expect("a cast has a result")));
+    // Match bitcast(umax(bitcast(a), bitcast(b))).
+    if let Some((lhs, rhs)) = max_or_min_operands(q, src) {
+        let cast_of = |one: Operand| {
+            let (_, cast) = q.instruction_of(one)?;
+            (cast.opcode == Opcode::Cast(CastOp::BitCast)).then(|| cast.operands[0])
+        };
+        if let (Some(cast_lhs), Some(cast_rhs)) = (cast_of(lhs), cast_of(rhs))
+            && q.type_of(cast_lhs) == ty
+            && q.type_of(cast_rhs) == ty
+        {
+            let known_rhs = compute_known_fp_class(q, cast_rhs, interested, depth + 1);
+            if !known_rhs.is_unknown() {
+                let known_lhs = compute_known_fp_class(q, cast_lhs, interested, depth + 1);
+                *known = known_lhs;
+                known.or_assign(&known_rhs);
+            }
+            return;
+        }
+    }
+    let sem = semantics_of(kind);
+    let bits = known::compute_known_bits(q, src, depth + 1);
+    if bits.width != crate::apfloat::semantics_size_in_bits(sem) {
+        return;
+    }
+    *known = KnownFpClass::bitcast(sem, &bits);
 }
 
 /// `PHI`
