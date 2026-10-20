@@ -9,14 +9,16 @@
 mod agg;
 mod call;
 mod control;
+mod divide;
 mod fp;
 mod int;
 mod mem;
 mod val;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{
     BlockId, ConstantId, ConstantKind, Function, GlobalId, InstId, Module, Opcode, Operand, Type, TypeId, ValueDef,
     ValueId,
@@ -52,14 +54,14 @@ pub struct Selector<'a> {
     pub(crate) layout: &'a DataLayout,
     pub(crate) platform: Platform,
     pub(crate) mf: MFunc,
-    pub(crate) vals: HashMap<ValueId, Val>,
+    pub(crate) vals: IdMap<ValueId, Val>,
     /// The blocks in reverse post-order: the order they are selected and laid
     /// out in.
     order: Vec<BlockId>,
-    index: HashMap<BlockId, usize>,
-    uses: HashMap<ValueId, usize>,
+    index: IdMap<BlockId, usize>,
+    uses: IdMap<ValueId, usize>,
     /// Comparisons selected where their reader is.
-    pub(crate) fused: HashSet<InstId>,
+    pub(crate) fused: IdSet<InstId>,
     /// The block being filled.
     pub(crate) current: usize,
     /// A variadic function's register save areas and where its unnamed
@@ -92,11 +94,11 @@ impl<'a> Selector<'a> {
     ) -> Self {
         let order = reverse_post_order(function);
         let index = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
-        let mut uses: HashMap<ValueId, usize> = HashMap::new();
+        let mut uses: IdMap<ValueId, usize> = IdMap::new();
         for (_, inst) in function.walk() {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = operand {
-                    *uses.entry(*value).or_default() += 1;
+                    *uses.get_or_insert_with(*value, || 0) += 1;
                 }
             }
         }
@@ -108,11 +110,11 @@ impl<'a> Selector<'a> {
             layout,
             platform,
             mf,
-            vals: HashMap::new(),
+            vals: IdMap::new(),
             order,
             index,
             uses,
-            fused: HashSet::new(),
+            fused: IdSet::new(),
             current: 0,
             va: None,
         }
@@ -491,8 +493,15 @@ impl<'a> Selector<'a> {
     ) {
         let register_bits = if bits <= 32 { 32 } else { 64 };
         let value = if register_bits == 32 { value & 0xFFFF_FFFF } else { value };
-        for inst in crate::expand_imm::mov_imm(value, register_bits, reg) {
-            self.inst(inst);
+        let insts = crate::expand_imm::mov_imm(value, register_bits, reg);
+        // A chain of `movz`/`movk` is several writes of one register: kept as one
+        // definition (expanded after allocation) so CSE and hoisting can move it.
+        if insts.len() > 1 {
+            self.emit(Op::Imm { dst: reg, bits: register_bits, value });
+        } else {
+            for inst in insts {
+                self.inst(inst);
+            }
         }
     }
 
@@ -513,9 +522,7 @@ impl<'a> Selector<'a> {
         // Through an integer register: LLVM loads from a constant pool.
         let scratch = self.mf.gpr();
         let (width, register_bits) = if size == FpSize::S { (Width::W, 32) } else { (Width::X, 64) };
-        for inst in crate::expand_imm::mov_imm(bits, register_bits, scratch) {
-            self.inst(inst);
-        }
+        self.load_immediate(scratch, register_bits, bits);
         self.inst(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: scratch, fpr: reg });
     }
 

@@ -44,8 +44,8 @@
 //! `access_tests.rs`.
 //!
 //! # Provides
-//! `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and
-//! `loopfuse` (`crates/opt/llrm-transforms`).
+//! `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam`
+//! (`crates/opt/llrm-transforms`).
 //!
 //! # See also
 //! LLVM ScalarEvolution add recurrences read by `DependenceAnalysis`; gcc's

@@ -272,7 +272,6 @@ impl Forest {
                 None => cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
             },
             loops,
-            reaching: Default::default(),
         });
         fresh.seed::<cfg::Shape>(function, std::rc::Rc::clone(&shape));
         shape

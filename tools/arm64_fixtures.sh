@@ -13,6 +13,8 @@ for source in "$crate"/tests/programs/*.c; do
   name=$(basename "$source" .c)
   "$build/bin/clang" -target arm64-apple-macos -O2 -Xclang -disable-llvm-passes -Xclang -disable-lifetime-markers \
     -S -emit-llvm -o "$crate/tests/darwin/$name.ll" "$source"
+  # No path of this checkout in the fixture.
+  sed -i -e '/^; ModuleID/d' -e 's|^source_filename = ".*/|source_filename = "|' "$crate/tests/darwin/$name.ll"
   "$build/bin/clang" -target aarch64-unknown-linux-gnu -O2 -c -o "$tmp/$name.o" "$source"
   "$build/bin/ld.lld" -static -o "$tmp/$name" "$tmp/$name.o" "$tmp/rt.o"
   set +e

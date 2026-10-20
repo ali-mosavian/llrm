@@ -35,6 +35,7 @@ Measured with `tools/arm64_compare.py` (modes `whole`, `backend`, `compile`; the
 1. `regalloc.rs`: ranges with holes, copy coalescing, no splitting or eviction; stands in for `RAGreedy`.
 2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
+4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
 
 ## Order of work
 
