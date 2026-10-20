@@ -155,3 +155,29 @@ def test_check_runs_smoke_once_and_names_its_result_in_the_covered_block(monkeyp
     failing, covered = postland.check("f" * 40, "e" * 40)
     assert calls == ["e" * 40] and "smoke ratchet:x" in failing
     assert any("SMOKE LINE" in line for line in covered)
+
+
+def test_a_culprit_naming_an_open_pr_is_rejected_and_a_merged_one_stands():
+    """watcom_words was blamed on #2892, an open unmerged PR: its change is not on the head, so the bisect was wrong."""
+    assert postland.verified_pr(2892, lambda pr: "OPEN") == (None, "#2892 is OPEN, not merged: rejected")
+    assert postland.verified_pr(3026, lambda pr: "MERGED") == (3026, "")
+    assert postland.verified_pr(None)[0] is None
+
+
+def test_a_probe_commit_that_does_not_build_stops_the_bisect_instead_of_reading_as_passing(monkeypatch, tmp_path):
+    monkeypatch.setattr(postland, "tree", lambda sha: tmp_path)
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: ({postland.NAMELESS}, ""))
+    postland.UNIT_SETS.clear()
+    import pytest
+
+    with pytest.raises(postland.Inconclusive):
+        postland.probe("unit a::t", "c" * 40)
+
+
+def test_a_smoke_failure_has_an_honest_repro_and_is_not_bisected_as_a_cargo_package():
+    """The ratchet rows read `cargo test -p ratchet:facts_rewrite`, a command that cannot run."""
+    assert "parity_smoke" in postland.repro("smoke ratchet:facts_rewrite") and "-p ratchet" not in postland.repro("smoke ratchet:facts_rewrite")
+    import pytest
+
+    with pytest.raises(postland.Inconclusive):
+        postland.probe("smoke ratchet:x", "c" * 40)
