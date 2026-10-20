@@ -116,7 +116,7 @@ impl FunctionPass for LoopIdiom {
         let name = unit
             .id
             .and_then(|id| outer.globals.get(id.0 as usize))
-            .and_then(|global| global.name.clone())
+            .and_then(|global| global.name.owned())
             .unwrap_or_default();
         let assumptions = AssumptionCache::of(unit.context, &outer.globals, unit.metadata, unit.function);
         let env = Env {

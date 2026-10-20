@@ -999,9 +999,47 @@ pub enum GlobalKind {
     Function(Box<Function>),
 }
 
+/// A global's name with the intrinsic it declares, found once when the name
+/// is made (LLVM's `Function::IntID`, set by `updateAfterNameChange`). The
+/// fields are private: a rename builds a new `GlobalName`, so the cached
+/// intrinsic cannot go stale.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GlobalName {
+    text: Option<String>,
+    intrinsic: Option<crate::intrinsics::Intrinsic>,
+}
+
+impl From<Option<String>> for GlobalName {
+    fn from(text: Option<String>) -> Self {
+        let intrinsic = text.as_deref().and_then(crate::intrinsics::Intrinsic::named);
+        GlobalName { text, intrinsic }
+    }
+}
+
+impl From<String> for GlobalName {
+    fn from(text: String) -> Self {
+        Some(text).into()
+    }
+}
+
+impl GlobalName {
+    /// The name as an owned `Option<String>`.
+    pub fn owned(&self) -> Option<String> {
+        self.text.clone()
+    }
+}
+
+impl std::ops::Deref for GlobalName {
+    type Target = Option<String>;
+
+    fn deref(&self) -> &Option<String> {
+        &self.text
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlobalValue {
-    pub name: Option<String>,
+    pub name: GlobalName,
     pub linkage: Linkage,
     pub unnamed_addr: UnnamedAddr,
     pub address_space: u32,
@@ -1038,6 +1076,12 @@ impl GlobalValue {
                 (GlobalKind::Variable(one), GlobalKind::Variable(other)) => one == other,
                 _ => false,
             }
+    }
+
+    /// The intrinsic this global's name declares, as `Intrinsic::named`
+    /// says, read from the name's cache.
+    pub fn intrinsic(&self) -> Option<crate::intrinsics::Intrinsic> {
+        self.name.intrinsic
     }
 
     pub fn function(&self) -> Option<&Function> {

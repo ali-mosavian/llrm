@@ -181,7 +181,7 @@ fn memory_of(
         .into_iter()
         .map(|(id, me)| {
             (
-                module.global(id).name.clone().expect("a name"),
+                module.global(id).name.owned().expect("a name"),
                 me.mod_ref(IRMemLocation::ArgMem),
                 me.mod_ref(IRMemLocation::Other),
             )

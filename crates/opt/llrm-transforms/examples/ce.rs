@@ -17,7 +17,7 @@ fn main() {
         let names: Vec<String> = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
-            .filter_map(|(_, global, _)| global.name.clone())
+            .filter_map(|(_, global, _)| global.name.owned())
             .collect();
         for name in names {
             let (context, function) = module.function_mut(&name).expect("a defined function");

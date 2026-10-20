@@ -40,7 +40,6 @@
 //! Once per function selected, in `isel::selected_with`.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::num::Num;
@@ -48,6 +47,7 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{Context, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Module, Operand, ValueId};
@@ -224,8 +224,8 @@ impl<'m> ValueFacts<'m> {
 pub fn exact_offsets(
     unit: &Unit,
     facts: &ValueFacts,
-) -> BTreeSet<ValueId> {
-    let mut verdict = IndexMap::<ValueId, bool>::default();
+) -> IdSet<ValueId> {
+    let mut verdict = IdMap::<ValueId, bool>::new();
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let Some(base) = reference.base else { continue };
@@ -241,9 +241,9 @@ pub fn exact_offsets(
                 );
                 low >= Num::from(0) && high < Num::from(1) << bits
             });
-        *verdict.entry(base).or_insert(true) &= exact;
+        *verdict.get_or_insert_with(base, || true) &= exact;
     }
-    verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect()
+    verdict.iter().filter(|(_, exact)| **exact).map(|(value, _)| value).collect()
 }
 
 /// The integer range of `value`, where it and every affine partial sum

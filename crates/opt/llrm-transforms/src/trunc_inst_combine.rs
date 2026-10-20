@@ -241,7 +241,7 @@ impl<'a> State<'a> {
         inst: InstId,
     ) -> Option<Intrinsic> {
         let global = memory::callee(self.context, self.function, inst)?;
-        Intrinsic::named(self.globals.get(global.0 as usize)?.name.as_deref()?)
+        self.globals.get(global.0 as usize)?.intrinsic()
     }
 
     /// `isRelevantOperand`

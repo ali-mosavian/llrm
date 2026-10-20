@@ -237,7 +237,7 @@ impl MemIntrinsic {
         let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
         let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
         let [dest, second, length, ..] = instruction.operands[..] else { return None };
-        match globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named)? {
+        match globals.get(callee.0 as usize)?.intrinsic()? {
             Intrinsic::MemSet => Some(Self::Set { dest, value: second, length }),
             Intrinsic::MemCpy | Intrinsic::MemMove => Some(Self::Transfer { dest, source: second, length }),
             _ => None,

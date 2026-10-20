@@ -186,20 +186,25 @@ impl<'a> Query<'a> {
         self.metadata.get(node.0 as usize)
     }
 
-    /// The global a call's callee names.
+    /// The name of the function a call's callee names.
     pub fn callee_name(
         &self,
         inst: InstId,
     ) -> Option<&'a str> {
+        self.callee_function(inst)?.name.as_deref()
+    }
+
+    /// The function global a call's callee names.
+    fn callee_function(
+        &self,
+        inst: InstId,
+    ) -> Option<&'a GlobalValue> {
         let instruction = self.function.instruction(inst);
         let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
         let Operand::Constant(id) = *instruction.operands.last()? else { return None };
         let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
         let global = self.globals.get(global.0 as usize)?;
-        match &global.kind {
-            GlobalKind::Function(_) => global.name.as_deref(),
-            GlobalKind::Variable(_) => None,
-        }
+        matches!(global.kind, GlobalKind::Function(_)).then_some(global)
     }
 
     /// The intrinsic a call reaches, when MIR has it.
@@ -207,7 +212,7 @@ impl<'a> Query<'a> {
         &self,
         inst: InstId,
     ) -> Option<Intrinsic> {
-        self.callee_name(inst).and_then(Intrinsic::named)
+        self.callee_function(inst)?.intrinsic()
     }
 
     /// Whether `a` is the same value as `b`.

@@ -458,7 +458,7 @@ fn found_with(
     let entries = bodies
         .iter()
         .filter(|(id, global, _)| program.exports.exported(global) || taken.contains(id))
-        .filter_map(|(_, global, _)| global.name.clone())
+        .filter_map(|(_, global, _)| global.name.owned())
         .collect();
     let bodies = bodies
         .iter()
@@ -516,7 +516,7 @@ fn symbol(
 ) -> Option<Symbol> {
     match program.definition(at, id) {
         Some((module, global)) => Some(Symbol::Defined(module, global)),
-        None => program.modules[at].global(id).name.clone().map(Symbol::Named),
+        None => program.modules[at].global(id).name.owned().map(Symbol::Named),
     }
 }
 

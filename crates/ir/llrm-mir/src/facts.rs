@@ -474,7 +474,7 @@ impl Facts {
                 facts.push(fact);
             }
         }
-        Facts(facts)
+        Facts::keeping_the_strongest_inlining(facts)
     }
 
     /// The facts `attributes` state; any other attribute is not a fact.
@@ -485,6 +485,14 @@ impl Facts {
                 facts.push(fact);
             }
         }
+        Facts::keeping_the_strongest_inlining(facts)
+    }
+
+    /// `Never` outranks the other ways to state inlining, whichever came first
+    /// (`noinline alwaysinline` and `alwaysinline noinline` agree).
+    fn keeping_the_strongest_inlining(mut facts: Vec<Fact>) -> Facts {
+        let strongest = facts.iter().filter_map(|fact| if let Fact::Inline(how) = fact { Some(*how) } else { None }).min();
+        facts.retain(|fact| !matches!(fact, Fact::Inline(how) if Some(*how) != strongest));
         Facts(facts)
     }
 
@@ -715,6 +723,20 @@ mod tests {
             );
         }
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
+    }
+
+    /// Two ways stated at once: the stronger wins in either order. `alwaysinline
+    /// noinline` read as `Always`, so a routine the language said never to
+    /// inline was copied.
+    #[test]
+    fn never_outranks_always_in_either_order() {
+        let flags = |names: &[&str]| -> Vec<Attribute> {
+            names.iter().map(|name| Attribute::Flag((*name).to_owned())).collect()
+        };
+        for names in [["noinline", "alwaysinline"], ["alwaysinline", "noinline"]] {
+            assert_eq!(Facts::of(&flags(&names)).inline(), Some(Inlining::Never), "{names:?}");
+        }
+        assert_eq!(Facts::of(&flags(&["inlinehint", "alwaysinline"])).inline(), Some(Inlining::Hint));
     }
 
     /// Each spelling of the unroll hint, and of an invariant load, reads back

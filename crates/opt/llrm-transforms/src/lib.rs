@@ -112,6 +112,7 @@ pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
 pub mod combine_negator;
+pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_select;

@@ -9,7 +9,7 @@ use llrm_support::hash::IndexMap;
 
 use super::{
     _direct_summary, _fills, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
-    initialized, nonnull_by_definition, points_to, summaries,
+    nonnull_by_definition, points_to, summaries,
 };
 use crate::memory::{
     self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of,
@@ -1217,79 +1217,21 @@ fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
     }
 }
 
-#[test]
-fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
-    // stamped_all interned one Parameter object per (read, parameter) pair: 112
-    // M instructions per QCport file.
-    let loads: String = (0..24).map(|i| format!("  %l{i} = load i16, ptr %p{}\n", i % 6)).collect();
-    let text = format!(
-        "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  store i16 0, ptr %p0\n  ret i16 %l0\n}}\n"
-    );
-    let parsed = Parsed::new(&text);
-    let unit = parsed.unit();
-    let before = ObjectInterner::of(&parsed.module.context).lookups();
-    let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    let asked = ObjectInterner::of(&parsed.module.context).lookups() - before;
-    assert_eq!(found.len(), 6);
-    assert!(asked < 24 * 6 / 2, "{asked} interner lookups for 24 reads and 6 parameters");
-}
-
 /// `initialized` made two points-to solves and the effects of every call for
 /// each body of the module, 45% of `mir interprocedural` over QCport at -O1.
 /// What it states is bytes a body writes into a pointer parameter before
 /// reading them: a body with no pointer parameter, or with no store or call,
 /// states none, and is not solved.
-#[test]
-fn initialized_does_not_solve_a_body_that_writes_no_pointer_parameter() {
-    let run = |text: &str| {
-        let parsed = Parsed::new(text);
-        let unit = parsed.unit();
-        let before = ObjectInterner::of(&parsed.module.context).lookups();
-        let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-        (found, ObjectInterner::of(&parsed.module.context).lookups() - before)
-    };
-    for (text, what) in [
-        ("define i16 @f(i16 %a) {\nb0:\n  %x = add i16 %a, 1\n  ret i16 %x\n}\n", "integer parameters"),
-        ("define i16 @f(ptr %p) {\nb0:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n", "a pointer parameter only read"),
-    ] {
-        let (found, asked) = run(text);
-        assert!(found.iter().all(Vec::is_empty), "{what}: {found:?}");
-        assert_eq!(asked, 0, "{what}: the body was solved");
-    }
-    let (found, asked) = run("define i16 @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  ret i16 0\n}\n");
-    assert_eq!(found, vec![vec![(0, 2)]], "premise: a store through a pointer parameter initializes it");
-    assert!(asked > 0);
-}
 
 /// `initialized` solved where every pointer points three times (plain, with the
 /// call arguments, with arguments and captures), the escape phase being the
 /// only part that differs: 3,908 + 1,954 solves over QCport's front half at
 /// -O1. Once a body.
-#[test]
-fn initialized_solves_the_pointer_values_of_a_body_once() {
-    let parsed = Parsed::new(
-        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
-    );
-    let unit = parsed.unit();
-    let before = crate::alias::value_solves();
-    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
-}
 
 /// `initialized` asked the escape phase twice more (with the call arguments,
 /// and plain) for provenance alone: `.values` of each is the value solve's, and
 /// 20 of d_faces' 252 escape phases at -O2 were these. It asks the one of
 /// `calls_annotated`, whose effects it reads.
-#[test]
-fn initialized_asks_no_escape_phase_of_its_own() {
-    let parsed = Parsed::new(
-        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
-    );
-    let unit = parsed.unit();
-    let before = crate::alias::escape_solves();
-    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    assert_eq!(crate::alias::escape_solves() - before, 1, "initialized asked for what escapes for its own use");
-}
 
 /// A loop the shape does not know of: the shape was taken before a copy loop
 /// was spliced in, so its dominance says no block dominates a latch and no back

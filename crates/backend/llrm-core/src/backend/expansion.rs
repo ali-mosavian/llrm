@@ -23,7 +23,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
+use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::types::TypeId;
 
@@ -34,7 +34,7 @@ pub fn expand_calls<T>(
     pick: impl Fn(Intrinsic) -> Option<T>,
     mut rewrite: impl FnMut(&mut Context, &mut Function, InstId, T) -> Result<(), String>,
 ) -> Result<(), String> {
-    let names: Vec<Option<String>> = module.globals.iter().map(|global| global.name.clone()).collect();
+    let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -42,7 +42,7 @@ pub fn expand_calls<T>(
             .walk()
             .filter_map(|(_, inst)| {
                 let callee = llrm_mir::memory::callee(context, function, inst)?;
-                Some((inst, pick(Intrinsic::named(names[callee.0 as usize].as_deref()?)?)?))
+                Some((inst, pick(intrinsics[callee.0 as usize]?)?))
             })
             .collect();
         for (inst, what) in found {

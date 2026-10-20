@@ -267,7 +267,8 @@ impl Parser {
                                     name: match name {
                                         Name::Named(one) => Some(one.clone()),
                                         Name::Numbered(_) => None,
-                                    },
+                                    }
+                                    .into(),
                                     linkage: Linkage::External,
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
@@ -588,7 +589,7 @@ impl Parser {
             local.function.personality = Some(self.constant(ty)?);
         }
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
-        if let Some(name) = &self.module.globals[id.0 as usize].name {
+        if let Some(name) = self.module.globals[id.0 as usize].name.as_deref() {
             intrinsics::declare(&mut local.function, &self.module.context.types, name);
         }
         if define {

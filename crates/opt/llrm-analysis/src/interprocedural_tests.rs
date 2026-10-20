@@ -33,7 +33,7 @@ fn named(
         .iter()
         .map(|(&id, values)| {
             (
-                module.global(id).name.clone().unwrap(),
+                module.global(id).name.owned().unwrap(),
                 values.iter().map(|value| value.map(|one| number(module, one))).collect(),
             )
         })

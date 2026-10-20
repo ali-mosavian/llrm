@@ -220,7 +220,7 @@ impl Selector<'_> {
         let (&callee_operand, arguments) = instruction.operands.split_last().expect("a call has a callee");
         if let Operand::Constant(id) = callee_operand
             && let llrm_mir::ConstantKind::Global(global) = self.module.context.get(id).kind
-            && let Some(name) = self.module.global(global).name.clone()
+            && let Some(name) = self.module.global(global).name.owned()
             && name.starts_with("llvm.")
         {
             return self.intrinsic(&name, instruction, arguments);

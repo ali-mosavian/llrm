@@ -9,10 +9,11 @@
 //! write each. `AnalyzeCallGraph` then walks the call graph callees first, one
 //! SCC at a time: a function gets a `FunctionInfo` (one `ModRefInfo` for all
 //! memory, a `ModRefInfo` per tracked global, and "may read any global") only
-//! if every callee of the SCC has one. A call to a declaration, an indirect
-//! call or a function whose definition is not exact leaves the caller
-//! without. `get_mod_ref_info` answers a call against a location that is a
-//! tracked global; any other location is left to the caller's other analyses.
+//! if every callee of the SCC has one. A call to a declaration that may call
+//! back into the module (no `nocallback`), an indirect call or a function
+//! whose definition is not exact leaves the caller without. `get_mod_ref_info`
+//! answers a call against a location that is a tracked global; any other
+//! location is left to the caller's other analyses.
 //!
 //! ```text
 //!  @g = internal global i16 0      f reads @g          g() calls f, writes @g
@@ -49,6 +50,9 @@
 //! - G4: no `TargetLibraryInfo`: a call to `free` is not recognised, so a
 //!   global passed to it is not tracked.
 //! - G5: `hasOptNone` is `noipa` (`llrm_mir::facts::opaque`).
+//! - G6: a declaration needs `nocallback` only, not `nosync` as well
+//!   (`MaySyncOrCallIntoModule`): MIR has no `nosync` and the targets no
+//!   threads.
 //!
 //! # Provides
 //! `GlobalsModRef`, `FunctionInfo`, `compute`.
@@ -67,7 +71,7 @@ use llrm_mir::GlobalId;
 use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Module, Operand, ValueId};
+use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use crate::aa::{MemoryEffects, ModRefInfo};
@@ -309,6 +313,34 @@ impl Analysis<'_> {
 }
 
 /// `GlobalsAAResult::analyzeModule`.
+/// What a call to the declaration `function` does, from its attributes alone
+/// (the `F->isDeclaration()` arm of `AnalyzeCallGraph`); None where it may
+/// call back into the module, so nothing is known of its callers.
+///
+/// DEVIATE G6: `MaySyncOrCallIntoModule` asks `nosync` as well as
+/// `nocallback`; MIR has no `nosync` and the targets have no threads, so
+/// `nocallback` is enough.
+fn declaration_info(function: &Function) -> Option<FunctionInfo> {
+    let effects = MemoryEffects::of_attrs(&function.attrs);
+    let mut info = FunctionInfo::default();
+    if effects.does_not_access_memory() {
+        return Some(info);
+    }
+    let may_call_into_module = !Facts::of(&function.attrs).no_callback();
+    if effects.only_reads_memory() {
+        info.add_mod_ref(ModRefInfo::Ref);
+        if !effects.only_accesses_arg_memory() && may_call_into_module {
+            info.may_read_any_global = true;
+        }
+        return Some(info);
+    }
+    info.add_mod_ref(ModRefInfo::ModRef);
+    if !effects.only_accesses_arg_memory() {
+        info.may_read_any_global = true;
+    }
+    (!may_call_into_module).then_some(info)
+}
+
 pub fn compute(module: &Module) -> GlobalsModRef {
     let analysis = Analysis { module, sites: Sites::of(module) };
     let mut result = GlobalsModRef::default();
@@ -391,7 +423,15 @@ pub fn compute(module: &Module) -> GlobalsModRef {
                 break;
             }
             for callee in graph.callees_of(id) {
-                if let Some(callee_info) = infos.get(&callee) {
+                if let Some(declared) = module.global(callee).function().filter(|one| one.is_declaration()) {
+                    match declaration_info(declared) {
+                        Some(declared) => info.add_function_info(&declared),
+                        None => {
+                            know_nothing = true;
+                            break;
+                        }
+                    }
+                } else if let Some(callee_info) = infos.get(&callee) {
                     info.add_function_info(&callee_info.clone());
                 } else if !scc.contains(&callee) {
                     know_nothing = true;
