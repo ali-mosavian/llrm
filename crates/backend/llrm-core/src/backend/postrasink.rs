@@ -95,37 +95,36 @@
 //! The body is returned unchanged where no block with several successors holds
 //! a copy or spill store. Block odds follow a bridged edge.
 //!
+//! # Deviations from the pin
+//! The copy half is `PostRAMachineSinkingImpl::tryToSinkCopy`; a copy moves
+//! when no later instruction of the block touches what it reads or writes and
+//! one successor, entered from this block alone, has its result live in.
+//! - DEVIATE P1: the spill-store half (a store to a frame cell sunk by cell
+//!   liveness, for shrink wrapping, with bridge blocks for a target entered
+//!   from elsewhere) has no counterpart in the pin, where `ShrinkWrap` places
+//!   the prologue. Exit: ShrinkWrap translated.
+//! - DEVIATE P2: `latched` has no counterpart in the pin (x_cordic `-Os`).
+//!   Exit: the coalescer or block placement keeps the copy off the back edge.
+//! - Blocks are walked in reverse post-order and past a call, not the pin's
+//!   layout order with a call stopping a block: the pin's way gives 7 different
+//!   objects of 556 (net +4 B, 2 larger), so ours stays.
+//!
 //! # See also
 //! - LLVM `PostRAMachineSinking`:
-//!   <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/MachineSink.cpp>
+//!   <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L2243>
 
 use std::sync::Arc;
 
-use crate::analysis::dataflow::{self, Direction};
 use crate::backend::copysink::{copy_of, touches};
-use crate::backend::liveness::{_before, _effects, _universe};
 use crate::backend::peephole::{_lanes, Lanes};
 use crate::model::ir::{Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The lanes live on entry to each block.
+/// The lanes live on entry to each block: the answer the clean-up already
+/// holds for the body, not another solve.
 fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
-    let regs = body.regs();
-    let universe = _universe(regs);
-    // Decoded once: the fixed point reads each block several times.
-    let decoded: IndexMap<i64, _> =
-        body.blocks.iter().map(|block| (block.at, _effects(regs, body.bits, block))).collect();
-    let nodes: Vec<&Block> = body.blocks.iter().collect();
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
-    dataflow::solve(
-        &nodes,
-        Direction::Backward,
-        |_| Lanes::new(),
-        |at, into| succ[&at].iter().filter_map(|to| into.get(to)).flat_map(|lanes| lanes.iter().copied()).collect(),
-        |at, after| _before(&decoded[&at], after.clone(), &universe),
-    )
-    .output
+    crate::backend::liveness::live_into(body).0
 }
 
 /// Blocks reachable from the entry, each before the successors it does not come
@@ -1008,5 +1007,18 @@ mod tests {
         // jump to save.
         let forward = latched(&build(false, false));
         assert_eq!(names(&forward, 1), ["cmp", "jge"]);
+    }
+
+    /// `postrasink` solved the liveness of the body for itself (decoding every
+    /// instruction's effects and a worklist over the blocks) beside the answer
+    /// the clean-up holds for it: 5.9 M of d_faces' 85 M for the peephole.
+    #[test]
+    fn test_sinking_makes_no_dataflow_solve_of_its_own() {
+        let body = shape(false, false);
+        crate::analysis::dataflow::WORKED.with(|worked| worked.set(0));
+        let after = sunk(&body);
+        let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
+        assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (0, 1), "the premise: a copy moved");
+        assert_eq!(worked, 0, "{worked} block transfers worked out");
     }
 }

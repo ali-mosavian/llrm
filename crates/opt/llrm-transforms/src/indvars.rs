@@ -8,33 +8,28 @@
 //! One run is these steps, each followed by a refresh of what is known where it
 //! changed the body.
 //!
-//! 1. `loopexit::evaluated`: values after a counted loop computed from its
-//!    trips.
-//! 2. `exitfold::folded`: exits their counts decide are folded.
-//! 3. `exit_values` (only with `exit_values: true`): a counted exit's phi
-//!    values that are affine in the counters, with constant starts and steps,
-//!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
-//!    as 32, so the exit no longer keeps the old counter alive past its step.
-//! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//! 5. `widened`: a counter read through `zext` (or, where it is signed and
-//!    tested by `slt`, `sext`) to the address's index width, where `induction`
-//!    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
-//!    becomes a counter of that width. C's `unsigned short i` reads `a[zext
-//!    i]`, and `short k` reads `a[sext k]`: a conversion per trip (`inc cx;
-//!    movsx esi,cx; cmp cx,bx`), which hides the loop from idioms and strength
-//!    reduction. A signed counter of a loop of at most `unroll`'s trip limit
-//!    (`IndVars::unrolls`) is left for `unroll` until the run with
-//!    `exit_values`: one operation fewer in the rolled loop made a loop that
-//!    `unroll` took whole no longer fit its own size. The wide counter ends the
-//!    loop against the bound extended once in the preheader; an unsigned or
-//!    equality compare of the narrow one with a value the loop leaves alone
-//!    compares the wide one with that value extended
-//!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
-//!    low part.
-//! 6. `congruent`: header counters with one start and one step are one counter
-//!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
-//!    first, and `dead` removes them.
-//! 7. `rewound`: see below.
+//! 0. `exitvalues::rewritten`: a value read after a loop becomes an expression
+//!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
+//!    ScalarEvolution's exit values, from every exit of the loop, a rotated
+//!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
+//! 1. `simplifyindvar::simplified_and_extended` (`simplifyAndExtend`): the IV
+//!    users simplified and a counter read through `zext` or `sext` at a wider
+//!    index becomes a counter of that width (`WidenIV`). C's `unsigned short i`
+//!    reads `a[zext i]`: a conversion per trip, which hides the loop from
+//!    idioms and strength reduction.
+//! 2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`; the older
+//!    `congruent` under `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves
+//!    equal, a narrow one a truncation of a wide one included, are one, and
+//!    `dead` removes the rest.
+//! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
+//!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+//!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+//!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), and the exits their
+//!    counts decide are folded by those.
+//! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
+//!    exit tests a counter against the value it has at the last trip.
+//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 6. `rewound`: see below.
 //!
 //! `rewound` carries an exact inner recurrence's exit value around the outer
 //! loop. An inner loop running exactly `count` trips leaves as
@@ -119,14 +114,14 @@
 //! `indvars_tests.rs`.
 //!
 //! # Runs
-//! In the body pipeline after `promote`, with `exit_values: false`. With
-//! `-ftree-ch` (not at -Os) it runs again with `exit_values: true` after the
-//! loop-header copy, where the copy made a counted exit's test the one that
-//! leaves (a number is a `mov` where the counter's register already holds it).
+//! In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs
+//! again after the loop-header copy, where the copy made a counted exit's test
+//! the one that leaves (a number is a `mov` where the counter's register
+//! already holds it).
 //!
 //! # Needs
-//! `Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
-//! [`crate::loopexit`], [`crate::exitfold`], [`crate::exitsink`],
+//! `Registers`, `induction`, `liveness`,
+//! [`crate::exitvalues`], [`crate::exitsink`],
 //! [`crate::profit`].
 //!
 //! # Keeps
@@ -140,14 +135,14 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg::Around;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, Affine, AffineOperand};
+use llrm_analysis::induction;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 use num_traits::Zero;
@@ -158,19 +153,20 @@ use crate::lcssa::{arms, from_arms};
 use crate::profit::OperationCosts;
 
 /// What IndVarSimplify leaves a loop's counters: values after a loop
-/// computed from its trips (`loopexit::evaluated`), final updates sunk to
+/// computed from its trips (`exitvalues`), final updates sunk to
 /// the exits (`exitsink`), and an inner recurrence's exit value carried
 /// round the loop outside (`rewound`). Which counters the loop keeps is
 /// `lsr`'s.
 pub struct IndVars {
-    /// Rewrite a counted exit's affine values as numbers. Off before the
-    /// header copy: a number is a `mov` where the counter's register already
-    /// holds it.
-    pub exit_values: bool,
-    /// The trips up to which `unroll` takes a loop whole (its
-    /// `max_unroll_iterations`, 0 for any number), none where it is off: a
-    /// signed counter of such a loop is left for it until `exit_values`.
-    pub unrolls: Option<i64>,
+    /// Whether LFTR runs: opt-in, `LLRM_LFTR` (D22).
+    pub lftr: bool,
+}
+
+/// `LLRM_LFTR`, read once: LFTR runs in the pipeline (D22). Off by default:
+/// the old `lsr` does not reduce the counter LFTR leaves, and every counted
+/// loop got a few bytes larger (+0.4% bytes of m32 code, rows pair on #2752).
+pub fn lftr_default() -> bool {
+    llrm_support::env_flag!("LLRM_LFTR")
 }
 
 impl FunctionPass for IndVars {
@@ -182,6 +178,10 @@ impl FunctionPass for IndVars {
         "indvars"
     }
 
+    fn translation(&self) -> Option<&'static str> {
+        Some("indvars")
+    }
+
     fn run(
         &mut self,
         unit: &mut passes::Unit,
@@ -191,57 +191,74 @@ impl FunctionPass for IndVars {
         // What is known without memory is the manager's until a step changes
         // the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-        // Only a `sext` of a counter asks what the loops bound.
-        let widens =
-            unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
-        let bounded =
-            widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
         // Once the body has changed, the manager brings what it holds up to
         // date from the changes logged, where `Standing` would derive
         // it again (13 times at d_faces -O2, 25 M).
-        let mut standing = match bounded.as_deref() {
-            Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds),
-            _ => llrm_analysis::memory::Standing::held(&held),
+        let mut standing = llrm_analysis::memory::Standing::held(&held)
+            .with_shape(shape)
+            .renewing(
+                |context, layout, function, reshaped| {
+                    let kept = if reshaped {
+                        PreservedAnalyses::none()
+                    } else {
+                        PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
+                    };
+                    analyses.invalidate(function, &kept);
+                    analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
+                },
+            );
+        let compared = crate::simplifyindvar::simplified_and_extended(
+            unit.context,
+            unit.layout,
+            unit.function,
+            unit.declared,
+            &outer,
+        );
+        if compared {
+            standing.changed();
         }
-        .with_shape(shape)
-        .renewing(|context, layout, function, reshaped| {
-            let kept = if reshaped {
-                PreservedAnalyses::none()
+        let rewrote = crate::exitvalues::enabled()
+            && crate::exitvalues::rewritten(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if rewrote {
+            standing.changed();
+        }
+        let merged = twin_phis(unit.function)
+            | if crate::congruentiv::enabled() {
+                let merged = crate::congruentiv::replaced(unit.context, unit.layout, unit.function, &outer);
+                if merged {
+                    standing.changed();
+                }
+                merged
             } else {
-                PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
+                congruent(unit.context, unit.layout, unit.function, &outer, &mut standing)
             };
-            analyses.invalidate(function, &kept);
-            analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
-        });
-        let evaluated =
-            crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
-                .unwrap_or_else(|error| panic!("indvars: {error}"));
-        if evaluated {
-            standing.reshaped();
+        let canonical = crate::canonexit::enabled()
+            && crate::canonexit::canonicalized(unit.context, unit.layout, unit.function, &outer);
+        if canonical {
+            standing.changed();
         }
-        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        if folded {
-            standing.reshaped();
+        let optimized = crate::exitopt::enabled()
+            && crate::exitopt::optimized(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if optimized {
+            standing.changed();
         }
-        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        if valued {
-            standing.reshaped();
+        let predicated = crate::exitpredicate::enabled()
+            && crate::exitpredicate::predicated(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if predicated {
+            standing.changed();
+        }
+        let tested = self.lftr
+            && crate::lftr::enabled()
+            && crate::lftr::replaced(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if tested {
+            standing.changed();
         }
         let shape = standing.shape(unit.function);
         let sunk = crate::exitsink::sunk(unit.function, &shape);
         if sunk {
             standing.changed();
         }
-        let widened = widened_with(
-            unit.context,
-            unit.layout,
-            unit.function,
-            &outer,
-            &mut standing,
-            if self.exit_values { None } else { self.unrolls },
-        );
-        let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,
             unit.layout,
@@ -251,11 +268,9 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued || merged)
+        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || rewound || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated || folded || valued {
-            PreservedAnalyses::none()
-        } else if sunk || rewound || widened || merged || dead {
+        if compared || rewrote || canonical || optimized || predicated || tested || sunk || rewound || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
@@ -269,7 +284,7 @@ impl FunctionPass for IndVars {
 /// replaceCongruentIVs`). Two loops fused, or one written with a counter twice,
 /// leave such a pair, and what is indexed by either is then the same address.
 fn congruent(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -297,6 +312,50 @@ fn congruent(
     }
     for &(later, first) in &merged {
         function.replace_all_uses_with(later, Operand::Value(first));
+    }
+    !merged.is_empty()
+}
+
+/// Phis of one block whose arms are, for each predecessor, one value or two
+/// pure binary operations of the same operands: the later reads as the first.
+/// DEVIATE (IV1, docs/architecture/loop-passes-port.md): `SCEVExpander::
+/// replaceCongruentIVs` finds them by their recurrences; this is by shape.
+/// LoopRotate leaves a counter twice that way, a phi of its sign-extension
+/// stepping by a copy of the counter's own `add`.
+fn twin_phis(function: &mut Function) -> bool {
+    #[derive(Eq, Hash, PartialEq)]
+    enum Arm {
+        Value(Operand),
+        Made(&'static str, Vec<Operand>),
+    }
+    let mut first = IndexMap::default();
+    let mut merged = Vec::new();
+    for (phi, block, _) in llrm_analysis::occurrence::phis(function) {
+        let Some(result) = function.instruction(phi).result else { continue };
+        let mut key = arms(function, phi)
+            .into_iter()
+            .map(|(value, from)| {
+                let made = match value {
+                    Operand::Value(one) => _defining(function, one).map(|inst| function.instruction(inst)),
+                    _ => None,
+                }
+                .filter(|made| matches!(made.opcode, Opcode::Binary(_)));
+                let arm = match made {
+                    Some(made) => Arm::Made(made.opcode.mnemonic(), made.operands.clone()),
+                    None => Arm::Value(value),
+                };
+                (from.0, arm)
+            })
+            .collect::<Vec<_>>();
+        key.sort_by_key(|(from, _)| *from);
+        let ty = function.value(result).ty;
+        let kept = *first.entry((block, ty, key)).or_insert(result);
+        if kept != result {
+            merged.push((result, kept));
+        }
+    }
+    for &(later, kept) in &merged {
+        function.replace_all_uses_with(later, Operand::Value(kept));
     }
     !merged.is_empty()
 }
@@ -334,114 +393,6 @@ fn alike_phis(function: &Function) -> bool {
         key.sort_by_key(|(from, _)| from.0);
         !seen.insert((block, key))
     })
-}
-
-/// A counted exit's phi values that are affine in the loop's counters, the
-/// counters' starts and steps constant, are numbers there: LLVM's
-/// `rewriteLoopExitValues`, the SCEV of the value at the exit's count. A
-/// counter stepped and then tested (`i + 1 < 32`) leaves with 32, so what the
-/// exit reads is no longer the counter kept alive past its step.
-fn exit_values(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &passes::Outer,
-    standing: &mut llrm_analysis::memory::Standing,
-) -> bool {
-    let mut changed = false;
-    let shape = standing.shape(function);
-    let mut found = Vec::new();
-    {
-        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
-        let facts = standing.of(&unit);
-        let unit = unit.with_registers(facts);
-        let facts = unit.registers();
-        for loop_ in shape.loops.iter() {
-            let counters = induction::basics(&unit, loop_);
-            if counters.is_empty() {
-                continue;
-            }
-            let headers = counters.keys().copied().collect::<BTreeSet<_>>();
-            for count in induction::exits(&unit, loop_, Some(&facts), false) {
-                let Some(taken) = count.taken.as_ref().filter(|taken| taken.iter().all(|one| one.terms.is_empty()))
-                else {
-                    continue;
-                };
-                let Some(trips) = taken.iter().map(|one| one.constant.clone()).min() else { continue };
-                let (from, exit) = (cfg::block(count.block), cfg::block(count.exit));
-                for phi in _phis(function, exit) {
-                    let Some(Operand::Value(value)) = _from(function, phi, from) else { continue };
-                    let Some(width) = unit.int_bits(Operand::Value(value)) else { continue };
-                    let Some(terms) = induction::linear(
-                        &unit,
-                        &AffineOperand::Value(value, width),
-                        &headers,
-                        width,
-                        false,
-                        &BTreeSet::new(),
-                        &mut IndexMap::default(),
-                    ) else {
-                        continue;
-                    };
-                    let mut total = BigInt::zero();
-                    let mut complete = true;
-                    for (term, coefficient) in &terms {
-                        let number = match term {
-                            AffineOperand::Const(constant) => constant.n.clone(),
-                            AffineOperand::Value(counter, _) => match counters.get(counter) {
-                                Some(Affine {
-                                    start: AffineOperand::Const(start),
-                                    step: AffineOperand::Const(step),
-                                    ..
-                                }) => &start.n + &step.n * &trips,
-                                _ => {
-                                    complete = false;
-                                    break;
-                                }
-                            },
-                        };
-                        total += coefficient * number;
-                    }
-                    if complete {
-                        let at = function
-                            .instruction(phi)
-                            .operands
-                            .chunks(2)
-                            .position(|pair| pair[1] == Operand::Block(from));
-                        found.push((phi, at, total, width));
-                    }
-                }
-            }
-        }
-    }
-    for (phi, at, total, width) in found {
-        let Some(at) = at else { continue };
-        let constant = counting::constant(context, &total, width);
-        if function.instruction(phi).operands.len() == 2 {
-            // An exit phi of one arm is its number wherever it is read.
-            let result = function.instruction(phi).result.expect("a phi's value");
-            function.replace_all_uses_with(result, constant);
-            function.set_operands(phi, Vec::new());
-            function.erase(phi).expect("a phi nothing reads");
-        } else {
-            function.set_operand(phi, 2 * at, constant);
-        }
-        changed = true;
-    }
-    changed
-}
-
-fn _phis(
-    function: &Function,
-    block: BlockId,
-) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
 }
 
 /// The instruction defining `value`.
@@ -488,64 +439,6 @@ fn _preheader(
     (function.successors(preheader) == [header]).then_some(preheader)
 }
 
-/// The header's one successor outside the loop, reached from nowhere else.
-fn _exit(
-    function: &Function,
-    loop_: &Loop,
-) -> Option<BlockId> {
-    let header = cfg::block(loop_.header);
-    let [exit] = function
-        .successors(header)
-        .into_iter()
-        .filter(|block| !loop_.body.contains(&cfg::id(*block)))
-        .collect::<Vec<_>>()[..]
-    else {
-        return None;
-    };
-    (function.predecessors(exit) == [header]).then_some(exit)
-}
-
-/// The continuing test of `branch` as an `icmp` of `left` and `right`: `ne`
-/// where its true arm stays in the loop, `eq` where it leaves.
-fn _test(
-    context: &mut Context,
-    function: &mut Function,
-    loop_: &Loop,
-    branch: InstId,
-    left: Operand,
-    right: Operand,
-) -> Result<InstId, String> {
-    let stays = matches!(
-        function.instruction(branch).operands[1],
-        Operand::Block(target) if loop_.body.contains(&cfg::id(target))
-    );
-    let bit = context.types.int(1);
-    let predicate = if stays { IntPredicate::Ne } else { IntPredicate::Eq };
-    let test = function.create_instruction(Opcode::ICmp(predicate), bit, vec![left, right], Flags::default(), None);
-    function.insert(test, Position::Before(branch))?;
-    Ok(test)
-}
-
-/// `compare`, which only `branch` reads, replaced by `test`.
-fn _retest(
-    function: &mut Function,
-    branch: InstId,
-    compare: InstId,
-    test: InstId,
-) -> Result<(), String> {
-    function.set_operand(branch, 0, Operand::Value(function.instruction(test).result.expect("a bit")));
-    function.erase(compare)
-}
-
-/// Whether only `branch` reads `compare`.
-fn _only_branch_reads(
-    function: &Function,
-    compare: InstId,
-    branch: InstId,
-) -> bool {
-    function.instruction(compare).result.is_some_and(|value| function.users(value).iter().all(|one| one.user == branch))
-}
-
 // ---------------------------------------------------------------- simplified
 
 /// An exact inner recurrence carried around its outer loop, where the
@@ -559,7 +452,7 @@ fn _only_branch_reads(
 /// old form is a load and a store, the new a memory update, which `costs`
 /// prices. Nothing here names either form.
 pub fn rewound(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
@@ -573,7 +466,7 @@ pub fn rewound(
 /// where the run before it changed nothing, found once for the body where it
 /// did.
 pub fn rewound_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -604,7 +497,7 @@ pub fn rewound_with(
             Flags::default(),
             None,
         );
-        let first = function.block(plan.exit).instructions()[0];
+        let first = function.block(plan.exit).first().expect("a block with an instruction");
         function.insert(closed, Position::Before(first)).expect("a placed block");
         Operand::Value(function.instruction(closed).result.expect("a phi's value"))
     };
@@ -613,10 +506,7 @@ pub fn rewound_with(
     let reset =
         function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![exit_value, back], Flags::default(), None);
     let after = function
-        .block(plan.exit)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(plan.exit)
         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
         .expect("a terminator");
     function.insert(reset, Position::Before(after)).expect("a placed block");
@@ -628,7 +518,7 @@ pub fn rewound_with(
         Flags::default(),
         None,
     );
-    let first = function.block(plan.parent_header).instructions()[0];
+    let first = function.block(plan.parent_header).first().expect("a block with an instruction");
     function.insert(carried, Position::Before(first)).expect("a placed block");
     let carried = Operand::Value(function.instruction(carried).result.expect("a phi's value"));
     let mut incoming = arms(function, plan.phi);
@@ -699,7 +589,10 @@ fn _rewinding(
         };
         let sources = exiting.iter().map(|(source, _)| *source).collect::<BTreeSet<_>>();
         let exit_preds = function.predecessors(cfg::block(exit)).into_iter().map(cfg::id).collect::<BTreeSet<_>>();
-        if !parent.body.contains(&exit) || exit_preds != sources || !dominance.dominates(exit, *parent_latch) {
+        if !parent.body.contains(&exit)
+            || exit_preds != sources
+            || !dominance.dominates(unit.function, exit, *parent_latch)
+        {
             continue;
         }
         let Some(count) = induction::trip_count(unit, inner, facts) else { continue };
@@ -729,7 +622,7 @@ fn _rewinding(
             // already `start + count * step`; a post-tested one from its
             // latch, where the update is.
             let updated = _block_of(function, stepping);
-            let exit_value = if sources.iter().all(|&source| dominance.dominates(updated, source)) {
+            let exit_value = if sources.iter().all(|&source| dominance.dominates(unit.function, updated, source)) {
                 Operand::Value(update)
             } else if sources == BTreeSet::from([inner.header]) {
                 Operand::Value(counter.value)
@@ -768,347 +661,4 @@ fn _rewinding(
 
 #[cfg(test)]
 #[path = "indvars_tests.rs"]
-mod tests;
-
-/// A counter read through `zext` to the default address's index width is a
-/// counter of that width, where `induction` proves its values never pass its
-/// own (`rises_unsigned`): C's `unsigned short i` reads `a[zext i]`, a
-/// conversion per trip, and its counted-loop proof is narrower than the
-/// address, so the idioms and strength reduction that want the address's width
-/// find none. The wide counter ends the loop against the bound extended once,
-/// before it, and what else reads the narrow one reads its low part. Every
-/// counter widened; whether any was.
-pub fn widened(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &passes::Outer,
-) -> bool {
-    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived(), None)
-}
-
-/// `widened`, what is known of the body without memory given as `standing`
-/// says: derived once for each state of the body, not once for each loop.
-/// With `unrolls`, a signed counter of a loop that runs that many times or
-/// fewer is left for `unroll`, which takes a loop whole by what it comes to
-/// rolled: one operation fewer in the widened loop was a loop that no longer
-/// fit its own size (bench/lru's three-trip fill).
-pub fn widened_with(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &passes::Outer,
-    standing: &mut llrm_analysis::memory::Standing,
-    unrolls: Option<i64>,
-) -> bool {
-    let mut changed = false;
-    'again: loop {
-        let shape = standing.shape(function);
-        for loop_ in shape.loops.clone() {
-            let found = {
-                let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
-                let facts = standing.of(&unit);
-                _find(&unit.with_registers(facts), &loop_, unrolls)
-            };
-            if let Some(found) = found {
-                let mark = function.mark();
-                _widen(context, function, &found);
-                match function.changes_since(mark) {
-                    Some(changes) => standing.edited(function, changes),
-                    None => standing.changed(),
-                }
-                changed = true;
-                continue 'again;
-            }
-        }
-        return changed;
-    }
-}
-
-struct _Found {
-    phi: InstId,
-    next: InstId,
-    compare: InstId,
-    preheader: BlockId,
-    latch: BlockId,
-    /// Where the counter starts: a number, or a value the loop does not define.
-    start: AffineOperand,
-    bound: Operand,
-    wide: u32,
-    extensions: Vec<InstId>,
-    /// Every other reader: its instruction and operand.
-    rest: Vec<(InstId, u32)>,
-    /// The readers that compare it, unsigned, with a value the loop does not
-    /// define: they compare the wide counter with that value extended.
-    compares: Vec<(InstId, u32)>,
-    /// The loop is tested after its trips: the compare reads the counter
-    /// stepped.
-    after: bool,
-    /// The counter is signed and read through `sext`: its wide counter is
-    /// tested by `slt` against the bound sign-extended.
-    signed: bool,
-}
-
-fn _find(
-    unit: &llrm_analysis::memory::Unit,
-    loop_: &Loop,
-    unrolls: Option<i64>,
-) -> Option<_Found> {
-    let function = unit.function;
-    let header = cfg::block(loop_.header);
-    let outside = function
-        .predecessors(header)
-        .into_iter()
-        .filter(|&one| !loop_.body.contains(&cfg::id(one)))
-        .collect::<Vec<_>>();
-    let [preheader] = outside[..] else { return None };
-    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
-    let latch = cfg::block(latch);
-    let still = induction::invariant(function, &loop_.body);
-    let facts = unit.registers();
-    for proof in induction::counted(unit, loop_, Some(&facts), false) {
-        let width = proof.width();
-        let signed = proof.rises_signed() || proof.rises_signed_after();
-        let after = proof.rises_unsigned_after() || proof.rises_signed_after();
-        if !(proof.rises_unsigned() || signed || after) || width > 64 {
-            continue;
-        }
-        let for_unroll = |count: &BigInt| unrolls.is_some_and(|most| most == 0 || *count <= BigInt::from(most));
-        if signed && proof.count.as_ref().is_some_and(for_unroll) {
-            continue;
-        }
-        let ext = if signed { CastOp::SExt } else { CastOp::ZExt };
-        let compare = function.instruction(proof.compare);
-        let (Operand::Value(tested), bound) = (compare.operands[0], compare.operands[1]) else { continue };
-        let Some(counter) = function.instruction(proof.phi).result else { continue };
-        // Tested before its trips the compare reads the counter, after them the
-        // counter stepped.
-        if !still.operand(bound) || function.parent(proof.phi) != Some(header) || (tested != counter && !after) {
-            continue;
-        }
-        let arms =
-            function.instruction(proof.phi).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
-        // The arms in either order: a loop entered behind a copy of its test
-        // lists its latch first.
-        let [(one, Operand::Block(one_from)), (other, Operand::Block(other_from))] = arms[..] else { continue };
-        let next = if other_from == latch && one_from == preheader {
-            other
-        } else if one_from == latch && other_from == preheader {
-            one
-        } else {
-            continue;
-        };
-        let Operand::Value(next_value) = next else { continue };
-        let ValueDef::Instruction(next_inst) = function.value(next_value).def else { continue };
-        let adds = function.instruction(next_inst);
-        if adds.opcode != Opcode::Binary(BinaryOp::Add)
-            || adds.operands[0] != Operand::Value(counter)
-            || unit.int_constant(adds.operands[1]) != Some(1)
-        {
-            continue;
-        }
-        if function.users(next_value).iter().any(|one| one.user != proof.phi && !(after && one.user == proof.compare)) {
-            continue;
-        }
-        if after && tested != next_value {
-            continue;
-        }
-        // The default space's index width, which a use already extends to.
-        let mut wide = None;
-        for one in function.users(counter) {
-            let user = function.instruction(one.user);
-            if user.opcode != Opcode::Cast(ext) {
-                continue;
-            }
-            let to = unit.int_bits(Operand::Value(user.result?))?;
-            if to > width && unit.layout.pointer(0).index_bits == to {
-                wide = Some(to);
-            }
-        }
-        let Some(wide) = wide else { continue };
-        let mut extensions = Vec::new();
-        let mut rest = Vec::new();
-        let mut compares = Vec::new();
-        for one in function.users(counter) {
-            let user = function.instruction(one.user);
-            if one.user == proof.compare || one.user == next_inst {
-                continue;
-            }
-            if user.opcode == Opcode::Cast(ext) && unit.int_bits(Operand::Value(user.result?)) == Some(wide) {
-                extensions.push(one.user);
-            } else if _compares_extended(user, one.index, &still, signed) {
-                compares.push((one.user, one.index));
-            } else {
-                rest.push((one.user, one.index));
-            }
-        }
-        return Some(_Found {
-            phi: proof.phi,
-            next: next_inst,
-            compare: proof.compare,
-            preheader,
-            latch,
-            start: proof.start.clone(),
-            bound,
-            wide,
-            extensions,
-            rest,
-            compares,
-            after,
-            signed,
-        });
-    }
-    None
-}
-
-/// `user` compares the counter, read as its `index`th operand, as unsigned
-/// numbers or for equality with a value `still` says the loop leaves alone:
-/// the counter never passes the narrow width, so its extension compares as it
-/// does (LLVM's `WidenIV::widenLoopCompare`).
-fn _compares_extended(
-    user: &llrm_mir::module::Instruction,
-    index: u32,
-    still: &induction::Invariant,
-    signed: bool,
-) -> bool {
-    let fits = if signed {
-        matches!(
-            user.opcode,
-            Opcode::ICmp(
-                IntPredicate::Eq
-                    | IntPredicate::Ne
-                    | IntPredicate::Slt
-                    | IntPredicate::Sle
-                    | IntPredicate::Sgt
-                    | IntPredicate::Sge
-            )
-        )
-    } else {
-        matches!(
-            user.opcode,
-            Opcode::ICmp(
-                IntPredicate::Eq
-                    | IntPredicate::Ne
-                    | IntPredicate::Ult
-                    | IntPredicate::Ule
-                    | IntPredicate::Ugt
-                    | IntPredicate::Uge
-            )
-        )
-    };
-    fits && still.operand(user.operands[1 - index as usize])
-}
-
-/// `operand` zero- (or, where `signed`, sign-) extended to `ty` at the end of
-/// `preheader`: a number is its own extension.
-fn _extended(
-    context: &mut Context,
-    function: &mut Function,
-    preheader: BlockId,
-    operand: Operand,
-    ty: llrm_mir::types::TypeId,
-    signed: bool,
-) -> Operand {
-    match operand {
-        Operand::Constant(constant) => match context.get(constant).kind {
-            llrm_mir::context::ConstantKind::Int(bits) => {
-                let narrow = context.types.int_bits(context.get(constant).ty).unwrap_or(64);
-                let value = if signed && narrow < 128 && bits >> (narrow - 1) & 1 == 1 {
-                    bits as i128 - (1_i128 << narrow)
-                } else {
-                    bits as i128
-                };
-                Operand::Constant(context.int(ty, value))
-            }
-            _ => unreachable!("an integer operand"),
-        },
-        value => {
-            let ext = if signed { CastOp::SExt } else { CastOp::ZExt };
-            let cast = function.create_instruction(Opcode::Cast(ext), ty, vec![value], Flags::default(), None);
-            let end = function.terminator(preheader).expect("a terminated preheader");
-            function.insert(cast, Position::Before(end)).expect("a preheader");
-            Operand::Value(function.instruction(cast).result.expect("a value"))
-        }
-    }
-}
-
-fn _widen(
-    context: &mut Context,
-    function: &mut Function,
-    found: &_Found,
-) {
-    let ty = context.types.int(found.wide);
-    let counter = function.instruction(found.phi).result.expect("a phi's value");
-    let header = function.parent(found.phi).expect("a placed phi");
-    // The bound and the start, extended once before the loop.
-    let bound = _extended(context, function, found.preheader, found.bound, ty, found.signed);
-    let first = function.block(header).instructions()[0];
-    let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("widen.iv"));
-    function.insert(phi, Position::Before(first)).expect("a header");
-    let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
-    let one = Operand::Constant(context.int(ty, 1));
-    let next = function.create_instruction(
-        Opcode::Binary(BinaryOp::Add),
-        ty,
-        vec![value, one],
-        Flags::default(),
-        Some("widen.iv.next"),
-    );
-    function.insert(next, Position::Before(found.next)).expect("a latch");
-    let next = Operand::Value(function.instruction(next).result.expect("a value"));
-    let start = match &found.start {
-        AffineOperand::Const(start) if found.signed => {
-            // The narrow start's value, sign-extended.
-            let width = function.value(counter).ty;
-            let bits = context.types.int_bits(width).unwrap_or(64);
-            let modulus = BigInt::from(1) << bits;
-            let mut n = ((&start.n % &modulus) + &modulus) % &modulus;
-            if n >= (BigInt::from(1) << (bits - 1)) {
-                n -= &modulus;
-            }
-            counting::constant(context, &n, found.wide)
-        }
-        AffineOperand::Const(start) => counting::constant(context, &start.n, found.wide),
-        AffineOperand::Value(value, _) => {
-            _extended(context, function, found.preheader, Operand::Value(*value), ty, found.signed)
-        }
-    };
-    function.set_operands(phi, vec![start, Operand::Block(found.preheader), next, Operand::Block(found.latch)]);
-    let bit = context.types.int(1);
-    let tested = if found.after { next } else { value };
-    let order = if found.signed { IntPredicate::Slt } else { IntPredicate::Ult };
-    let test = function.create_instruction(Opcode::ICmp(order), bit, vec![tested, bound], Flags::default(), None);
-    function.insert(test, Position::Before(found.compare)).expect("a placed compare");
-    let test = Operand::Value(function.instruction(test).result.expect("a value"));
-    let old = function.instruction(found.compare).result.expect("a value");
-    function.replace_all_uses_with(old, test);
-    function.erase(found.compare).expect("its uses were replaced");
-    for &extension in &found.extensions {
-        let old = function.instruction(extension).result.expect("a value");
-        function.replace_all_uses_with(old, value);
-        function.erase(extension).expect("its uses were replaced");
-    }
-    for &(user, index) in &found.compares {
-        let other = function.instruction(user).operands[1 - index as usize];
-        let other = _extended(context, function, found.preheader, other, ty, found.signed);
-        function.set_operand(user, index as usize, value);
-        function.set_operand(user, 1 - index as usize, other);
-    }
-    // What else reads the counter reads its low part, cut where it is read.
-    let narrow = function.value(counter).ty;
-    for &(user, index) in &found.rest {
-        let at = match function.instruction(user).opcode {
-            Opcode::Phi => {
-                let Operand::Block(from) = function.instruction(user).operands[index as usize + 1] else {
-                    unreachable!("a phi arm names its block")
-                };
-                function.terminator(from).expect("a terminated block")
-            }
-            _ => user,
-        };
-        let cut = function.create_instruction(Opcode::Cast(CastOp::Trunc), narrow, vec![value], Flags::default(), None);
-        function.insert(cut, Position::Before(at)).expect("a placed reader");
-        let cut = Operand::Value(function.instruction(cut).result.expect("a value"));
-        function.set_operand(user, index as usize, cut);
-    }
-}
+pub(crate) mod tests;

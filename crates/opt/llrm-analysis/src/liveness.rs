@@ -118,7 +118,7 @@ fn split(
     function: &Function,
     block: BlockId,
 ) -> (Vec<&Instruction>, Vec<&Instruction>) {
-    function.block(block).instructions().iter().map(|&one| function.instruction(one)).partition(|one| is_phi(one))
+    function.iter_block(block).map(|one| function.instruction(one)).partition(|one| is_phi(one))
 }
 
 /// A phi's value on the edge from `predecessor`, when it is a local value.
@@ -141,7 +141,7 @@ fn _defines(
     function: &Function,
     block: BlockId,
 ) -> IdSet<ValueId> {
-    function.block(block).instructions().iter().filter_map(|&one| function.instruction(one).result).collect()
+    function.iter_block(block).filter_map(|one| function.instruction(one).result).collect()
 }
 
 /// Values the ordinary operations read before writing.
@@ -235,7 +235,7 @@ pub fn live_points(
 ) -> Vec<LivePoint> {
     let mut alive = found.live_out[&id(block)].clone();
     let mut points = Vec::new();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.iter_block_rev(block) {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -263,7 +263,7 @@ pub fn each_across(
     f: &mut dyn FnMut(InstId, &dyn Fn(ValueId) -> bool),
 ) {
     let mut alive = found.live_out[&id(block)].clone();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.iter_block_rev(block) {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -300,7 +300,7 @@ pub fn live_steps(
 ) -> Steps {
     let mut alive = found.live_out[&id(block)].clone();
     let mut steps = Vec::new();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.iter_block_rev(block) {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -509,13 +509,8 @@ pub fn ranges_of(
             let exposed = match at {
                 Some((home, false)) if home == block => {
                     let places = positions.get_or_insert_with(block, || {
-                        let mut table: Vec<(llrm_mir::module::InstId, usize)> = function
-                            .block(block)
-                            .instructions()
-                            .iter()
-                            .enumerate()
-                            .map(|(at, &one)| (one, at))
-                            .collect();
+                        let mut table: Vec<(llrm_mir::module::InstId, usize)> =
+                            function.iter_block(block).enumerate().map(|(at, one)| (one, at)).collect();
                         table.sort_unstable();
                         #[cfg(test)]
                         POSITION_SLOTS.with(|slots| slots.set(slots.get() + table.len()));
@@ -583,8 +578,8 @@ pub fn ranges_of(
                     if !seen_phis.insert((id(block), value)) {
                         continue;
                     }
-                    for one in function.block(block).instructions() {
-                        let phi = function.instruction(*one);
+                    for one in function.iter_block(block) {
+                        let phi = function.instruction(one);
                         if phi.opcode != Opcode::Phi {
                             break;
                         }

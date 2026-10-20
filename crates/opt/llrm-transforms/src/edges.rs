@@ -43,7 +43,7 @@
 //! ; ...
 //! ```
 //!
-//! After `loadjoins` inserts the missing load on the `b2`-to-`b3` edge:
+//! After load PRE inserts the missing load on the `b2`-to-`b3` edge:
 //!
 //! ```mir
 //! b2:
@@ -62,16 +62,19 @@
 //! not in `b2`.
 //!
 //! From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
-//! `loadjoins_tests.rs`.
+//! `gvn_load_tests.rs`.
 //!
 //! # Runs
-//! Not a pass: a library. `split` is called by `loadjoins`, `rotate` and
-//! `unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
+//! Not a pass: a library. `split` is called by `rotate` and
+//! `simpleloopunswitch`; `phis` and `retarget` by most of the CFG-rewriting
+//! passes.
 
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
+
+use crate::lcssa::{arms, from_arms};
 
 /// `target` is the edge `block`'s conditional branch takes when its
 /// condition holds: the old branch's own target, not its fall-through.
@@ -142,6 +145,205 @@ pub fn split(
     Ok(bridge)
 }
 
+/// `BasicBlock::getSinglePredecessor`: the block when exactly one edge, of one
+/// block, enters `block`.
+pub fn single_predecessor(
+    function: &Function,
+    block: BlockId,
+) -> Option<BlockId> {
+    let mut edges =
+        function.block_users(block).iter().filter(|one| function.instruction(one.user).opcode.is_terminator());
+    let first = edges.next()?;
+    edges.next().is_none().then(|| function.parent(first.user)).flatten()
+}
+
+/// `isCriticalEdge`
+/// ([CFG.cpp:106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/CFG.cpp#L106)),
+/// for the first edge from `from` to `to`: `from` has several edges out and
+/// `to` more than one in.
+pub fn is_critical_edge(
+    function: &Function,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let Some(terminator) = function.terminator(from) else { return false };
+    let out = function.instruction(terminator).operands.iter().filter(|one| matches!(one, Operand::Block(_))).count();
+    out > 1 && single_predecessor(function, to).is_none()
+}
+
+/// `SplitCriticalEdge(Src, Dst)`
+/// ([BasicBlockUtils.h:244](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/BasicBlockUtils.h#L244))
+/// without analyses to keep: a block holding a `br to` on the first edge from
+/// `from` to `to`, if that edge is critical and `to` is not a landing pad.
+pub fn split_critical_edge(
+    function: &mut Function,
+    from: BlockId,
+    to: BlockId,
+) -> Option<BlockId> {
+    if !is_critical_edge(function, from, to) {
+        return None;
+    }
+    let first = function.iter_block(to).find(|&one| function.instruction(one).opcode != Opcode::Phi);
+    if first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. })) {
+        return None;
+    }
+    let terminator = function.terminator(from)?;
+    let slot = function.instruction(terminator).operands.iter().position(|one| *one == Operand::Block(to))?;
+    let void = function.instruction(terminator).ty;
+    let bridge = function.create_block(None);
+    function.insert_block(bridge, None).ok()?;
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
+    function.insert(jump, Position::End(bridge)).ok()?;
+    function.set_operand(terminator, slot, Operand::Block(bridge));
+    // One input of each phi is the edge that moved.
+    for phi in phis(function, to) {
+        let at = function.instruction(phi).operands.iter().position(|one| *one == Operand::Block(from))?;
+        function.set_operand(phi, at, Operand::Block(bridge));
+    }
+    Some(bridge)
+}
+
+/// `SplitEdge(from, to)`
+/// ([BasicBlockUtils.cpp:672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L672)):
+/// a new block on the edges `from` has to `to`, which `to`'s phis read it for.
+pub fn split_edge(
+    function: &mut Function,
+    from: BlockId,
+    to: BlockId,
+) -> BlockId {
+    let term = function.terminator(from).expect("a terminated block");
+    let void = function.instruction(term).ty;
+    let bridge = function.create_block(None);
+    function.insert_block(bridge, None).expect("a new block");
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
+    function.insert(jump, Position::End(bridge)).expect("a placed block");
+    retarget(function, term, to, bridge);
+    for phi in phis(function, to) {
+        let mut incoming = arms(function, phi);
+        let mut seen = false;
+        incoming.retain_mut(|(_, source)| {
+            if *source != from {
+                return true;
+            }
+            *source = bridge;
+            !std::mem::replace(&mut seen, true)
+        });
+        function.set_operands(phi, from_arms(&incoming));
+    }
+    bridge
+}
+
+/// `SplitBlock(old, old->begin())`
+/// ([BasicBlockUtils.cpp:1079](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1079)):
+/// the instructions of `old` after its phis move to a new block, `old` jumps
+/// to; the successors' phis name the new one.
+pub fn split_block(
+    function: &mut Function,
+    old: BlockId,
+) -> BlockId {
+    let first = function
+        .iter_block(old)
+        .find(|&inst| !matches!(
+            function.instruction(inst).opcode,
+            Opcode::Phi | Opcode::LandingPad { .. }
+        ))
+        .expect("a terminated block");
+    split_block_at(function, old, first)
+}
+
+/// `Block::splitBasicBlock(at)`: the instructions of `old` from `at` on move
+/// to a new block, `old` jumps to; the successors' phis name the new one.
+pub fn split_block_at(
+    function: &mut Function,
+    old: BlockId,
+    at: InstId,
+) -> BlockId {
+    let list: Vec<InstId> = function.iter_block(old).collect();
+    let first = list.iter().position(|&inst| inst == at).expect("an instruction of the block");
+    let void = function.instruction(*list.last().expect("a terminated block")).ty;
+    let new = function.create_block(None);
+    function.insert_block(new, None).expect("a new block");
+    function.splice(&list[first..], Position::End(new)).expect("a placed run");
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(new)], Flags::default(), None);
+    function.insert(jump, Position::End(old)).expect("a placed block");
+    for succ in function.successors(new).into_iter().collect::<Vec<_>>() {
+        for phi in phis(function, succ) {
+            let incoming: Vec<_> = arms(function, phi)
+                .into_iter()
+                .map(|(value, from)| (value, if from == old { new } else { from }))
+                .collect();
+            function.set_operands(phi, from_arms(&incoming));
+        }
+    }
+    new
+}
+
+/// SimplifyCFG's `addPredecessorToBlock(Succ, NewPred, ExistPred)`
+/// ([L1224](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L420)):
+/// each phi of `block` gets an input from `new_pred`, the one it has from
+/// `existing_pred`.
+pub fn predecessor_added(
+    function: &mut Function,
+    block: BlockId,
+    new_pred: BlockId,
+    existing_pred: BlockId,
+) {
+    for phi in phis(function, block) {
+        let mut incoming = arms(function, phi);
+        let value = incoming
+            .iter()
+            .find(|&&(_, from)| from == existing_pred)
+            .expect("an input from the existing predecessor")
+            .0;
+        incoming.push((value, new_pred));
+        function.set_operands(phi, from_arms(&incoming));
+    }
+}
+
+/// `SplitBlockPredecessors(BB, Preds)`
+/// ([BasicBlockUtils.cpp:1400](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1400),
+/// body `SplitBlockPredecessorsImpl`): a new block that `preds` jump to
+/// instead of `bb` and that jumps to `bb`. Each phi of `bb` gets one input
+/// from the new block: the value the `preds` agree on, else a phi in the new
+/// block gathering theirs (`UpdatePHINodes`, L1241). No analyses to keep, no
+/// landing pads; `preds` is not empty.
+pub fn split_block_predecessors(
+    function: &mut Function,
+    bb: BlockId,
+    preds: &[BlockId],
+) -> BlockId {
+    assert!(!preds.is_empty(), "predecessors to split off");
+    let void = function.instruction(function.terminator(bb).expect("a terminated block")).ty;
+    let new = function.create_block(None);
+    function.insert_block(new, None).expect("a new block");
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(bb)], Flags::default(), None);
+    function.insert(jump, Position::End(new)).expect("a placed block");
+    for &pred in preds {
+        let term = function.terminator(pred).expect("a terminated predecessor");
+        retarget(function, term, bb, new);
+    }
+    for phi in phis(function, bb) {
+        let mut incoming = arms(function, phi);
+        let coming: Vec<Operand> = incoming.iter().filter(|(_, from)| preds.contains(from)).map(|&(v, _)| v).collect();
+        let common = coming.first().filter(|first| coming.iter().all(|one| one == *first)).copied();
+        let value = match common {
+            Some(value) => value,
+            None => {
+                let ty = function.instruction(phi).ty;
+                let gathered: Vec<_> = incoming.iter().filter(|(_, from)| preds.contains(from)).copied().collect();
+                let gather =
+                    function.create_instruction(Opcode::Phi, ty, from_arms(&gathered), Flags::default(), Some("ph"));
+                function.insert(gather, Position::Before(jump)).expect("a placed phi");
+                Operand::Value(function.instruction(gather).result.expect("a phi's value"))
+            }
+        };
+        incoming.retain(|(_, from)| !preds.contains(from));
+        incoming.push((value, new));
+        function.set_operands(phi, from_arms(&incoming));
+    }
+    new
+}
+
 /// The edge's own phi uses: a phi in one arm of a `br i1` that takes the
 /// branch's own condition from the branch's block reads that arm's constant:
 /// the edge it is read on is the one the condition decides (GVN's
@@ -150,7 +352,7 @@ pub fn split(
 /// and no GVN runs after them; the branch on the phi then decides itself.
 /// Whether any use changed.
 pub fn conditions_decided(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut found = Vec::new();
@@ -196,18 +398,26 @@ pub(crate) fn retarget(
     }
 }
 
+/// Whether the first instruction of `block` after its phis is a `landingpad`:
+/// a copy of it would be a second pad, and the one module handler
+/// (`ehprepare`) cannot choose between two. Jump threading does not copy such
+/// a block (J10 of `jumpthreading.rs`, DF3 of `dfajumpthreading.rs`).
+pub(crate) fn starts_with_landing_pad(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+}
+
 /// `block`'s phis, in order.
 pub(crate) fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 #[cfg(test)]
@@ -343,7 +553,7 @@ spare:
         let mut module = parsed(text);
         let (_, function) = module.function_mut("f").expect("@f");
         // An unreachable block lends the store's operands.
-        let spare = function.block(named(function, "spare")).instructions()[0];
+        let spare = function.block(named(function, "spare")).first().expect("an instruction");
         let model = function.instruction(spare).clone();
         let store = function.create_instruction(model.opcode, model.ty, model.operands, model.flags, None);
         let (b1, b3) = (named(function, "b1"), named(function, "b3"));
@@ -375,5 +585,66 @@ b3:
         assert!(split(function, b1, b3, vec![]).is_err());
         assert!(split(function, b2, b3, vec![]).is_err());
         assert_eq!(*function, before);
+    }
+
+    const JOIN: &str = "define i16 @f(i1 %c, i1 %d, i16 %a) {
+entry:
+  br i1 %c, label %p1, label %m
+
+p1:
+  br i1 %d, label %p2, label %m
+
+p2:
+  br label %m
+
+m:
+  %r = phi i16 [ 1, %entry ], [ %V, %p1 ], [ 2, %p2 ]
+  ret i16 %r
+}
+";
+
+    /// Predecessors that agree on a phi's value give the new block no phi: the
+    /// phi of `m` reads the shared value from the new block.
+    #[test]
+    fn test_split_block_predecessors_with_one_shared_value_makes_no_phi() {
+        let mut module = llrm_mir::parse::module(&JOIN.replace("%V", "1")).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let [entry, p1, m] = ["entry", "p1", "m"].map(|name| named(function, name));
+        let new = split_block_predecessors(function, m, &[entry, p1]);
+        assert_eq!(function.layout()[4], new);
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&module);
+        assert!(text.contains("%r = phi i16 [ 2, %p2 ], [ 1, %0 ]"), "{text}");
+    }
+
+    /// Predecessors that disagree get a phi in the new block, which `m`'s phi
+    /// reads.
+    #[test]
+    fn test_split_block_predecessors_with_different_values_gathers_a_phi() {
+        let mut module = llrm_mir::parse::module(&JOIN.replace("%V", "%a")).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let [entry, p1, m] = ["entry", "p1", "m"].map(|name| named(function, name));
+        split_block_predecessors(function, m, &[entry, p1]);
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&module);
+        assert!(text.contains("phi i16 [ 1, %entry ], [ %a, %p1 ]"), "{text}");
+        assert!(text.contains("%r = phi i16 [ 2, %p2 ], [ %ph, %0 ]"), "{text}");
+    }
+
+    /// `split_block` moves everything after the phis, and a successor's phi
+    /// that named the old block names the new one; `split_edge` renames only
+    /// that edge's input.
+    #[test]
+    fn test_split_block_and_split_edge_keep_the_successors_phis_true() {
+        let mut module = llrm_mir::parse::module(&JOIN.replace("%V", "%a")).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let [p2, m] = ["p2", "m"].map(|name| named(function, name));
+        let tail = split_block(function, p2);
+        assert_eq!(llrm_mir::print::module(&module).matches("[ 2, %").count(), 1);
+        let (_, function) = module.function_mut("f").expect("@f");
+        split_edge(function, tail, m);
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&module);
+        assert!(text.contains("[ 2, %1 ]") && !text.contains("%p2 ]"), "{text}");
     }
 }

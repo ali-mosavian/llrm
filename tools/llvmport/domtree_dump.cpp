@@ -4,6 +4,7 @@
 // A line is `<dom|post> <updates> <updated tree> <updated tree, children and roots sorted> <fresh tree of the new graph, sorted>`;
 // the last two differ where LLVM's incremental update leaves a tree a fresh build would not (post-dominators of infinite loops).
 #include "llvm/Config/llvm-config.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -23,7 +24,7 @@ using namespace llvm;
 using Graph = std::vector<std::vector<unsigned>>;
 using Edge = std::pair<unsigned, unsigned>;
 
-static const unsigned N = 8;
+static unsigned N = 8;
 
 static Graph base() { return {{1, 2}, {3}, {3, 4}, {1, 5}, {3, 6}, {6}, {5}, {2}}; }
 
@@ -52,7 +53,7 @@ static Graph flip(const Graph &g, Edge e, bool &insert) {
 static void setTerminators(Function &F, const Graph &g, std::vector<BasicBlock *> &bb) {
   LLVMContext &C = F.getContext();
   Value *cond = F.getArg(0), *sel = F.getArg(1);
-  for (unsigned b = 0; b < N; ++b) {
+  for (unsigned b = 0; b < g.size(); ++b) {
     if (bb[b]->hasTerminator()) bb[b]->getTerminator()->eraseFromParent();
     IRBuilder<> B(bb[b]);
     const auto &s = g[b];
@@ -78,10 +79,16 @@ static void mix(const std::string &s) {
   }
 }
 
+static int num(BasicBlock *B, std::vector<BasicBlock *> &bb) {
+  for (unsigned i = 0; i < bb.size(); ++i)
+    if (bb[i] == B) return (int)i;
+  return -1;
+}
+
 template <typename DT> static std::string dump(const DT &T, std::vector<BasicBlock *> &bb, bool sorted) {
   std::string out;
   auto num = [&](BasicBlock *B) -> int {
-    for (unsigned i = 0; i < N; ++i)
+    for (unsigned i = 0; i < bb.size(); ++i)
       if (bb[i] == B) return (int)i;
     return -1;
   };
@@ -101,7 +108,7 @@ template <typename DT> static std::string dump(const DT &T, std::vector<BasicBlo
     out += "\n";
   };
   if (T.isPostDominator()) line("V", nullptr);
-  for (unsigned b = 0; b < N; ++b) line(std::to_string(b).c_str(), bb[b]);
+  for (unsigned b = 0; b < bb.size(); ++b) line(std::to_string(b).c_str(), bb[b]);
   out += "roots:";
   std::vector<int> roots;
   for (auto *r : T.roots()) roots.push_back(num(r));
@@ -140,8 +147,64 @@ template <typename DT> static void run(const char *name, const Graph &before, co
   DT Fresh;
   Fresh.recalculate(*F);
   mix(dump(Fresh, bb, true));
-  printf("%s %s %016llx %016llx %016llx\n", name, key.c_str(), (unsigned long long)inc, (unsigned long long)incSorted,
-         (unsigned long long)H);
+  uint64_t freshSorted = H;
+  // The same updates through a Lazy DomTreeUpdater, one at a time, then asked for the tree; and through
+  // applyUpdatesPermissive with the first update repeated.
+  uint64_t lazy = 0, permissive = 0;
+  for (int variant = 0; variant < 2; ++variant) {
+    LLVMContext C2;
+    Module M2("m", C2);
+    Function *F2 = Function::Create(FunctionType::get(Type::getVoidTy(C2), {Type::getInt1Ty(C2), Type::getInt32Ty(C2)}, false),
+                                    GlobalValue::ExternalLinkage, "f", M2);
+    std::vector<BasicBlock *> bb2;
+    for (unsigned b = 0; b < N; ++b) bb2.push_back(BasicBlock::Create(C2, "b" + std::to_string(b), F2));
+    setTerminators(*F2, before, bb2);
+    DT T2;
+    T2.recalculate(*F2);
+    setTerminators(*F2, g, bb2);
+    std::vector<typename DT::UpdateType> ups;
+    for (auto &u : updates) ups.push_back({u.getKind(), bb2[num(u.getFrom(), bb)], bb2[num(u.getTo(), bb)]});
+    DomTreeUpdater DTU(T2, DomTreeUpdater::UpdateStrategy::Lazy);
+    if (variant == 0) {
+      for (auto &u : ups) DTU.applyUpdates({u});
+    } else {
+      ups.push_back(ups[0]);
+      DTU.applyUpdatesPermissive(ups);
+    }
+    if (T2.isPostDominator()) DTU.getPostDomTree(); else DTU.getDomTree();
+    mix(dump(T2, bb2, false));
+    (variant == 0 ? lazy : permissive) = H;
+  }
+  printf("%s %s %016llx %016llx %016llx %016llx %016llx\n", name, key.c_str(), (unsigned long long)inc,
+         (unsigned long long)incSorted, (unsigned long long)freshSorted, (unsigned long long)lazy,
+         (unsigned long long)permissive);
+}
+
+// A critical edge split: the tree of the 8 blocks, then block 8 made, the edge retargeted through it and the updater told.
+template <typename DT> static void runSplit(const char *name, const Graph &before, Edge e, bool lazy) {
+  LLVMContext C;
+  Module M("m", C);
+  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(C), {Type::getInt1Ty(C), Type::getInt32Ty(C)}, false),
+                                 GlobalValue::ExternalLinkage, "f", M);
+  std::vector<BasicBlock *> bb;
+  for (unsigned b = 0; b < N; ++b) bb.push_back(BasicBlock::Create(C, "b" + std::to_string(b), F));
+  setTerminators(*F, before, bb);
+  DT T;
+  T.recalculate(*F);
+  bb.push_back(BasicBlock::Create(C, "b8", F));
+  Graph g = before;
+  for (auto &t : g[e.first])
+    if (t == e.second) {
+      t = N;
+      break;
+    }
+  g.push_back({e.second});
+  setTerminators(*F, g, bb);
+  DomTreeUpdater DTU(T, lazy ? DomTreeUpdater::UpdateStrategy::Lazy : DomTreeUpdater::UpdateStrategy::Eager);
+  DTU.splitCriticalEdge(bb[e.first], bb[e.second], bb[N]);
+  if (T.isPostDominator()) DTU.getPostDomTree(); else DTU.getDomTree();
+  mix(dump(T, bb, false));
+  printf("split %s %u>%u %s %016llx\n", name, e.first, e.second, lazy ? "lazy" : "eager", (unsigned long long)H);
 }
 
 int main() {
@@ -165,5 +228,11 @@ int main() {
     run<DominatorTree>("dom", g, b);
     run<PostDominatorTree>("post", g, b);
   }
+  for (unsigned f = 0; f < N; ++f)
+    for (unsigned t : g[f])
+      for (int lazy = 0; lazy < 2; ++lazy) {
+        if (f != 7) runSplit<DominatorTree>("dom", g, {f, t}, lazy);
+        runSplit<PostDominatorTree>("post", g, {f, t}, lazy);
+      }
   return 0;
 }

@@ -1,16 +1,17 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:0da883c57a27a83f3a88f8468ac5621c9a8960bf8b15f1b0b25199e03e3f16c3 -->
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:9b88dbf4a372a8abe321815ad3dae9cdadc03adf7f87dfd5150e044e3a72c8a1 -->
 
 # coalesce
 
-Removes a copy whose two values can share a register.
+Removes a copy whose two values can share a register: the phase that runs
+LLVM's `RegisterCoalescer` (`crate::coalescer`), and the interference
+graph `twoaddr` and the spiller read.
 
 ## How it works
 After `phielim` and `twoaddr` the body is full of `mov v2, v1` between
-values. If `v1` and `v2` never need different registers at once, they can
-be one value and the move is an identity that disappears. This is
-conservative coalescing: a join cannot be undone, so it is made only
-where it provably cannot make the body harder to colour.
+values. If the live intervals of `v1` and `v2` can be joined (the values
+they hold agree wherever both are live), they are one value and the move
+is an identity that disappears:
 
 ```text
  before                          after
@@ -19,36 +20,20 @@ where it provably cannot make the body harder to colour.
    ... v2 ...                      the mov is gone
 ```
 
-The values are the nodes of an interference graph (`_interference`, built
-by walking each block backwards: values live at the same point are
-adjacent, the two ends of a copy not by that copy, and the sources of a
-parallel copy before any of its destinations is written). Each value also
-has a live interval. Copies are visited block by block, the deepest loops
-first and, within a loop, the busiest blocks first, so that of two joins
-that clash the one in the hotter code stays. For one copy `(a, b)` the webs
-already joined are looked up (union-find) and the join is refused when:
+The phase builds the intervals ([`crate::liveness::liveintervals`](liveness.md)) and
+hands them to `crate::coalescer` with the target's answers (which values
+may share a register: the palettes and the pins). Joining is by interval
+and leaves colouring to the allocator, which splits where it must; the old
+pass here (Briggs and George over an interference graph, with a call-clobber
+check) is gone, objects unchanged on the corpora the day it went. A body
+with phis is not coalesced.
 
-- they are the same web, or are pinned to different registers;
-- they are adjacent in the graph;
-- the registers both may take (their class palettes) have none in common, or
-  every common register is destroyed somewhere in the merged interval
-  (`allocate::_clobbered`), or a pin is outside what is left;
-- Briggs and George both fail.
-
-Briggs counts the neighbours of the joined web that are significant (their
-degree reaches the size of their palette); the join is safe when fewer
-than `k` of them, `k` being the registers left. If that fails, George
-accepts when `gone` can join `kept` (or the reverse) because each neighbour
-of `gone` is already a neighbour of `kept`, cannot take a register of the
-join, or is neither pinned nor significant. George is not tried if either
-web is pinned.
-
-`Webs` keeps the significant and pinned neighbour counts per web as webs
-join, so a join costs the smaller web's neighbours, not the larger's. The
-joined web's interval is the union of the two (`_merged`), its pin is the
-pin of either, and the web kept is the one with more neighbours. At the
-end every value is renamed to its web's root and identity moves are
-dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
+What stays in this file is the interference graph: `_interference` (built by
+walking each block backwards: values live at the same point are adjacent,
+the two ends of a copy not by that copy, and the sources of a parallel copy
+before any of its destinations is written) and `_interference_among`, read
+by `twoaddr.rs` and by the spiller's sibling pricing; `_merged` and
+`_copy`.
 
 ## Example
 A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
@@ -87,16 +72,6 @@ From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5& = x * 5` (function
 Once per function, in the machine phases after `twoaddr` and before
 `regalloc`, at every -O level. Both routes run it.
 
-## Needs
-[`crate::backend::classes`](classes.md) for the palettes, [`crate::backend::regclass`](regclass.md)
-for each value's register class, and `allocate::_masks` for the points
-that destroy registers. `_interference` and `_interference_among` are also
-read by `twoaddr.rs` and by the spiller's sibling pricing.
-
 ## See also
-LLVM's `RegisterCoalescer` joins by live range and keeps no graph:
-<https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/RegisterCoalescer.cpp>
-
-The two tests: Briggs, Cooper and Torczon, "Improvements to graph coloring
-register allocation" (1994), and George and Appel, "Iterated register
-coalescing" (1996).
+LLVM's `RegisterCoalescer`:
+<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp>

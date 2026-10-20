@@ -181,6 +181,21 @@ def cells(n: int) -> str:
     return PRELUDE_C + f"static unsigned cell[{n}];\nunsigned fn(unsigned a) {{\n" + body + "    return a;\n}\n" + _main("cells", "    return (long)fn(3u);\n")
 
 
+def fanout(n: int) -> str:
+    """One function using one value N times: each store reads the parameter `a`, so its use list is N long. A pass that walks a value's
+    users once per use (EarlyCSE did, in an oldest-first `Vec`: x3.5 a doubling) is quadratic here and not on `straight`, whose values
+    have four uses at most."""
+    body = "".join(f"    p[{k % 64}] = a + {k}u;\n" for k in range(n))
+    return PRELUDE_C + "unsigned fn(unsigned *p, unsigned a) {\n" + body + "    return p[0];\n}\n" + _main("fanout", "    static unsigned cell[64];\n    return (long)fn(cell, 3u);\n")
+
+
+def equal(n: int) -> str:
+    """One function of N equal expressions of two values: value numbering replaces them all by one leader, whose use list is N long
+    after the replacement (`replace_all_uses_with` runs N times on one list)."""
+    body = "".join(f"    p[{k % 64}] ^= (a * 7u + b) * {k % 5 + 1}u;\n" for k in range(n))
+    return PRELUDE_C + "unsigned fn(unsigned *p, unsigned a, unsigned b) {\n" + body + "    return p[0];\n}\n" + _main("equal", "    static unsigned cell[64];\n    return (long)fn(cell, 3u, 5u);\n")
+
+
 def joins(n: int) -> str:
     """Four functions, each with N static cells all known after its first N stores and N if/else joins that store to one and read
     another: every join meets N held cells, so a pass that keeps the cells of memory as one map per block, and meets the maps of the
@@ -222,7 +237,7 @@ def fjoins(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled}
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled, "fanout": fanout, "equal": equal}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------

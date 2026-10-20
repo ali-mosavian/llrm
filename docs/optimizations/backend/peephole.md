@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:9475278206ca22e9ea3f73973b28f58086fe331eefb9f380ad99fca932e7a47d -->
+<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:934eeb91d9288a3bda70f8524fdd5763b52d5f3e58a6f693b80f4ed167c6efbe -->
 
 # peephole
 
@@ -28,7 +28,7 @@ next, then the flag passes, then dead-code elimination, and last the repair
 of what the 16-bit target's 32-bit addresses need.
 
 ```text
- thrash -> frame copies -> copyprop -> extensions -> copysink
+ frame copies -> machinecp -> extensions -> copysink
    -> spillforward -> postrasink -> storecombine -> pushed constants
    -> pushes, constants, commuted, transferred, high extracts, restored
       copies, shuttles, overwritten, fused, fused calls, far loads

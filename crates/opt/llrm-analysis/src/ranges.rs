@@ -62,10 +62,6 @@
 //! `operand_at` is one operand's at one block without copying the rest.
 //! `covering` widens an indexed access into its own object to the byte interval
 //! it can touch; `inside_object` says that interval lies inside the object.
-//! `exact_offsets` finds index values whose every access sums, at any wider
-//! width, to the same bytes, because every partial sum is a non-negative
-//! integer below `2**index_bits`; it is used where the object's own address is
-//! the only root known to start at 0.
 //!
 //! # Example
 //! `for i = 0 while i < 10: if i < 4: off = i * 2`:
@@ -1155,7 +1151,7 @@ pub fn edges_solved(
         let parents = function.predecessors(block);
         let sole = (parents.len() == 1).then(|| cfg::id(parents[0]));
         let from_parent = sole.is_some_and(|parent| known.contains_key(&parent) && once(parent, at));
-        let source = if from_parent { sole } else { shape.dominance.immediate(at) };
+        let source = if from_parent { sole } else { shape.dominance.immediate(unit.function, at) };
         if let Some((states, reached)) = before {
             let stale = reached.contains(&block)
                 || (from_parent && sole.is_some_and(|parent| reached.contains(&cfg::block(parent))))
@@ -1185,12 +1181,12 @@ pub fn edges_solved(
                 }
             }
             _ => {
-                let up = shape.dominance.immediate(at);
+                let up = shape.dominance.immediate(unit.function, at);
                 up.and_then(|up| made.get(&up)).hash(&mut made_of);
                 up.and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded)
             }
         };
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let (Some(interval), Some(result)) =
                 (_computed(unit, inst, &scoped, facts), function.instruction(inst).result)
             else {
@@ -1475,7 +1471,7 @@ pub fn loops_reached(
     let starts = |one: &loops::Loop| -> Vec<i64> {
         shape
             .dominance
-            .immediate(one.header)
+            .immediate(function, one.header)
             .into_iter()
             .chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at)))
             .collect()
@@ -1485,7 +1481,7 @@ pub fn loops_reached(
         .iter()
         .filter(|one| {
             one.body.iter().any(|at| reached.contains(at))
-                || judged.iter().any(|above| shape.dominance.dominates(*above, one.header))
+                || judged.iter().any(|above| shape.dominance.dominates(function, *above, one.header))
                 || starts(one).iter().any(moved)
         })
         .map(|one| one.header)
@@ -1542,10 +1538,7 @@ fn capped_from(
 ) -> Option<usize> {
     let work: usize = nest
         .iter()
-        .map(|one| {
-            one.body.len()
-                * one.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum::<usize>()
-        })
+        .map(|one| one.body.len() * one.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum::<usize>())
         .sum();
     (work > CAP_WORK).then_some(CAP_DEPTH)
 }
@@ -1847,8 +1840,8 @@ fn bounded_solved_under(
         // LazyValueInfo of one value at a point (`getValueAt`), not of every
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
-        let header_above = shape.dominance.immediate(loop_.header);
-        for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
+        let header_above = shape.dominance.immediate(unit.function, loop_.header);
+        for inst in in_layout.iter().flat_map(|&block| function.iter_block(block)) {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
                     && outside(value)
@@ -1862,7 +1855,7 @@ fn bounded_solved_under(
         let operations = in_layout
             .iter()
             .filter(|&&block| inside.contains(&cfg::id(block)) || cfg::id(block) == loop_.header)
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.iter_block(block))
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
         if check_scopes() {
@@ -2015,7 +2008,7 @@ fn bounded_solved_under(
                     let mut above = Some(member);
                     while let Some(one) = above.filter(|one| loop_.body.contains(one)) {
                         *counts.entry(one).or_default() += 1;
-                        above = shape.dominance.immediate(one);
+                        above = shape.dominance.immediate(unit.function, one);
                     }
                 }
                 counts
@@ -2044,10 +2037,10 @@ fn bounded_solved_under(
         let outer_chain = || -> Rc<Vec<(usize, usize, i64)>> {
             Rc::clone(above_header.borrow_mut().get_or_insert_with(|| {
                 let mut found = Vec::new();
-                let mut above = shape.dominance.immediate(loop_.header);
+                let mut above = shape.dominance.immediate(unit.function, loop_.header);
                 while let Some(one) = above {
                     edges_into(one, &mut found);
-                    above = shape.dominance.immediate(one);
+                    above = shape.dominance.immediate(unit.function, one);
                 }
                 found.sort_unstable();
                 Rc::new(found)
@@ -2065,7 +2058,7 @@ fn bounded_solved_under(
             let mut above = Some(at);
             while let Some(one) = above.filter(|one| loop_.body.contains(one)) {
                 edges_into(one, &mut chain);
-                above = shape.dominance.immediate(one);
+                above = shape.dominance.immediate(unit.function, one);
             }
             chain.sort_unstable();
             let outer_edges = outer_chain();
@@ -2083,7 +2076,7 @@ fn bounded_solved_under(
                 let mut above = Some(at);
                 while let Some(one) = above {
                     edges_into(one, &mut every);
-                    above = shape.dominance.immediate(one);
+                    above = shape.dominance.immediate(unit.function, one);
                 }
                 every.sort_unstable();
                 let outer = every.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
@@ -2189,7 +2182,7 @@ fn bounded_solved_under(
                 if rest.is_empty()
                     && kept > 0
                     && 2 * operations.len() > scoped.len()
-                    && assumed.above(&shape, at).is_empty()
+                    && assumed.above(&shape, unit.function, at).is_empty()
                 {
                     let mut path = Vec::new();
                     let mut at_node = Some(node);
@@ -2268,7 +2261,7 @@ fn bounded_solved_under(
                 assert!(same_narrowing(&every, &scoped), "the edges above a loop narrow `known` as they did before");
             }
             // What the blocks above it assume.
-            for condition in assumed.above(&shape, at) {
+            for condition in assumed.above(&shape, unit.function, at) {
                 if let Some(delta) = narrowed_delta(unit, condition, true, &scoped, facts) {
                     scoped.extend(delta);
                 }
@@ -2287,7 +2280,7 @@ fn bounded_solved_under(
         // What the edges above the loop say of a value made outside it, read
         // where the loop's dominator ends: asked of the values the box search
         // reads, not worked out for the whole chain of guards.
-        let dominator = shape.dominance.immediate(loop_.header);
+        let dominator = shape.dominance.immediate(unit.function, loop_.header);
         let above = |value: ValueId| -> Option<Interval> {
             let outside = match function.value(value).def {
                 ValueDef::Instruction(inst) => {
@@ -2443,13 +2436,13 @@ fn box_candidates(
     const SIZE: usize = 512;
     let function = unit.function;
     let header = cfg::block(loop_.header);
-    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
+    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum();
     if size > SIZE {
         return Vec::new();
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
-    for &inst in function.block(header).instructions() {
+    for inst in function.iter_block(header) {
         let op = function.instruction(inst);
         let (Opcode::Phi, Some(phi)) = (&op.opcode, op.result) else { continue };
         let Some(width) = unit.int_bits(Operand::Value(phi)).filter(|&width| width > 1) else { continue };
@@ -2701,105 +2694,6 @@ pub fn operand_at(
         }
     }
     Ok(_operand(unit, operand, &known, &facts))
-}
-
-/// The values that index accesses whose offset every wider sum names exactly.
-///
-/// An index added to its object's own address is summed at the pointer's
-/// index width, which wraps. The sum names the same bytes at any wider
-/// width when every partial sum of the offset, as the affine operations
-/// computing it would be cut anywhere, is a non-negative integer below
-/// 2**index_bits: zero extension is then the identity. `inbounds` is the
-/// promise that places the start. A value is exact only if every access it
-/// indexes is.
-pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
-    exact_offsets_given(unit, &scoped(unit)?)
-}
-
-/// `exact_offsets`, given the `scoped` facts of the unit: a caller that needs
-/// them too solves once.
-pub fn exact_offsets_given(
-    unit: &Unit,
-    scoped: &Facts,
-) -> Result<BTreeSet<ValueId>, String> {
-    let mut verdict = IndexMap::<ValueId, bool>::default();
-    for (block, inst) in unit.function.walk() {
-        let Some(reference) = MemRef::of(unit, inst) else { continue };
-        let Some(base) = reference.base else { continue };
-        let bits = reference.index_bits;
-        // A far pointer made from a selector starts at offset 0 as well.
-        let placed = (reference.inbounds && reference.object) || reference.segment.is_some();
-        let exact = placed
-            && reference.base_width == bits
-            && _exact_sum(unit, base, cfg::id(block), scoped, bits, 16).is_some_and(|(low, high)| {
-                let (low, high) = (
-                    BigInt::from(reference.disp) + low * reference.scale,
-                    BigInt::from(reference.disp) + high * reference.scale,
-                );
-                low >= BigInt::from(0) && high < BigInt::from(1) << bits
-            });
-        *verdict.entry(base).or_insert(true) &= exact;
-    }
-    Ok(verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect())
-}
-
-/// The integer range of `value`, where it and every affine partial sum
-/// computing it is a non-negative integer below 2**bits; leaves read at `at`.
-fn _exact_sum(
-    unit: &Unit,
-    value: ValueId,
-    at: i64,
-    scoped: &Facts,
-    bits: u32,
-    depth: usize,
-) -> Option<(BigInt, BigInt)> {
-    // Past the depth, a node is unproven, not a leaf.
-    if depth == 0 {
-        return None;
-    }
-    let limit = BigInt::from(1) << bits;
-    let inside = |(low, high): (BigInt, BigInt)| (low >= BigInt::from(0) && high < limit).then_some((low, high));
-    let operand = |one: Operand| -> Option<(BigInt, BigInt)> {
-        if unit.int_bits(one) != Some(bits) {
-            return None;
-        }
-        match one {
-            Operand::Value(value) => _exact_sum(unit, value, at, scoped, bits, depth - 1),
-            _ => unit.int_constant(one).map(|n| (BigInt::from(n), BigInt::from(n))),
-        }
-    };
-    let constant = |one: Operand| unit.int_constant(one).map(BigInt::from);
-    let made = unit.defining(Operand::Value(value));
-    if let Some((_, op)) = made {
-        let affine = match (&op.opcode, op.operands.as_slice()) {
-            (Opcode::Binary(BinaryOp::Add), &[left, right]) => {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 + r.0, l.1 + r.1)))
-            }
-            (Opcode::Binary(BinaryOp::Sub), &[left, right]) if constant(right).is_some() => {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 - r.1, l.1 - r.0)))
-            }
-            (Opcode::Binary(BinaryOp::Mul), &[left, right]) | (Opcode::Binary(BinaryOp::Mul), &[right, left])
-                if constant(right).is_some() =>
-            {
-                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 * &r.0, l.1 * r.0)))
-            }
-            (Opcode::Binary(BinaryOp::Shl), &[left, right]) => {
-                let count = constant(right).and_then(|count| u32::try_from(count).ok()).filter(|count| *count < bits);
-                Some(operand(left).zip(count).map(|(l, count)| (l.0 << count, l.1 << count)))
-            }
-            _ => None,
-        };
-        if let Some(bounds) = affine {
-            return bounds.and_then(inside);
-        }
-    }
-    // A leaf: whatever it is, it is read in this block.
-    let defined = made.and_then(|(inst, _)| unit.function.parent(inst)).map(cfg::id);
-    let fact = scoped
-        .get(&at)
-        .and_then(|known| known.get(&value))
-        .or_else(|| defined.and_then(|block| scoped.get(&block)).and_then(|known| known.get(&value)))?;
-    (fact.width == bits).then(|| (fact.low.clone(), fact.high.clone())).and_then(inside)
 }
 
 /// Every value `consts` knows without solving memory, as the singleton

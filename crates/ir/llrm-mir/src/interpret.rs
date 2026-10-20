@@ -238,6 +238,8 @@ impl<'m> Machine<'m> {
             },
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
+            // Any value is a legal undef; the interpreter picks zero.
+            ConstantKind::Undef => self.zero(constant.ty),
             ConstantKind::Zero => self.zero(constant.ty),
             ConstantKind::Aggregate(members) => {
                 Val::Aggregate(members.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?)
@@ -416,6 +418,29 @@ impl<'m> Machine<'m> {
                     _ => Val::Poison,
                 }
             }
+            Intrinsic::BitCount(count) => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                // A zero is poison where the second argument says so.
+                let zero_is_poison = count.has_zero_poison_flag() && matches!(argument(1), Val::Int { bits: 1, .. });
+                if bits == 0 && zero_is_poison {
+                    return Ok(Val::Poison);
+                }
+                Val::Int { bits: count.apply(bits, width), width }
+            }
+            Intrinsic::ByteSwap => {
+                let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
+                Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
+            }
+            Intrinsic::Compare { signed } => {
+                let (Val::Int { .. }, Val::Int { .. }) = (argument(0), argument(1)) else { return Ok(Val::Poison) };
+                let width = self.types().int_bits(returns).expect("an integer result");
+                let less = icmp(if signed { IntPredicate::Slt } else { IntPredicate::Ult }, argument(0), argument(1));
+                let greater =
+                    icmp(if signed { IntPredicate::Sgt } else { IntPredicate::Ugt }, argument(0), argument(1));
+                let bit = |compare: Val| matches!(compare, Val::Int { bits: 1, .. });
+                // -1, 0 or 1 at the result's width.
+                Val::Int { bits: (u128::from(bit(greater)).wrapping_sub(u128::from(bit(less)))) & mask(width), width }
+            }
             Intrinsic::Fixed { divide } => {
                 let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
                     (argument(0), argument(1), argument(2))
@@ -521,7 +546,10 @@ impl<'m> Machine<'m> {
             // Flat memory: the same address.
             Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
-            Intrinsic::VaStart => return unsupported("a variadic argument list"),
+            Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => {
+                return unsupported("a variadic argument list");
+            }
+            Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
         })
@@ -705,10 +733,9 @@ impl<'m> Machine<'m> {
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
         loop {
-            let list = function.block(block).instructions();
             // Phis read together, along the edge taken.
             let mut chosen = Vec::new();
-            for &inst in list.iter().take_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 let instruction = function.instruction(inst);
                 let from = came_from.expect("the entry has no phis");
                 let pair = instruction
@@ -720,7 +747,7 @@ impl<'m> Machine<'m> {
             }
             values.extend(chosen);
             let mut next = None;
-            for &inst in list.iter().skip_while(|&&one| function.instruction(one).opcode == Opcode::Phi) {
+            for inst in function.iter_block(block).skip_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
                 self.fuel = self.fuel.checked_sub(1).ok_or(Trap::OutOfFuel)?;
                 let instruction = function.instruction(inst);
                 let ops = &instruction.operands;
@@ -1208,24 +1235,6 @@ fn fcmp(
 ) -> Val {
     let (Val::Float(kind, x), Val::Float(_, y)) = (a, b) else { return Val::Poison };
     let (x, y) = (to_f64(kind, x), to_f64(kind, y));
-    let unordered = x.is_nan() || y.is_nan();
-    let truth = match predicate {
-        FloatPredicate::False => false,
-        FloatPredicate::True => true,
-        FloatPredicate::Ord => !unordered,
-        FloatPredicate::Uno => unordered,
-        FloatPredicate::Oeq => !unordered && x == y,
-        FloatPredicate::Ogt => !unordered && x > y,
-        FloatPredicate::Oge => !unordered && x >= y,
-        FloatPredicate::Olt => !unordered && x < y,
-        FloatPredicate::Ole => !unordered && x <= y,
-        FloatPredicate::One => !unordered && x != y,
-        FloatPredicate::Ueq => unordered || x == y,
-        FloatPredicate::Ugt => unordered || x > y,
-        FloatPredicate::Uge => unordered || x >= y,
-        FloatPredicate::Ult => unordered || x < y,
-        FloatPredicate::Ule => unordered || x <= y,
-        FloatPredicate::Une => unordered || x != y,
-    };
+    let truth = predicate.holds(x.partial_cmp(&y));
     Val::Int { bits: u128::from(truth), width: 1 }
 }

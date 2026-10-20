@@ -1,41 +1,15 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/avail.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/avail.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:5d1d071f263545e28a3cf43a627c1ce5ecb39aafa2ca0fd28b3fb867777fe712 -->
+<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:c27ad68758f04141cd508134472017b01e75a37708946f33ced5ee350fbdf5b3 -->
 
 # avail
 
-Available loads and dead stores, as LLVM's GVN load forwarding and DSE find
-them through MemoryDependence.
+Dead stores, and the cells loads and stores name, as LLVM's DSE finds them.
 
 ## How it works
-Two independent queries share the memory model (`MemRef` cells and
-[`crate::memoryssa`](memoryssa.md)'s `Accesses`).
+The memory model is `MemRef` cells and [`crate::memoryssa`](memoryssa.md)'s `Accesses`.
+Load forwarding is `llrm-transforms`' `gvn` (MemoryDependence), not here.
 
-Forwarding. `forwardable_walk` takes a set of loads and, for each plain
-(non-volatile) load, asks MemorySSA for the nearest writes that may clobber
-its bytes and tries three sources in order:
-
-1. One clobber that is a plain store to the same bytes, defined before the
-   load, whose value has the load's type: the load is that value.
-2. Two or more clobbers (at most `MAX_NEAREST_WRITES`) that are all exact
-   stores of one value defined where the load can read it, such as the arms
-   of a join that each stored the same thing.
-3. A dominating load of the same bytes, nearest first, with nothing between
-   the two that may change them (`MemorySSA::unchanged`). A candidate whose
-   walk fails also fails every load that dominates it.
-
-A value serves a read only of its own type. Each answer is a `Forward { at,
-value }`.
-
-```text
-   store i32 %v, p          %a = load p     <- 1: %a is %v
-   ...                      ...
-   %a = load p              %b = load p     <- 3: %b is %a
-   ...
-   br c, T, F      T: store %v, p   F: store %v, p
-   J: %b = load p                                 <- 2: %b is %v
-```
-
-Dead stores. `dead_stores` is a backward must-overwrite analysis over the
+`dead_stores` is a backward must-overwrite analysis over the
 CFG. Every cell a function stores to is numbered once (`Stored`), as LLVM's
 DSE numbers its memory locations, and a block's state is a set of numbered
 cells overwritten before any read. Walking a block backward:
@@ -69,34 +43,7 @@ takes one displaced frame or one base pointer and bytes that meet, so it is
 compared with those (`Members::meeting`) and not with its object's cells.
 
 ## Example
-Forwarding. Both arms of a join store `%v` to the cell, so the load at the
-join is `%v` (with `%w` on one arm instead, it is not forwarded):
-
-```mir
-define i16 @f(i1 %c, i16 %v, i16 %w) {
-b0:
-  br i1 %c, label %b1, label %b2
-
-b1:
-  store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
-  br label %b3
-
-b2:
-  store i16 %v, ptr getelementptr (i8, ptr @g, i16 32)
-  br label %b3
-
-b3:
-  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
-  ret i16 %x
-}
-```
-
-`forwardable_walk` returns `Forward { at: the load in b3, value: %v }`.
-
-From unit test `test_a_join_keeps_what_every_predecessor_agrees_on` in
-`avail_tests.rs`.
-
-Dead store. The first store is overwritten before any read, so `dead_stores`
+The first store is overwritten before any read, so `dead_stores`
 returns it:
 
 ```mir
@@ -112,9 +59,8 @@ From unit test `test_a_store_is_dead_only_when_overwritten_before_any_read`
 in `avail_tests.rs`.
 
 ## Provides
-`forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the
-accessors `loaded_into`, `stored_from`, `stored_cell`. Consumers:
-`transform` (load forwarding), `loadjoins` and `dse` in `llrm-transforms`.
+`dead_stores`, `dead_stores_escaping`, and the accessors `loaded_into`,
+`stored_from`, `stored_cell`. Consumer: `dse` in `llrm-transforms`.
 
 ## Needs
 [`crate::memoryssa`](memoryssa.md), [`crate::alias`](alias.md) (`EscapedBefore`), [`crate::ranges`](ranges.md)

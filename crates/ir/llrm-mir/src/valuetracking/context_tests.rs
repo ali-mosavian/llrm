@@ -1,5 +1,5 @@
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::knownbits::KnownBits;
 use crate::module::{GlobalKind, Operand};
 use crate::opcode::Opcode;
@@ -21,7 +21,7 @@ fn context_lines(text: &str) -> String {
         if function.is_declaration() {
             continue;
         }
-        let dt = DominatorTree::new(function);
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
         let mut n = function.parameters().len();
         for (_, inst) in function.walk() {
@@ -73,7 +73,7 @@ fn cond_context_lines(text: &str) -> String {
             continue;
         }
         let name = global.name.as_deref().unwrap_or("");
-        let dt = DominatorTree::new(function);
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
         let insts: Vec<_> = function.walk().map(|(_, inst)| inst).collect();
         let nm = |v: Operand| -> String {

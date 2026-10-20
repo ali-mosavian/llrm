@@ -75,6 +75,7 @@ fn before(
 /// refused.
 #[test]
 fn test_a_compare_crowded_before_its_branches_spills() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
 
@@ -102,6 +103,7 @@ fn test_a_compare_crowded_before_its_branches_spills() {
 /// A block is written again only when a victim reaches it.
 #[test]
 fn test_a_round_writes_only_the_blocks_a_new_spill_reaches() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     WRITTEN.with(|one| one.set(0));
@@ -169,6 +171,7 @@ fn refuses_nothing(
 /// `floatassign` on it. A block's are worked out once.
 #[test]
 fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     SHAPED.with(|one| one.set(0));
@@ -184,6 +187,7 @@ fn test_a_blocks_steps_and_liveness_are_worked_out_once() {
 /// spill state of a root it touches changed.
 #[test]
 fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     STEPPED.with(|one| one.set(0));
@@ -201,6 +205,7 @@ fn test_a_round_writes_only_the_steps_a_new_spill_reaches() {
 /// the victim is in.
 #[test]
 fn test_a_round_looks_for_the_crowded_block_from_where_the_last_left_off() {
+    let _old = crate::backend::allocate::RfpOn::off();
     let (body, mut frame) = before_float_assign();
     let cpu = crate::backend::cpu::profile("486").unwrap();
     CROWDED_BLOCKS.with(|one| one.set(0));
@@ -245,4 +250,87 @@ fn test_pressuresink_builds_no_set_of_live_values_per_block() {
     );
     let built = SETS_BUILT.with(|one| one.get());
     assert_eq!(built, 0, "{built} block sets built");
+}
+
+fn float_move(
+    at: i64,
+    group: Option<i64>,
+    into: u32,
+    from: u32,
+) -> Arc<Insn> {
+    let held = |value| Loc::Held(Held { value, width: 10 });
+    let what = Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![held(into)],
+        sources: vec![held(from)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn {
+        group,
+        widths: vec![(into, 10), (from, 10)],
+        ..Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from])
+    })
+}
+
+/// A rotation of ten floats is one group of ten copies, each value read by one
+/// and written by another: greedy cannot hold the ten at once in seven
+/// registers. Written one at a time, a temporary breaking the cycle, no copy is
+/// grouped and each destination is written after its readers.
+#[test]
+fn test_a_cycle_of_float_copies_is_written_one_at_a_time() {
+    use crate::model::lir::{Block, LirBlock};
+    let insns: Vec<Arc<Insn>> = (0..10).map(|k| float_move(k as i64, Some(1), k + 1, (k + 1) % 10 + 1)).collect();
+    let body =
+        LirBody::new("rot", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default());
+    let made = _sequenced(&body);
+    let copies = made.insns();
+    assert!(copies.iter().all(|one| one.group.is_none()), "a copy is still grouped");
+    // Ten copies and the temporary that holds the first value overwritten.
+    assert_eq!(copies.len(), 11);
+    // Simulate: each value holds its own number; the result is the rotation.
+    let mut values: IndexMap<u32, u32> = (1..=10).map(|v| (v, v)).collect();
+    for one in &copies {
+        let what = one.what.as_ref().expect("a copy");
+        let (Loc::Held(into), Loc::Held(from)) = (&what.dests[0], &what.sources[0]) else { panic!("held") };
+        let value = values[&from.value];
+        values.insert(into.value, value);
+    }
+    for k in 0..10u32 {
+        assert_eq!(values[&(k + 1)], (k + 1) % 10 + 1, "value {} after the rotation", k + 1);
+    }
+}
+
+/// A float compare is followed by `fnstsw ax` once the stack is built, after
+/// registers are allocated: AX holds no value across it. The integer
+/// accumulator of classify() sat in AX and the compare's `fnstsw` wrote over it
+/// (`bits |= ...` lost to every compare).
+#[test]
+fn test_a_float_compare_clobbers_the_status_word_register() {
+    use crate::model::lir::{Block, LirBlock};
+    let held = |value| Loc::Held(Held { value, width: 10 });
+    let what = Semantics {
+        name: Some("fcom".to_owned()),
+        sources: vec![held(1), held(2)],
+        ..Semantics::new(Operation::Compare)
+    };
+    let compare = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![1, 2]));
+    let body = LirBody::new(
+        "cmp",
+        0,
+        vec![Block::from(LirBlock::new(0, vec![compare]))],
+        IndexMap::default(),
+        IndexMap::default(),
+    );
+    let made = _compares_clobber(&body, RegId::AX);
+    assert!(made.insns()[0].clobbers.contains(&RegId::AX));
+}
+
+/// A spill home's reload defines its value: made with no definition, the
+/// reload of an x87 value spilled inline left the value a use nothing defined,
+/// and the live-range calculation panicked ("a unique value").
+#[test]
+fn test_a_float_reload_defines_its_value() {
+    let cell = Mem { through: RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) };
+    let reload = _spill_home(7, cell);
+    assert_eq!(reload.defines, vec![7]);
 }

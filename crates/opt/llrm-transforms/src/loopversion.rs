@@ -25,7 +25,7 @@
 //!                                    else:      for i: a[i * s] = 0
 //! ```
 //!
-//! The copy is a candidate, as in [`crate::unswitch`]: [`crate::candidate`]
+//! The copy is a candidate, as in [`crate::loopfuse`]: [`crate::candidate`]
 //! runs the pipeline over it, with the loop's header copied and what it loads
 //! unchanged hoisted ([`crate::pipeline::header_copied`]) and the same done to
 //! the loop it is judged against, so what the assumption allows is done by
@@ -254,7 +254,7 @@ pub trait Assumption {
     /// `copy` made to take it for granted.
     fn assumed(
         &self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         copy: &LoopCopy,
     ) -> Result<(), String>;

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:dc483d5566192eb2c3a59e2a2547f0b6d754109ff20704cdd7bd26c6076964a2 -->
+<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:add70581b49957f51d894db5de8ff7b1e4ae7ccbec9061e074289fa228e8ab59 -->
 
 # selects
 
@@ -21,6 +21,22 @@ replaces the select's uses:
                                join:   %r = phi [a, taken], [b, block]
                                        rest
 ```
+
+An operand of the select that only the select uses, is safe to execute
+speculatively and costs `TCC_Expensive` or more (a division) moves into the
+block of its own side, so the other path does not run it: CodeGenPrepare's
+`sinkSelectOperand`. A cheap one stays, as in LLVM. Where the target states
+no cost model every instruction costs one, and nothing moves.
+
+DEVIATE S2 (no number): the pin keeps the select to instruction selection.
+CodeGenPrepare's `optimizeSelectInst` forms no branch where
+`isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
+`isFormingBranchFromSelectProfitable`), and `X86TargetLowering::
+EmitLoweredSelect` then expands the select to a diamond on machine IR, with
+both operands computed before it. Ours expands in MIR and moves an
+expensive operand into its arm. Exit: move the expansion to selection and
+drop the operand sinking: the registry slot `emit-lowered-select`
+(lir-cleanup-port, PR by 2026-11-13, rows pair after it lands; #3052).
 
 The loop is repeated until no select is left in any function, so two selects
 in one block each get their own split. The result is checked by an

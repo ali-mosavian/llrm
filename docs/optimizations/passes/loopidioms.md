@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:ffca51f899467bd35ce9e28b73362ecbcd2677ce8ef0e6cf3b924bdc47a7e9d2 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:20a00abb203a0b3e03f90c38e16a8c5d31c002f9f77f82db9bd3157d84eef161 -->
 
 # loopidioms
 
@@ -34,8 +34,10 @@ these forms:
 The count in bytes must not wrap the index: a byte's trips never do, and
 wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
 not be wider than the index. A huge pointer, which carries into its
-selector, is refused. A volatile access, a call, or a value the loop changes
-keeps the loop.
+selector, is taken like any other: the intrinsic carries its address space,
+and instruction selection splits the fill at each 64K segment
+(`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
+a value the loop changes keeps the loop.
 
 A loop with one fill of constant bytes is rewritten always. A pattern, a
 copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
@@ -65,9 +67,8 @@ at least two non-volatile stores of one repeated byte to adjacent bytes of
 one object (no other memory access between them) is one memset placed where
 the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
 or 16 bytes, or fewer only where the memset needs fewer widest-integer
-stores). A run of adjacent constants that are not one byte repeated becomes
-stores of the widest legal integer, when that is no more code bytes (a value
-stored more than once lives in a register, which is cheaper). `Merge` runs
+stores). The other stores, of constants and of loaded values, to adjacent
+cells are wider ones (`mergestores`). `Merge` runs
 after the scalar passes have settled: no pass asks a memset what a cell
 holds, so merging sooner would lose a store's value to the forwarding after
 it.

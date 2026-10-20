@@ -1,5 +1,7 @@
 //! LLVM's instructions, each with what its class carries beside operands.
 
+use std::cmp::Ordering;
+
 use crate::types::TypeId;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -90,6 +92,28 @@ impl IntPredicate {
             same => same,
         }
     }
+
+    /// Whether `x self y` for `width`-bit integers given as unsigned bits.
+    pub fn holds(
+        self,
+        x: u128,
+        y: u128,
+        width: u32,
+    ) -> bool {
+        let (sx, sy) = (crate::context::signed(x, width), crate::context::signed(y, width));
+        match self {
+            Self::Eq => x == y,
+            Self::Ne => x != y,
+            Self::Ugt => x > y,
+            Self::Uge => x >= y,
+            Self::Ult => x < y,
+            Self::Ule => x <= y,
+            Self::Sgt => sx > sy,
+            Self::Sge => sx >= sy,
+            Self::Slt => sx < sy,
+            Self::Sle => sx <= sy,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -110,6 +134,76 @@ pub enum FloatPredicate {
     Une,
     Uno,
     True,
+}
+
+impl FloatPredicate {
+    /// `FCmpInst::compare`
+    /// ([Instructions.cpp:3916](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/Instructions.cpp#L3916)):
+    /// whether the predicate holds for operands that compare as `order`, None
+    /// being unordered.
+    pub fn holds(
+        self,
+        order: Option<Ordering>,
+    ) -> bool {
+        use Ordering::{Equal, Greater, Less};
+        match self {
+            Self::False => false,
+            Self::True => true,
+            Self::Uno => order.is_none(),
+            Self::Ord => order.is_some(),
+            Self::Ueq => matches!(order, None | Some(Equal)),
+            Self::Oeq => order == Some(Equal),
+            Self::Une => order != Some(Equal),
+            Self::One => matches!(order, Some(Less | Greater)),
+            Self::Ult => matches!(order, None | Some(Less)),
+            Self::Olt => order == Some(Less),
+            Self::Ugt => matches!(order, None | Some(Greater)),
+            Self::Ogt => order == Some(Greater),
+            Self::Ule => order != Some(Greater),
+            Self::Ole => matches!(order, Some(Less | Equal)),
+            Self::Uge => order != Some(Less),
+            Self::Oge => matches!(order, Some(Greater | Equal)),
+        }
+    }
+
+    /// `CmpInst::getInversePredicate`: the predicate that holds where this one
+    /// does not (an ordered one becomes the unordered of its complement).
+    pub fn inverse(self) -> Self {
+        match self {
+            Self::False => Self::True,
+            Self::True => Self::False,
+            Self::Oeq => Self::Une,
+            Self::Ogt => Self::Ule,
+            Self::Oge => Self::Ult,
+            Self::Olt => Self::Uge,
+            Self::Ole => Self::Ugt,
+            Self::One => Self::Ueq,
+            Self::Ord => Self::Uno,
+            Self::Ueq => Self::One,
+            Self::Ugt => Self::Ole,
+            Self::Uge => Self::Olt,
+            Self::Ult => Self::Oge,
+            Self::Ule => Self::Ogt,
+            Self::Une => Self::Oeq,
+            Self::Uno => Self::Ord,
+        }
+    }
+
+    /// `CmpInst::getSwappedPredicate`: the predicate that holds with the
+    /// operands exchanged.
+    pub fn swapped(self) -> Self {
+        match self {
+            Self::Ogt => Self::Olt,
+            Self::Oge => Self::Ole,
+            Self::Olt => Self::Ogt,
+            Self::Ole => Self::Oge,
+            Self::Ugt => Self::Ult,
+            Self::Uge => Self::Ule,
+            Self::Ult => Self::Ugt,
+            Self::Ule => Self::Uge,
+            same => same,
+        }
+    }
 }
 
 /// Keyword spellings, shared by the parser and the printer.
@@ -217,7 +311,22 @@ impl Flags {
     pub const NINF: Flags = Flags(1 << 10);
     pub const NSZ: Flags = Flags(1 << 11);
     pub const ARCP: Flags = Flags(1 << 12);
+    pub const CONTRACT: Flags = Flags(1 << 13);
     pub const FAST: Flags = Flags(0x7f << 8);
+    /// What makes a result poison where the operation's promise breaks:
+    /// `Instruction::dropPoisonGeneratingFlags`.
+    pub const POISON_GENERATING: Flags = Flags(
+        Flags::NUW.0
+            | Flags::NSW.0
+            | Flags::EXACT.0
+            | Flags::DISJOINT.0
+            | Flags::NNEG.0
+            | Flags::SAMESIGN.0
+            | Flags::INBOUNDS.0
+            | Flags::NUSW.0
+            | Flags::NNAN.0
+            | Flags::NINF.0,
+    );
     /// On a `switch`: the backend lowers it as a jump table, its cases the
     /// indices `0..n` in a register of the pointer's width.
     pub const TABLE: Flags = Flags(1 << 15);
@@ -237,7 +346,7 @@ impl Flags {
         (Flags::NINF, "ninf"),
         (Flags::NSZ, "nsz"),
         (Flags::ARCP, "arcp"),
-        (Flags(1 << 13), "contract"),
+        (Flags::CONTRACT, "contract"),
         (Flags(1 << 14), "afn"),
         (Flags::TABLE, "table"),
     ];
@@ -256,8 +365,31 @@ impl Flags {
         self.0 |= other.0;
     }
 
+    pub fn remove(
+        &mut self,
+        other: Flags,
+    ) {
+        self.0 &= !other.0;
+    }
+
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// The flags of `self` that `other` does not have.
+    pub fn without(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 & !other.0)
+    }
+
+    /// The flags either has.
+    pub fn union(
+        self,
+        other: Flags,
+    ) -> Flags {
+        Flags(self.0 | other.0)
     }
 
     /// The flags both have.
@@ -318,7 +450,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 43] = [
+pub const FLAG_ATTRIBUTES: [&str; 44] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -348,6 +480,7 @@ pub const FLAG_ATTRIBUTES: [&str; 43] = [
     "nosync",
     "noundef",
     "nounwind",
+    "null_pointer_is_valid",
     "optnone",
     "optsize",
     "readnone",
@@ -362,6 +495,21 @@ pub const FLAG_ATTRIBUTES: [&str; 43] = [
     "writable",
     "writeonly",
     "zeroext",
+];
+
+/// Attributes the pin's clang states that no pass here reads (stack protection,
+/// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
+/// kind in parentheses (`uwtable(sync)`).
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 9] = [
+    "allockind",
+    "allocsize",
+    "dead_on_return",
+    "nocreateundeforpoison",
+    "nofreeobj",
+    "ssp",
+    "sspreq",
+    "sspstrong",
+    "uwtable",
 ];
 
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
@@ -462,7 +610,7 @@ pub enum Clause {
 /// callee` and `call args.., callee`, as LLVM's CallBase keeps them;
 /// `phi (v, block)*`; `alloca [count]`; `store value, ptr`; `gep ptr,
 /// indices..`; `landingpad clauses..`.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash)]
 pub enum Opcode {
     Ret,
     Br,
@@ -486,6 +634,41 @@ pub enum Opcode {
     Freeze,
     Call(Box<CallInfo>),
     LandingPad { cleanup: bool, clauses: Vec<Clause> },
+}
+
+/// `==` inlined: a compare with a unit variant (`opcode == Opcode::Phi`) is
+/// one discriminant test, where the derived `eq` was a call and the temporary's
+/// drop glue (4% of a diamond-800 compile).
+impl PartialEq for Opcode {
+    #[inline]
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        use std::mem::discriminant;
+        if discriminant(self) != discriminant(other) {
+            return false;
+        }
+        match (self, other) {
+            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
+            (Self::Binary(a), Self::Binary(b)) => a == b,
+            (Self::Cast(a), Self::Cast(b)) => a == b,
+            (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
+            (
+                Self::Alloca { allocated: a, align: b, address_space: c },
+                Self::Alloca { allocated: d, align: e, address_space: f },
+            ) => a == d && b == e && c == f,
+            (Self::Load { align: a, volatile: b }, Self::Load { align: c, volatile: d })
+            | (Self::Store { align: a, volatile: b }, Self::Store { align: c, volatile: d }) => a == c && b == d,
+            (Self::GetElementPtr { source: a }, Self::GetElementPtr { source: b }) => a == b,
+            (Self::ICmp(a), Self::ICmp(b)) => a == b,
+            (Self::FCmp(a), Self::FCmp(b)) => a == b,
+            (Self::LandingPad { cleanup: a, clauses: b }, Self::LandingPad { cleanup: c, clauses: d }) => {
+                a == c && b == d
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Opcode {
@@ -528,3 +711,53 @@ impl Opcode {
 /// caller of: here arguments pushed right to left and popped by the callee
 /// (`ret N`), which a caller's `add sp,N` then does not repeat.
 pub const FAST: u32 = 8;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Opcode::eq` is hand-written (inlined) and must stay the derived one:
+    /// equal only to itself, payload included.
+    #[test]
+    fn opcode_equality_compares_the_variant_and_its_payload() {
+        let info = || {
+            Box::new(CallInfo {
+                function_type: crate::context::Context::default().types.void(),
+                calling_convention: 0,
+                return_attrs: Vec::new(),
+                argument_attrs: Vec::new(),
+                attrs: Vec::new(),
+                tail: Tail::None,
+            })
+        };
+        let ops = [
+            Opcode::Ret,
+            Opcode::Br,
+            Opcode::Phi,
+            Opcode::Select,
+            Opcode::Freeze,
+            Opcode::Binary(BinaryOp::Add),
+            Opcode::Binary(BinaryOp::Sub),
+            Opcode::Cast(CastOp::ZExt),
+            Opcode::Cast(CastOp::SExt),
+            Opcode::ICmp(IntPredicate::Eq),
+            Opcode::ICmp(IntPredicate::Ne),
+            Opcode::Load { align: None, volatile: false },
+            Opcode::Load { align: Some(2), volatile: false },
+            Opcode::Load { align: None, volatile: true },
+            Opcode::Store { align: None, volatile: false },
+            Opcode::ExtractValue(vec![0]),
+            Opcode::ExtractValue(vec![1]),
+            Opcode::InsertValue(vec![0]),
+            Opcode::Call(info()),
+            Opcode::Invoke(info()),
+            Opcode::LandingPad { cleanup: false, clauses: vec![] },
+            Opcode::LandingPad { cleanup: true, clauses: vec![] },
+        ];
+        for (a, x) in ops.iter().enumerate() {
+            for (b, y) in ops.iter().enumerate() {
+                assert_eq!(x == y, a == b, "{x:?} against {y:?}");
+            }
+        }
+    }
+}

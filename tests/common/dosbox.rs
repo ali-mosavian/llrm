@@ -31,7 +31,7 @@ pub fn skipped(
     // Written to the stderr itself, which the harness does not capture: seen
     // when the test passes.
     let _ = Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
-    assert!(std::env::var_os(require).is_none(), "{require} is set, and: {reason}");
+    assert!(!llrm_core::support::env_set(require), "{require} is set, and: {reason}");
 }
 
 fn conf(

@@ -16,7 +16,7 @@ use crate::module::{
 };
 use crate::opcode::{
     Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
-    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TYPE_ATTRIBUTES, Tail, spelled,
+    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -30,8 +30,8 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 9] =
-    ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 8] =
+    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -272,6 +272,7 @@ impl Parser {
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
                                     kind: GlobalKind::Variable(GlobalVariable {
+                                        externally_initialized: false,
                                         ty: void,
                                         constant: false,
                                         initializer: None,
@@ -472,7 +473,7 @@ impl Parser {
         let linkage = self.linkage();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
-        self.eat_word("externally_initialized");
+        let externally_initialized = self.eat_word("externally_initialized");
         let constant = match self.word()?.as_str() {
             "global" => false,
             "constant" => true,
@@ -499,7 +500,7 @@ impl Parser {
             linkage,
             unnamed_addr,
             address_space,
-            kind: GlobalKind::Variable(GlobalVariable { ty, constant, initializer, align }),
+            kind: GlobalKind::Variable(GlobalVariable { externally_initialized, ty, constant, initializer, align }),
         };
         self.defined_globals.insert(id);
         Ok(())
@@ -513,7 +514,8 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "zeroinitializer", "getelementptr"].contains(&word.as_str())
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
+                    .contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
             }
             _ => false,
@@ -587,7 +589,7 @@ impl Parser {
         }
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = &self.module.globals[id.0 as usize].name {
-            intrinsics::declare(&mut local.function, name);
+            intrinsics::declare(&mut local.function, &self.module.context.types, name);
         }
         if define {
             self.body(&mut local)?;
@@ -625,6 +627,37 @@ impl Parser {
                     let key = self.string()?;
                     let value = if self.eat_punct('=') { Some(self.string()?) } else { None };
                     out.push(Attribute::Str(key, value));
+                }
+                // `captures(none)` is `nocapture`; any other capture kind says
+                // what the callee may do with the pointer, which no pass here
+                // reads.
+                Token::Word(word) if word == "captures" => {
+                    self.next();
+                    self.expect_punct('(')?;
+                    let none = self.is_word("none");
+                    while !self.eat_punct(')') {
+                        if *self.peek() == Token::Eof {
+                            return self.fail("`captures(` is never closed");
+                        }
+                        self.next();
+                    }
+                    if none {
+                        out.push(Attribute::Flag("nocapture".to_owned()));
+                    }
+                }
+                Token::Word(word) if TARGET_FLAG_ATTRIBUTES.contains(&word.as_str()) => {
+                    self.next();
+                    // An argument list (`uwtable(sync)`, `allocsize(0, 1)`) is
+                    // not read.
+                    if self.eat_punct('(') {
+                        while !self.eat_punct(')') {
+                            if *self.peek() == Token::Eof {
+                                return self.fail(format!("`{word}(` is never closed"));
+                            }
+                            self.next();
+                        }
+                    }
+                    out.push(Attribute::Flag(word));
                 }
                 Token::Word(word) if FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
@@ -871,6 +904,7 @@ impl Parser {
                 ConstantKind::Null
             }
             Token::Word(word) if word == "poison" => ConstantKind::Poison,
+            Token::Word(word) if word == "undef" => ConstantKind::Undef,
             Token::Word(word) if word == "zeroinitializer" => ConstantKind::Zero,
             Token::Global(name) => return self.global_ref(&name, ty, line),
             Token::Bytes(bytes) => {
@@ -940,6 +974,8 @@ impl Parser {
                 ConstantKind::Expr(ConstantExpr::GetElementPtr {
                     source,
                     inbounds: flags.contains(Flags::INBOUNDS),
+                    nusw: flags.contains(Flags::INBOUNDS) || flags.contains(Flags::NUSW),
+                    nuw: flags.contains(Flags::NUW),
                     operands,
                 })
             }
@@ -1248,7 +1284,7 @@ impl Parser {
                         continue;
                     }
                     let inst = self.instruction(local)?;
-                    local.function.blocks[block.0 as usize].instructions.push(inst);
+                    local.function.link_last(block, inst);
                     if local.function.instruction(inst).opcode.is_terminator() {
                         current = None;
                     }
@@ -1783,7 +1819,7 @@ impl Parser {
             local.function.values.push(ValueData { ty, name: None, def: ValueDef::Instruction(id) });
             Some(value)
         };
-        local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata });
+        local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata, link: (0, 0) });
         for (variable, what) in std::mem::take(&mut local.pending_records) {
             local.function.debug_records.push(DebugRecord { before: id, variable, what });
         }

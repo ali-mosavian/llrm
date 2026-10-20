@@ -33,11 +33,7 @@
 //! no memory effect, `willreturn` and `nounwind`. `erasable` asks the same of
 //! one call (LLVM's `wouldInstructionBeTriviallyDead`), and
 //! `remove_dead_pure_calls` erases the calls with no used result that are
-//! erasable. `returns_without_looping` holds when every CFG path ends in `ret`
-//! without revisiting a block. `cannot_fault` holds when every access is
-//! non-volatile and either in a frame object (`frameescape::framed`) or a
-//! constant offset ([`crate::pointerfacts`]) from an initialized near global
-//! this module defines.
+//! erasable.
 //!
 //! Noreturn. `noreturn_procedures` and `program_noreturn` are
 //! [`crate::noreturn`]'s greatest fixed point over the eligible bodies;
@@ -90,22 +86,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::memory;
-use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueId};
+use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::program::Program;
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_support::hash::IndexMap;
 
-use crate::cfg;
 use crate::effects::{self, Declarations};
-use crate::frameescape;
 use crate::noreturn;
 pub use crate::noreturn::terminal_sites;
-use crate::pointerfacts;
 
 pub type Returns = IndexMap<GlobalId, ConstantId>;
 pub type Parameters = IndexMap<GlobalId, Vec<Option<ConstantId>>>;
@@ -291,14 +283,24 @@ pub fn specialize_parameters(
     constants: &[Option<ConstantId>],
 ) -> bool {
     let mut changed = false;
+    let mut pointer = false;
     for (parameter, constant) in function.parameters().to_vec().into_iter().zip(constants) {
         if let Some(constant) = *constant
             && context.get(constant).ty == function.value(parameter).ty
             && !function.users(parameter).is_empty()
         {
+            pointer |= matches!(
+                context.types.get(function.value(parameter).ty),
+                llrm_mir::Type::Pointer(_)
+            );
             function.replace_all_uses_with(parameter, Operand::Constant(constant));
             changed = true;
         }
+    }
+    if pointer {
+        // A pointer parameter now a constant address: its accesses are no
+        // longer argument memory.
+        llrm_mir::memory::unsplit(&mut function.attrs, llrm_mir::memory::Moved::OutOfArguments);
     }
     changed
 }
@@ -361,46 +363,6 @@ pub fn propagate_returns(
     !known.is_empty()
 }
 
-/// Whether every CFG path ends in RETURN without revisiting a block.
-pub fn returns_without_looping(function: &Function) -> bool {
-    let graph = cfg::graph(function);
-    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
-    let mut visiting = BTreeSet::new();
-    let mut visited = BTreeSet::new();
-
-    fn visit(
-        at: i64,
-        function: &Function,
-        blocks: &BTreeMap<i64, &cfg::Block>,
-        visiting: &mut BTreeSet<i64>,
-        visited: &mut BTreeSet<i64>,
-    ) -> bool {
-        if visiting.contains(&at) || !blocks.contains_key(&at) {
-            return false;
-        }
-        if visited.contains(&at) {
-            return true;
-        }
-        visiting.insert(at);
-        let block = blocks[&at];
-        let okay = if !block.succ.is_empty() {
-            block.succ.iter().all(|&one| visit(one, function, blocks, visiting, visited))
-        } else {
-            function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret)
-        };
-        visiting.remove(&at);
-        if okay {
-            visited.insert(at);
-        }
-        okay
-    }
-
-    match graph.first() {
-        Some(entry) => visit(entry.at, function, &blocks, &mut visiting, &mut visited),
-        None => false,
-    }
-}
-
 /// Whether the body here is the one that runs: LLVM's `hasExactDefinition`.
 /// The linker may swap any other for a different one.
 fn _exact(linkage: Linkage) -> bool {
@@ -430,38 +392,6 @@ fn _access(
         Opcode::Store { volatile, .. } => Some((instruction.operands[1], volatile, true)),
         _ => None,
     }
-}
-
-/// Whether no access of `function` can fault: each is non-volatile and in
-/// its frame (`frameescape::framed`) or a constant offset
-/// (`pointerfacts`) from a near global variable this module defines. A
-/// pointer, an external or far selector may name memory that is not there.
-pub fn cannot_fault(
-    module: &Module,
-    layout: &DataLayout,
-    spaces: llrm_mir::spaces::Spaces,
-    function: &Function,
-) -> bool {
-    let context = &module.context;
-    let framed = frameescape::framed(function);
-    let offsets = pointerfacts::offsets(context, layout, function);
-    let is_local = |pointer: Operand| matches!(pointer, Operand::Value(value) if framed.contains_key(&value));
-    let is_static = |pointer: Operand| {
-        let Some((Operand::Constant(base), _)) = offsets.relative(pointer) else { return false };
-        let ConstantKind::Global(global) = context.get(base).kind else { return false };
-        let global = module.global(global);
-        global.address_space == spaces.near
-            && matches!(
-                &global.kind,
-                GlobalKind::Variable(variable) if variable.initializer.is_some()
-            )
-    };
-    function
-        .walk()
-        .all(
-            |(_, inst)| _access(function, inst)
-                .is_none_or(|(pointer, volatile, _)| !volatile && (is_local(pointer) || is_static(pointer))),
-        )
 }
 
 /// Exactly defined bodies whose attributes state they touch no memory and
@@ -515,7 +445,7 @@ pub fn noreturn_procedures(
 
 /// Noreturn's terminal-call cut, at the direct calls to `noreturn` bodies.
 pub fn terminal_calls(
-    context: &mut Context,
+    context: &Context,
     declarations: &Declarations,
     function: &mut Function,
     noreturn: &BTreeSet<GlobalId>,
