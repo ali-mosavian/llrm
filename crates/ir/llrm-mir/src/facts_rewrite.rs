@@ -408,6 +408,12 @@ mod tests {
             // so it ran wherever the branch does, and a value the flag makes
             // poison made the branch undefined before.
             "icmpchain.rs",
+            // SimplifyCFG.cpp's `isValueEqualityComparison` (L810) takes the
+            // operand of a `trunc nuw` that is the condition of a branch as the
+            // value compared: the trunc is an operand of the branch, so it ran
+            // wherever the branch does, and a value the flag makes poison made
+            // the branch undefined before.
+            "switchvalue.rs",
             // SimplifyCFG.cpp's `switchToLookupTable` gives the `sub` that
             // makes the table index `nsw` when the case range cannot wrap;
             // it reads no flag.
