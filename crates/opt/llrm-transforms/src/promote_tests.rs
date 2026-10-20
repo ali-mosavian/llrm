@@ -662,6 +662,7 @@ b0:
     };
     let promoted = |linkage: &str| {
         let mut module = module(&text(linkage));
+        crate::testing::attributed(&mut module);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Promote);

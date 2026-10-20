@@ -248,6 +248,7 @@ pub(crate) fn summarized(
     module: &mut Module,
     pass: impl llrm_mir::passes::FunctionPass + 'static,
 ) -> String {
+    crate::testing::attributed(module);
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.require::<llrm_analysis::manager::Summaries>();
     manager.add(pass);

@@ -324,18 +324,6 @@ fn omax_unswitches_loops() {
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
 
-/// gcc turns `-ftree-loop-distribution` on at -O3 and no lower; -Omax is
-/// everything.
-#[test]
-fn only_o3_and_omax_distribute_loops_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).distribute && pipeline(&["-O3"]).distribute);
-    assert!(!pipeline(&["-O3", "-fno-tree-loop-distribution"]).distribute);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).distribute, "{level}");
-        assert!(pipeline(&[level, "-ftree-loop-distribution"]).distribute, "{level}");
-    }
-}
-
 /// gcc turns `-fversion-loops` on at -O3 and no lower; -Omax is
 /// everything.
 #[test]

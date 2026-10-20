@@ -16,7 +16,7 @@
 //! an instruction outside it.
 //!
 //! # Example
-//! None: a library. [`crate::loopdistribute`] asks all four of its one loop.
+//! None: a library. [`crate::versionalias`] asks all four of its one loop.
 //!
 //! # Provides
 //! `controls`, `quiet`, `header_quiet`, `read_outside`.

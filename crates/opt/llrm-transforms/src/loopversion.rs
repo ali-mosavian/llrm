@@ -25,7 +25,7 @@
 //!                                    else:      for i: a[i * s] = 0
 //! ```
 //!
-//! The copy is a candidate, as in [`crate::loopdistribute`]:
+//! The copy is a candidate, as a candidate is:
 //! [`crate::candidate`] runs the pipeline over it, with the loop's header
 //! copied and what it loads unchanged hoisted
 //! ([`crate::pipeline::header_copied`]) and the same done to the loop it is
@@ -61,7 +61,7 @@
 //! `loopversion_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `unswitch` and `distribute` and
+//! Once per body, after `unswitch` and
 //! at -O3 and -Omax (`-fversion-loops`, both
 //! reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 //! pass is selected by name. The module declares `llrm.noalias.p0` first

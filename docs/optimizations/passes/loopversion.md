@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopversion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopversion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:8df615d638da646de5f35d54ea032daf1c33d3882d3cc3db7bb016131f2b8752 -->
+<!-- src: crates/opt/llrm-transforms/src/loopversion.rs sha256:108bf4e2344f6390195d4b72e0cf517ce79159b779738eedca6eb79e954b9cb7 -->
 
 # loopversion
 
@@ -30,7 +30,7 @@ take the copy's values.
                                    else:      for i: a[i * s] = 0
 ```
 
-The copy is a candidate, as in [`crate::loopdistribute`](loopdistribute.md):
+The copy is a candidate, as a candidate is:
 [`crate::candidate`](candidate.md) runs the pipeline over it, with the loop's header
 copied and what it loads unchanged hoisted
 ([`crate::pipeline::header_copied`](pipeline.md)) and the same done to the loop it is
@@ -66,7 +66,7 @@ From unit test `a_loop_that_steps_by_a_stride_is_copied_for_one` in
 `loopversion_tests.rs`.
 
 ## Runs
-Once per body, after `unswitch` and `distribute` and
+Once per body, after `unswitch` and
 at -O3 and -Omax (`-fversion-loops`, both
 reasons: gcc's flag is the stride's, LLVM's has none). Not run where one
 pass is selected by name. The module declares `llrm.noalias.p0` first
