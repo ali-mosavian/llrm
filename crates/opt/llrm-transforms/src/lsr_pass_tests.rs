@@ -336,12 +336,13 @@ b6:
 ";
 
 /// #3075: real mode priced like the flat model kept the `shl` and the element
-/// counter, listed as `lea` and 32-bit addresses in 16-bit code. With the
-/// prefix and its stall priced, the fill steps a pointer by 2 as before the
-/// flip.
+/// counter, listed as `lea` and 32-bit addresses in 16-bit code. A priced
+/// prefixed form was only a late tie-break (the scale key sits behind the
+/// registers), so the 16-bit forms alone are legal and the fill steps a
+/// pointer by 2 as before the flip.
 #[test]
-fn a_scaled_address_costs_real_mode_its_prefix_and_steps_a_pointer() {
-    let real = RealMode { scale_costs: vec![(0, 0), (1, 0), (2, 2), (4, 2), (8, 2)], registers: 6 };
+fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
+    let real = RealMode { scale_costs: vec![(1, 0)], registers: 6 };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
     let before = module.clone();
