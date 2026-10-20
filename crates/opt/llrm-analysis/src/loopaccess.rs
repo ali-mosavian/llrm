@@ -143,7 +143,7 @@ pub(crate) fn load_store_pointer_operand(
 }
 
 /// `getLoadStoreType`.
-pub(crate) fn load_store_type(
+pub fn load_store_type(
     cx: &Cx,
     inst: InstId,
 ) -> Option<TypeId> {

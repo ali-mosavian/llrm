@@ -214,6 +214,7 @@ pub mod loopdeletion;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopversioning;
+pub mod looploadelim;
 pub mod loopinterchange;
 pub mod loopnest;
 pub mod looppeel;
