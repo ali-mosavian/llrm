@@ -38,6 +38,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_funnel::match_funnel_shift;
+use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
@@ -254,7 +255,10 @@ pub fn visit_or(
     // foldComplexAndOrPatterns, foldIntegerPackFromVector, foldOrOfInversions,
     // foldUsingDistributiveLaws and the i1 select folds.
     let (op0, op1, _) = parts(c, inst);
-    FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
+        return found;
+    }
+    fold_boolean_and_or(c, inst, op0, op1, false, false).map_or(Visit::None, Visit::Replace)
 }
 
 #[cfg(test)]
