@@ -447,3 +447,34 @@ fn an_outer_loop_without_a_preheader_gets_its_invariants_stepped() {
     assert!(after.contains(" = phi ptr"), "{after}");
     assert!(!after.contains(" = shl nuw nsw i32 %o, 3"), "{after}");
 }
+
+/// `loops` counted loops one after another, each with an array walk to reduce.
+fn walks(loops: usize) -> String {
+    let mut text = String::from("define i32 @f(i32 %n) {\ne0:\n  %buf = alloca [64 x i32]\n");
+    for k in 0..loops {
+        text += &format!(
+            "  br label %h{k}\nh{k}:\n  %i{k} = phi i32 [ 0, %e{k} ], [ %n{k}, %h{k} ]\n  %a{k} = getelementptr i32, ptr %buf, i32 %i{k}\n  store i32 7, ptr %a{k}\n  %n{k} = add i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %e{}, label %h{k}\ne{}:\n",
+            k + 1,
+            k + 1
+        );
+    }
+    text + "  ret i32 0\n}\n"
+}
+
+/// The trip counts LSR works out over `loops` loops it rewrites.
+fn lsr_trip_counts(loops: usize) -> usize {
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let (changed, after) = reduced_on(FLAT, &walks(loops), "i486", &[&[5]]);
+    assert!(changed, "{after}");
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// LSR dropped every expression after each edit, so each loop it came to worked
+/// out the trip counts of the loops before it again: 4 loops cost 26 counts and
+/// 16 cost 392 (quadratic; 40 M of d_faces -O2's LSR against the pin's 18 M).
+/// Only what an edit touched is dropped now: 4x the loops, about 4x the counts.
+#[test]
+fn the_trip_counts_lsr_works_out_grow_with_the_loops_not_their_square() {
+    let (small, large) = (lsr_trip_counts(4), lsr_trip_counts(16));
+    assert!(large < 6 * small, "4 loops: {small} counts, 16 loops: {large}");
+}
