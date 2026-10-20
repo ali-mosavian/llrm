@@ -427,6 +427,7 @@ pub fn datum(item: &Datum) -> Vec<String> {
                 match bytes {
                     4 => "dd",
                     2 => "dw",
+                    8 => "dq",
                     other => panic!("a pointer of {other} bytes"),
                 },
                 _signed(*offset)
@@ -625,8 +626,11 @@ fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
 /// value.
 fn saved_of(procedure: &Procedure) -> Vec<RegId> {
     let found = procedure.body.facts.0.get::<BodyRoots>(&procedure.body);
-    let mut roots =
-        if procedure.registers.free { found.of_values(procedure.registers.pointer) } else { found.plain.clone() };
+    let mut roots = if procedure.registers.free {
+        found.of_values(procedure.body.regs(), procedure.registers.pointer)
+    } else {
+        found.plain.clone()
+    };
     roots.extend(found.disturbed.iter());
     // An interrupt handler has saved everything before its frame, and a
     // runtime-built one has saved SI and DI (B$ENRA/B$ENRD, restored by
@@ -689,7 +693,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
-                || roots.contains(&ir::root(procedure.registers.pointer))
+                || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| !one.code.is_empty()))
     };
     let locals = reserve != 0;
@@ -700,7 +704,7 @@ fn parts(
     // frame register and the reserve a multiple of it.
     let align = procedure.registers.align;
     let calls = align > slot
-        && procedure.body.bits == 32
+        && procedure.body.bits >= 32
         && !procedure.far
         && procedure.interrupt.is_none()
         && procedure.entry == 0
@@ -869,8 +873,8 @@ fn frame_held(procedure: &Procedure) -> bool {
             .facts
             .0
             .get::<BodyRoots>(&procedure.body)
-            .of_values(registers.pointer)
-            .contains(&ir::root(registers.pointer))
+            .of_values(procedure.body.regs(), registers.pointer)
+            .contains(&procedure.body.regs().root(registers.pointer))
 }
 
 pub fn listing(
@@ -1195,7 +1199,7 @@ fn stack_addressed(
         || procedure.far
         || procedure.interrupt.is_some()
         || procedure.entry != 0
-        || procedure.body.bits != 32
+        || procedure.body.bits < 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
         || procedure.callees.values().any(|one| !inert(one))
     {
@@ -1358,7 +1362,7 @@ fn addressed_pass(
                             if what.op == Operation::Push { (&what.sources, 1) } else { (&what.dests, -1) };
                         let [place] = &places[..] else { return Err(stop(procedure, &format!("{what:?}"))) };
                         match width_of(place) {
-                            Some(bytes @ (2 | 4)) => depth = Some(here + sign * bytes),
+                            Some(bytes @ (2 | 4 | 8)) => depth = Some(here + sign * bytes),
                             _ => return Err(stop(procedure, &format!("{what:?}"))),
                         }
                     }
@@ -1370,7 +1374,7 @@ fn addressed_pass(
                             (place.st_index().is_some() || matches!(place, Loc::Mem(_)))
                                 || matches!(
                                     place,
-                                    Loc::Reg(reg) if ir::root(reg.register) != ir::root(registers.stack)
+                                    Loc::Reg(reg) if procedure.body.regs().root(reg.register) != procedure.body.regs().root(registers.stack)
                                 )
                         }) => {}
                     Operation::Barrier
@@ -1425,7 +1429,7 @@ fn addressed_pass(
                         // Only `add sp, n` and `sub sp, n` are understood.
                         let amount = match (&what.dests[..], &what.sources[..]) {
                             ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })])
-                                if dest.register == STACK && source.register == STACK =>
+                                if ir::root(dest.register) == ir::root(STACK) && ir::root(source.register) == ir::root(STACK) =>
                             {
                                 *value
                             }
@@ -1468,7 +1472,10 @@ fn width_of(place: &Loc) -> Option<i64> {
 }
 
 fn writes_stack_pointer(place: &Loc) -> bool {
-    matches!(place, Loc::Reg(one) if one.register == STACK)
+    matches!(
+        place,
+        Loc::Reg(one) if ir::root(one.register) == ir::root(STACK)
+    )
 }
 
 /// `place` with a frame cell addressed through the stack pointer; none where it
@@ -1693,6 +1700,7 @@ impl Roots {
     /// use it.
     pub fn of_values(
         &self,
+        regs: Regs,
         pointer: RegId,
     ) -> RegSet {
         let mut found = self.values.clone();
@@ -1700,7 +1708,7 @@ impl Roots {
             self.frame_through
                 .iter()
                 .filter(|through| *through != FRAME && *through != pointer && *through != RegId::None)
-                .map(ir::root),
+                .map(|through| regs.root(through)),
         );
         found
     }
@@ -1717,35 +1725,44 @@ impl crate::analysis::facts::Fact for BodyRoots {
 
     fn run(body: &lir::LirBody) -> Roots {
         let mut found = Roots::default();
-        let stack = ir::root(STACK);
+        let regs = body.regs();
+        let root = |register: RegId| regs.root(register);
+        let stack = root(STACK);
         for block in &body.blocks {
             for one in block.insns.iter() {
-                for disturbed in one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)) {
+                for disturbed in one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(root)) {
                     found.moves_stack |= disturbed == stack;
                     found.disturbed.insert(disturbed);
                 }
                 let Some(what) = &one.what else { continue };
-                // A move into the stack pointer (`stackrestore`) leaves it
-                // somewhere else, as an `alloca` does.
-                found.moves_stack |= what.op == Operation::Move
-                    && what.dests.iter().any(|to| matches!(to, Loc::Reg(reg) if ir::root(reg.register) == stack));
+                // An instruction that sets the stack pointer to something not
+                // known at compile time (a dynamic
+                // `alloca`, `stackrestore`); `add sp, n` and `sub sp, n`, the
+                // cleanup after a call, are the frame's own.
+                let known = matches!(
+                    (what.name.as_deref(), &what.dests[..], &what.sources[..]),
+                    (Some("add" | "sub"), [Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(_)])
+                        if root(dest.register) == stack && root(source.register) == stack
+                );
+                found.moves_stack |= !known
+                    && what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if root(reg.register) == stack));
                 for r#where in what.dests.iter().chain(&what.sources) {
                     if let Loc::Reg(ir::Reg { register, .. }) = r#where {
-                        found.plain.insert(ir::root(*register));
-                        found.values.insert(ir::root(*register));
+                        found.plain.insert(root(*register));
+                        found.values.insert(root(*register));
                     }
                     // `lea` of a cell reads the register the cell is addressed
                     // through as much as a load of it does.
                     if let Some(at) = r#where.address() {
-                        found.plain.extend([at.through, at.index_through].map(ir::root));
+                        found.plain.extend([at.through, at.index_through].map(root));
                     }
                     if let Loc::Mem(cell) = r#where {
                         if cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame) {
                             found.frame_through.insert(cell.through);
                         } else {
-                            found.values.insert(ir::root(cell.through));
+                            found.values.insert(root(cell.through));
                         }
-                        found.values.insert(ir::root(cell.index_through));
+                        found.values.insert(root(cell.index_through));
                     }
                 }
             }
@@ -1817,7 +1834,7 @@ pub fn _instruction(
             }
         }
         Operation::Move | Operation::Address => vec![format!("{name} {}, {}", dests[0], sources[0])],
-        Operation::Binary => vec![format!("{name} {}, {}", dests[0], sources[1])],
+        Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources
@@ -2443,6 +2460,8 @@ mod tests {
                 bitness: 32,
                 header: vec![".386".to_owned(), ".model flat".to_owned()],
                 dwarf_version: llrm_target::object::DEFAULT_DWARF_VERSION,
+                pc_relative: false,
+                got_external: false,
             },
             code: "T_TEXT".into(),
             names: no_names(),

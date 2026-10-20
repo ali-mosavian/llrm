@@ -97,11 +97,14 @@ use crate::model::lir::{Block, Insn};
 type Pair = (Held, Held);
 
 impl Selector<'_, '_, '_> {
+    /// An i64 the target has no register for: held as two halves. Where the
+    /// datalayout's largest legal integer is 64 bits, it is an ordinary
+    /// value.
     pub(super) fn is_wide(
         &self,
         ty: llrm_mir::TypeId,
     ) -> bool {
-        self.types().int_bits(ty) == Some(64)
+        self.types().int_bits(ty) == Some(64) && self.layout.largest_legal_integer() < 64
     }
 
     /// Whether `operand` is an i32 sign-extended.
