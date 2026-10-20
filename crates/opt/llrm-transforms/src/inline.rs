@@ -259,6 +259,10 @@ pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
 /// gcc 13.3's depth (params.opt:573), which peeling keeps.
 const MAX_INLINE_RECURSIVE_DEPTH_GCC: usize = 8;
 
+/// gcc 13.3's `max-inline-insns-recursive-auto` (params.opt:553), which caps
+/// what the copies of one peeled call add.
+const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
+
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
 /// in `gcc_insns`: the size the function may reach by copies of itself. The
@@ -665,6 +669,8 @@ struct Plan<'a, 'c> {
     own: i64,
     /// The caller's size in `gcc_insns`, kept only to bound self-inlining.
     insns: i64,
+    /// What peeled copies have added, in `gcc_insns`.
+    peeled: i64,
     frame: u64,
     seq: usize,
 }
@@ -720,17 +726,27 @@ impl<'a> Plan<'a, '_> {
             // so a tree (fib: 1, bintree: 1.25) is not peeled, which doubles
             // a copy at each level (bintree -O2 +0.13% clocks, 988 to 1276 B).
             let level = depth - 1;
-            let recursing = parent.and_then(|one| one.self_calls).unwrap_or(1.0);
+            // The edge's frequency in the caller, over that of the call that
+            // made the outermost copy: the calls to itself per call, to the
+            // power of the copies it is deep.
+            let reached = parent.and_then(|one| one.self_calls).unwrap_or(1.0).powi(level as i32);
             let mut limit = 1.0 - 1.0 / MAX_INLINE_RECURSIVE_DEPTH_GCC as f64;
             for _ in 1..level {
                 limit *= limit;
             }
+            let grown = gcc_insns(callee) - 1;
+            // DEVIATE: gcc has no cap on peeling; the copies of one call add at
+            // most what gcc lets a function grow by recursive inlining, 450
+            // (recpow -O1: uncapped 32 copies and 8203 bytes; 150 left it at
+            // 486966 clocks against 475701 before; 450 is 454246 / 5547).
             if level > MAX_INLINE_RECURSIVE_DEPTH_GCC
-                || recursing >= limit
-                || gcc_insns(callee) - 1 > MAX_INLINE_INSNS_AUTO
+                || reached >= limit
+                || grown > MAX_INLINE_INSNS_AUTO
+                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE_GCC
             {
                 return None;
             }
+            self.peeled += grown;
         }
         self.seq += 1;
         let seq = self.seq;
@@ -1014,6 +1030,7 @@ pub fn expanded_all(
         available,
         own: start.0,
         insns: gcc_insns(function),
+        peeled: 0,
         frame: start.1,
         seq: 0,
     };
@@ -1029,6 +1046,7 @@ pub fn expanded_all(
             None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
         };
         let Some(target) = target else { continue };
+        plan.peeled = 0;
         if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
             if instruction.result.is_some() {
                 results.insert(call, result);
