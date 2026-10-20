@@ -187,6 +187,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 30 | `LoopVersioning` and `cloneLoopWithPreheader` update no `DominatorTree`, `LoopInfo` or `MemorySSA` | `LoopInfo` and `DomTree` are not updatable; the caller finds them again, as `simpleloopunswitch` does (SU7) | `loopversioning_tests::a_copy_loop_is_versioned_into_two_simplified_loops` finds both again and checks simplify form and the verifier |
 | 31 | the new branch is not marked with unknown weights (`setExplicitlyUnknownBranchWeightsIfProfiled`) | MIR has no function entry count; LLVM would not mark either | `loopversioning.rs` header |
 | 32 | `forgetLcssaPhiWithNewPredecessor` is not called by `addPHINodes` | the CFG changed, so the caller drops its SCEV (`ScevSession::forget_expressions`) | `loopversioning.rs` header |
+| 33 | `LoopLoadElimination` has no `ProfileSummaryInfo` or `BlockFrequencyInfo`: `shouldOptimizeForSize` is the function's `optsize` or `minsize` | MIR has no profile | `looploadelim.rs` header |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 

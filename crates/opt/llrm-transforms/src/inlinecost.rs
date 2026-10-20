@@ -67,6 +67,22 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
+//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
+//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
+//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
+//!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
+//!   10%; none at -Os; calls of a function that reads and writes nothing with
+//!   the same arguments count once; only a tree, at least one self-call per
+//!   call). They follow ipa-cp's second round, as the pin's specializer
+//!   precedes its inliner (PassBuilderPipelines.cpp:1228 against :1331), and so
+//!   does the tail-call elimination of such a function (the pin: inside its
+//!   function simplification, :688). Why: -O2 clocks/bytes, main | this: fib
+//!   227171/537 | 154398/392, rectwo 612458/538 | 597725/552, recchop -O3
+//!   5946/1450 | 5932/5113; gcc's 8 and 450 cost 3-10x main's bytes. Owner:
+//!   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
+//!   tail-call elimination at the pin's slot; open rows hanoi, bintree,
+//!   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
 //!
 //! # See also
 //! [`crate::inline`], the decision this is to replace; the plan is
@@ -385,7 +401,6 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
-    recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -426,7 +441,6 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
-            recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -1401,11 +1415,10 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        if target == self.site.callee_id && self.callee.layout().first().is_some() {
-            // F == Call.getFunction(): the callee calls itself.
-            self.recursive_call = true;
-            return false;
-        }
+        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
+        // an ordinary call here, not the refusal "recursive": a recursive
+        // callee is inlined into another caller as gcc does, and into itself
+        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1606,9 +1619,7 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.recursive_call {
-                return Err("recursive".into());
-            } else if self.exposes_returns_twice {
+            if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -2443,7 +2454,9 @@ pub fn decide(
     let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
     let callee_global = module.global(callee_id);
     let GlobalKind::Function(callee) = &callee_global.kind else { return None };
-    if callee.layout().is_empty() || !crate::inline::cloneable(module, context.recursive, callee_id, callee) {
+    // A call of the caller itself is `walk`'s bounded self-inlining, not a
+    // site priced here.
+    if callee.layout().is_empty() || callee_id == caller_id || !crate::inline::copyable(module, callee) {
         return None;
     }
     let site = Site {
