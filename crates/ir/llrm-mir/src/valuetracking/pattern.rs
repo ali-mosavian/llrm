@@ -416,6 +416,8 @@ intrinsics! {
     UaddWithOverflow => "uadd.with.overflow",
     UsubWithOverflow => "usub.with.overflow",
     UmulWithOverflow => "umul.with.overflow",
+    Fabs => "fabs",
+    Copysign => "copysign",
     Ctpop => "ctpop",
     Ctlz => "ctlz",
     Cttz => "cttz",
