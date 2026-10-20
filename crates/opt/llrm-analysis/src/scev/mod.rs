@@ -19,6 +19,7 @@ pub mod arith;
 pub mod backedge;
 pub mod cast;
 pub mod compare;
+pub mod compare_predicate;
 pub mod create;
 pub mod create_addrec;
 pub mod create_phi;

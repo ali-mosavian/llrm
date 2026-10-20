@@ -1,0 +1,99 @@
+== 
+@exact0
+  none!
+  flow [<=|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact1
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@exact2
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@exact3
+  none!
+  flow [>]!
+  confused!
+  none!
+  confused!
+  none!
+@exact4
+  none!
+  flow [>]!
+  confused!
+  none!
+  confused!
+  none!
+@exact5
+  none!
+  flow [=>|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact6
+  none!
+  flow [=>|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact7
+  none!
+  flow [*|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact8
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@exact9
+  none!
+  flow [>]!
+  confused!
+  none!
+  confused!
+  none!
+@exact10
+  none!
+  flow [>]!
+  confused!
+  none!
+  confused!
+  none!
+@exact11
+  none!
+  flow [=>|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact12
+  none!
+  flow [=>|<]!
+  confused!
+  none!
+  confused!
+  none!
+@exact13
+  none!
+  flow [*|<]!
+  confused!
+  none!
+  confused!
+  none!

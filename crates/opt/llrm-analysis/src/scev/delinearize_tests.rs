@@ -24,3 +24,15 @@ fn every_access_of_the_corpus_delinearizes_as_the_pinned_llvm_does() {
     }
     assert_eq!(got, GOLDEN);
 }
+
+/// `getelementptr [0 x [12 x i8]], ptr %a, i64 0, i64 %i, i64 %j` panicked in
+/// `getGEPExpr` ("an element type"): the walk asked a zero-length array for its
+/// member 0. LLVM indexes an array's element type whatever its length. It
+/// stopped `print<da>` on PR148435.
+#[test]
+fn a_gep_into_a_zero_length_array_has_a_scev() {
+    let text = "define void @f(ptr %a, i64 %i, i64 %j) {\nentry:\n  %p = getelementptr inbounds [0 x [12 x i8]], ptr %a, i64 0, i64 %i, i64 %j\n  store i8 0, ptr %p\n  ret void\n}\n";
+    let module = llrm_mir::parse::module(text).expect("the function parses");
+    let printed = crate::scev::values::print_module_values(&module);
+    assert!(printed.contains("((12 * %i)<nsw> + %j + %a)"), "{printed}");
+}
