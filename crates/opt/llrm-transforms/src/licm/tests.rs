@@ -1181,3 +1181,19 @@ b2:
     assert!(after.contains("%invariant.gep = getelementptr inbounds [16 x i8]"), "{after}");
     assert!(after.contains("%gep = getelementptr inbounds i16"), "{after}");
 }
+
+/// The exposed allocas were found on every LICM run that had a loop, a scan of
+/// the function (3.1 M of d_faces -O2 in 17 runs), though only a loop that may
+/// throw asks for them.
+#[test]
+fn test_the_exposed_allocas_are_not_scanned_for_a_loop_that_cannot_throw() {
+    let text = "@g = global i16 0\n\ndefine i16 @f(i16 %n) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %v = load i16, ptr @g\n  %j = add i16 %i, %v\n  br label %h\nx:\n  ret i16 %i\n}\n";
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::ExposedFrames);
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm runs");
+    // The manager's own `ExposedFrames` is the one scan; LICM made a second.
+    let scans = llrm_mir::counts::get(llrm_mir::counts::Event::ExposedFrames) - before;
+    assert!(scans <= 1, "the function was scanned for exposed allocas {scans} times");
+}
