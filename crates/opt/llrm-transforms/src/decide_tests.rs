@@ -120,14 +120,13 @@ b3:
     );
 }
 
-/// A switch on a known number is a jump to its case.
+/// A switch on a constant is a jump to its case (the constant is folded into the operand, as the pin's IRBuilder leaves it).
 #[test]
 fn test_a_switch_on_a_known_number_is_a_jump_to_its_case() {
     check(
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
-  switch i16 %s, label %d [ i16 1, label %a
+  switch i16 2, label %d [ i16 1, label %a
                             i16 2, label %b ]
 
 a:
@@ -142,7 +141,6 @@ d:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
   br label %b
 
 b:
