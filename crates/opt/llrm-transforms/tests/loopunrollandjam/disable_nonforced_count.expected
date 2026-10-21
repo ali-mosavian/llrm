@@ -1,0 +1,75 @@
+== -allow-unroll-and-jam
+@disable_nonforced_enable
+B0:
+  %v0 = icmp ne i32 %J, 0
+  %v1 = icmp ne i32 %I, 0
+  %v2 = and i1 %v0, %v1
+  br i1 %v2, label %B1, label %B7
+B1:
+  %v3 = add i32 %I, -1
+  %v4 = and i32 %I, 1
+  %v5 = icmp ult i32 %v3, 1
+  br i1 %v5, label %B2, label %B8
+B2:
+  %v6 = phi i32 [ %v41, %B12 ], [ 0, %B1 ]
+  %v7 = icmp ne i32 %v4, 0
+  call void @llvm.assume(i1 %v7)
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v8 = phi i32 [ %v13, %B4 ], [ 0, %B3 ]
+  %v9 = phi i32 [ %v12, %B4 ], [ 0, %B3 ]
+  %v10 = getelementptr inbounds i32, ptr %B, i32 %v8
+  %v11 = load i32, ptr %v10
+  %v12 = add i32 %v11, %v9
+  %v13 = add nuw i32 %v8, 1
+  %v14 = icmp eq i32 %v13, %J
+  br i1 %v14, label %B5, label %B4
+B5:
+  %v15 = phi i32 [ %v12, %B4 ]
+  %v16 = getelementptr inbounds i32, ptr %A, i32 %v6
+  store i32 %v15, ptr %v16
+  br label %B6
+B6:
+  br label %B7
+B7:
+  ret void
+B8:
+  %v17 = sub i32 %I, %v4
+  br label %B9
+B9:
+  %v18 = phi i32 [ %v21, %B11 ], [ 0, %B8 ]
+  %v19 = phi i32 [ %v22, %B11 ], [ 0, %B8 ]
+  %v20 = add nuw nsw i32 %v18, 1
+  %v21 = add nuw i32 %v18, 2
+  %v22 = add nuw i32 %v19, 2
+  br label %B10
+B10:
+  %v23 = phi i32 [ %v30, %B10 ], [ 0, %B9 ]
+  %v24 = phi i32 [ %v29, %B10 ], [ 0, %B9 ]
+  %v25 = phi i32 [ %v34, %B10 ], [ 0, %B9 ]
+  %v26 = phi i32 [ %v33, %B10 ], [ 0, %B9 ]
+  %v27 = getelementptr inbounds i32, ptr %B, i32 %v23
+  %v28 = load i32, ptr %v27
+  %v29 = add i32 %v28, %v24
+  %v30 = add nuw i32 %v23, 1
+  %v31 = getelementptr inbounds i32, ptr %B, i32 %v25
+  %v32 = load i32, ptr %v31
+  %v33 = add i32 %v32, %v26
+  %v34 = add nuw i32 %v25, 1
+  %v35 = icmp eq i32 %v34, %J
+  br i1 %v35, label %B11, label %B10
+B11:
+  %v36 = phi i32 [ %v29, %B10 ]
+  %v37 = phi i32 [ %v33, %B10 ]
+  %v38 = getelementptr inbounds i32, ptr %A, i32 %v18
+  store i32 %v36, ptr %v38
+  %v39 = getelementptr inbounds i32, ptr %A, i32 %v20
+  store i32 %v37, ptr %v39
+  %v40 = icmp eq i32 %v22, %v17
+  br i1 %v40, label %B12, label %B9
+B12:
+  %v41 = phi i32 [ %v21, %B11 ]
+  %v42 = icmp ne i32 %v4, 0
+  br i1 %v42, label %B2, label %B6
