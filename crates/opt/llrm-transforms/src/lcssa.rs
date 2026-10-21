@@ -185,17 +185,18 @@ pub(crate) struct Read {
 }
 
 /// The values defined in `body` that a reader outside it reads, each with its
-/// block and the reads. Found from the uses of what the loop defines (LLVM's
-/// formLCSSA), not by reading every instruction outside for each loop.
+/// block and the reads, by value. Found from the uses of what the loop defines
+/// (LLVM's formLCSSA), not by reading every instruction outside for each loop.
 pub(crate) fn outside_reads(
     function: &Function,
     body: &llrm_mir::forest::Body,
-) -> BTreeMap<ValueId, (i64, Vec<Read>)> {
-    let mut found: BTreeMap<ValueId, (i64, Vec<Read>)> = BTreeMap::new();
+) -> Vec<(ValueId, i64, Vec<Read>)> {
+    let mut found = Vec::new();
     for &at in body {
         let block = cfg::block(at);
         for inst in function.iter_block(block) {
             let Some(value) = function.instruction(inst).result else { continue };
+            let mut reads = Vec::new();
             for one in function.users(value) {
                 let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
                 if body.contains(&home) {
@@ -208,10 +209,15 @@ pub(crate) fn outside_reads(
                 } else {
                     None
                 };
-                found.entry(value).or_insert_with(|| (cfg::id(block), Vec::new())).1.push(Read { home, from });
+                reads.push(Read { home, from });
+            }
+            if !reads.is_empty() {
+                found.push((value, cfg::id(block), reads));
             }
         }
     }
+    // By value, as a map of them was walked: the phis are made in this order.
+    found.sort_unstable_by_key(|(value, ..)| *value);
     found
 }
 
@@ -289,15 +295,18 @@ pub fn _closed_loop(
     // exit is already the LCSSA boundary, so only downstream phis count here.
     // Found from the uses of what the loop defines (LLVM's formLCSSA), keeping
     // only the values something outside reads, not every value the loop makes.
-    let mut escaping: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
-    for (value, (home, reads)) in outside_reads(function, &loop_.body) {
-        for read in reads {
-            let site = match read.from {
-                Some(_) if read.home == exit_at => continue,
-                Some(from) => from,
-                None => read.home,
-            };
-            escaping.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
+    let mut escaping: Vec<(ValueId, i64, BTreeSet<i64>)> = Vec::new();
+    for (value, home, reads) in outside_reads(function, &loop_.body) {
+        let sites = reads
+            .iter()
+            .filter_map(|read| match read.from {
+                Some(_) if read.home == exit_at => None,
+                Some(from) => Some(from),
+                None => Some(read.home),
+            })
+            .collect::<BTreeSet<_>>();
+        if !sites.is_empty() {
+            escaping.push((value, home, sites));
         }
     }
     if escaping.is_empty() {
@@ -307,11 +316,11 @@ pub fn _closed_loop(
     let dominance = &*dominance.get_or_insert_with(|| cfg::Dominance::of(function));
     let crossing = escaping
         .iter()
-        .filter(|(_, (home, sites))| {
+        .filter(|(_, home, sites)| {
             sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
                 && sources.iter().all(|&source| dominance.dominates(function, *home, source))
         })
-        .map(|(value, _)| *value)
+        .map(|(value, ..)| *value)
         .collect::<Vec<_>>();
     if crossing.is_empty() {
         return Ok(false);

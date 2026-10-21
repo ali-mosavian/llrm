@@ -142,9 +142,8 @@ pub fn closed(
         return Ok(false);
     }
     let reachable = graph.iter().map(|block| block.at).collect::<BTreeSet<_>>();
-    let mut definitions: BTreeMap<ValueId, i64> = BTreeMap::new();
-    let mut sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for (value, (home, reads)) in outside_reads(function, &loop_.body) {
+    let mut sites: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
+    for (value, home, reads) in outside_reads(function, &loop_.body) {
         for read in reads {
             let site = match read.from {
                 Some(from) if loop_.body.contains(&from) => continue,
@@ -152,19 +151,16 @@ pub fn closed(
                 None => read.home,
             };
             if reachable.contains(&read.home) {
-                definitions.insert(value, home);
-                sites.entry(value).or_default().insert(site);
+                sites.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
             }
         }
     }
     let mut changed = false;
-    for (&value, value_sites) in &sites {
+    for (&value, (home, value_sites)) in &sites {
         let available = exits
             .iter()
             .copied()
-            .filter(|at| {
-                predecessors[at].iter().all(|&parent| dominance.dominates(function, definitions[&value], parent))
-            })
+            .filter(|at| predecessors[at].iter().all(|&parent| dominance.dominates(function, *home, parent)))
             .collect::<BTreeSet<_>>();
         let mut needed = BTreeSet::new();
         let mut pending = value_sites.iter().copied().collect::<Vec<_>>();
