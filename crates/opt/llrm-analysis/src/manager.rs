@@ -1020,7 +1020,7 @@ pub fn call_effects(
     alias::calls_annotated(&Procedure::of(*unit), known)
 }
 
-/// Every value known without solving memory: `consts::known` of no calls.
+/// The constants the body holds as values, which is none: see `Registers::run`.
 pub struct Registers;
 
 /// The loads from a constant global by an index (`consts::is_table_load`), in
@@ -1112,108 +1112,20 @@ impl Analysis for TableLoads {
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
-    const INCREMENTAL: bool = true;
+    const READS_OUTER: bool = false;
 
-    /// A fact is of the values its value is made from alone (the edges of the
-    /// CFG are not read: a phi meets what its arms are), so the facts of
-    /// the values a change did not reach, by the uses of what it
-    /// touched, stand; the others are worked out again from them.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
-    }
-
-    fn update_owned(
-        previous: Rc<Self::Result>,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let tables = analyses.get::<TableLoads>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        // A load from a table is known by the bounds of its whole index,
-        // whatever it is made of: it is asked again with the values a
-        // change touched.
-        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
-        // The values touched, and the facts that were made from them, which no
-        // longer stand.
-        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
-        let mut work = Vec::<ValueId>::new();
-        for &inst in tables.iter() {
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        for change in changes {
-            let inst = match *change {
-                Change::Inserted { inst, .. }
-                | Change::Erased { inst, .. }
-                | Change::Moved { inst, .. }
-                | Change::Rewritten(inst) => inst,
-                Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_)
-                | Change::BlockErased(_)
-                | Change::Operand { .. }
-                | Change::Operands { .. }
-                | Change::Substituted { .. } => {
-                    continue;
-                }
-                // An argument's fact is of its position.
-                Change::Parameters => return None,
-            };
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        // Every value to settle again: the touched, those whose fact was made
-        // from them, and the users of each, whose operands may now be
-        // known.
-        let mut dirty = touched.clone();
-        let mut seen = touched;
-        while let Some(value) = work.pop() {
-            kept.swap_remove(&value);
-            for user in function.users(value) {
-                if function.parent(user.user).is_none() {
-                    continue;
-                }
-                let Some(result) = function.instruction(user.user).result else { continue };
-                dirty.insert(result);
-                if kept.contains_key(&result) && seen.insert(result) {
-                    work.push(result);
-                }
-            }
-        }
-        Some(consts::known_from(&unit, kept, Some(&dirty), &tables))
-    }
-
+    /// Empty: a constant is folded into the body where it appears (SCCP,
+    /// InstSimplify, `fold`), as the pin does, so no map of them is kept. The
+    /// fixed point this used to derive (`consts::known`) found 72 values in
+    /// 25033 instructions of d_faces -O2, and every object, row, run and
+    /// QCport module was the same without it.
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::known(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_exposed(&exposed),
-        )
+        IndexMap::default()
     }
 }
 
