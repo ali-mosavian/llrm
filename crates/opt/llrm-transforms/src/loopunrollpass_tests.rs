@@ -264,3 +264,55 @@ b2:
     assert!(!unrolled, "{text}");
     assert_eq!(text.matches("landingpad").count(), 1, "{text}");
 }
+
+/// An outer loop of two trips round an inner loop of unknown count: unrolling
+/// the outer copies the inner loop. The loop pass manager hands the copies to
+/// the passes after the unroll.
+const OUTER_TWICE: &str = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %o
+
+o:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %ol ]
+  %acc = phi i16 [ %x, %b0 ], [ %r, %ol ]
+  br label %h
+
+h:
+  %j = phi i16 [ 0, %o ], [ %j.next, %h ]
+  %a = phi i16 [ %acc, %o ], [ %a.next, %h ]
+  %a.next = add i16 %a, %j
+  %j.next = add i16 %j, 1
+  %go = icmp slt i16 %j.next, %n
+  br i1 %go, label %h, label %ol
+
+ol:
+  %r = phi i16 [ %a.next, %h ]
+  %i.next = add i16 %i, 1
+  %again = icmp slt i16 %i.next, 2
+  br i1 %again, label %o, label %out
+
+out:
+  %done = phi i16 [ %r, %ol ]
+  ret i16 %done
+}
+";
+
+#[test]
+fn a_full_unroll_hands_over_the_loops_it_made() {
+    let mut module = parsed(OUTER_TWICE);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let text = crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            created: std::rc::Rc::clone(&created),
+        },
+    );
+    assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
+    assert!(!created.borrow().is_empty(), "the copy of the inner loop is a loop the unroll made: {text}");
+    // The text has five blocks, b0 to out: a loop made is headed by a block
+    // made.
+    assert!(created.borrow().iter().all(|header| header.0 >= 5), "{:?}: {text}", created.borrow());
+}
