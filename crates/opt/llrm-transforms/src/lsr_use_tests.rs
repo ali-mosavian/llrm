@@ -8,7 +8,7 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::tti::{Cost as TtiCost, LsrCost};
 use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::HashSet;
-use llrm_x86::tti::X86;
+use llrm_x86::tti::{RealMode, X86};
 
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
 use crate::lsr_use::*;
@@ -287,5 +287,39 @@ fn a_fixup_is_outside_the_loop_where_its_user_is() {
         let next = cx.function.instruction(user(Opcode::Binary(BinaryOp::Add))).result.unwrap();
         let phi = Fixup::new(user(Opcode::Phi), Operand::Value(next));
         assert!(!phi.is_use_fully_outside_loop(cx, header));
+    });
+}
+
+/// DEVIATE LU1: real mode pays the prefixed index once for each scaled
+/// register. Six uses of `base + 2 * i` cost 2 instructions beyond the
+/// recurrence, not 12 (particle's ADVANCE took six pointer recurrences for want
+/// of that).
+#[test]
+fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
+    with_loop(|cx, se, a, b, header, ar| {
+        let real = RealMode { scale_costs: vec![(1, 0), (2, 2)], registers: 6, scaled_index_insns: 2 };
+        let real = X86::of_cpu("i486").unwrap().in_real_mode(real);
+        let flat = X86::of_cpu("i486").unwrap();
+        let lu = use_of(Kind::Address, &[0]);
+        let scaled = |base| {
+            let mut f = Formula {
+                base_regs: vec![base],
+                scaled_reg: Some(ar),
+                scale: 2,
+                has_base_reg: true,
+                ..Formula::default()
+            };
+            f.canonicalize(se, header);
+            f
+        };
+        let (fa, fb) = (scaled(a), scaled(b));
+        for (tti, first, both) in [(&real as &dyn llrm_mir::tti::Tti, 3, 3), (&flat, 1, 1)] {
+            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false };
+            let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
+            cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
+            assert_eq!(cost.c.insns, first, "the recurrence and the prefixed index");
+            cost.rate_formula(&mut rating, &fb, &mut regs, &visited, &lu, None);
+            assert_eq!(cost.c.insns, both, "the same scaled register is not paid for again");
+        }
     });
 }

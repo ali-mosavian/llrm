@@ -3039,6 +3039,27 @@ fn _stable_loads_from(
                             }
                         }
                     }
+                    // An x87 load of a fixed cell (a frame cell, a global):
+                    // made again where it is read, as the
+                    // integer load above.
+                    if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
+                        if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
+                            (what.dests.as_slice(), what.sources.as_slice())
+                        {
+                            if dest.value == *value
+                                && (_fixed_data(source).is_some() || _incoming_frame(source))
+                                && one.uses.is_empty()
+                                && one.defines == [*value]
+                                && one.clobbers.is_empty()
+                                && one.group.is_none()
+                                && one.spread.is_empty()
+                                && !one.volatile
+                                && one.symbol != Some(true)
+                            {
+                                cell = Some(source.clone());
+                            }
+                        }
+                    }
                 }
                 definitions.entry(*value).or_default().push((Arc::clone(one), cell, made.place));
             }
