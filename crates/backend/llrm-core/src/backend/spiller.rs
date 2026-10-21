@@ -332,6 +332,23 @@ pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
 /// than storing them: literals, frame and symbol addresses, and loads of a cell
 /// nothing writes while the value lives. What `TargetInstrInfo::
 /// isTriviallyReMaterializable` answers for the translated allocator.
+
+/// Whether `one` has the shape `_stable_loads_from` takes a definition in:
+/// a plain move or an x87 `fld` of memory into one value.
+fn is_load_shape(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| {
+                let from_memory =
+                    matches!(what.dests.as_slice(), [Loc::Held(_)]) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
+                from_memory
+                    && ((what.op == Operation::Move && what.name.as_deref() == Some("mov"))
+                        || (what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld")))
+            },
+        )
+}
+
 pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
     postings::following(body, |postings| {
         let values: BTreeSet<u32> = body
@@ -342,7 +359,16 @@ pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
             .collect();
         let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
         out.extend(_addresses_by(body, &values, postings).keys().copied());
-        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        // Only a value some load defines can be a stable load: the search
+        // gathers where each value occurs, which the others need not.
+        let loaded: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| is_load_shape(one))
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        out.extend(_stable_loads_by(body, &loaded, &IndexMap::default(), postings).keys().copied());
         out
     })
 }
@@ -6677,6 +6703,32 @@ mod tests {
         let folded = super::_folded_reads(&body, &values);
         let asked = super::STABLE_ASKED.with(std::cell::Cell::get) - before;
         assert_eq!(folded, set(&[1]), "premise: the pushed load folds");
+        assert_eq!(asked, 1, "the stable-load search was asked about {asked} values");
+    }
+
+    /// `remade_values` asked the stable-load search about every value the
+    /// body defines: 7.4 M of the 105.5 M of d_faces' `decide_with_split`
+    /// (`_stable_loads_from` gathers where each value occurs). Only a value a
+    /// load defines can be one.
+    #[test]
+    fn test_remade_values_ask_the_stable_load_search_only_about_loaded_values() {
+        let cell = Loc::Mem(mem(Addr::new(Space::Frame, -2), 2, RegId::BP, -2, 1));
+        let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
+        let mut insns = vec![Arc::new(load)];
+        for at in 1..=40_u32 {
+            let what =
+                semantics(Operation::Binary, "add", vec![held(100 + at, 2)], vec![held(100 + at - 1, 2), imm(1, 2)]);
+            insns.push(Arc::new(insn(i64::from(at) * 10, (0, 1), what, &[100 + at], &[100 + at - 1])));
+        }
+        let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
+        insns.push(Arc::new(used));
+        let blocks = vec![LirBlock::new(0, insns)];
+        let body =
+            LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        let before = super::STABLE_ASKED.with(std::cell::Cell::get);
+        let remade = super::remade_values(&body);
+        let asked = super::STABLE_ASKED.with(std::cell::Cell::get) - before;
+        assert!(remade.contains(&1), "premise: the pushed load is remade");
         assert_eq!(asked, 1, "the stable-load search was asked about {asked} values");
     }
 
