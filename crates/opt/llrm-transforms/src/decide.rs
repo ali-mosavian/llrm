@@ -192,7 +192,11 @@ fn _decided(
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
     let scev = LazyScevView::new(analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, &outer), registers.as_deref(), &scev, use_scev)?;
+    let unit = held.unit(context, layout, function, &outer);
+    let decisions = match registers.as_deref() {
+        Some(facts) => _decisions_known(&unit, facts, &scev, use_scev)?,
+        None => _decisions_implied(&unit, &scev, use_scev),
+    };
     if decisions.is_empty() {
         return Ok(false);
     }
@@ -205,17 +209,13 @@ fn _decided(
     Ok(true)
 }
 
-/// Each block whose terminator's way is known, with that way; `facts` None:
-/// only what the guards and ScalarEvolution prove of a branch's compare.
-fn _decisions(
+/// Each block whose terminator's way is known, with that way: only what the
+/// guards and ScalarEvolution prove of a branch's compare.
+fn _decisions_implied(
     unit: &Unit,
-    facts: Option<&IndexMap<ValueId, Known>>,
     scev: &LazyScevView,
     use_scev: bool,
-) -> Result<Vec<(BlockId, BlockId)>, String> {
-    if let Some(facts) = facts {
-        return _decisions_known(unit, facts, scev, use_scev);
-    }
+) -> Vec<(BlockId, BlockId)> {
     let function = unit.function;
     let mut out = Vec::new();
     for &block in function.layout() {
@@ -226,7 +226,7 @@ fn _decisions(
         let answer = _implied(unit, scev, block, last, use_scev);
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
-    Ok(out)
+    out
 }
 
 /// Whether the compare `last` branches on holds or fails there: by what
