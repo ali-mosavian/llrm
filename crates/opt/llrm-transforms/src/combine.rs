@@ -421,6 +421,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
+        Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         _ => &[],
     }
 }
