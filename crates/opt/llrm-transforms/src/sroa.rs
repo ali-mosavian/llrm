@@ -1319,9 +1319,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         true
     }
 
-    /// `isInstructionTriviallyDead`: nothing uses it and it does nothing else.
     /// `isInstructionTriviallyDead` (Local.cpp), used as SROA.cpp#L3445
-    /// `deleteIfTriviallyDead` does.
+    /// `deleteIfTriviallyDead` does: nothing uses it and it does nothing else.
     fn is_trivially_dead(
         &self,
         inst: InstId,
@@ -1330,25 +1329,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if function.is_erased(inst) {
             return false;
         }
-        let instruction = function.instruction(inst);
-        let unused = instruction.result.is_none_or(|result| function.users(result).is_empty());
-        let pure = match &instruction.opcode {
-            Opcode::Binary(_)
-            | Opcode::Cast(_)
-            | Opcode::ExtractValue(_)
-            | Opcode::InsertValue(_)
-            | Opcode::Alloca { .. }
-            | Opcode::GetElementPtr { .. }
-            | Opcode::ICmp(_)
-            | Opcode::FCmp(_)
-            | Opcode::Phi
-            | Opcode::Select
-            | Opcode::Freeze
-            | Opcode::FNeg => true,
-            Opcode::Load { volatile, .. } => !volatile,
-            _ => false,
-        };
-        unused && pure
+        let outer = self.analyses.outer();
+        crate::local::is_instruction_trivially_dead(self.context(), outer.callees(), &self.globals, function, inst)
     }
 
     /// `PoisonValue::get`.

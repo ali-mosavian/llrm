@@ -636,4 +636,9 @@ b0:
     };
     assert!(!in_f("").contains("tail call void @g"), "{}", in_f(""));
     assert!(in_f("tail ").contains("tail call void @g"), "{}", in_f("tail "));
+    // A `notail` call stays so (`ChildTCK != TCK_NoTail`).
+    let mut module = parsed(&text("").replace("  tail call void @g", "  notail call void @g"));
+    assert!(inline_into(&mut module, "f", 0));
+    let printed = printed(&module);
+    assert!(printed[printed.find("define void @f(").unwrap()..].contains("notail call void @g"), "{printed}");
 }

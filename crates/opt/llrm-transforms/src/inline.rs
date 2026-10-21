@@ -1020,8 +1020,9 @@ fn executed(
 
 /// The `tail` markers of the calls a body brings, as `InlineFunction` leaves
 /// them: a call is no more `tail` than the site it was inlined at
-/// (`ChildTCK = std::min(CallSiteTailKind, ChildTCK)`,
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L2808>);
+/// (`ChildTCK = std::min(CallSiteTailKind, ChildTCK)` unless the child is
+/// `notail`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3136>);
 /// the body's `tail` rested on its own frame, not on the caller's. `notail`
 /// at the site is no marker.
 fn narrow_tail_calls(
@@ -1039,7 +1040,7 @@ fn narrow_tail_calls(
     let site = if site == Tail::NoTail { Tail::None } else { site };
     for &copy in copies {
         let Opcode::Call(info) = &function.instruction(copy).opcode else { continue };
-        if rank(site) < rank(info.tail) {
+        if info.tail != Tail::NoTail && rank(site) < rank(info.tail) {
             let mut info = info.clone();
             info.tail = site;
             function.set_opcode(copy, Opcode::Call(info));
