@@ -122,7 +122,7 @@ use llrm_analysis::{cfg, ssa};
 use llrm_mir::module::{Function, Operand, ValueId};
 
 use crate::edges;
-use crate::lcssa::{arms, definitions, exit_phi, from_arms, operations, place_phi};
+use crate::lcssa::{arms, exit_phi, from_arms, operations, outside_reads, place_phi};
 
 /// Whether anything changed.
 pub fn closed(
@@ -141,26 +141,19 @@ pub fn closed(
     }) {
         return Ok(false);
     }
-    let definitions = definitions(function, &loop_.body);
+    let reachable = graph.iter().map(|block| block.at).collect::<BTreeSet<_>>();
+    let mut definitions: BTreeMap<ValueId, i64> = BTreeMap::new();
     let mut sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        for inst in operations(function, cfg::block(block.at)) {
-            for operand in &function.instruction(inst).operands {
-                if let Operand::Value(value) = operand
-                    && definitions.contains_key(value)
-                {
-                    sites.entry(*value).or_default().insert(block.at);
-                }
-            }
-        }
-        for phi in edges::phis(function, cfg::block(block.at)) {
-            for (value, parent) in arms(function, phi) {
-                if let Operand::Value(value) = value
-                    && !loop_.body.contains(&cfg::id(parent))
-                    && definitions.contains_key(&value)
-                {
-                    sites.entry(value).or_default().insert(cfg::id(parent));
-                }
+    for (value, (home, reads)) in outside_reads(function, &loop_.body) {
+        for read in reads {
+            let site = match read.from {
+                Some(from) if loop_.body.contains(&from) => continue,
+                Some(from) => from,
+                None => read.home,
+            };
+            if reachable.contains(&read.home) {
+                definitions.insert(value, home);
+                sites.entry(value).or_default().insert(site);
             }
         }
     }
