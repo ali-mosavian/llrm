@@ -221,6 +221,17 @@ pub struct Said {
     pub phis: std::collections::BTreeMap<Name, Vec<(i64, Name)>>,
 }
 
+/// The instructions whose use the walker moved to an access further up
+/// (`MemoryUse::isOptimized`): a graph made afresh has the nearest def there,
+/// and LLVM's `verifyMemorySSA` does not compare the two either.
+pub fn optimized_uses(mssa: &Mssa) -> Vec<InstId> {
+    (0..mssa.accesses.len() as u32)
+        .filter(|&at| at != LIVE_ON_ENTRY && !mssa.access(at).dead && mssa.access(at).kind == Kind::Use)
+        .filter(|&at| mssa.is_optimized(at))
+        .filter_map(|at| mssa.access(at).inst)
+        .collect()
+}
+
 pub fn said(mssa: &Mssa) -> Said {
     let mut instructions = llrm_mir::dense::IdMap::new();
     let mut phis = std::collections::BTreeMap::new();

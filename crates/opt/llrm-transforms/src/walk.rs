@@ -385,6 +385,7 @@ impl ProgramPass for Walk {
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
                 if !members.is_empty() {
+                    let mut stated = false;
                     for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
@@ -392,6 +393,11 @@ impl ProgramPass for Walk {
                         &members,
                     ) {
                         modules[at].changed(id);
+                        stated = true;
+                    }
+                    // What it stated reaches the next body's callees.
+                    if stated {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }
@@ -488,6 +494,7 @@ impl SelfInline {
             let marked: Vec<GlobalId> =
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
+                let mut copies = 0;
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
@@ -507,7 +514,7 @@ impl SelfInline {
                         self_inlining: Some(&frequencies),
                         peeling: false,
                     };
-                    crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    copies = crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
                     if declared.place(module)? > 0 {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
@@ -524,6 +531,13 @@ impl SelfInline {
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
+                // The list runs GVN before jump threading: the copies' paths
+                // are joined only after it, and each copy repeats the calls of
+                // the ones that dominate it (fib -O2 at depth 3: 154398 clocks
+                // once, 14802 twice; the pin's copies are of one level).
+                if copies > 0 {
+                    (self.simplify)(module, &mut modules[at], id, "self-inline-again.");
+                }
             }
         }
         Ok(())
