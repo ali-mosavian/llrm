@@ -2600,12 +2600,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         // handler, and the optimiser folds what reads it.
         let written = self.tables.zeroed.contains(&self.function.id).then(|| written_places(self.function));
         // What the handler can read: the groups live where RESUME continues.
-        let needed = match &self.tables.module_handler {
-            Some(handler) if handler.owner == self.function.id => None,
-            _ => handling::handlers(self.function)
-                .ok()
-                .and_then(|handlers| resumable_groups(self.function, &groups, statements, &handlers)),
-        };
+        // The module handler runs as a function of its own, which reads none of
+        // the owner's locals; the owner's RESUME labels are scanned for
+        // like any.
+        let owner = matches!(
+            &self.tables.module_handler,
+            Some(handler) if handler.owner == self.function.id
+        );
+        let needed = handling::handlers(self.function)
+            .ok()
+            .and_then(
+                |handlers| resumable_groups(self.function, &groups, statements, if owner { &[] } else { &handlers }),
+            );
         for (at, group) in groups.iter().enumerate() {
             for place in &group.places {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
