@@ -262,6 +262,15 @@ e:
     assert!(!held(&text("internal ", looped), false), "a local callee with other calls was copied");
     assert!(held(&text("internal ", looped), true), "the last call of a local callee, which goes, stays");
     assert!(held(&text("", small), false), "a callee smaller than its call stays");
+    // A call and the push of its argument are bigger than the instructions
+    // they count as: `_savegame_read_block` (28 calls) grew its module by 408
+    // bytes while the call counted as three plain instructions.
+    let three = "b0:
+  %a = add i32 %x, 1
+  %b = xor i32 %a, 85
+  %c = mul i32 %b, 3
+  ret i32 %c";
+    assert!(held(&text("", three), false), "a callee of the size of a far call and its push was kept out");
 }
 
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`

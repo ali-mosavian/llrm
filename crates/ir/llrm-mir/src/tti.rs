@@ -301,6 +301,14 @@ pub trait Tti {
         false
     }
 
+    /// How many percent of its `CodeSize` units a call and the pushes of its
+    /// arguments take in code, where they are bigger than the average
+    /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
+    /// 3 for an ALU instruction); 100: as counted.
+    fn call_code_size_percent(&self) -> i64 {
+        100
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).

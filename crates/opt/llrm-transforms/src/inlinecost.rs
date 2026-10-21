@@ -1928,10 +1928,12 @@ impl<'a> Analyzer<'a> {
         .value
     }
 
-    /// The target's code size of the call and the pushes of its arguments.
+    /// The target's code size of the call and the pushes of its arguments,
+    /// where the target says a call is bigger than the instruction it is
+    /// counted as.
     fn call_size(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        llrm_mir::instructioncost::instruction_cost(
+        let size = llrm_mir::instructioncost::instruction_cost(
             tti,
             self.context,
             self.site.layout,
@@ -1940,7 +1942,8 @@ impl<'a> Analyzer<'a> {
             self.site.call,
             llrm_mir::tti::CostKind::CodeSize,
         )
-        .value
+        .value;
+        (size * tti.call_code_size_percent() + 50) / 100
     }
 
     fn finalize(&mut self) -> Result<(), String> {

@@ -462,6 +462,14 @@ impl Tti for X86 {
         true
     }
 
+    /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
+    /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
+    /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
+    /// 14-instruction loop of `idioms.bas` out of ten sites.
+    fn call_code_size_percent(&self) -> i64 {
+        150
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
