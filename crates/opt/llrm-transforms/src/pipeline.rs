@@ -321,8 +321,8 @@ impl Options {
         Self { optimize: false, ..Self::default() }
     }
 
-    /// -O1: the scalar passes, a loop copied out completely only where the
-    /// code does not grow, the pin's inliner (`getInlineParamsFromOptLevel`:
+    /// -O1: the scalar passes, a loop copied out completely only where it
+    /// asks (`loop_unrolling` off, as clang's `UnrollLoops` is), the pin's inliner (`getInlineParamsFromOptLevel`:
     /// 225 as -O2, PassBuilderPipelines.cpp L968), no allocation search or
     /// second route (compile -34% on d_faces), value numbering that inserts
     /// nothing, and no sibling calls, peeling or unswitching. Pattern fill is
