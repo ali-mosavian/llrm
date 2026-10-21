@@ -836,3 +836,42 @@ fn indvars_on_the_created_loops_runs_on_those_loops_alone() {
     assert_eq!(both_header_phis(&mut module), vec![2, 1], "{}", printed(&module));
     assert!(created.borrow().is_empty(), "the run took the list");
 }
+
+/// `i < -5` inside `for i = 0 to 9`: the counted loop's range says it never
+/// holds. `decide` answered this from ScalarEvolution; the pin's IndVars does,
+/// in `eliminateIVComparison`, on every loop including the ones an unroll made.
+#[test]
+fn a_compare_the_counted_loops_range_rules_out_is_folded_by_indvars() {
+    let text = "define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b4 ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %neg = icmp slt i16 %i, -5
+  br i1 %neg, label %b3, label %b4
+
+b3:
+  %u = add i16 %s, 100
+  br label %b4
+
+b4:
+  %t = phi i16 [ %s, %b2 ], [ %u, %b3 ]
+  %next = add i16 %i, 1
+  br label %b1
+
+b5:
+  ret i16 %s
+}
+";
+    let mut module = parsed(text);
+    let before = results(&module, &[&[]]);
+    managed(&mut module, IndVars { lftr: true });
+    assert!(!printed(&module).contains("icmp slt i16 %i, -5"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[]]), before);
+}
