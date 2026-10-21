@@ -140,6 +140,24 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let loop_interchange = {
+        let at = arguments.iter().position(|one| one == "--loop-interchange");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
+    let interchange_options = if loop_interchange {
+        match llrm_transforms::loopinterchange::Options::take_flags(&mut arguments) {
+            Ok(found) => found,
+            Err(why) => {
+                eprintln!("--loop-interchange: {why}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Default::default()
+    };
     let unroll_full_os = {
         let at = arguments.iter().position(|one| one == "--unroll-full-os");
         at.inspect(|&at| {
@@ -277,6 +295,16 @@ fn main() -> ExitCode {
                     }
                 }
                 if let Err(error) = manager.run_module(&mut module, machine) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if loop_interchange {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::loopinterchange::Interchange { options: interchange_options.clone() });
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;
                 }

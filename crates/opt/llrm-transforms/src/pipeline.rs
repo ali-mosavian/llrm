@@ -27,7 +27,7 @@
 //!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
-//!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+//!     swap["<b>interchange (rounds only)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -106,7 +106,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `interchange` | the passes of that name (`unswitch` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -199,8 +199,8 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
-    /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
-    /// too. LLVM's `LoopInterchange` is off in its pipelines.
+    /// `-floop-interchange`: LLVM's `LoopInterchange.cpp`, in the pin's
+    /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
     /// The passes run in LLVM's order, once each (`Fixed::linear`:
     /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
@@ -291,7 +291,7 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
-            interchange: false,
+            interchange: true,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -363,7 +363,6 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -378,7 +377,6 @@ impl Options {
             limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
-            interchange: true,
             search: true,
             routes: true,
             exhaustive: true,
@@ -458,6 +456,7 @@ impl Options {
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
+            "loop-interchange" => self.interchange,
             _ => true,
         }
     }
@@ -725,6 +724,9 @@ pub(crate) fn llvm_order(
         // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
         // function pass of `OptimizePM`, after LoopSink) and L2376.
         Phase::Late => vec![
+            // LoopInterchangePass (l.1631), in the loop pass manager after
+            // LoopRotate (l.1621) and LoopDeletion (l.1628).
+            slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
             // L1438; llrm's targets have no vector registers.
             slot("loop-load-elim@1400", Box::new(crate::looploadelim::LoopLoadElim::default())),
@@ -1245,7 +1247,7 @@ impl Fixed {
             passes,
             last,
             unswitch,
-            interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
+            interchange: (applied.options.interchange && only.is_none()).then(loopinterchange::Interchange::default),
             only: only.is_some(),
             rounds: applied.options.rounds,
             dump: applied.dump.clone(),
@@ -1304,9 +1306,8 @@ impl Fixed {
         linear.rounds = 1;
         // The slot of the order unswitches, where the pin does.
         linear.unswitch = None;
-        if !matches!(phase, Phase::Simplify) {
-            linear.interchange = None;
-        }
+        // It has its own slot (`loop-interchange@1631`) in `Phase::Late`.
+        linear.interchange = None;
         linear
     }
 
