@@ -192,9 +192,7 @@ fn derived_from(
 ) -> Option<GlobalId> {
     match &context.get(c).kind {
         ConstantKind::Global(global) => Some(*global),
-        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
-            derived_from(context, *operands.first()?)
-        }
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => derived_from(context, *operands.first()?),
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
             derived_from(context, *value)
         }

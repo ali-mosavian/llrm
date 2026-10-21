@@ -176,9 +176,19 @@ def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(
     (tmp_path / "app/src").mkdir(parents=True)
     (tmp_path / "app/Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nlib = { path = "../lib" }\n')
     (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &lib::Context) { lib::undef(context); }\n")
-    assert ps.workspace_check(tmp_path) != ""
+    assert ps.workspace_check(tmp_path, tmp_path / "t") != ""
     (tmp_path / "app/src/lib.rs").write_text("pub fn fold(context: &mut lib::Context) { lib::undef(context); }\n")
-    assert ps.workspace_check(tmp_path) == ""
+    assert ps.workspace_check(tmp_path, tmp_path / "t") == ""
+
+
+def test_an_unused_mut_fails_the_land_time_workspace_check(tmp_path):
+    """#3390 landed `let mut reads` with no mutation: the land-time build check ran without `-D warnings`, so feat/parity's fast-tier `build` step was red for every owner."""
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/lib.rs").write_text("pub fn f() -> u32 { let mut reads = 1; reads }\n")
+    assert "mutable" in ps.workspace_check(tmp_path, tmp_path / "t")
+    (tmp_path / "src/lib.rs").write_text("pub fn f() -> u32 { let reads = 1; reads }\n")
+    assert ps.workspace_check(tmp_path, tmp_path / "t") == ""
 
 
 def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(tmp_path, monkeypatch):

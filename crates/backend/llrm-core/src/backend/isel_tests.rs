@@ -94,9 +94,19 @@ fn listing_float_store(
     text: &str,
     name: &str,
 ) -> Vec<String> {
-    let profile =
-        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true, false, false)
-            .expect("the 486 profile");
+    let profile = crate::backend::cpu::tuned_optimizing(
+        &llrm_x86_m16::M16,
+        "486",
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+    )
+    .expect("the 486 profile");
     let module = assemble::assembled(
         &parsed(text),
         &qb(),

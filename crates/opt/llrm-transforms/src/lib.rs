@@ -96,6 +96,7 @@ pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
+pub mod combine_branch;
 pub mod combine_build;
 pub mod combine_casts;
 #[cfg(test)]
@@ -133,7 +134,6 @@ pub mod combine_sink;
 mod combine_sink_tests;
 pub mod combine_sub;
 pub mod combine_visit_select;
-pub mod combine_branch;
 pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;

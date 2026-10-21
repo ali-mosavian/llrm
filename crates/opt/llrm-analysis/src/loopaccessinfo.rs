@@ -9,9 +9,9 @@
 //! memory instruction that is not a simple load or store makes the loop
 //! unanalysable); the pointers they use are given to an [`AccessAnalysis`] that
 //! partitions them by what they may alias, builds the dependence classes and
-//! finds the bounds for runtime checks; the [`MemoryDepChecker`] then classifies
-//! the dependences within the classes, and if those are not provably safe but
-//! may be with checks, the bounds are found again for every pointer.
+//! finds the bounds for runtime checks; the [`MemoryDepChecker`] then
+//! classifies the dependences within the classes, and if those are not provably
+//! safe but may be with checks, the bounds are found again for every pointer.
 //!
 //! # Example
 //! `a[i + 1] = a[i] + x` over a loop with a known trip count: "Memory
@@ -38,8 +38,8 @@ use llrm_mir::valuetracking::guarantee::{may_read_from_memory, may_write_to_memo
 use crate::aa::{AAInfo, AAResults, LocationSize, MemoryLocation};
 use crate::accessanalysis::AccessAnalysis;
 use crate::loopaccess::{
-    SymbolicStrideMap, block_needs_predication, get_ptr_stride, load_store_pointer_operand,
-    load_store_type, visit_pointers,
+    SymbolicStrideMap, block_needs_predication, get_ptr_stride, load_store_pointer_operand, load_store_type,
+    visit_pointers,
 };
 use crate::memdepchecker::{DepType, MemoryDepChecker};
 use crate::runtimecheck::{DepCandidates, RuntimePointerChecking, VectorizerParams};
@@ -467,7 +467,8 @@ impl LoopAccessInfo {
         let mut deps_are_safe = true;
         if accesses.is_dependency_check_needed() {
             let mut caches = self.pt_rt_checking.caches();
-            deps_are_safe = self.dep_checker.are_deps_safe(se, cx, &mut caches, &dep_cands, accesses.dependencies_to_check());
+            deps_are_safe =
+                self.dep_checker.are_deps_safe(se, cx, &mut caches, &dep_cands, accesses.dependencies_to_check());
 
             if !deps_are_safe && self.dep_checker.should_retry_with_runtime_checks() {
                 self.pt_rt_checking.reset();
@@ -709,7 +710,8 @@ fn call_is_convergent(
 ) -> bool {
     let q = cx.query(None);
     let instruction = cx.function.instruction(inst);
-    let flag = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "convergent"));
+    let flag =
+        |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "convergent"));
     llrm_mir::valuetracking::pattern::call_info(instruction).is_some_and(|info| flag(&info.attrs))
         || llrm_mir::valuetracking::pattern::called_function(&q, instruction).is_some_and(|callee| flag(&callee.attrs))
 }
