@@ -531,10 +531,11 @@ fn will_return_by_loops(
                 }),
             )
     };
-    if counted() && calls_state() {
+    let calls_state = calls_state();
+    if calls_state && counted() {
         return true;
     }
-    if !norecurse || !calls_state() {
+    if !norecurse || !calls_state {
         return false;
     }
     let volatile = function
