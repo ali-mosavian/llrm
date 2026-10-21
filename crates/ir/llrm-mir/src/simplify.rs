@@ -4325,6 +4325,24 @@ pub fn simplify_binop_at(
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
 }
 
+/// `simplifyBinOp(Opcode, LHS, RHS,
+/// SQ.getWithInstruction(&cxt).getWithoutUndef())`: `simplify_binop_at` where
+/// an `undef` operand is not read as a value of the caller's choosing.
+pub fn simplify_binop_at_without_undef(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: false };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
 /// `simplifyBinOp(Opcode, LHS, RHS, FMF, SQ.getWithInstruction(&cxt))`:
 /// `simplify_binop_at` with the fast-math flags of the operation.
 pub fn simplify_binop_with_flags_at(

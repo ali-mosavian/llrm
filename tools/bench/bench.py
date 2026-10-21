@@ -794,12 +794,20 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     return problems
 
 
+def folded(got: dict) -> bool:
+    """The compiler folded the kernel away: the program ran and printed the right text, and the kernel was never entered (0 instructions).
+    Such a row is marked, not counted: a ratio to 0 is no ratio, and an unmeasured kernel is not a faster one."""
+    return got.get("instructions") == 0 and "error" not in got
+
+
 def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     """The 486 clocks of each selected benchmark's kernel beside its counts. Reported, not gated: the counts ratchet, and
     a change that trades instructions for fewer clocks is judged by these."""
     lines = []
     for (name, language, opt), got in sorted(measured.items()):
-        if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
+        if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and folded(got):
+            lines.append(f"{name} {language} -{opt}: folded (the kernel is never entered)")
+        elif name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
             lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions" + (f", {got['memory_operands']} memory operands" if "memory_operands" in got else ""))
     return lines
 
@@ -818,11 +826,14 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
             for opt in opts:
                 level = reference_level(reference, opt)
                 rows = []
+                skipped = []
                 for directory in benchmarks(selected):
                     name = str(directory.relative_to(BENCH))
                     got = measured.get((name, language, opt), {})
                     ref = read_expected(directory).get(reference, {}).get(level)
-                    if ref and "error" not in got and any(one in got for one in ("instructions", "kernel_ms", "code_bytes")):
+                    if ref and folded(got):
+                        skipped.append(name)
+                    elif ref and "error" not in got and any(one in got for one in ("instructions", "kernel_ms", "code_bytes")):
                         rows.append((got, ref))
                 parts = []
                 for counter, title in (("instructions", "instructions"), ("memory_operands", "memory operands"), ("kernel_ms", "kernel time"),
@@ -830,6 +841,8 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     ratios = [got[counter] / ref[counter] for got, ref in rows if counter in got and counter in ref and got[counter] > 0 and ref[counter] > 0]
                     if ratios:
                         parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
+                if skipped:
+                    parts.append(f"folded, out of the geomeans: {', '.join(skipped)}")
                 if parts:
                     lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference in BASIC_REFERENCES else '-' + level}: " + ", ".join(parts))
     return lines
