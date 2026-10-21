@@ -2697,3 +2697,19 @@ b2:
     let text = llrm_mir::print::module(&module);
     assert!(text.contains("icmp eq") || text.contains("icmp ne"), "{text}");
 }
+
+/// jpeg_single's `DECODE%` at -Os: LSR ran on a loop whose exit value reached
+/// its reader through a phi that was not LCSSA, so the use counted as outside
+/// the loop and got `-1` scales: a second counter stepping down by 4 beside
+/// the one stepping up by 4, live across a call (+224 bytes). LSR requires
+/// LoopSimplify and LCSSA, so they run right before it.
+#[test]
+fn lsr_runs_on_simplified_loops_in_lcssa_form() {
+    for options in [pipeline::Options::size(), pipeline::Options::basic(), pipeline::Options::default()] {
+        let applied = Applied { options, ..Applied::default() };
+        let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
+        let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
+        assert_eq!(&names[at.saturating_sub(2)..at], ["loopsimplify", "lcssa"], "{names:?}");
+        assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
+    }
+}

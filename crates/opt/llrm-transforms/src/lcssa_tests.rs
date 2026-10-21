@@ -4,7 +4,7 @@
 
 use llrm_mir::passes::PassManager;
 
-use super::{LoopClosedSSA, closed};
+use super::{LoopClosedSSA, closed, opened_in};
 use crate::testing::{f, parsed, printed, results};
 
 /// A counted loop whose carried value is read after it.
@@ -289,6 +289,25 @@ fn test_the_pass_keeps_what_the_function_returns() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert!(printed(&module).contains("%carried.lcssa = phi"));
     assert_eq!(results(&module, inputs), expected);
+}
+
+/// recmany -Os grew 189 bytes: LSR now runs on loop-closed SSA, and the exit
+/// phis stayed to the code generator, which copies each. Opened after the loop
+/// passes, a phi that names one value is that value, at an exit as elsewhere.
+#[test]
+fn test_the_exit_phis_go_when_the_loop_passes_are_done() {
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    closed(f(&mut module)).unwrap();
+    assert!(printed(&module).contains(" = phi i16 [ %carried, %b1 ]"), "{}", printed(&module));
+    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
+    assert!(
+        !opened_in(f(&mut module), &shape, false).unwrap(),
+        "the phi outside loop exits go; this one is at the exit"
+    );
+    assert!(opened_in(f(&mut module), &shape, true).unwrap());
+    let after = printed(&module);
+    assert!(!after.contains("lcssa"), "{after}");
+    assert!(after.contains("%answer = add i16 %carried, 7"), "{after}");
 }
 
 #[test]

@@ -90,6 +90,34 @@ use crate::{edges, lcssamerges};
 
 pub struct LoopClosedSSA;
 
+/// Takes the loop-closing phis away again once the loop passes are done: a
+/// phi that names one value is that value. The code generator copies each
+/// one (recmany -Os grew 189 bytes under the exit phis LSR's `lcssa` made).
+pub struct LoopOpened;
+
+impl FunctionPass for LoopOpened {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &'static str {
+        "opened"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        match opened_in(unit.function, &shape, true) {
+            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("opened: {error}"),
+        }
+    }
+}
+
 impl FunctionPass for LoopClosedSSA {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -247,14 +275,27 @@ fn _opened(
     function: &mut Function,
     shape: &cfg::Shape,
 ) -> Result<bool, String> {
+    opened_in(function, shape, false)
+}
+
+/// Without the phis that name one value, those at loop exits too if
+/// `exits_too`.
+fn opened_in(
+    function: &mut Function,
+    shape: &cfg::Shape,
+    exits_too: bool,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
-    for loop_ in &shape.loops {
-        exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
+    if !exits_too {
+        for loop_ in &shape.loops {
+            exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
+        }
     }
     let one = |function: &Function, phi: InstId| {
         let values = arms(function, phi).into_iter().map(|(value, _)| value).collect::<Vec<_>>();
-        values.first().copied().filter(|&first| values.iter().all(|&value| value == first))
+        let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        values.first().copied().filter(|&first| first != result && values.iter().all(|&value| value == first))
     };
     let swap = graph
         .iter()
