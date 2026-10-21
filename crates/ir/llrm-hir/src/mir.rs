@@ -1656,7 +1656,8 @@ fn resumable_groups(
     let mut targets: Vec<i64> = handlers.to_vec();
     let mut raising = vec![false; rows.len()];
     for one in function.blocks.iter().flat_map(|block| &block.instructions) {
-        // RESUME label: a jump to the label's block, which is no edge of the blocks.
+        // RESUME label: a jump to the label's block, which is no edge of the
+        // blocks.
         if let Some(label) = one.callee.as_deref().and_then(|callee| callee.strip_prefix(handling::LABEL)) {
             targets.push(label.parse().ok()?);
         }
