@@ -12,10 +12,9 @@
 //! replaced by it; `decide` and `dead` then do the rest.
 //!
 //! Not translated, each its own step: `foldIVUser`,
-//! `replaceIVUserWithLoopInvariant`, `makeIVComparisonInvariant` (needs the
-//! expander), the `samesign` canonicalisation, `eliminateSDiv`,
-//! `simplifyIVRemainder`, `strengthenBinaryOp`, `eliminateTrunc` and the
-//! float-induction replacement.
+//! `replaceIVUserWithLoopInvariant`, the `samesign` canonicalisation,
+//! `eliminateSDiv`, `simplifyIVRemainder`, `strengthenBinaryOp`,
+//! `eliminateTrunc` and the float-induction replacement.
 //!
 //! ```text
 //!  loop (n <= 100):  %i = phi [0, ...], [%i.next, ...]
@@ -202,9 +201,8 @@ pub fn simplified_loop_ivs(
 /// `dead`'s.
 ///
 /// Not translated of `SimplifyIndvar::simplifyUsers` (DEVIATE 17):
-/// `replaceIVUserWithLoopInvariant`, `replaceFloatIVWithIntegerIV`,
-/// `makeIVComparisonInvariant`, and the overflow and saturating intrinsic
-/// eliminations (MIR lacks them, D9).
+/// `replaceIVUserWithLoopInvariant`, `replaceFloatIVWithIntegerIV`, and the
+/// overflow and saturating intrinsic eliminations (MIR lacks them, D9).
 pub fn simplified_and_extended(
     context: &mut Context,
     layout: &DataLayout,
