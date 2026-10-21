@@ -1361,12 +1361,32 @@ pub struct MssaGraph {
 
 /// Two graphs are equal when every access says the same (`shadow::said`): the
 /// manager's check of a preserved set compares a graph with the one made again.
+/// A use the walker answered for is optimized: its defining access is the
+/// walker's result, not the nearest def ([`setDefiningAccess(DMA,
+/// Optimized)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L293),
+/// [`MemoryUse::isOptimized`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L337)),
+/// so those names are not compared.
 impl PartialEq for MssaGraph {
     fn eq(
         &self,
         other: &Self,
     ) -> bool {
-        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        let (mut held, mut fresh) = (crate::mssa::shadow::said(&self.mssa), crate::mssa::shadow::said(&other.mssa));
+        // A use the walker moved up stands for the same load as the nearest
+        // def of a graph made afresh.
+        for inst in crate::mssa::shadow::optimized_uses(&self.mssa) {
+            if let (Some(kept), Some(now)) = (held.instructions.get_mut(&inst), fresh.instructions.get_mut(&inst))
+                && !kept.0
+                && !now.0
+            {
+                kept.1 = crate::mssa::shadow::Name::Live;
+                now.1 = crate::mssa::shadow::Name::Live;
+            }
+        }
+        held == fresh
     }
 }
 
