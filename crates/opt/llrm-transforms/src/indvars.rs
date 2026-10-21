@@ -133,6 +133,13 @@ fn settled(
     if changed {
         session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, *mark);
         *mark = unit.function.mark();
+        // The pin's `SE.verify()` after a pass that kept it: what is kept is
+        // what a new one would work out.
+        if llrm_support::debug::verifying()
+            && let Err(why) = session.verify(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function)
+        {
+            panic!("indvars left a stale expression: {why}");
+        }
     }
     changed
 }
