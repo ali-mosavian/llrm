@@ -6436,6 +6436,36 @@ define float @f(float %x, float %y) addrspace(1) {
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }
 
+/// Two float arguments read again after a call were stored to the frame and
+/// loaded back from it: no float load was a value the spiller could make
+/// again, though `x` and `y` are read from cells nothing writes. Both loads are
+/// now such values (the pin: immutable stack arguments are invariant).
+#[test]
+fn test_float_arguments_read_after_a_call_are_loads_the_spiller_makes_again() {
+    let text = "declare void @g() addrspace(1)
+define double @f(double %x, double %y) addrspace(1) {
+  %a = fmul double %x, %y
+  call addrspace(1) void @g()
+  %b = fadd double %x, %a
+  %c = fmul double %b, %x
+  %e = fadd double %c, %y
+  %d = fmul double %e, %y
+  ret double %d
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let again = crate::backend::spiller::remade_values(&body);
+    let loads: Vec<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::FloatLoad))
+        .flat_map(|one| one.defines.iter().copied())
+        .collect();
+    assert!(!loads.is_empty(), "the premise: float loads");
+    assert!(loads.iter().all(|value| again.contains(value)), "{loads:?} against {again:?}");
+}
+
 /// `while (p < big + 20000)` over a huge array stopped at the 64 KB boundary:
 /// the offset half of the end compare (`big + 14464`, the bytes past it) was
 /// gone from the loop, so `sbb` borrowed from whatever flags came before and

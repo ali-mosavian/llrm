@@ -78,6 +78,15 @@ pub struct Tables {
 // proves the same per live range (`_stable_loads_by`), which covers the m16
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
 // with an invariant-load flag set from those facts.
+//
+// DEVIATE D-RFP4: an x87 load (`fld`) of a cell nothing writes while the value
+// lives is made again where it is read, whatever the cell's address. The fact:
+// X86InstrInfo takes a load only when it is invariant (an incoming stack
+// argument is; a pointer's cell is not), but the floatassign route re-read any
+// such cell (`_homes`, GCC's REG_EQUIV memory) and the RFP route stored and
+// reloaded it: QCport d_alias -Os 520 fld, 461 fstp, 161 fxch against 462,
+// 394, 144 with it. Exit: the pin's invariant flag set from llrm's facts, for
+// every class at once (D-I).
 /// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
 /// register written by a plain move or address, nothing pinned or destroyed.
 pub fn remat_shape(one: &Insn) -> bool {
@@ -89,7 +98,10 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.clobbers_high.is_empty()
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
-            matches!(w.op, Operation::Move | Operation::Address)
+            matches!(
+                w.op,
+                Operation::Move | Operation::Address | Operation::FloatLoad
+            )
                 && matches!(
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
@@ -320,6 +332,10 @@ impl<'a> InlineSpiller<'a> {
             self.tables.orders.borrow_mut().insert(value, order);
             let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
             self.tables.widths.borrow_mut().insert(value, width);
+            let bytes = self.tables.float_bytes.borrow().get(&reg).copied();
+            if let Some(bytes) = bytes {
+                self.tables.float_bytes.borrow_mut().insert(value, bytes);
+            }
             self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
