@@ -377,6 +377,13 @@ mod tests {
             // proves; `narrowBinOp` keeps an add's or sub's flags only where
             // they still hold.
             "combine_casts.rs",
+            // InstructionCombining.cpp's `tryFactorization` reads the `nsw`/
+            // `nuw` of the instruction and of the two operands it factors
+            // (`OverflowingBinaryOperator`) and gives the factored result
+            // `nuw`/`nsw` only where all three had them, an `add` of `mul`s
+            // `nsw` only for a constant factor that is not INT_MIN; it never
+            // gives one an expansion, and drops the rest.
+            "combine_distribute.rs",
             // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
             // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
             // tree keeps them only if all had them; `ConvertShiftToMul` and
