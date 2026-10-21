@@ -63,12 +63,14 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
-//! - D11: at -Os a callee that stays is inlined only if the target's bound
-//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target)
-//!   holds the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth.
-//!   The pin's threshold cannot say it: its verdict is `cost < max(1,
-//!   threshold)` and the walk stops at cost 0, so a threshold of 0 inlines a
-//!   callee whose walk ends there. No shape of callee is tested.
+//! - D11: at -Os a callee that stays is inlined only if it does not grow the
+//!   code (`Tti::opt_size_inline_by_code_size`, X86: yes): the target's
+//!   `CodeSize` of the callee's instructions that the walk did not fold must
+//!   not exceed the `CodeSize` of the call and the pushes of its arguments.
+//!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
+//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
+//!   of a local callee, which goes with it, is the pin's. No shape of callee
+//!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot the caller stored a constant to and whose callee
 //!   loads through that parameter, is inlined if the caller, simplified again
@@ -447,6 +449,9 @@ struct Analyzer<'a> {
     allocated_size: u64,
     instructions: u64,
     vector_instructions: u64,
+    /// D11: the target's code size of the callee's instructions that cost
+    /// (the ones the walk did not fold), in `CostKind::CodeSize` units.
+    size_units: i64,
     // InlineCostCallAnalyzer state.
     load_elimination_cost: i64,
     vector_bonus: i64,
@@ -488,6 +493,7 @@ impl<'a> Analyzer<'a> {
             allocated_size: 0,
             instructions: 0,
             vector_instructions: 0,
+            size_units: 0,
             load_elimination_cost: 0,
             vector_bonus: 0,
             single_bb_bonus: 0,
@@ -1650,6 +1656,7 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -1902,6 +1909,39 @@ impl<'a> Analyzer<'a> {
         self.finalize()
     }
 
+    /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    fn code_size_of(
+        &self,
+        inst: InstId,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.callee,
+            inst,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value
+    }
+
+    /// The target's code size of the call and the pushes of its arguments.
+    fn call_size(&self) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.site.caller,
+            self.site.call,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -1912,18 +1952,20 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
-        // D11: the analysis above stops at LLVM's threshold; the verdict is
-        // held to the target's.
+        // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
+        // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        if self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size == CallerSize::OptSize
             && !self.site.sole_call_to_local
-            && let Some(bound) = self.site.tti.and_then(|tti| tti.opt_size_inline_threshold())
-        {
-            self.threshold = self.threshold.min(bound);
+            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
+            && self.size_units > self.call_size();
+        self.blocked_by_bound = grows && self.cost < pin;
+        if grows {
+            // The verdict is `cost < threshold`: the call stays.
+            self.threshold = self.threshold.min(self.cost);
         }
-        self.blocked_by_bound = self.cost < pin && self.cost >= self.threshold.max(1);
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
 }
 

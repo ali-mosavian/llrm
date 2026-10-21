@@ -454,12 +454,12 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// SZ1: at most one call penalty (25) of growth over the call removed,
-    /// where the pin's 50 let crc, tile and recchop copy an external callee
-    /// into `main` at -Os (+52, +42, +15 bytes). Over the -Os corpus: 0
-    /// grows 16 programs, 25 grows 3, 50 is the pin.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        Some(25)
+    /// SZ1: an inline that stays must not grow the code. The pin's
+    /// threshold of 50 let crc, tile and recchop copy an external callee into
+    /// `main` at -Os (+52, +42, +15 bytes), and a fixed bound of 25 let a
+    /// 14-instruction loop in at ten sites of idioms.bas (+690 bytes).
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
     }
 
     fn is_type_legal(

@@ -211,6 +211,59 @@ b0:
     assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
 }
 
+/// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
+/// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
+/// bound of 25) into ten call sites, +690 bytes. The callee that stays is
+/// refused when its instructions that do not fold cost more code than the call
+/// and its argument pushes; the last call of a local callee, which goes with
+/// it, and a callee smaller than its call are inlined.
+#[test]
+fn an_optsize_caller_inlines_only_what_does_not_grow_the_code_on_x86() {
+    let text = |linkage: &str, body: &str| {
+        format!(
+            "@arr = global [64 x i32] zeroinitializer
+
+define {linkage}i32 @callee(i32 %x) {{
+{body}
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+        )
+    };
+    let looped = "b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %n, %h ]
+  %s = phi i32 [ %x, %b0 ], [ %t, %h ]
+  %p = getelementptr i32, ptr @arr, i32 %i
+  %v = load i32, ptr %p
+  %t = add i32 %s, %v
+  %n = add i32 %i, 1
+  %c = icmp ne i32 %n, 64
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %t";
+    let small = "b0:
+  %a = add i32 %x, 1
+  ret i32 %a";
+    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let held = |text: &str, sole: bool| {
+        let (cost, threshold) = priced_with(text, 0, sole, CallerSize::OptSize, Some(&x86));
+        cost < threshold
+    };
+    let (generic, bound) = priced_with(&text("", looped), 0, false, CallerSize::OptSize, None);
+    assert!(generic < bound, "premise: the pin inlines the loop, cost {generic} threshold {bound}");
+    assert!(!held(&text("", looped), false), "an external loop callee was copied into the caller");
+    assert!(!held(&text("internal ", looped), false), "a local callee with other calls was copied");
+    assert!(held(&text("internal ", looped), true), "the last call of a local callee, which goes, stays");
+    assert!(held(&text("", small), false), "a callee smaller than its call stays");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).
