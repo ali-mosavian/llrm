@@ -147,6 +147,7 @@ impl Machine for Dos {
             scale_costs,
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
+            huge_space: crate::spaces().huge,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
@@ -354,6 +355,21 @@ mod tests {
         assert_eq!(scaled, 2, "the lea and the prefix: no address stall");
         assert!(!tti.is_legal_addressing_mode(false, 1 << 16, true, 1), "a displacement is 16 bits");
         assert_eq!(tti.number_of_gpr_registers(), 6);
+    }
+
+    /// A huge pointer's offset carries into its selector: `[base + index]` and
+    /// a displacement are not addressing modes there, while a far pointer's
+    /// are the ordinary ones.
+    #[test]
+    fn a_huge_pointer_is_addressed_by_one_register_and_a_far_one_as_usual() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        let (huge, far) = (crate::spaces().huge.expect("m16 has a huge space"), crate::spaces().far);
+        assert!(tti.is_legal_addressing_mode_in(huge, false, 0, true, 0), "the pointer itself");
+        assert!(!tti.is_legal_addressing_mode_in(huge, false, 0, true, 1), "no index");
+        assert!(!tti.is_legal_addressing_mode_in(huge, false, 2, true, 0), "no displacement");
+        assert!(tti.is_legal_addressing_mode_in(far, false, 2, true, 1), "a far pointer takes both");
     }
 
     /// Dos prices at the 486's clocks: a 16-bit divide and multiply, and a

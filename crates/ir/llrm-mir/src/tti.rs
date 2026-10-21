@@ -449,6 +449,22 @@ pub trait Tti {
         scale: i64,
     ) -> bool;
 
+    /// `isLegalAddressingMode` in address space `addr_space` (LLVM's `AS`): a
+    /// space can have fewer forms than the machine's, as a huge pointer's
+    /// offset carries into its selector and takes no index. By default every
+    /// space has the target's forms.
+    fn is_legal_addressing_mode_in(
+        &self,
+        addr_space: u32,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = addr_space;
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -936,6 +952,17 @@ mod access_tests {
                 scale: i64,
             ) -> bool {
                 self.0.is_legal_addressing_mode(gv, offset, base, scale)
+            }
+
+            fn is_legal_addressing_mode_in(
+                &self,
+                addr_space: u32,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> bool {
+                self.0.is_legal_addressing_mode_in(addr_space, gv, offset, base, scale)
             }
 
             fn cast_cost(
