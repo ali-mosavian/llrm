@@ -1870,6 +1870,35 @@ define double @f(double %x) addrspace(1) {
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }
 
+/// `fexp2` pushes two slots above its operand: with six doubles live the `fld1`
+/// overflowed the stack and reset the loop counter (p_pressure2 printed 40.04
+/// for 44.44). The selector marks the sequence as clobbering the stack's top
+/// slots.
+#[test]
+fn test_a_sequence_that_pushes_above_its_operand_clobbers_the_top_stack_registers() {
+    use llrm_lir::registers::RegId;
+    let text = "declare double @llvm.exp2.f64(double)
+declare double @llvm.log2.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.exp2.f64(double %x)
+  %b = call double @llvm.log2.f64(double %a)
+  ret double %b
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let clobbers = |name: &str| -> Vec<RegId> {
+        let one = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .find(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name))
+            .expect(name);
+        one.clobbers.iter().copied().collect()
+    };
+    assert_eq!(clobbers("fexp2"), [RegId::MM5, RegId::MM6]);
+    assert_eq!(clobbers("flog2"), [RegId::MM6]);
+}
+
 /// A segment's far pointer is offset 0: plasma's element address was
 /// `xor bx,bx; add bx,cx`, a zero made and added each iteration.
 #[test]

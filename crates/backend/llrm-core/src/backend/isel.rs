@@ -5944,10 +5944,15 @@ impl Selector<'_, '_, '_> {
                     };
                     let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                    out.push(insn(
+                    let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
-                    ));
+                    );
+                    // The sequence pushes above its operand: the stack's top
+                    // slots are not free for a value live across it.
+                    let scratch = llrm_x86::select::x87_scratch(name);
+                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    out.push(Arc::new(one));
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
