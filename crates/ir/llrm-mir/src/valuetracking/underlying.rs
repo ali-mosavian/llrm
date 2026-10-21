@@ -38,12 +38,12 @@ fn selector_source(
     q: &Query,
     from: Operand,
 ) -> bool {
-    (q.type_of(from).is_some_and(|ty| {
+    q.type_of(from).is_some_and(|ty| {
         matches!(
             q.context.types.get(ty),
             Type::Pointer(space) if q.layout.has_unstable_representation(*space)
         )
-    }) && crate::valuetracking::object_below(q.context, q.function, from))
+    }) && crate::valuetracking::object_below(q.context, q.function, from)
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7289>
