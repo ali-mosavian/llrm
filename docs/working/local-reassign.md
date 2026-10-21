@@ -22,7 +22,7 @@ Measured on parity `7f75d65222` and main `origin/main` (clean builds, one target
 | ui/sbar | fails | 3887 | 3885 (-2) |
 | ui/screen | 6635 | 6993 | 6997 (+4) |
 
-Main fails to compile 11 of the 65 modules ("value#1 has no word destination to promote"). Over the 54 it builds: main 172,605 B, parity 178,157, with the change 178,108. All 65: parity 223,891, with the change 223,829 (-62 B).
+Main fails on those modules only with the flags this table was made with (`-m16 -march=i386` and a keyword wrapper: "value#1 has no word destination to promote"); with tools/rows/qcport.py's compile (no flags) it builds all 65 (`qcport-vs-main.md`, 2026-10-21), so the `fails` cells are not a property of main. Over the 54 it builds: main 172,605 B, parity 178,157, with the change 178,108. All 65: parity 223,891, with the change 223,829 (-62 B).
 
 Three modules are bigger (+2, +4, +4): game/weapons, ui/menu, ui/screen; ui/menu and ui/screen are already above main on parity. The change moves host/demo and render/d_alias by -3 and 0 B: it does not close the base gap to main.
 

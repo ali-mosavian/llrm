@@ -362,3 +362,14 @@ fn test_disable_lsr_turns_off_the_lsr_slot_alone() {
     }
     assert!(parsed(&["-mllvm", "-nonsense"]).is_err());
 }
+
+/// DEVIATE 1: `-fno-inline=NAME` names a function a source cannot mark
+/// `noinline`; each is kept, in order, and a bare `-fno-inline=` is no name.
+#[test]
+fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
+    let flags = parsed(&["-O2", "-fno-inline=BenchFib", "-fno-inline=Helper"]).unwrap();
+    assert_eq!(flags.no_inline, ["BenchFib", "Helper"]);
+    assert_eq!(flags.pipeline().inline, pipeline(&["-O2"]).inline, "no function is left out of inlining by it");
+    assert!(parsed(&["-fno-inline="]).is_err());
+    assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
+}
