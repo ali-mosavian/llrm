@@ -22,7 +22,16 @@ entry:
 
 /// `build`'s SCEV expanded before the `ret` of `BODY`, and the body printed.
 fn expanded(build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev) -> String {
-    let module = llrm_mir::parse::module(BODY).expect("a module");
+    expanded_in(BODY, build)
+}
+
+/// [`expanded`] over `body`; `build` gets the three parameters, then the
+/// result of each instruction that has one.
+fn expanded_in(
+    body: &str,
+    build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev,
+) -> String {
+    let module = llrm_mir::parse::module(body).expect("a module");
     let (_, _, original) = module.functions().next().expect("a function");
     let mut function = original.clone();
     let mut context = module.context.clone();
@@ -39,7 +48,9 @@ fn expanded(build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev) -
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let arguments: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
+    let mut arguments: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
+    let entry = function.entry().expect("an entry");
+    arguments.extend(function.iter_block(entry).filter_map(|one| function.instruction(one).result.map(Operand::Value)));
     let s = build(&mut se, &env.cx(&context, &function), &arguments);
     let ret = function.terminator(function.entry().expect("an entry")).expect("a ret");
     let mut expander = Expander::new("t");
@@ -149,6 +160,26 @@ fn test_an_equal_binop_just_before_the_insert_point_is_reused() {
         se.get_add_expr(cx, vec![sum, sum], Flags::default(), 0).scev
     });
     assert_eq!(lines(&text).len(), 2, "{text}");
+}
+
+/// `InsertBinop` builds through `InstSimplifyFolder`: `(%a + -1) + 1` is `%a`.
+/// LSR's compare on a post-increment value plus the step it was normalized
+/// by came out as `add %a.next, 1` beside the phi it equals, and x_insertion
+/// compiled worse.
+#[test]
+fn test_a_sum_that_cancels_an_earlier_add_is_the_operand_it_started_from() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %x = add nsw i32 %a, -1
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let x = unknown(se, cx, args[3]);
+        let one = constant(se, 32, 1);
+        se.get_add_expr(cx, vec![x, one], Flags::default(), 0).scev
+    });
+    assert_eq!(lines(&text).len(), 1, "{text}");
 }
 
 /// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by

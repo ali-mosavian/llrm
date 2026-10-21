@@ -211,7 +211,9 @@ impl ScevSession {
         mark: llrm_mir::module::Mark,
     ) {
         match function.touched_since(mark) {
-            Some(touched) if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() => {
+            Some(touched)
+                if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() =>
+            {
                 self.ask_within(context, layout, globals, metadata, function, |se, cx| se.forget_touched(cx, &touched));
             }
             _ => self.forget_expressions(),

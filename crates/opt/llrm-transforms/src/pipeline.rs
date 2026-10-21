@@ -106,7 +106,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `interchange` | the passes of that name (`unswitch` on at -O3 and -Omax; `interchange` on at every level but -O0) |
+//! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -143,8 +143,8 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollpass, mem2reg, memcpyopt, ports, promote, rotate,
-    sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
+    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
+    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -202,6 +202,11 @@ pub struct Options {
     /// `-floop-interchange`: LLVM's `LoopInterchange.cpp`, in the pin's
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
+    /// `-floop-unroll-and-jam`: LLVM's `LoopUnrollAndJamPass`, in the Late
+    /// stage (L1474). DEVIATE: the pin's default pipelines have it off
+    /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
+    /// particle row gains from it.
+    pub unroll_and_jam: bool,
     /// The passes run in LLVM's order, once each (`Fixed::linear`:
     /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
     /// turns it off.
@@ -292,6 +297,7 @@ impl Default for Options {
             sibcalls: true,
             unswitch: false,
             interchange: true,
+            unroll_and_jam: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -363,6 +369,7 @@ impl Options {
         Self {
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -377,6 +384,7 @@ impl Options {
             limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
+            unroll_and_jam: true,
             search: true,
             routes: true,
             exhaustive: true,
@@ -433,7 +441,7 @@ impl Options {
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
     /// how a miscompile is bisected.
-    fn wanted(
+    pub(crate) fn wanted(
         &self,
         name: &str,
     ) -> bool {
@@ -457,6 +465,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             "loop-interchange" => self.interchange,
+            "loop-unroll-and-jam" => self.unroll_and_jam,
             _ => true,
         }
     }
@@ -495,7 +504,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // A terminator on a literal is a jump before `decide` asks what the
         // body's values are.
         Box::new(simplifycfg::SimplifyCfg::default()),
-        Box::new(decide::Decide),
+        Box::new(decide::Decide { constants: true }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         // Before a call is made a loop: two equal calls are one first, as
@@ -649,7 +658,7 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
-    let decide = |name| slot(name, Box::new(decide::Decide));
+    let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let fold = |name| slot(name, Box::new(fold::Fold));
@@ -733,6 +742,16 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
+            // before LoopUnrollPass; the nest is in simplify form and LCSSA.
+            slot(
+                "loop-unroll-and-jam@1474",
+                Box::new(loopunrollandjam::LoopUnrollAndJam {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                }),
+            ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
@@ -1081,12 +1100,8 @@ pub fn recorded(
         manager.add(fixednarrow::FixedNarrow);
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
-    if applied.options.wanted("lsr") {
-        manager.add(crate::lsr_pass::LoopStrengthReduce);
-        // What the counters it chose leave behind (a bound subtracted from a
-        // counter rebased by it), as LLVM's LSR cleans with
-        // SimplifyInstructions.
-        manager.add(algebraic::Differences);
+    for pass in strength_slot(applied) {
+        manager.add_boxed(pass);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far
     // there.
@@ -1136,6 +1151,27 @@ pub fn recorded(
         }
     }
     done
+}
+
+/// Each loop's counters chosen once, on the loop the passes before leave. LSR
+/// requires LoopSimplify and LCSSA (`getAnalysisUsage`): an exit value read
+/// through a phi that is not LCSSA is not a use outside the loop, and LSR gave
+/// it `-1` scales (jpeg_single's `DECODE%` -Os grew a second counter).
+pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
+    let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
+    if applied.options.wanted("lsr") {
+        passes.push(Box::new(loopsimplify::LoopSimplify));
+        passes.push(Box::new(lcssa::LoopClosedSSA));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
+        // What the counters it chose leave behind (a bound subtracted from a
+        // counter rebased by it), as LLVM's LSR cleans with
+        // SimplifyInstructions.
+        passes.push(Box::new(algebraic::Differences));
+        // The exit phis `lcssa` made go again: the code generator copies each
+        // (recmany -Os grew 189 bytes).
+        passes.push(Box::new(lcssa::LoopOpened));
+    }
+    passes
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,

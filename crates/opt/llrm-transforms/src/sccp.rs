@@ -42,7 +42,7 @@ use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Fact, Facts};
-use llrm_mir::module::{BlockId, Function, InstId, Linkage, MetadataNode, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
@@ -200,6 +200,25 @@ pub fn run_sccp(
     changed
 }
 
+/// `function`'s `inst` as the rewrites read it: without the metadata, whose
+/// strings the solver's rewrites never look at and a whole-instruction clone
+/// copies for every instruction they visit.
+fn detached(
+    function: &Function,
+    inst: InstId,
+) -> Instruction {
+    let one = function.instruction(inst);
+    Instruction {
+        opcode: one.opcode.clone(),
+        ty: one.ty,
+        operands: one.operands.clone(),
+        flags: one.flags,
+        result: one.result,
+        metadata: Vec::new(),
+        link: (0, 0),
+    }
+}
+
 /// The rewrites, over the solved function.
 struct Rewrite<'a> {
     context: &'a Context,
@@ -343,7 +362,7 @@ impl Rewrite<'_> {
         function: &mut Function,
         inst: InstId,
     ) -> bool {
-        let instruction = function.instruction(inst).clone();
+        let instruction = detached(function, inst);
         // Determine if a signed value is known to be >= 0.
         let is_non_negative = |this: &Self, v: Operand| this.get_range(function, v).is_all_non_negative();
         let (opcode, operands, flags) = match &instruction.opcode {
@@ -397,7 +416,7 @@ impl Rewrite<'_> {
         function: &mut Function,
         inst: InstId,
     ) -> bool {
-        let instruction = function.instruction(inst).clone();
+        let instruction = detached(function, inst);
         let mut changed = false;
         let mut flags = instruction.flags;
         match &instruction.opcode {
@@ -468,7 +487,7 @@ impl Rewrite<'_> {
         function: &mut Function,
         inst: InstId,
     ) -> Option<Operand> {
-        let instruction = function.instruction(inst).clone();
+        let instruction = detached(function, inst);
         // Remove masking operations.
         if instruction.opcode == Opcode::Binary(BinaryOp::And)
             && let Some((mask, width)) = self.query(function).int_constant(instruction.operands[1])
@@ -498,7 +517,7 @@ impl Rewrite<'_> {
         inst: InstId,
         signed: bool,
     ) -> Option<Operand> {
-        let instruction = function.instruction(inst).clone();
+        let instruction = detached(function, inst);
         let args = call_arguments(&instruction).to_vec();
         let (lhs, rhs) = (args[0], args[1]);
         let ty = function.operand_type(self.context, lhs).expect("a value");
@@ -544,7 +563,7 @@ impl Rewrite<'_> {
         inst: InstId,
         pred: IntPredicate,
     ) -> Option<Operand> {
-        let instruction = function.instruction(inst).clone();
+        let instruction = detached(function, inst);
         let (rhs_bits, width) = self.query(function).int_constant(instruction.operands[1])?;
         let lhs = instruction.operands[0];
         let lhs_value = match lhs {

@@ -158,6 +158,24 @@ fn main() -> ExitCode {
     } else {
         Default::default()
     };
+    let loop_unroll_and_jam = {
+        let at = arguments.iter().position(|one| one == "--loop-unroll-and-jam");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
+    let jam_options = if loop_unroll_and_jam {
+        match llrm_transforms::loopunrollandjam::JamOptions::take_flags(&mut arguments) {
+            Ok(found) => found,
+            Err(why) => {
+                eprintln!("--loop-unroll-and-jam: {why}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Default::default()
+    };
     let unroll_full_os = {
         let at = arguments.iter().position(|one| one == "--unroll-full-os");
         at.inspect(|&at| {
@@ -295,6 +313,21 @@ fn main() -> ExitCode {
                     }
                 }
                 if let Err(error) = manager.run_module(&mut module, machine) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if loop_unroll_and_jam {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::loopunrollandjam::LoopUnrollAndJam {
+                    opt_level: 2,
+                    opt_size: false,
+                    options: jam_options.clone(),
+                });
+                let tti: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(llrm_mir::target::Neutral);
+                if let Err(error) = manager.run_module(&mut module, tti) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;
                 }

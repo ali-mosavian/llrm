@@ -513,7 +513,8 @@ x:
 ";
     let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[7], &[2000]]);
     assert!(changed, "{after}");
-    // The loop's phis are the scaled counter and the sum; the exit phi is the third.
+    // The loop's phis are the scaled counter and the sum; the exit phi is the
+    // third.
     assert_eq!(after.matches(" = phi i32").count(), 3, "{after}");
     assert!(after.contains("icmp eq i32 %t1, 0"), "{after}");
 }

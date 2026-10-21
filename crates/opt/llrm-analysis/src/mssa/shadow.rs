@@ -221,6 +221,17 @@ pub struct Said {
     pub phis: std::collections::BTreeMap<Name, Vec<(i64, Name)>>,
 }
 
+/// The instructions whose use the walker moved to an access further up
+/// (`MemoryUse::isOptimized`): a graph made afresh has the nearest def there,
+/// and LLVM's `verifyMemorySSA` does not compare the two either.
+pub fn optimized_uses(mssa: &Mssa) -> Vec<InstId> {
+    (0..mssa.accesses.len() as u32)
+        .filter(|&at| at != LIVE_ON_ENTRY && !mssa.access(at).dead && mssa.access(at).kind == Kind::Use)
+        .filter(|&at| mssa.is_optimized(at))
+        .filter_map(|at| mssa.access(at).inst)
+        .collect()
+}
+
 pub fn said(mssa: &Mssa) -> Said {
     let mut instructions = llrm_mir::dense::IdMap::new();
     let mut phis = std::collections::BTreeMap::new();
@@ -273,6 +284,33 @@ pub fn same_as_fresh(
         left.phis,
         right.phis
     ))
+}
+
+/// Whether a kept graph's answer `kept` is safe against `fresh`'s walk `now`:
+/// the same access, or one `now` dominates. A use keeps the answer it had
+/// before an edit took a clobber away, later than a fresh walk's; an earlier
+/// one would let a pass move past a clobber. The pin returns a cached
+/// optimized access without walking again (MemorySSA.cpp:2556), and resets it
+/// only for the uses an edit may have given a new clobber
+/// (MemorySSAUpdater.cpp:1253, 1441; MemorySSA.h:337-346), so a cached answer
+/// is older: nearer the use than a fresh walk, never past a clobber.
+pub fn answer_is_safe(
+    fresh: &Mssa,
+    kept: &Name,
+    now: &Name,
+) -> bool {
+    if kept == now {
+        return true;
+    }
+    let find = |name: &Name| match name {
+        Name::Live => Some(fresh.live_on_entry_def()),
+        Name::Phi(at) => fresh.get_memory_phi(cfg::block(*at)),
+        Name::Site(inst) => fresh.get_memory_access(*inst),
+    };
+    matches!(
+        (find(now), find(kept)),
+        (Some(now), Some(kept)) if fresh.dominates(now, kept)
+    )
 }
 
 /// What the walker answers for every load and store of `function`, in names:

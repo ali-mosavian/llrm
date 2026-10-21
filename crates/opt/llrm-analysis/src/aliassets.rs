@@ -343,11 +343,7 @@ impl<'a, Q: AliasLocations> AliasSetTracker<'a, Q> {
         if let Some(found) = entry {
             let found = self.collapse_forwarding(found);
             entry = Some(found);
-            if self.sets[found]
-                .locations
-                .iter()
-                .any(|one| one.is_same(location))
-            {
+            if self.sets[found].locations.iter().any(|one| one.is_same(location)) {
                 return found;
             }
         }

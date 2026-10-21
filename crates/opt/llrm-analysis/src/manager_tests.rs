@@ -181,7 +181,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
         let outer = Rc::new(outer);
         for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
-            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
+            let unit = crate::testing::with_manager_registers(Unit::of(&module, &layout, function));
             let mut analyses = Analyses::new(Rc::clone(&outer));
             assert_eq!(
                 *analyses.get::<Pointers>(&module.context, &layout, function),
@@ -189,7 +189,10 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
                 "{at}"
             );
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
-            assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit), "{at}");
+            assert!(
+                analyses.get::<Registers>(&module.context, &layout, function).is_empty(),
+                "{at}: the manager keeps no map of constants"
+            );
             assert_eq!(
                 analyses
                     .get::<DominatedEdges>(&module.context, &layout, function)
@@ -425,12 +428,18 @@ end:
 }
 ";
 
-/// A change made to what a loop's bound comes from, outside the loop, is not
-/// seen in the loop's blocks: its trips were kept stale. Only the loop it
-/// reaches is proved again.
+/// The same two loops with the bound folded into the compare, as the pipeline
+/// leaves it: the manager keeps no map of constants, so a bound computed by an
+/// instruction that was not folded is not read as a number.
+fn limited_folded() -> String {
+    LIMITED.replace("  %lim = add i16 %five, 0\n", "").replace("%j, %lim", "%j, 5")
+}
+
+/// A change to a loop's bound is seen by the loop that reads it and by no
+/// other: only that loop is proved again.
 #[test]
-fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
-    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+fn a_change_to_a_loops_bound_reaches_only_that_loop() {
+    let mut module = parsed(&format!("{DOS}{}", limited_folded()));
     let layout = layout(&module);
     let outer = Rc::new(Outer::of(&module, None));
     let mut analyses = Analyses::new(Rc::clone(&outer));
@@ -442,11 +451,11 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
         let (context, function) = module.function_mut("f").unwrap();
         let before = analyses.get::<super::Counted>(context, &layout, function);
         assert_eq!(trips(&before, "h1", function), Some(crate::num::Num::from(5)));
-        let lim = value(function, "lim");
-        let lim =
-            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
-        let seven = Operand::Value(value(function, "seven"));
-        function.set_operand(lim, 0, seven);
+        let d = value(function, "d");
+        let d =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(d)).unwrap();
+        let seven = Operand::Constant(context.int(function.value(value(function, "j")).ty, 7));
+        function.set_operand(d, 1, seven);
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let (context, function) = module.function_mut("f").unwrap();
