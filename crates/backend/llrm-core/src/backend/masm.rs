@@ -330,6 +330,15 @@ pub fn text_by(
     module: &Module,
     listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>,
 ) -> Result<String, Unprintable> {
+    // The listing writer is a step of its own: with `-S` it was 21 M of a
+    // d_faces -O2 compile that no timed step held.
+    crate::support::debug::timed("masm text", || text_listed(module, listed))
+}
+
+fn text_listed(
+    module: &Module,
+    listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>,
+) -> Result<String, Unprintable> {
     let mut out: Vec<String> = module.object.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
