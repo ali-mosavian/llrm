@@ -32,3 +32,16 @@ def test_a_program_that_did_not_build_or_end_is_not_a_right_answer(tmp_path):
     root = bench(tmp_path, "42\n")
     lines = answer_smoke.check(("p",), lambda source, target: ("timeout", ""), root)
     assert not any(one.startswith("ok ") for one in lines)
+
+
+def test_a_demo_that_differs_or_could_not_be_played_is_not_a_right_answer():
+    """oversight's standing check is the Microsoft demos played: #3460 broke NIBBLES and GORILLA at m32 (`DEF SEG = 0` refused) and no answer
+    check saw it."""
+    import dosbatch
+
+    real, flat = dosbatch.REAL_MODE, answer_smoke.qbbuild.FLAT
+    lines = answer_smoke.demo_lines(
+        {"GORILLA": {real: [], flat: ["ready"]}, "NIBBLES": {real: [], flat: "VARSEG is 0 and PEEK, POKE take the whole address"}, "X": RuntimeError("never settled")}
+    )
+    assert [one.split(":")[0].split(" (")[0] for one in lines] == ["ok GORILLA m16", "WRONG GORILLA m32", "ok NIBBLES m16", "NIBBLES m32", "X"]
+    assert not any(one.startswith("ok") for one in lines if "m32" in one or one.startswith("X"))
