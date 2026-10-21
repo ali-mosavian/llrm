@@ -1,0 +1,133 @@
+== 
+@test1
+B0:
+  %v0 = load i32, ptr @a
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v17, %B7 ], [ 5, %B1 ]
+  %v2 = phi i32 [ %v18, %B7 ], [ 5, %B1 ]
+  %v3 = phi i32 [ %v0, %B1 ], [ %v16, %B7 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v4 = phi i64 [ %v13, %B6 ], [ 0, %B3 ]
+  %v5 = phi i32 [ %v3, %B3 ], [ %v9, %B6 ]
+  %v6 = add nsw i64 %v4, 9
+  br label %B5
+B5:
+  %v7 = getelementptr inbounds [200 x [200 x i32]], ptr @b, i64 0, i64 %v1, i64 %v6
+  %v8 = load i32, ptr %v7
+  %v9 = or i32 %v5, %v8
+  %v10 = add nsw i64 %v1, -1
+  %v11 = add nsw i32 %v2, -1
+  %v12 = icmp eq i32 %v11, 0
+  br label %B6
+B6:
+  %v13 = add nsw i64 %v4, 1
+  %v14 = trunc i64 %v13 to i32
+  %v15 = icmp eq i32 %v14, 100
+  br i1 %v15, label %B7, label %B4
+B7:
+  %v16 = phi i32 [ %v9, %B6 ]
+  %v17 = add nsw i64 %v1, -1
+  %v18 = add nsw i32 %v2, -1
+  %v19 = icmp eq i32 %v18, 0
+  br i1 %v19, label %B8, label %B2
+B8:
+  %v20 = phi i32 [ %v16, %B7 ]
+  store i32 %v20, ptr @a
+  br label %B9
+B9:
+  ret void
+@test2
+B0:
+  %v0 = load i32, ptr @a
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v21, %B7 ], [ 5, %B1 ]
+  %v2 = phi i32 [ %v19, %B7 ], [ 6, %B1 ]
+  %v3 = phi i32 [ %v0, %B1 ], [ %v18, %B7 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v4 = phi i64 [ %v15, %B6 ], [ 0, %B3 ]
+  %v5 = phi i32 [ %v3, %B3 ], [ %v9, %B6 ]
+  %v6 = add nsw i64 %v4, 9
+  br label %B5
+B5:
+  %v7 = getelementptr inbounds [200 x [200 x i32]], ptr @b, i64 0, i64 %v1, i64 %v6
+  %v8 = load i32, ptr %v7
+  %v9 = or i32 %v5, %v8
+  %v10 = add nsw i64 %v1, -1
+  %v11 = add nsw i32 %v2, -2
+  %v12 = sext i32 %v11 to i64
+  %v13 = add nsw i64 %v10, %v12
+  %v14 = icmp sle i64 %v13, 0
+  br label %B6
+B6:
+  %v15 = add nsw i64 %v4, 1
+  %v16 = trunc i64 %v15 to i32
+  %v17 = icmp eq i32 %v16, 100
+  br i1 %v17, label %B7, label %B4
+B7:
+  %v18 = phi i32 [ %v9, %B6 ]
+  %v19 = add nsw i32 %v2, -2
+  %v20 = sext i32 %v19 to i64
+  %v21 = add nsw i64 %v1, -1
+  %v22 = add nsw i64 %v21, %v20
+  %v23 = icmp sle i64 %v22, 0
+  br i1 %v23, label %B8, label %B2
+B8:
+  %v24 = phi i32 [ %v18, %B7 ]
+  store i32 %v24, ptr @a
+  br label %B9
+B9:
+  ret void
+@test3
+B0:
+  %v0 = load i32, ptr @a
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v1 = phi i32 [ %v17, %B7 ], [ 5, %B1 ]
+  %v2 = phi i32 [ %v16, %B7 ], [ 49, %B1 ]
+  %v3 = phi i32 [ %v0, %B1 ], [ %v15, %B7 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v4 = phi i64 [ %v13, %B6 ], [ 0, %B3 ]
+  %v5 = phi i32 [ %v3, %B3 ], [ %v9, %B6 ]
+  %v6 = add nsw i64 %v4, 9
+  br label %B5
+B5:
+  %v7 = getelementptr inbounds [200 x [200 x i32]], ptr @b, i64 0, i32 %v1, i64 %v6
+  %v8 = load i32, ptr %v7
+  %v9 = or i32 %v5, %v8
+  %v10 = add nsw i32 %v1, 1
+  %v11 = add nsw i32 %v2, -1
+  %v12 = icmp eq i32 %v10, %v11
+  br label %B6
+B6:
+  %v13 = add nsw i64 %v4, 1
+  %v14 = icmp eq i64 %v13, 100
+  br i1 %v14, label %B7, label %B4
+B7:
+  %v15 = phi i32 [ %v9, %B6 ]
+  %v16 = add nsw i32 %v2, -1
+  %v17 = add nsw i32 %v1, 1
+  %v18 = icmp eq i32 %v17, %v16
+  br i1 %v18, label %B8, label %B2
+B8:
+  %v19 = phi i32 [ %v15, %B7 ]
+  store i32 %v19, ptr @a
+  br label %B9
+B9:
+  ret void

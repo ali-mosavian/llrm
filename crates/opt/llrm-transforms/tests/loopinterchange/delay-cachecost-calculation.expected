@@ -1,0 +1,43 @@
+== -loop-interchange-profitabilities=cache
+@legal_to_interchange
+B0:
+  br label %B1
+B1:
+  %v0 = phi i32 [ %v7, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i32 [ %v5, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [16 x [16 x i32]], ptr @A, i32 0, i32 %v1, i32 %v0
+  %v3 = load i32, ptr %v2
+  %v4 = add i32 %v3, 1
+  store i32 %v4, ptr %v2
+  %v5 = add i32 %v1, 1
+  %v6 = icmp eq i32 %v5, 16
+  br i1 %v6, label %B3, label %B2
+B3:
+  %v7 = add i32 %v0, 1
+  %v8 = icmp eq i32 %v7, 16
+  br i1 %v8, label %B4, label %B1
+B4:
+  ret void
+@illegal_to_interchange
+B0:
+  br label %B1
+B1:
+  %v0 = phi i32 [ %v7, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i32 [ %v5, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [16 x [16 x i32]], ptr @A, i32 0, i32 %v0, i32 %v1
+  %v3 = getelementptr inbounds [16 x [16 x i32]], ptr @A, i32 0, i32 %v1, i32 %v0
+  %v4 = load i32, ptr %v2
+  store i32 %v4, ptr %v3
+  %v5 = add i32 %v1, 1
+  %v6 = icmp eq i32 %v5, 16
+  br i1 %v6, label %B3, label %B2
+B3:
+  %v7 = add i32 %v0, 1
+  %v8 = icmp eq i32 %v7, 16
+  br i1 %v8, label %B4, label %B1
+B4:
+  ret void
