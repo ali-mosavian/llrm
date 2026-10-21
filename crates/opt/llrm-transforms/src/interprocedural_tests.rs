@@ -1221,3 +1221,15 @@ fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
     assert_eq!(loads(""), 0, "premise: the stamped read-only callee leaves the cell alone");
     assert_eq!(loads("noipa"), 1);
 }
+
+/// erlnum.bas m16 -O3: the runtime's `B$FCHR` is `available_externally` (a body
+/// to read, not the definition that runs), and a copy of it for a constant
+/// became an internal definition that can raise an error, which `ehprepare`
+/// refuses ("@llrm.qb.B$FCHR.constprop.1 may raise an error").
+#[test]
+fn test_an_available_externally_function_is_not_cloned_for_a_constant() {
+    let text = TWO_CONTEXTS.replacen("define i16 @g", "define available_externally i16 @g", 1);
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    assert!(module.named("g.constprop.1").is_none(), "{}", printed(&module));
+}

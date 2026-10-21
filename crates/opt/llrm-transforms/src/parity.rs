@@ -194,7 +194,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "SimplifyIndvar, WidenIV, exit values, congruent IVs, canonicalizeExitCondition; optimizeLoopExits and predicateLoopExits once indvars.rs calls exitopt/exitpredicate; LFTR on (D22 closed); criterion: identical to opt on d_faces -O2; exit: exitsink deleted or DEVIATE-numbered; congruent/twin_phis, rewound, exitfold and the old widen path are deleted",
     ),
     entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
-    entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
+    Entry {
+        slot: "unroll@753",
+        phase: Simplify,
+        llvm: "loop-unroll-full",
+        kind: Translated,
+        replaced_by: "",
+        note: "CLOSED row planets -Os (found 2026-10-20 by w-6, withdrawn the same day): the pin's -Os (O2 plus the optsize attribute) keeps the 4-trip f32 sum over four constant stores to a frame slot, as head does (opt -passes='default<O2>' on that IR with optsize keeps the loop, without it folds); clang folded a C array literal only because its frontend initializes the array from a constant global by memcpy, which the unroll cost reads as a large saving. A frontend-shape difference (Nib/C array literal), not the unroll cost or LFTR (21aadae64 only stopped the -O1 fold, where the pin keeps the loop too)",
+    },
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Translated, ""),
@@ -256,12 +263,17 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // pipeline, and llrm has neither a profile nor a vectorizer.
     // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
     // vector width (no vector registers on llrm's targets).
-    entry("loop-load-elim@1400", Late, "loop-load-elim", Translated, ""),
+    partial(
+        "loop-load-elim@1400",
+        Late,
+        "loop-load-elim",
+        "translated LoopLoadElimination (looploadelim.rs) runs here, output equal to opt's on its tests; criterion: x_prefix clocks at or below main at -O1/-O2/-O3/-Os (-O2: 47985 against 44454 clocks, 395 against 174 bytes; base was 50377 before the slot); exit: the assembly of the three x_prefix loops against main's tells which pass differs (laa-runtime-checks-loadelim, 2026-11-06)",
+    ),
     partial(
         "simplifycfg@1438",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (simplifyEqualityComparisonWithOnlyPredecessor SimplifyCFG.cpp:973, foldValueComparisonIntoPredecessors :1475, simplifySwitchOnSelect :5192; stub switchvalue.rs); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
@@ -269,13 +281,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg@1682",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (simplifyEqualityComparisonWithOnlyPredecessor SimplifyCFG.cpp:973, foldValueComparisonIntoPredecessors :1475, simplifySwitchOnSelect :5192; stub switchvalue.rs); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
     ),
     partial(
         "simplifycfg@2376",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (simplifyEqualityComparisonWithOnlyPredecessor SimplifyCFG.cpp:973, foldValueComparisonIntoPredecessors :1475, simplifySwitchOnSelect :5192; stub switchvalue.rs); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
     ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),

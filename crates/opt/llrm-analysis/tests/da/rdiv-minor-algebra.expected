@@ -1,0 +1,5 @@
+== --tbaa
+@f
+  output [S]!
+  output [*|<]!
+  output [* *]!

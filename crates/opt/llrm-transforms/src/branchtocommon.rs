@@ -111,23 +111,30 @@ fn safe_to_merge_terminators(
     first: BlockId,
     second: BlockId,
 ) -> bool {
-    if first == second {
-        return false;
-    }
+    first != second && incompatible_successors(function, first, second).is_empty()
+}
+
+/// `safeToMergeTerminators`' `FailBlocks`: the successors of `second` that
+/// `first` reaches too and whose phis take different values from them.
+pub(crate) fn incompatible_successors(
+    function: &Function,
+    first: BlockId,
+    second: BlockId,
+) -> Vec<BlockId> {
     let reached = function.successors(first);
-    for successor in function.successors(second).iter() {
-        if !reached.contains(successor) {
-            continue;
-        }
-        for phi in crate::edges::phis(function, *successor) {
-            let arms = llrm_analysis::occurrence::arms(function, phi);
-            let from = |at: BlockId| arms.iter().find(|&&(_, one)| one == at).map(|&(value, _)| value);
-            if from(first) != from(second) {
-                return false;
-            }
-        }
-    }
-    true
+    function
+        .successors(second)
+        .iter()
+        .copied()
+        .filter(|successor| reached.contains(successor))
+        .filter(|&successor| {
+            crate::edges::phis(function, successor).into_iter().any(|phi| {
+                let arms = llrm_analysis::occurrence::arms(function, phi);
+                let from = |at: BlockId| arms.iter().find(|&&(_, one)| one == at).map(|&(value, _)| value);
+                from(first) != from(second)
+            })
+        })
+        .collect()
 }
 
 fn has_one_use(

@@ -216,6 +216,13 @@ pub fn cloned(
     }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        // DEVIATE: an `available_externally` body is read, not run: the
+        // definition is elsewhere. A copy would become a definition of its own
+        // (`isDefinitionExact` is false for it; GCC's `ipa-cp` versions only a
+        // node whose definition it owns).
+        if module.global(name).linkage == Linkage::AvailableExternally {
+            continue;
+        }
         if !inline::copyable(module, body)
             || body.parameters().len() != known.len()
             || matches!(

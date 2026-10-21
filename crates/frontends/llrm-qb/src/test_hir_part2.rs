@@ -902,13 +902,15 @@ fn test_resume_next_retains_runtime_statement_entries() {
     let after =
         lines.iter().position(|line| line.contains("cmp word ptr HANDLED%, 1")).expect("the statement after ERROR");
     let labels: Vec<&str> = lines[..after].iter().rev().map_while(|line| line.strip_suffix(':')).collect();
-    // Entered by a jump, or by the compare of the frame that falls into it:
-    // the dispatch on the frame is a tree of compares now, and the entry the
-    // fall-through of one.
+    // Entered by a jump, or by the compare of the frame that falls into it
+    // (the dispatch on the frame is a tree of compares now), or by the runtime
+    // alone, through the statement table: the cells stay in the frame, so
+    // nothing in the function names the row.
     let before = lines[..after - labels.len()].last().copied().unwrap_or_default();
     assert!(
         labels.iter().any(|label| body.contains(&format!("jmp {label}\n")) || body.contains(&format!("je {label}\n")))
-            || before.trim_start().starts_with("jne "),
+            || before.trim_start().starts_with("jne ")
+            || (!labels.is_empty() && before.trim_start().starts_with("jmp ")),
         "{body}"
     );
     // ERL of ERROR 11 is its line number, 100.

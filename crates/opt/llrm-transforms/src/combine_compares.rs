@@ -208,8 +208,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt, foldICmpCommutative,
-    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
+    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt,
+    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
+    // the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
 }
 

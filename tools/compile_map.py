@@ -214,12 +214,16 @@ def build_map(args) -> dict:
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}
     timed = run(base, env=timed_env)
     instrumented = instructions(base, timed_env)
+    with tempfile.TemporaryDirectory() as empty_dir:  # what a compile of nothing costs: loader, runtime start, exit
+        empty = Path(empty_dir) / "empty.c"
+        empty.write_text("int f(void){return 1;}\n")
+        startup = instructions([*base[:-1], str(empty)], env) / 1e6 if base[-1] == str(source) else None
     rows, step_total = parse_steps(timed.stderr)
     own_sum = sum(r[1] for r in rows)
     result = {
         "header": {"commit": commit(), "llrm": " ".join(base), "gcc": f"gcc {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}",
                    "clang": f"clang {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}"},
-        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None,
+        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None, "startup_M": startup,
         "outside_every_step_M": step_total[2] if step_total else None,
         "rows": [], "categories": {},
     }
@@ -275,6 +279,21 @@ def build_map(args) -> dict:
     return result
 
 
+def accounting(result: dict) -> list[tuple[str, float]]:
+    """The lines of the accounting block, (label, M) in order, and the identities they satisfy:
+    instrumented = timed thread + outside the thread; timed thread = rows + outside every step + unexplained. Every figure of a report is quoted with this block."""
+    plain, inst = result["total_M"], result["instrumented_M"]
+    thread = result["debug_total_M"] if result.get("debug_total_M") is not None else result["rows_sum_M"] + (result["outside_every_step_M"] or 0.0)
+    rows, outside = result["rows_sum_M"], result["outside_every_step_M"] or 0.0
+    process = inst - thread
+    startup = min(result.get("startup_M") or 0.0, process)
+    return [("plain perf total (instructions:u, process)", plain), ("instrumented perf total (LLRM_DEBUG=time on)", inst),
+            ("instrument overhead (instrumented - plain)", inst - plain), ("timed thread total", thread), ("rows sum (own M of every step)", rows),
+            ("outside every step, inside the thread", outside), ("unexplained in the thread (thread - rows - outside)", thread - rows - outside),
+            ("outside the timed thread (instrumented - thread)", process), ("  of which start-up and exit (empty-file compile)", startup),
+            ("  of which the rest (main-thread work, instrument)", process - startup)]
+
+
 def show(result: dict, old: dict | None = None) -> str:
     out = []
     head = result["header"]
@@ -282,9 +301,8 @@ def show(result: dict, old: dict | None = None) -> str:
     total = result["total_M"]
     inst = result["instrumented_M"]
     gap = inst - result["rows_sum_M"]
-    out.append(f"perf total {total:,.0f} M plain, {inst:,.0f} M with LLRM_DEBUG=time on (the instrument costs {inst - total:,.0f} M, {100 * (inst - total) / total:.1f}%); "
-               f"the rows sum to {result['rows_sum_M']:,.0f} M of the instrumented run, {gap:,.0f} M ({100 * gap / inst:.1f}%) short: outside every step "
-               f"(llrm's own count {result['outside_every_step_M']:,.0f} M) and process start-up. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
+    out += ["Accounting (M instructions; quote it with any figure of this map):"] + [f"  {label:56}{value:>9,.1f}" for label, value in accounting(result)]
+    out.append(f"The rows sum to {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
     if abs(gap) > 0.02 * inst:
         out.append("WARNING: the rows are not within 2% of the instrumented total; read nothing off this map until that is explained.")
     out.append(f"gcc {result['gcc_total_M']:,.0f} M, clang {result['clang_total_M']:,.0f} M (perf total, one file). llrm/gcc {total / result['gcc_total_M']:.1f}x, llrm/clang {total / result['clang_total_M']:.1f}x.")
@@ -311,17 +329,22 @@ def show(result: dict, old: dict | None = None) -> str:
     for key, (l, g, c) in sorted(buckets.items(), key=lambda kv: -kv[1][0]):
         out.append(f"{key:38}{l:>8.0f}{g:>8.0f}{c:>8.0f}{(f'{l / g:.1f}x' if g > 1 else ''):>10}{(f'{l / c:.1f}x' if c > 1 else ''):>12}")
     before = {r["name"]: r["own_M"] for r in (old or {}).get("rows", [])}
-    out += ["", f"By step (own M as measured under the instrument; % of the instrumented total), rows of 0.5% and more{', change against the other map' if old else ''}",
+    out += ["", f"By step (own M as measured under the instrument; % of the instrumented total), rows of 0.5% and more, then one line for the rest{', change against the other map' if old else ''}",
             f"{'step':34}{'n':>6}{'own M':>9}{'%':>6}{'cum %':>7}  {'category':20}{'owner':16}" + ("   change M" if old else "")]
     cum = 0.0
+    rest_n, rest_rows, rest_own = 0, 0, 0.0
     for r in result["rows"]:
         share = 100 * r["own_M"] / inst
         if share < 0.5:
+            rest_n += r["count"]; rest_rows += 1; rest_own += r["own_M"]
             continue
         cum += share
         flag = "UNOWNED" if r["owner"] is None and share >= FLAG_AT else (r["owner"] or "-")
         delta = f"{r['own_M'] - before.get(r['name'], 0.0):>+10.0f}" if old else ""
         out.append(f"{r['name'][:33]:34}{r['count']:>6}{r['own_M']:>9.0f}{share:>6.1f}{cum:>7.1f}  {r['category']:20}{flag:16}{delta}")
+    if rest_rows:  # the table sums to the instrumented total: the rows under 0.5% were ~19 M of it, listed nowhere
+        rest_share = 100 * rest_own / inst
+        out.append(f"{f'other ({rest_rows} rows under 0.5%)':34}{rest_n:>6}{rest_own:>9.0f}{rest_share:>6.1f}{cum + rest_share:>7.1f}  {'-':20}{'-':16}")
     unowned = [r for r in result["rows"] if r["owner"] is None and 100 * r["own_M"] / inst >= FLAG_AT]
     out += ["", f"{len(unowned)} unowned row(s) at {FLAG_AT}% or more (of the instrumented total): "
             + (", ".join(f"{r['name']} ({100 * r['own_M'] / inst:.1f}%)" for r in unowned) or "none")]

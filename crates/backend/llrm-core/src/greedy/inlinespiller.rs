@@ -454,7 +454,9 @@ impl InlineSpiller<'_> {
     /// of its cell before where the unit reads it and an `fstp` after where it
     /// writes it. DEVIATE D-RFP1: the cell is the value's float type
     /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
-    /// spill rounds, not one class width. Exit: the class width once the
+    /// spill rounds, not one class width, where the language follows the pin
+    /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
+    /// as only a store the program writes rounds there (stft_single). Exit: the class width once the
     /// classes are split.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
@@ -522,6 +524,10 @@ impl InlineSpiller<'_> {
 /// a value is the program's, else that of the values it is copied from or
 /// to. A web joined to values of two types has the wider.
 pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
+    // No width table: the target does not round a spill (`rounds_float_spills`).
+    if body.float_bytes.is_empty() {
+        return HashMap::default();
+    }
     fn root(
         parent: &mut HashMap<u32, u32>,
         value: u32,

@@ -721,7 +721,14 @@ impl ScalarEvolution {
                     cur_ty = Some(src_element_ty);
                     first_iter = false;
                 } else {
-                    cur_ty = cx.context.types.member(cur_ty.expect("a type being indexed"), 0);
+                    // The element type of an array or vector whatever its
+                    // length: a `[0 x T]` indexes `T`.
+                    let indexed = cur_ty.expect("a type being indexed");
+                    cur_ty = match cx.context.types.get(indexed) {
+                        MirType::Array { element, .. } => Some(*element),
+                        MirType::Vector { element, .. } => Some(*element),
+                        _ => cx.context.types.member(indexed, 0),
+                    };
                 }
                 // For an array, add the element offset, explicitly scaled.
                 let element_size = self.get_size_of_expr(cx, int_idx_ty, cur_ty.expect("an element type"));

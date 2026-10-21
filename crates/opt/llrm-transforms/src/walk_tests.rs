@@ -230,7 +230,10 @@ b0:
     let text = llrm_mir::print::module(&module);
     let calls = text.matches("call i32 @fib").count();
     assert!(calls > 3, "fib was not copied into itself, {calls} calls of it:\n{text}");
-    assert!(calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize, "fib was copied past gcc's limit, {calls} calls of it");
+    assert!(
+        calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize,
+        "fib was copied past gcc's limit, {calls} calls of it"
+    );
 }
 
 /// A tail-recursive function called once: tail-call elimination makes its
@@ -666,13 +669,17 @@ b0:
 ";
 
 /// A recursive callee inlined into a caller has its own call inlined in the
-/// copy, to gcc's peeling depth (hanoi: one copy and then a call, 180 clocks
-/// against 163 with the copies).
+/// copy, to gcc's peeling depth: the probability of reaching the copy (the
+/// calls to itself per call, 0.5 here, to the power of the copies deep) below
+/// 1 - 1/8, squared per copy only where the body has more than one call
+/// (their copies grow as sites to the power of the depth; one call grows them
+/// by one a level). Eight copies after the one the cost allowed (hanoi: 180
+/// clocks with one copy, 163 with three, 133 with six squared, 103 now).
 #[test]
 fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     let top = walked_top(LINEAR);
     let copies = top.matches("mul i32 %").count();
-    assert!((3..=8).contains(&copies), "{copies} copies of down in top:\n{top}");
+    assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
@@ -707,4 +714,136 @@ b0:
     );
     let copies = top.matches("mul i32 %x").count();
     assert_eq!(copies, 1, "{copies} copies of down in top:\n{top}");
+}
+
+/// What the copies a call peels add is capped at gcc's recursive growth
+/// limit: two calls in exclusive branches (recpow's shape) double the copies
+/// at each level, 32 copies and 8203 bytes at -O1 before the cap, 20 after.
+#[test]
+fn test_the_copies_a_call_peels_add_at_most_a_functions_growth() {
+    let top = walked_top(
+        "define internal i32 @down(i32 %n) {
+b0:
+  %done = icmp eq i32 %n, 0
+  br i1 %done, label %out, label %more
+
+out:
+  ret i32 1
+
+more:
+  %bit = and i32 %n, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %odd.arm, label %even.arm
+
+odd.arm:
+  %a = sub i32 %n, 1
+  %x = call i32 @down(i32 %a)
+  %r = urem i32 %x, 30011
+  ret i32 %r
+
+even.arm:
+  %h = lshr i32 %n, 1
+  %y = call i32 @down(i32 %h)
+  %q = urem i32 %y, 30013
+  ret i32 %q
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @down(i32 %n)
+  ret i32 %r
+}
+",
+    );
+    let copies = top.matches("urem i32 %x").count();
+    assert!(copies <= 24, "{copies} copies of down in top:\n{top}");
+}
+
+/// A callee that loops on two values read through pointers: `parity(count,
+/// seed)` as `loop.bas` has it, public so that nothing deletes it.
+const BY_REFERENCE: &str = "define i32 @parity(ptr %count, ptr %seed) {
+b1:
+  %s0 = load i16, ptr %seed
+  %seed.w = sext i16 %s0 to i32
+  br label %head
+
+head:
+  %total = phi i32 [ %seed.w, %b1 ], [ %next, %body ]
+  %i = phi i16 [ 0, %b1 ], [ %i.next, %body ]
+  %n = load i16, ptr %count
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %out
+
+body:
+  %i.w = sext i16 %i to i32
+  %m = mul i32 %i.w, %seed.w
+  %t = add i32 %total, %m
+  %next = add i32 %t, 3
+  %i.next = add i16 %i, 1
+  br label %head
+
+out:
+  ret i32 %total
+}
+";
+
+/// `@top` after the pipeline sized for bytes over `parity` and a caller that
+/// stores `count` and `seed` to stack slots (`first` and `second`: the values
+/// it stores) and calls it twice.
+fn sized_top(
+    count: i16,
+    seed: i16,
+    constant: bool,
+) -> String {
+    let stores = if constant {
+        format!(
+            "  store i16 {count}, ptr %a\n  store i16 {seed}, ptr %b\n  store i16 {seed}, ptr %c\n  store i16 {count}, ptr %d\n"
+        )
+    } else {
+        "  store i16 %x, ptr %a\n  store i16 %y, ptr %b\n  store i16 %y, ptr %c\n  store i16 %x, ptr %d\n".to_owned()
+    };
+    let mut module = parsed(&format!(
+        "{BY_REFERENCE}
+define i32 @top(i16 %x, i16 %y) {{
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  %d = alloca i16
+{stores}  %p = call i32 @parity(ptr %a, ptr %b)
+  %q = call i32 @parity(ptr %d, ptr %c)
+  %r = add i32 %p, %q
+  ret i32 %r
+}}
+"
+    ));
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    text.split("define").find(|one| one.contains("@top(")).expect("@top").to_owned()
+}
+
+/// `parity(7, 5)` is a constant once the call is inlined (the loop runs seven
+/// times on known values) and the call to it costs more bytes than the
+/// constant; the cost model sees the loop and two loads through pointers, 40
+/// against the -Os bound of 25, so the call stayed (`loop.bas`, 247 bytes
+/// against 159).
+#[test]
+fn test_an_os_call_whose_stack_arguments_make_the_loop_a_constant_is_inlined() {
+    let top = sized_top(7, 5, true);
+    assert!(!top.contains("call"), "the call to parity stayed:\n{top}");
+}
+
+/// The same call with values the caller does not know folds nothing: the
+/// trial finds the copy no smaller, and the call stays.
+#[test]
+fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
+    let top = sized_top(7, 5, false);
+    assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
