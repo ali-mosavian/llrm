@@ -495,7 +495,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // A terminator on a literal is a jump before `decide` asks what the
         // body's values are.
         Box::new(simplifycfg::SimplifyCfg::default()),
-        Box::new(decide::Decide),
+        Box::new(decide::Decide { constants: true }),
         // Once the arguments are values rather than frame cells; the loop it
         // makes goes to the loop passes below.
         // Before a call is made a loop: two equal calls are one first, as
@@ -649,7 +649,7 @@ pub(crate) fn llvm_order(
     let size = applied.options.prefers_size();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
-    let decide = |name| slot(name, Box::new(decide::Decide));
+    let decide = |name| slot(name, Box::new(decide::Decide { constants: false }));
     let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
     let simplify_cfg_with = |name, options| slot(name, Box::new(simplifycfg::SimplifyCfg { options }));
     let fold = |name| slot(name, Box::new(fold::Fold));

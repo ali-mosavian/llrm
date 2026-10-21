@@ -769,7 +769,7 @@ fn demote_live(
                         else {
                             unreachable!("an invoke")
                         };
-                        if function.predecessors(normal).len() != 1 {
+                        if function.sole_predecessor(normal).is_none() {
                             return Err(
                                 "an invoke's value live into the pad, continuing at a block others reach".to_owned()
                             );
