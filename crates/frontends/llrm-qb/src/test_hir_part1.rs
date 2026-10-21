@@ -345,13 +345,18 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
 
     // The OK arm falls through (`jne` to the other): same size, laid out so.
-    assert!(main.contains("cmp dword ptr $QB$FRAME, 42\n    jne L"), "{main}");
-    assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
-    // Each arm ends in its own exit: the jump to the shared `ret` is replaced
-    // by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`), and
-    // `driver::basic::ends_program` then spells every `ret` of the module as a
-    // call of B$CENP. Both arms must reach it.
-    assert_eq!(main.matches("call far ptr B$CENP").count(), 2, "{main}");
+    assert!(main.contains("$QB$FRAME, 42\n    jne L"), "{main}");
+    // Both arms reach one exit: the OK arm jumps to the label the false arm
+    // falls into, and that block ends the program (B$PESD, then B$CENP, which
+    // `driver::basic::ends_program` spells for every `ret`). SimplifyCFG
+    // shares the tail (ea15230ed1); the old test counted two copies.
+    let ok_arm = between(&main, "offset EDGE$D5", "offset EDGE$D7");
+    let exit = ok_arm.split("jmp ").nth(1).and_then(|jump| jump.split_whitespace().next());
+    let exit = exit.unwrap_or_else(|| panic!("the OK arm does not jump to the exit: {main}"));
+    let label = format!("{exit}:");
+    let tail = main.split_once(&label).unwrap_or_else(|| panic!("no {label}: {main}")).1;
+    assert!(main.find("offset EDGE$D7").unwrap() < main.find(&label).unwrap(), "{main}");
+    assert!(tail.contains("call far ptr B$PESD") && tail.contains("call far ptr B$CENP"), "{main}");
 }
 
 /// SUBTRACTPAIR read 8-50: calls pushed left-to-right but formals used
