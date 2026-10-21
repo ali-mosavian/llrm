@@ -408,6 +408,16 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         replaced_by: "",
     },
     AnalysisEntry {
+        key: "globals-modref",
+        symbol: "GlobalsModRefAnalysis",
+        llvm: "GlobalsAA (GlobalsModRef.cpp)",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "globalsmodref_tests.rs against the rules of GlobalsModRef.cpp at the pin; opt -O2 on noinline callees (pt1n/pt1in cases)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
         key: "loops",
         symbol: "Loops",
         llvm: "LoopAnalysis",

@@ -184,6 +184,7 @@ impl<'a> Unit<'a> {
         outer: &'a Outer,
     ) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
+        let globals_mr = outer.cached_ref::<GlobalsModRefAnalysis>();
         Self {
             program: Some(outer.program()),
             spaces: outer.target().spaces(),
@@ -194,6 +195,7 @@ impl<'a> Unit<'a> {
             globals: &outer.globals,
             function,
             globals_aa,
+            globals_mr,
             references: None,
             shape: None,
             registers: None,
@@ -277,6 +279,27 @@ impl ModuleAnalysis for GlobalsAA {
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
         globalsaa::analysis(module, analyses)
+    }
+}
+
+/// `GlobalsAAResult` (GlobalsModRef.cpp): what each function does to memory
+/// and to each global nothing outside the module reaches but by name.
+pub struct GlobalsModRefAnalysis;
+
+impl ModuleAnalysis for GlobalsModRefAnalysis {
+    type Result = crate::globalsmodref::GlobalsModRef;
+    const NAME: &'static str = "globals-modref";
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        stale.covers(fresh)
+    }
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::globalsmodref::compute(module)
     }
 }
 
@@ -1349,8 +1372,8 @@ impl Analysis for Counted {
     }
 }
 
-/// What each call writes, as `CallEffects` says: the `Calls` consts and
-/// floatfacts take.
+/// What each call writes, as its attributes and `GlobalsModRef` say
+/// (`alias::calls_by_attributes`): the `Calls` consts and floatfacts take.
 pub struct Writes;
 
 impl Analysis for Writes {
@@ -1366,12 +1389,12 @@ impl Analysis for Writes {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        Ok(Result::as_ref(&*effects)
-            .map_err(String::clone)?
-            .iter()
-            .map(|(&at, effect)| (at, effect.stores.clone()))
-            .collect())
+        let values = analyses.get::<PointerValues>(context, layout, function);
+        let mut unit = Unit::within(context, layout, function, analyses.outer());
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        Ok(alias::calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect())
     }
 }
 
@@ -1962,9 +1985,6 @@ pub fn ask_some(
     }
     if chosen() {
         analyses.get::<Annotated>(context, layout, function);
-    }
-    if chosen() {
-        analyses.get::<CallEffects>(context, layout, function);
     }
     if chosen() {
         analyses.get::<Writes>(context, layout, function);

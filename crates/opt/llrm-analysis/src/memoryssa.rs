@@ -3,11 +3,12 @@
 //!
 //! # How it works
 //! `Accesses` records what each instruction touches: a load's or store's own
-//! `MemRef`, a call's footprint (its `CallEffects`, or anything its attributes
-//! allow), and the bytes a call fills before reading any. It is the manager's
-//! `accesses` analysis, built from [`crate::manager`]'s `Annotated` and
-//! `CallEffects`, and kept across changes that only move instructions or give a
-//! store another value (`update`).
+//! `MemRef`, a call's footprint (`alias::calls_by_attributes`: its attributes
+//! and `GlobalsModRef`, no points-to solve), and the bytes a call fills before
+//! reading any. A query of a call is the meet of the footprint and `AAResults`
+//! (BasicAA, GlobalsAA). It is the manager's `accesses` analysis, built from
+//! [`crate::manager`]'s `Annotated`, and kept across changes that only move
+//! instructions or give a store another value (`update`).
 //!
 //! `built` numbers the accesses. Every instruction that writes (`None` writes
 //! means anything) is a `Def`; one that only reads memory is a `Use`; one that
@@ -107,7 +108,7 @@
 //! `transform`.
 //!
 //! # Needs
-//! [`crate::manager`] (`Annotated`, `CallEffects`, `ExposedFrames`),
+//! [`crate::manager`] (`Annotated`, `PointerValues`, `ExposedFrames`),
 //! [`crate::cfg`], [`crate::regions`], [`crate::pointerfacts`],
 //! [`crate::memory`].
 //!
@@ -131,11 +132,10 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, Procedure, Summary};
 use crate::cfg;
 use crate::consts::Calls;
 use crate::graph::loops;
-use crate::manager::{Annotated, CallEffects};
+use crate::manager::Annotated;
 use crate::memory::{MemRef, ObjectRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
@@ -196,7 +196,7 @@ pub struct Accesses {
     fills: IndexMap<InstId, Vec<MemRef>>,
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
-    source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
+    source: Option<Rc<<Annotated as Analysis>::Result>>,
     /// What the manager's plain accesses were made from: the references
     /// annotated, the calls' writes, and the module facts that decide a call.
     plain_source: Option<PlainSource>,
@@ -343,17 +343,19 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
-        let effects = Result::as_ref(&*calls).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        let made = Self::of(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            references.clone(),
-            effects,
-        );
-        Ok(Rc::new(Self { source: Some((annotated, calls)), ..made }))
+        // The pointer value solve `Annotated` shares: the objects a call's
+        // pointer arguments reach.
+        let values = analyses.get::<crate::manager::PointerValues>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        let made = Self::of(&unit, references.clone());
+        Ok(Rc::new(Self { source: Some(annotated), ..made }))
     }
 
     /// What an instruction touches is its own: a store or call moved to
@@ -370,7 +372,7 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let held = previous.as_ref().ok()?;
-        let (was_annotated, was_calls) = held.source.as_ref()?;
+        let was_annotated = held.source.as_ref()?;
         let inert = |inst: InstId| {
             let opcode = &function.instruction(inst).opcode;
             !llrm_mir::touched::touches_memory(opcode) && !opcode.is_terminator()
@@ -390,9 +392,7 @@ impl Analysis for Accesses {
             return None;
         }
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
-        let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
-            && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
+        let unchanged = Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated;
         if !unchanged {
             return None;
         }
@@ -467,16 +467,13 @@ impl Accesses {
     }
 
     /// `unit`'s accesses as `alias` resolves them: each reference with its
-    /// provenance, each call's effect instantiated from `known` callees.
-    pub fn resolved(
-        unit: &Unit,
-        known: &IndexMap<String, Summary>,
-    ) -> Result<Self, String> {
-        Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
+    /// provenance.
+    pub fn resolved(unit: &Unit) -> Result<Self, String> {
+        Ok(Self::of(unit, unit.annotated()?.into_owned()))
     }
 
     /// `function`'s accesses, the manager's: from its `Annotated` and
-    /// `CallEffects`; the pipeline must require `Summaries`.
+    /// the unit's `GlobalsModRef`.
     pub fn managed(
         context: &Context,
         layout: &DataLayout,
@@ -486,22 +483,19 @@ impl Accesses {
         (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
-    /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
-    /// call's `effects` (`alias::calls_annotated`'s).
+    /// `unit`'s accesses from `references` (`alias::annotated`'s) and the
+    /// bytes each call initializes.
     pub fn of(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
-        effects: &IndexMap<InstId, Effect>,
     ) -> Self {
-        let fills = effects
-            .iter()
-            .filter(|(_, effect)| !effect.fills.is_empty())
-            .map(|(&at, effect)| (at, effect.fills.clone()))
-            .collect();
+        // A call's reads and writes as its attributes and `GlobalsModRef` say;
+        // no points-to solve.
+        let calls = crate::alias::calls_by_attributes(unit);
         Self {
-            fills,
+            fills: initialized_by_calls(unit),
             ..Self::new(unit, references, |inst| {
-                effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
+                calls.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
             })
         }
     }
@@ -1916,4 +1910,47 @@ impl<'a> Writers<'a> {
         read.unwritable()
             || (!self.anywhere && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
+}
+
+/// The bytes each call of `unit` writes through an argument before it reads
+/// any: `initializes` at the site or on the callee's parameter.
+fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
+    let mut out = IndexMap::default();
+    for (_, inst) in unit.function.walk() {
+        let op = unit.function.instruction(inst);
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(GlobalValue::function);
+        let mut fills = Vec::new();
+        for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+            let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+            let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+                attrs
+                    .iter()
+                    .any(
+                        |one| matches!(
+                            one,
+                            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                        ),
+                    )
+            };
+            if byval(&info.argument_attrs[argument]) || byval(declared) {
+                continue;
+            }
+            for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+                .iter()
+                .chain(llrm_mir::memory::initializes(declared))
+            {
+                let Ok(width) = u32::try_from(high - low) else { continue };
+                let mut one = MemRef::at(unit, operand, width);
+                one.disp += low;
+                fills.push(one);
+            }
+        }
+        if !fills.is_empty() {
+            out.insert(inst, fills);
+        }
+    }
+    out
 }

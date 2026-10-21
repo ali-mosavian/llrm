@@ -939,7 +939,10 @@ pub mod read {
     /// The other functions' and variables' declarations, and the globals'
     /// sizes.
     pub const DECLARATIONS: u8 = 16;
-    pub const ALL: u8 = 31;
+    /// What `GlobalsModRef` holds: what each function does to each tracked
+    /// global.
+    pub const GLOBALS_MODREF: u8 = 32;
+    pub const ALL: u8 = 63;
 
     thread_local! {
         static READ: Cell<u8> = const { Cell::new(0) };
@@ -961,6 +964,7 @@ pub mod read {
             "callee-effects" | "call-registers" => CALLEES,
             "summaries" => SUMMARIES,
             "globals-aa" => GLOBALS,
+            "globals-modref" => GLOBALS_MODREF,
             "callbacks" => CALLBACKS,
             "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
             _ => ALL,

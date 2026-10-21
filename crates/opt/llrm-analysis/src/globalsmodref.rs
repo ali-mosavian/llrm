@@ -192,9 +192,7 @@ fn derived_from(
 ) -> Option<GlobalId> {
     match &context.get(c).kind {
         ConstantKind::Global(global) => Some(*global),
-        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
-            derived_from(context, *operands.first()?)
-        }
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => derived_from(context, *operands.first()?),
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
             derived_from(context, *value)
         }
@@ -562,6 +560,29 @@ pub fn compute(module: &Module) -> GlobalsModRef {
 }
 
 impl GlobalsModRef {
+    /// Whether `self`, held past edits that add no memory operation, still
+    /// bounds what `fresh` finds: it tracks no global `fresh` does not, and
+    /// each function it states something of is stated by `fresh` as no more.
+    pub fn covers(
+        &self,
+        fresh: &Self,
+    ) -> bool {
+        let within = |stale: ModRefInfo, fresh: ModRefInfo| stale.union(fresh) == stale;
+        self.non_address_taken.is_subset(&fresh.non_address_taken)
+            && (self.unknown_functions_with_local_linkage || !fresh.unknown_functions_with_local_linkage)
+            && self.functions.iter().all(|(id, stale)| {
+                fresh.functions.get(id).is_some_and(|now| {
+                    within(stale.mod_ref(), now.mod_ref())
+                        && (stale.may_read_any_global || !now.may_read_any_global)
+                        && now
+                            .globals
+                            .keys()
+                            .chain(stale.globals.keys())
+                            .all(|&global| within(stale.mod_ref_for_global(global), now.mod_ref_for_global(global)))
+                })
+            })
+    }
+
     /// `getFunctionInfo`: none where nothing useful is known.
     pub fn function_info(
         &self,
@@ -593,12 +614,12 @@ impl GlobalsModRef {
     /// where nothing is known of `callee`, the direct callee.
     pub fn get_mod_ref_info_for_global(
         &self,
-        module: &Module,
+        globals: &[GlobalValue],
         callee: Option<GlobalId>,
         global: GlobalId,
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
-        let global_value: &GlobalValue = module.global(global);
+        let global_value: &GlobalValue = &globals[global.0 as usize];
         if !local(global_value.linkage) || self.unknown_functions_with_local_linkage {
             return ModRefInfo::ModRef;
         }
@@ -610,6 +631,132 @@ impl GlobalsModRef {
             Some(info) => info.mod_ref_for_global(global).union(argument_may_reach()),
             None => ModRefInfo::ModRef,
         }
+    }
+}
+
+/// `GlobalsAAResult` as one of a query's providers: what a call may do to a
+/// tracked global (`getModRefInfo(Call, Loc)`), the top of the lattice for
+/// everything else.
+pub struct GlobalsAAResult<'a> {
+    unit: &'a crate::memory::Unit<'a>,
+    info: &'a GlobalsModRef,
+}
+
+impl<'a> GlobalsAAResult<'a> {
+    pub fn new(
+        unit: &'a crate::memory::Unit<'a>,
+        info: &'a GlobalsModRef,
+    ) -> Self {
+        Self { unit, info }
+    }
+
+    /// `getModRefInfoForArgument`: what the call may do to `global` through
+    /// its arguments. DEVIATE G7: `getUnderlyingObjects` is one object, through
+    /// geps and casts (no phi or select), and the "all identified or not
+    /// aliasing" test asks identified-ness only.
+    fn for_argument(
+        &self,
+        call: InstId,
+        global: GlobalId,
+    ) -> ModRefInfo {
+        let function = self.unit.function;
+        let effects = crate::basicaa::call_memory_effects(self.unit, call);
+        if effects.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let conservative = if effects.only_reads_memory() { ModRefInfo::Ref } else { ModRefInfo::ModRef };
+        let op = function.instruction(call);
+        let arguments = op.operands.len().saturating_sub(1);
+        for &argument in &op.operands[..arguments] {
+            if self.unit.space(argument).is_none() {
+                continue;
+            }
+            let object = crate::basicaa::underlying_object(self.unit, argument);
+            if !crate::basicaa::is_identified_object(self.unit, object) {
+                return conservative;
+            }
+            if let Operand::Constant(id) = object
+                && matches!(
+                    self.unit.context.get(id).kind,
+                    ConstantKind::Global(one) if one == global
+                )
+            {
+                return conservative;
+            }
+        }
+        ModRefInfo::NoModRef
+    }
+}
+
+impl crate::aa::AAResults for GlobalsAAResult<'_> {
+    fn alias(
+        &mut self,
+        _: &crate::aa::MemoryLocation,
+        _: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+        _: Option<InstId>,
+    ) -> crate::aa::AliasResult {
+        crate::aa::AliasResult::MayAlias
+    }
+
+    fn get_mod_ref_info_mask(
+        &mut self,
+        _: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+        _: bool,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn get_arg_mod_ref_info(
+        &mut self,
+        _: InstId,
+        _: u32,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn get_memory_effects(
+        &mut self,
+        _: InstId,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> MemoryEffects {
+        MemoryEffects::unknown()
+    }
+
+    fn get_mod_ref_info(
+        &mut self,
+        inst: InstId,
+        loc: Option<&crate::aa::MemoryLocation>,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        let (Some(loc), Opcode::Call(_) | Opcode::Invoke(_)) = (loc, &self.unit.function.instruction(inst).opcode)
+        else {
+            return ModRefInfo::ModRef;
+        };
+        let object = crate::basicaa::underlying_object(self.unit, loc.ptr);
+        let Operand::Constant(id) = object else { return ModRefInfo::ModRef };
+        let ConstantKind::Global(global) = self.unit.context.get(id).kind else { return ModRefInfo::ModRef };
+        let callee = llrm_mir::memory::callee(self.unit.context, self.unit.function, inst);
+        self.info.get_mod_ref_info_for_global(self.unit.globals, callee, global, || self.for_argument(inst, global))
+    }
+
+    fn get_mod_ref_info_call(
+        &mut self,
+        _: InstId,
+        _: InstId,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn call_captures_before(
+        &mut self,
+        _: InstId,
+        _: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
     }
 }
 

@@ -2483,6 +2483,96 @@ pub fn calls_annotated(
     Ok(out)
 }
 
+/// What each call of `unit` reads and writes as its attributes and the unit's
+/// `GlobalsModRef` say, with no points-to solve (`getModRefInfo(Call, Loc)`
+/// as the pin's BasicAA and GlobalsAA read it): through each pointer argument
+/// the call may read or write, as a reference to the whole object it points
+/// into; elsewhere (`other`) unknown and non-local memory and the tracked
+/// globals the callee may touch (all of them where `GlobalsModRef` has nothing
+/// of the callee).
+pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect> {
+    let tracked: Vec<GlobalId> =
+        unit.globals_aa.into_iter().flat_map(|aa| aa.tracked_globals().iter().copied()).collect();
+    let reference = |one: &Slice| {
+        MemRef::reach(
+            u32::MAX >> 2,
+            Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
+        )
+    };
+    // What a call reaches elsewhere depends on its callee alone.
+    let reaches = |callee: Option<GlobalId>| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+        let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
+        for object in [ObjectRef::UNKNOWN, ObjectRef::NONLOCAL] {
+            reads.insert(Slice::whole(object));
+            writes.insert(Slice::whole(object));
+        }
+        for &global in &tracked {
+            let Some(object) = memory::global_object(unit, global) else { continue };
+            // What reaches the global through an argument is the argument's own
+            // reference.
+            let touched = unit.globals_mr.map_or(crate::aa::ModRefInfo::ModRef, |all| {
+                all.get_mod_ref_info_for_global(unit.globals, callee, global, || crate::aa::ModRefInfo::NoModRef)
+            });
+            if touched.is_ref_set() {
+                reads.insert(Slice::whole(object));
+            }
+            if touched.is_mod_set() {
+                writes.insert(Slice::whole(object));
+            }
+        }
+        (reads.iter().map(&reference).collect(), writes.iter().map(&reference).collect())
+    };
+    let mut elsewhere: llrm_mir::dense::IdMap<u32, (Rc<[MemRef]>, Rc<[MemRef]>)> = llrm_mir::dense::IdMap::default();
+    let mut elsewhere_unknown = None;
+    let mut out = llrm_mir::dense::IdMap::default();
+    for (_, at) in unit.function.walk() {
+        let op = unit.function.instruction(at);
+        let (Opcode::Call(_) | Opcode::Invoke(_)) = op.opcode else { continue };
+        let count = match op.opcode {
+            Opcode::Call(_) => op.operands.len() - 1,
+            _ => op.operands.len() - 3,
+        };
+        let allowed = _allowed(unit, at);
+        let (mut loads, mut stores): (Vec<MemRef>, Vec<MemRef>) = (Vec::new(), Vec::new());
+        for (index, &argument) in op.operands[..count].iter().enumerate() {
+            if !is_pointer(unit, argument) {
+                continue;
+            }
+            let through = allowed.through.get(index).copied().unwrap_or(Effects::ANY);
+            let width = match crate::aa::MemoryLocation::get_for_argument(unit, at, index as u32).map(|one| one.size) {
+                Some(crate::aa::LocationSize::Precise(bytes)) => u32::try_from(bytes).unwrap_or(u32::MAX >> 2),
+                _ => u32::MAX >> 2,
+            };
+            let mut place = MemRef::at(unit, argument, width);
+            place.provenance = unit.point_values.and_then(|values| values.reference(unit, &place));
+            if through.writes && !_by_value(unit, at, index) {
+                stores.push(place.clone());
+            }
+            if through.reads {
+                loads.push(place);
+            }
+        }
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
+        let (other_loads, other_stores) = match callee {
+            Some(id) => {
+                if !elsewhere.contains_key(&id.0) {
+                    elsewhere.insert(id.0, reaches(callee));
+                }
+                elsewhere.get(&id.0).expect("inserted above")
+            }
+            None => elsewhere_unknown.get_or_insert_with(|| reaches(None)),
+        };
+        if allowed.other.reads {
+            loads.extend(other_loads.iter().cloned());
+        }
+        if allowed.other.writes {
+            stores.extend(other_stores.iter().cloned());
+        }
+        out.insert(at, Effect { loads: loads.into(), stores: stores.into(), fills: Vec::new() });
+    }
+    out
+}
+
 /// Whether argument `argument` of the call `at` is passed byval: the callee's
 /// own copy, which its writes do not carry back.
 fn _by_value(

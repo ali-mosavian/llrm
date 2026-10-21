@@ -110,6 +110,40 @@ pub(crate) fn is_identified_function_local(
     BasicAA::new(unit).is_identified_local(operand)
 }
 
+/// `CallBase::getMemoryEffects`: the site's attributes met with the direct
+/// callee's.
+pub(crate) fn call_memory_effects(
+    unit: &Unit,
+    call: llrm_mir::module::InstId,
+) -> MemoryEffects {
+    let function = unit.function;
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+        return MemoryEffects::unknown();
+    };
+    let site = MemoryEffects::of_attrs(&info.attrs);
+    let callee = llrm_mir::memory::callee(unit.context, function, call)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+}
+
+/// `isIdentifiedObject`: an identified local, or a global variable.
+pub(crate) fn is_identified_object(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    let basic = BasicAA::new(unit);
+    basic.is_identified_local(operand) || basic.global_variable(operand)
+}
+
+/// `getUnderlyingObject`: through geps and casts.
+pub(crate) fn underlying_object(
+    unit: &Unit,
+    operand: Operand,
+) -> Operand {
+    BasicAA::new(unit).underlying(operand)
+}
+
 pub struct BasicAA<'a> {
     unit: &'a Unit<'a>,
 }
@@ -986,15 +1020,7 @@ impl AAResults for BasicAA<'_> {
         call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        let function = self.unit.function;
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
-            return MemoryEffects::unknown();
-        };
-        let site = MemoryEffects::of_attrs(&info.attrs);
-        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
-            .and_then(|one| self.unit.globals.get(one.0 as usize))
-            .and_then(|one| one.function());
-        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+        call_memory_effects(self.unit, call)
     }
 
     /// A call against a location is `getModRefInfo(Call, Loc)`; every other

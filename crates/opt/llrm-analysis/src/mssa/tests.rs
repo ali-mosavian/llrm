@@ -849,8 +849,6 @@ b0:
 #[test]
 fn test_unknown_reads_of_a_call_reach_a_local_only_after_its_capture() {
     use super::alias::AliasQuery;
-    use crate::alias::{Effect, NONLOCAL, UNKNOWN};
-    use crate::memory::MemRef;
     let parsed = Parsed::new(
         "declare void @use(ptr)
 
@@ -885,11 +883,7 @@ b2:
         ))
         .collect();
     let [_use, after_capture, before_capture] = calls[..] else { panic!("{calls:?}") };
-    let unknown: std::rc::Rc<[MemRef]> =
-        std::rc::Rc::from(vec![MemRef::reach(1, UNKNOWN.clone()), MemRef::reach(1, NONLOCAL.clone())]);
-    let effect = Effect { loads: unknown, stores: std::rc::Rc::from(Vec::new()), fills: Vec::new() };
-    let effects = [(after_capture, effect.clone()), (before_capture, effect)].into_iter().collect();
-    let accesses = Accesses::of(&unit, references, &effects);
+    let accesses = Accesses::of(&unit, references);
     let aa = AliasQuery::new(&unit, &accesses);
     let store = unit
         .function

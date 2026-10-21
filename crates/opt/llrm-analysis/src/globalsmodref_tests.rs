@@ -88,7 +88,10 @@ b0:
     );
     let (f, g) = (module.named("f").unwrap(), module.named("g").unwrap());
     assert!(!result.is_non_address_taken(g));
-    assert_eq!(result.get_mod_ref_info_for_global(&module, Some(f), g, || ModRefInfo::NoModRef), ModRefInfo::ModRef);
+    assert_eq!(
+        result.get_mod_ref_info_for_global(&module.globals, Some(f), g, || ModRefInfo::NoModRef),
+        ModRefInfo::ModRef
+    );
 }
 
 /// The query: a call that only reads `@g` does not modify it.
@@ -96,7 +99,7 @@ b0:
 fn a_call_that_only_reads_a_tracked_global_does_not_modify_it() {
     let (module, result) = found(CHAIN);
     let (f, g) = (module.named("f").unwrap(), module.named("g").unwrap());
-    let info = result.get_mod_ref_info_for_global(&module, Some(f), g, || ModRefInfo::NoModRef);
+    let info = result.get_mod_ref_info_for_global(&module.globals, Some(f), g, || ModRefInfo::NoModRef);
     assert_eq!(info, ModRefInfo::Ref);
 }
 
@@ -142,11 +145,55 @@ b0:
         asked.set(asked.get() + 1);
         ModRefInfo::NoModRef
     };
-    assert_eq!(result.get_mod_ref_info_for_global(&module, None, g, ask), ModRefInfo::ModRef);
-    assert_eq!(result.get_mod_ref_info_for_global(&module, Some(f), g, ask), ModRefInfo::ModRef);
+    assert_eq!(result.get_mod_ref_info_for_global(&module.globals, None, g, ask), ModRefInfo::ModRef);
+    assert_eq!(result.get_mod_ref_info_for_global(&module.globals, Some(f), g, ask), ModRefInfo::ModRef);
     assert_eq!(asked.get(), 0);
     let (module, result) = found(CHAIN);
     let (f, g) = (module.named("f").unwrap(), module.named("g").unwrap());
-    result.get_mod_ref_info_for_global(&module, Some(f), g, ask);
+    result.get_mod_ref_info_for_global(&module.globals, Some(f), g, ask);
     assert_eq!(asked.get(), 1);
+}
+
+/// `GlobalsAAResult::getModRefInfo(Call, Loc)`: a call to a function that only
+/// writes `@h` leaves `@g` alone and modifies `@h`; both are internal and
+/// never have their address taken.
+#[test]
+fn a_call_is_apart_from_a_tracked_global_its_callee_never_names() {
+    use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
+    let module = parsed(
+        "@g = internal global i16 0
+@h = internal global i16 0
+
+define internal void @seth() {
+b0:
+  store i16 1, ptr @h
+  ret void
+}
+
+define i16 @f() {
+b0:
+  store i16 7, ptr @g
+  call void @seth()
+  %a = load i16, ptr @g
+  %b = load i16, ptr @h
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+    );
+    let info = compute(&module);
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+    let call =
+        f.walk().map(|(_, inst)| inst).find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Call(_))).unwrap();
+    let load = |name: &str| {
+        let value = crate::testing::value(f, name);
+        let inst = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+        MemoryLocation::get(&unit, inst).expect("a load")
+    };
+    let mut aa = GlobalsAAResult::new(&unit, &info);
+    let mut aaqi = AAQueryInfo::default();
+    assert_eq!(aa.get_mod_ref_info(call, Some(&load("a")), &mut aaqi), ModRefInfo::NoModRef, "@g");
+    assert_eq!(aa.get_mod_ref_info(call, Some(&load("b")), &mut aaqi), ModRefInfo::Mod, "@h");
 }

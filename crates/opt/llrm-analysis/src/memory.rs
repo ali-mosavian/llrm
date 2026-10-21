@@ -1085,6 +1085,10 @@ pub struct Unit<'a> {
     /// What GlobalsAA proves of the module's globals; without it every
     /// global is captured.
     pub globals_aa: Option<&'a Globals>,
+    /// What `GlobalsModRef` proves of the module's calls and tracked globals,
+    /// the manager's `GlobalsModRefAnalysis`; without it a call says nothing
+    /// of a global.
+    pub globals_mr: Option<&'a crate::globalsmodref::GlobalsModRef>,
     /// Dominance and loops, the manager's; without them each ask finds them.
     pub shape: Option<&'a Shape>,
     /// What consts knows without memory, the manager's `Registers`.
@@ -1189,6 +1193,7 @@ impl<'a> Unit<'a> {
             globals,
             function,
             globals_aa: None,
+            globals_mr: None,
             references: None,
             shape: None,
             registers: None,
@@ -1253,6 +1258,13 @@ impl<'a> Unit<'a> {
         exposed: &'a BTreeSet<ValueId>,
     ) -> Self {
         Self { exposed: Some(exposed), ..self }
+    }
+
+    pub fn with_globals_mr(
+        self,
+        globals_mr: &'a crate::globalsmodref::GlobalsModRef,
+    ) -> Self {
+        Self { globals_mr: Some(globals_mr), ..self }
     }
 
     pub fn with_globals_aa(

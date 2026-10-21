@@ -1768,3 +1768,40 @@ fn a_callee_that_writes_a_byval_parameter_writes_nothing_of_the_callers_object()
     assert!(writes_global(""), "premise: a plain parameter's store writes the object");
     assert!(!writes_global("byval(i16) "));
 }
+
+/// A call's footprint from its attributes alone (`calls_by_attributes`): a
+/// `memset` of a constant length writes those bytes through its destination
+/// and reads nothing; a callee with `memory(argmem: read)` reads through its
+/// argument and writes nothing; one with no attribute may write anywhere.
+#[test]
+fn a_calls_footprint_follows_its_attributes() {
+    let parsed = Parsed::new(
+        "declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+declare i16 @peek(ptr nocapture) memory(argmem: read) nounwind willreturn
+declare void @anything(ptr)
+
+define void @f() {
+b0:
+  %s = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+  %v = call i16 @peek(ptr %s)
+  call void @anything(ptr %s)
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let found = crate::alias::calls_by_attributes(&unit);
+    let calls: Vec<InstId> = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+        .collect();
+    let [memset, peek, anything] = calls[..] else { panic!("{calls:?}") };
+    let shape = |at: InstId| (found[&at].loads.len(), found[&at].stores.len());
+    assert_eq!(shape(memset), (0, 1));
+    assert_eq!(found[&memset].stores[0].width, 8, "the bytes the length names");
+    assert_eq!(shape(peek), (1, 0));
+    assert!(found[&anything].stores.len() > 1 && found[&anything].loads.len() > 1, "unknown memory too");
+}
