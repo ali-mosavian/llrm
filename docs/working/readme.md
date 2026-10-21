@@ -19,6 +19,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
 | [qcport-os-rows](qcport-os-rows.md) | The 12 QCport modules bigger at -Os after #3369: the numbers, owner and exit |
+| [local-reassign](local-reassign.md) | `canReassign` in the greedy allocator: the QCport -Os modules that change, vs parity and main |
 
 ## Docs with the change
 
