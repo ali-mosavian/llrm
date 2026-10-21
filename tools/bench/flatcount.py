@@ -40,8 +40,15 @@ LIMIT = 400_000_000  # instructions the emulator runs before it gives up: a kern
 AGREE = 0.005  # the emulator's count and DOSBox's differ by this much of the count or less, or 64 instructions
 
 
-def agrees(counted: int, dosbox: int) -> bool:
-    return abs(counted - dosbox) <= max(64, AGREE * dosbox)
+DOSBOX_REP_SLICE = 4  # DOSBox counts a repeated string instruction once, and once more for every 4 iterations (measured on 6 kernels, 3,950 to 149,800)
+
+
+def agrees(counted: int, dosbox: int, rep_iterations: int = 0) -> bool:
+    """DOSBox's count is the emulator's once the iterations of the kernel's repeated string instructions (`Run.rep_iterations`) are counted as DOSBox
+    does. Without the allowance a kernel with a `rep stosd` over a page (matmul, ring, sieve, bintree, huge on head: the loop idioms made them)
+    read as another run's."""
+    expected = counted + rep_iterations // DOSBOX_REP_SLICE
+    return abs(expected - dosbox) <= max(64, AGREE * dosbox)
 
 
 def symbol(image: Path, name: str) -> int | None:
@@ -228,6 +235,8 @@ def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
         if not (repeated and before is not None and before[0] == address):
             counts.instructions += 1
             counts.memory_operands += memory
+        else:
+            result.rep_iterations += 1
 
     uc.hook_add(UC_HOOK_INTR, interrupt)
     uc.hook_add(UC_HOOK_CODE, step)

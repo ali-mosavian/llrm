@@ -673,6 +673,32 @@ pub fn decide_with(
 }
 
 /// `decide_with`, with live range splitting (`trySplit`) chosen.
+/// The blocks an x87 value is live into and out of, as (in, out) by block.
+fn float_live_blocks(
+    lis: &mut LiveIntervals,
+    floats: &crate::support::hash::HashSet<u32>,
+    count: usize,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut live_in = vec![false; count];
+    let mut live_out = vec![false; count];
+    if floats.is_empty() {
+        return (live_in, live_out);
+    }
+    let starts: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_start_idx(at)).collect();
+    let ends: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_end_idx(at)).collect();
+    for &reg in floats {
+        for segment in &lis.interval(reg).segments {
+            let mut at = starts.partition_point(|start| *start <= segment.start).saturating_sub(1);
+            while at < count && starts[at] < segment.end {
+                live_in[at] |= segment.start <= starts[at];
+                live_out[at] |= segment.end >= ends[at];
+                at += 1;
+            }
+        }
+    }
+    (live_in, live_out)
+}
+
 pub fn decide_with_split(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
@@ -696,7 +722,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let lis = LiveIntervals::new(body);
+    let mut lis = LiveIntervals::new(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -746,12 +772,22 @@ pub fn decide_with_split(
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
+    let (float_in, float_out) = float_live_blocks(&mut lis, &floats, body.blocks.len());
     for (at, block) in body.blocks.iter().enumerate() {
         let first = calls.len();
-        for one in block.insns.iter() {
+        let last = block.insns.len().saturating_sub(1);
+        for (n, one) in block.insns.iter().enumerate() {
+            // DEVIATE D-DS1 (exit: a spill or split tells the masks): the
+            // masks are made once, before allocation. A split or a spill of an
+            // x87 value that lives through a block stores or reloads it
+            // (`fstp`, `fld`) at the block's ends, where no instruction of the
+            // body names it; those need the data group (`needs_data_group`),
+            // and `datagroup` then loads `ds` from `ss` there. A selector
+            // placed in `ds` over such an end is lost.
+            let at_edge = (n == 0 && float_in[at]) || (n == last && float_out[at]);
             let read: RegSet = inputs
                 .data
-                .filter(|_| crate::backend::target::needs_data_group(one))
+                .filter(|_| at_edge || crate::backend::target::needs_data_group(one))
                 .map(crate::model::ir::root)
                 .into_iter()
                 .collect();
@@ -1054,6 +1090,85 @@ mod tests {
         assert_eq!(masks.reg_mask_clobbered(&live(5)), Some([ds].into_iter().collect()), "ends at the instruction");
         assert_eq!(masks.reg_mask_clobbered(&live(8)), Some([ds].into_iter().collect()), "goes on past it");
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
+    }
+
+    /// A selector placed in `ds` over a block an x87 value lives through was
+    /// clobbered: a split or spill stores the value (`fstp`) at the block's
+    /// edge, an instruction that needs the data group, and `datagroup` put
+    /// `mov ds, ss` there. nbody.bas at -O2 (m16) wrote an array through the
+    /// stack segment and printed 4849201 for 4774160.
+    #[test]
+    fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
+        use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let insn = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| {
+            Arc::new(Insn::new(at, None, Some(what), defines.to_vec(), uses.to_vec()))
+        };
+        let float = Loc::Held(Held { value: 1, width: 10 });
+        let selector = Loc::Held(Held { value: 2, width: 2 });
+        let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let load = || insn(1, what(Operation::FloatLoad, "fld", vec![float.clone()], vec![cell(-8)]), &[1], &[]);
+        let store = || insn(2, what(Operation::FloatStore, "fstp", vec![cell(-16)], vec![float.clone()]), &[], &[1]);
+        let make = || {
+            insn(
+                3,
+                what(
+                    Operation::Move,
+                    "mov",
+                    vec![selector.clone()],
+                    vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
+                ),
+                &[2],
+                &[],
+            )
+        };
+        let read = || insn(4, what(Operation::Move, "mov", vec![cell(-24)], vec![selector.clone()]), &[], &[2]);
+        let jump = |at: i64| insn(at, what(Operation::Jump, "jmp", vec![], vec![]), &[], &[]);
+        let body = |blocks: Vec<Vec<Arc<Insn>>>| {
+            let count = blocks.len();
+            let blocks: Vec<Block> = blocks
+                .into_iter()
+                .enumerate()
+                .map(|(n, insns)| {
+                    let mut b = LirBlock::new(n as i64, insns);
+                    if n + 1 < count {
+                        b.succ = vec![n as i64 + 1].into();
+                    }
+                    Block::from(b)
+                })
+                .collect();
+            LirBody::new("selector", 0, blocks, IndexMap::default(), IndexMap::default())
+        };
+        let order = |value: u32| if value == 2 { vec![RegId::DS, RegId::ES] } else { vec![RegId::EAX] };
+        let placed_in_ds = |body: &LirBody| {
+            let inputs = ShadowInputs {
+                body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: Some(RegId::DS),
+                sets: None,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            decided
+                .placed
+                .iter()
+                .any(|(value, reg)| *value == 2 && crate::model::ir::root(*reg) == crate::model::ir::root(RegId::DS))
+        };
+        // The x87 value dies before the middle block: the selector may take
+        // `ds`.
+        let apart = body(vec![vec![make(), jump(5)], vec![jump(6)], vec![read(), load(), store()]]);
+        assert!(placed_in_ds(&apart), "premise: the selector is placed in ds");
+        // The x87 value lives through the middle block.
+        let through = body(vec![vec![load(), make(), jump(5)], vec![jump(6)], vec![read(), store()]]);
+        assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
     }
 
     /// A range live at the two ends of a function and not between them was
