@@ -21,7 +21,7 @@ b0:
 ";
     let mut module = llrm_mir::parse::module(text).expect("parses");
     let mut manager = PassManager::default();
-    manager.add(Decide);
+    manager.add(Decide { constants: true });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     assert!(llrm_mir::print::module(&module).contains("ret i32"));
 }
