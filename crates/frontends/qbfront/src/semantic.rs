@@ -346,6 +346,7 @@ struct Compiler {
     next_data: u32,
     next_module_data: u32,
     def_segment_symbol: Option<u32>,
+    def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
     // The table each DEFtype leaves, by source position. BC reads the file
@@ -1704,6 +1705,7 @@ impl Compiler {
             // measured ordinals while globals use BASIC's typed spelling.
             next_module_data: 1_000_000,
             def_segment_symbol: None,
+            def_segment_base_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
             default_changes: Vec::new(),
@@ -3502,18 +3504,26 @@ impl Compiler {
                 },
                 Statement::DefSeg { value, .. } => {
                     if self.options.one_space() {
-                        // A segment has no meaning where the address is one
-                        // number: PEEK and POKE would read and write the
-                        // wrong bytes without a word (far3: the string
-                        // unchanged, n = 0), so it is refused.
-                        if value.is_some() {
-                            return self.fail(
-                                "DEF SEG with a non-default segment is not supported at one address space (-m32): VARSEG is 0 \
-                                 and PEEK, POKE, BLOAD and BSAVE take the whole address, so an absolute address (video memory) \
-                                 is held in a variable, as vram& = &HB8000 (docs/frontends/qb/memory-model.md)",
-                            );
-                        }
-                        self.warn_def_seg_ignored();
+                        // One address space: the segment is its linear base,
+                        // paragraph * 16, added to every PEEK, POKE, BLOAD
+                        // and BSAVE address.  Only a constant has one the
+                        // compiler can name; VARSEG and variables are refused.
+                        let base = match value {
+                            None => 0,
+                            Some(value) => match self.expression(value)? {
+                                (Operand::Constant(_, Number::Integer(paragraph)), _) => (paragraph & 0xFFFF) * 16,
+                                _ => {
+                                    return self.fail(
+                                        "DEF SEG with a non-constant segment is not supported at one address space (-m32): VARSEG is 0 \
+                                         and PEEK, POKE, BLOAD and BSAVE take the whole address, so name the segment as a constant, \
+                                         DEF SEG = &HB800 (docs/frontends/qb/memory-model.md)",
+                                    );
+                                }
+                            },
+                        };
+                        let place = self.def_segment_base_place();
+                        let near = integer_type(self.options.near(), true);
+                        self.emit("store", Vec::new(), vec![Operand::Place(place), Operand::Constant(near, Number::Integer(base))]);
                     } else if let Some(value) = value {
                         let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
@@ -7665,19 +7675,6 @@ impl Compiler {
         self.convert(value, type_id, integer_type(self.options.near(), true))
     }
 
-    /// One address space has no segments: DEF SEG does nothing, VARSEG is 0,
-    /// and PEEK, POKE, BLOAD and BSAVE take the whole address.  An absolute
-    /// address (video memory) is held in a variable by the program: `vram& =
-    /// &HB8000`.
-    fn warn_def_seg_ignored(&mut self) {
-        self.warnings.push(format!(
-            "line {}: warning: DEF SEG is ignored at one address space: VARSEG is 0 and PEEK, POKE, BLOAD and BSAVE take the whole \
-             address, so an absolute address (video memory) is held in a variable, as vram& = &HB8000 \
-             (docs/frontends/qb/memory-model.md)",
-            self.current_source_line
-        ));
-    }
-
     /// The byte pointer an address names: the offset from DEF SEG's paragraph.
     fn segment_pointer(
         &mut self,
@@ -7685,14 +7682,20 @@ impl Compiler {
     ) -> u32 {
         // One address space: the address is the offset whole, no segment is
         // read.
-        let segment = if self.options.one_space() {
-            Operand::Constant(INTEGER, Number::Integer(0))
+        let (segment, offset) = if self.options.one_space() {
+            let near = integer_type(self.options.near(), true);
+            let place = self.def_segment_base_place();
+            let base = self.value(near);
+            self.emit("load", vec![base], vec![Operand::Place(place)]);
+            let linear = self.value(near);
+            self.emit("add", vec![linear], vec![Operand::Value(base), offset]);
+            (Operand::Constant(INTEGER, Number::Integer(0)), Operand::Value(linear))
         } else {
             let segment_place = self.def_segment_place();
             let segment = self.value(INTEGER);
             self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
             self.tag_last(Tag::ReadSegment);
-            Operand::Value(segment)
+            (Operand::Value(segment), offset)
         };
         let pointer_type = self.far_pointer_type(BYTE);
         let pointer = self.value(pointer_type);
@@ -8938,6 +8941,47 @@ impl Compiler {
         self.data_offset += extent;
         self.reserve_module_data(storage);
         Ok(id)
+    }
+
+    /// The linear base DEF SEG names at one address space: a program-owned
+    /// cell, zero until a DEF SEG stores to it.
+    fn def_segment_base_place(&mut self) -> u32 {
+        let near = integer_type(self.options.near(), true);
+        let extent = self.options.near();
+        let symbol = if let Some(symbol) = self.def_segment_base_symbol {
+            symbol
+        } else {
+            let symbol = self.next_data;
+            self.next_data += 1;
+            self.data.push(DataObject {
+                align: extent as u32,
+                id: symbol,
+                name: "$defSegBase".into(),
+                bytes: vec![0; extent],
+                readonly: false,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+            });
+            self.def_segment_base_symbol = Some(symbol);
+            symbol
+        };
+        if let Some(place) = self.places.iter().find(|place| place.storage == "static" && place.symbol == symbol) {
+            return place.id;
+        }
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: "$defSegBase".into(),
+            type_id: near,
+            offset: 0,
+            extent,
+            storage: "static",
+            symbol,
+        });
+        place
     }
 
     fn def_segment_place(&mut self) -> u32 {
