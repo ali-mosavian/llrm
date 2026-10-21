@@ -290,3 +290,10 @@ fn test_the_pass_keeps_what_the_function_returns() {
     assert!(printed(&module).contains("%carried.lcssa = phi"));
     assert_eq!(results(&module, inputs), expected);
 }
+
+#[test]
+fn test_only_the_values_read_outside_get_exit_phis() {
+    let closed = closed_once(LOOP_WITH_EXIT_USE);
+    assert_eq!(closed.matches(".lcssa = phi").count(), 1, "{closed}");
+    assert!(closed.contains("%carried.lcssa = phi i16 [ %carried, %b1 ]"), "{closed}");
+}

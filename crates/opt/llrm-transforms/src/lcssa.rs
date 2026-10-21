@@ -227,43 +227,44 @@ pub fn _closed_loop(
         return Ok(false);
     }
 
-    let defined = definitions(function, &loop_.body);
-    if defined.is_empty() {
+    // Phi inputs are used on their incoming edge.  A phi in the dedicated
+    // exit is already the LCSSA boundary, so only downstream phis count here.
+    // Found from the uses of what the loop defines (LLVM's formLCSSA), keeping
+    // only the values something outside reads, not every value the loop makes.
+    let mut escaping: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
+    for &at in &loop_.body {
+        let block = cfg::block(at);
+        for inst in function.iter_block(block) {
+            let Some(value) = function.instruction(inst).result else { continue };
+            for one in function.users(value) {
+                let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
+                if loop_.body.contains(&home) {
+                    continue;
+                }
+                let user = function.instruction(one.user);
+                let site = if user.opcode == Opcode::Phi {
+                    let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
+                    if home == exit_at {
+                        continue;
+                    }
+                    cfg::id(from)
+                } else {
+                    home
+                };
+                escaping.entry(value).or_insert_with(|| (cfg::id(block), BTreeSet::new())).1.insert(site);
+            }
+        }
+    }
+    if escaping.is_empty() {
         return Ok(false);
     }
 
-    // Phi inputs are used on their incoming edge.  A phi in the dedicated
-    // exit is already the LCSSA boundary, so only downstream phis count here.
-    // Found from the uses of what the loop defines (LLVM's formLCSSA), not by
-    // reading every instruction outside it for each loop.
-    let mut use_sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for &value in defined.keys() {
-        for one in function.users(value) {
-            let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
-            if loop_.body.contains(&home) {
-                continue;
-            }
-            let user = function.instruction(one.user);
-            let site = if user.opcode == Opcode::Phi {
-                let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
-                if home == exit_at {
-                    continue;
-                }
-                cfg::id(from)
-            } else {
-                home
-            };
-            use_sites.entry(value).or_default().insert(site);
-        }
-    }
-
     let dominance = &*dominance.get_or_insert_with(|| cfg::Dominance::of(function));
-    let crossing = use_sites
+    let crossing = escaping
         .iter()
-        .filter(|(value, sites)| {
-            !sites.is_empty()
-                && sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
-                && sources.iter().all(|&source| dominance.dominates(function, defined[*value], source))
+        .filter(|(_, (home, sites))| {
+            sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
+                && sources.iter().all(|&source| dominance.dominates(function, *home, source))
         })
         .map(|(value, _)| *value)
         .collect::<Vec<_>>();
