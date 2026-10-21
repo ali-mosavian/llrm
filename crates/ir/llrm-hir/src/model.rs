@@ -1094,6 +1094,9 @@ pub struct RuntimePromises {
     pub reads_arguments: Vec<String>,
     /// The routines that keep no pointer argument past their return.
     pub no_retain: Vec<String>,
+    /// The routines whose result is the machine flags, so only a comparison
+    /// reads it; read from the runtime's description, not carried in text.
+    pub flags_results: Vec<String>,
     /// The routines that never come back to their caller: END, SYSTEM, the
     /// error funnel. Their calls end their block.
     pub no_return: Vec<String>,
@@ -1128,6 +1131,7 @@ impl RuntimePromises {
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
             no_retain: Vec::new(),
+            flags_results: Vec::new(),
             no_return: Vec::new(),
             descriptor: None,
             routines: Vec::new(),
