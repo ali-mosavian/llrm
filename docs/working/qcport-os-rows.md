@@ -18,3 +18,16 @@ Measured: `tools/rows/qcport.py`'s way (`llrm-c -Os -march=i386`, QCport 65 modu
 | QO-10 | host/savegame | 7953 | 7958 | +5 |
 | QO-11 | render/r_bsp | 4959 | 4963 | +4 |
 | QO-12 | render/d_faces | 4901 | 4904 | +3 |
+
+## Re-land on parity 9e7f33edd3 (2026-10-21)
+
+Base = parity without the change, then with it (`llrm-c -m16 -Os -march=i386`, same 65 modules, emitted bytes). With the DS-selector fix (#3434) in, 58 are equal, 5 smaller (game/mdl_ai -2, game/weapons -7, model/mdl -1, ui/console -4, ui/screen -2) and two bigger: QO-1 and QO-6. The other ten rows are at base. Total 223,756 -> 223,879 B (+123, 0.055%).
+
+| row | module | main B | base B | with change B | owner, date |
+|---|---|---|---|---|---|
+| QO-1 | host/demo | 5404 | 5609 | 5742 (+133) | w-1, 2026-10-28 |
+| QO-6 | render/d_alias | 11537 | 12393 | 12399 (+6) | w-1, 2026-10-28 |
+
+Both are above main already on parity (cause not examined); the change adds to it.
+
+QO-1 is one function, `_demo_snapshot_apply@3` (+45 lines): the pointer argument is kept in `di` on base and reloaded from its cell before each use with the change. `LLRM_GREEDY_TRACE`: values 220 and spilled 25 -> 26, but reloads 14 -> 47, stores 9 -> 21, new ranges 129 -> 171. The allocator splits differently, so the cause is splitkit's allocation row, not the phi lowering. Exit: the module at or below base.
