@@ -1634,11 +1634,15 @@ pub struct InductionDescriptor {
     pub induction_bin_op: Option<InstId>,
 }
 
-/// `InductionDescriptor::isFPInductionPHI`.
-fn is_fp_induction_phi(
-    c: &Ctx,
+/// `InductionDescriptor::isFPInductionPHI`: the floating-point branch of the
+/// `PredicatedScalarEvolution` overload of `isInductionPHI` (D2); the
+/// `ScalarEvolution` overload ([`is_induction_phi`]) does not take it.
+pub fn is_fp_induction_phi(
+    cx: &Cx,
     phi: InstId,
+    the_loop: Loop,
 ) -> Option<InductionDescriptor> {
+    let c = &Ctx { cx, the_loop };
     if c.the_loop.get_header() != c.parent(phi) {
         return None;
     }
@@ -1699,16 +1703,10 @@ pub fn is_induction_phi(
 ) -> Option<InductionDescriptor> {
     let c = Ctx { cx, the_loop };
     let ty = c.instruction(phi).ty;
-    // Handle integer and pointer inductions variables, and FP ones.
-    let float = matches!(c.cx.context.types.get(ty), MirType::Float(_));
-    if !c.scalar_is_int(ty) && !c.scalar_is_pointer(ty) && !float {
+    // isSCEVable returns true for integer and pointer types.
+    if !c.scalar_is_int(ty) && !c.scalar_is_pointer(ty) {
         return None;
     }
-    if float {
-        return is_fp_induction_phi(&c, phi);
-    }
-
-    // isSCEVable returns true for integer and pointer types.
     let phi_scev = se.get_scev(cx, Operand::Value(c.instruction(phi).result.expect("a phi")));
     // Check that the PHI is consecutive: an affine add recurrence of the loop.
     let Kind::AddRec(operands, header) = se.node(phi_scev).kind.clone() else { return None };

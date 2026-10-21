@@ -324,17 +324,15 @@ fn omax_unswitches_loops() {
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
 
-/// gcc turns `-floop-interchange` on at -O3 and no lower (opts.cc:677);
-/// -Omax is everything.
+/// The pin's default pipelines hold `LoopInterchange` at every level but -O0
+/// (`enable-loopinterchange`, PassBuilderPipelines.cpp#L219); it was on at -O3
+/// and -Omax only, gcc's choice.
 #[test]
-fn only_o3_and_omax_interchange_loops_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).interchange);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).interchange, "{level}");
-        assert!(pipeline(&[level, "-floop-interchange"]).interchange, "{level}");
+fn every_optimized_level_interchanges_loops_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-O3", "-Omax"] {
+        assert!(pipeline(&[level]).interchange, "{level}");
+        assert!(!pipeline(&[level, "-fno-loop-interchange"]).interchange, "{level}");
     }
-    assert!(pipeline(&["-O3"]).interchange);
-    assert!(!pipeline(&["-O3", "-fno-loop-interchange"]).interchange);
 }
 
 /// `-disable-lsr` (LLVM's TargetPassConfig option, also `-mllvm -disable-lsr`)

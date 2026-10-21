@@ -433,6 +433,12 @@ mod tests {
             // iteration (the GEP would be poison, the access UB, otherwise);
             // it changes no instruction.
             "loopaccess.rs",
+            // LoopInterchange.cpp's `checkReductionKind` lists the reduction
+            // operations that carry `nsw`/`nuw` (and `ninf`), and the
+            // transform clears them, since a reordered sum may overflow; it
+            // keeps no instruction's promise and grants none.
+            "loopinterchange.rs",
+            "loopinterchange_transform.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
