@@ -641,7 +641,7 @@ impl<'a> Solver<'a> {
         &mut self,
         term: InstId,
     ) -> Vec<bool> {
-        let instruction = self.function.instruction(term).clone();
+        let instruction = self.function.instruction(term);
         let count = instruction.operands.iter().filter(|one| matches!(one, Operand::Block(_))).count();
         let mut succs = vec![false; count];
         match &instruction.opcode {
@@ -875,7 +875,7 @@ impl<'a> Solver<'a> {
         inst: InstId,
         op: CastOp,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a cast has a value");
         // ResolvedUndefsIn might mark I as overdefined. Bail out, even if we
         // would discover a concrete value later.
@@ -985,7 +985,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("an extractvalue has a value");
         let Opcode::ExtractValue(indices) = &instruction.opcode else { unreachable!() };
         // If this returns a struct, mark all elements over defined, we don't
@@ -1044,7 +1044,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("an insertvalue has a value");
         let Opcode::InsertValue(indices) = &instruction.opcode else { unreachable!() };
         let Some(fields) = self.struct_fields(instruction.ty) else { return self.mark_overdefined(result) };
@@ -1084,7 +1084,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a select has a value");
         // If this select returns a struct, just mark the result overdefined.
         if self.struct_fields(instruction.ty).is_some() {
@@ -1124,7 +1124,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a unary operator has a value");
         let operand = self.get_value_state(instruction.operands[0]);
         // resolvedUndefsIn might mark I as overdefined. Bail out, even if we
@@ -1152,7 +1152,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a freeze has a value");
         // If this freeze returns a struct, just mark the result overdefined.
         if self.struct_fields(instruction.ty).is_some() {
@@ -1185,7 +1185,7 @@ impl<'a> Solver<'a> {
         inst: InstId,
         op: BinaryOp,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a binary operator has a value");
         let (lhs, rhs) = (instruction.operands[0], instruction.operands[1]);
         let state1 = self.get_value_state(lhs);
@@ -1256,7 +1256,7 @@ impl<'a> Solver<'a> {
         inst: InstId,
         pred: IntPredicate,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a compare has a value");
         // Do not cache this lookup, getValueState calls later in the function
         // might invalidate the reference.
@@ -1287,7 +1287,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a compare has a value");
         if self.state_mut(result).is_overdefined() {
             return self.mark_overdefined(result);
@@ -1305,7 +1305,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a getelementptr has a value");
         if self.state_mut(result).is_overdefined() {
             return self.mark_overdefined(result);
@@ -1375,7 +1375,7 @@ impl<'a> Solver<'a> {
         inst: InstId,
         volatile: bool,
     ) {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         let result = instruction.result.expect("a load has a value");
         // If this load is of a struct or the load is volatile, just mark the
         // result as overdefined.
@@ -1507,7 +1507,7 @@ impl<'a> Solver<'a> {
         &mut self,
         call: InstId,
     ) {
-        let instruction = self.function.instruction(call).clone();
+        let instruction = self.function.instruction(call);
         let q = self.query();
         let callee = called_function(&q, &instruction);
         if let Some(id) = pattern::call_intrinsic(&q, call)
@@ -1555,7 +1555,7 @@ impl<'a> Solver<'a> {
         &mut self,
         call: InstId,
     ) {
-        let instruction = self.function.instruction(call).clone();
+        let instruction = self.function.instruction(call);
         // Void return and not tracking callee, just bail.
         let Some(result) = instruction.result else { return };
         // Always mark struct return as overdefined.
@@ -1639,7 +1639,7 @@ impl<'a> Solver<'a> {
         &mut self,
         inst: InstId,
     ) -> bool {
-        let instruction = self.function.instruction(inst).clone();
+        let instruction = self.function.instruction(inst);
         // Look for instructions which produce undef values.
         let Some(result) = instruction.result else { return false };
         if let Some(fields) = self.struct_fields(instruction.ty) {

@@ -378,3 +378,37 @@ b2:
         &[&[5], &[6]],
     );
 }
+
+/// The rewrites read an instruction by `detached`: all of it but the metadata
+/// strings, which a whole clone copied for every instruction they visited
+/// (d_faces -O2: the clones were 5.5 of sccp's 16.6 Minstr).
+#[test]
+fn a_rewrite_reads_an_instruction_without_copying_its_metadata() {
+    let mut module = parsed(
+        "define i16 @f(ptr %p) {
+b0:
+  %v = load i16, ptr %p, !tbaa !1
+  ret i16 %v
+}
+
+!0 = !{!\"root\"}
+!1 = !{!0, !0, i64 0}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let load = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("the load");
+    assert!(!function.instruction(load).metadata.is_empty(), "the load carries !tbaa");
+    let seen = super::detached(function, load);
+    assert!(seen.metadata.is_empty());
+    assert_eq!((seen.opcode, seen.ty, seen.operands, seen.flags, seen.result), {
+        let one = function.instruction(load);
+        (one.opcode.clone(), one.ty, one.operands.clone(), one.flags, one.result)
+    });
+}

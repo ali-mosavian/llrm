@@ -942,3 +942,30 @@ b4:
     assert!(!answer_is_safe(&fresh, &Name::Live, &store), "live on entry misses the store");
     assert!(answer_is_safe(&fresh, &store, &Name::Live));
 }
+
+/// LLRM_CHECK_PRESERVED said `earlycse@1180 left mssa held but stale` of 172
+/// programs: a load the walker had moved above a store it does not alias
+/// (`MemoryUse::isOptimized`) differed from the fresh graph's nearest def. A
+/// graph the walker has answered for equals one made afresh.
+#[test]
+fn a_graph_with_walked_uses_equals_one_made_afresh() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "define i8 @f() {
+b0:
+  store i32 7, ptr @g
+  store i8 1, ptr getelementptr (i8, ptr @g, i16 4)
+  %r = load i8, ptr @g
+  ret i8 %r
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = std::rc::Rc::new(Accesses::plain(&unit, &crate::consts::Calls::default()));
+    let build = || Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses, unit.function));
+    let mut held = build();
+    let aa = AliasQuery::new(&unit, &accesses);
+    shadow::walked(&mut held, &aa, unit.function);
+    let graph = |mssa| crate::manager::MssaGraph { mssa, accesses: std::rc::Rc::clone(&accesses) };
+    assert!(graph(held) == graph(build()));
+}
