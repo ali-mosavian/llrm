@@ -335,6 +335,21 @@ fn every_optimized_level_interchanges_loops_and_the_flag_overrides_it() {
     }
 }
 
+/// The pin's default pipelines have `LoopUnrollAndJam` off
+/// (`enable-unroll-and-jam`); llrm runs it at -O3 and -Omax (DEVIATE D1 of its
+/// parity row), and `-floop-unroll-and-jam` overrides either way.
+#[test]
+fn only_o3_and_omax_unroll_and_jam_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os"] {
+        assert!(!pipeline(&[level]).unroll_and_jam, "{level}");
+        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_and_jam, "{level}");
+    }
+    for level in ["-O3", "-Omax"] {
+        assert!(pipeline(&[level]).unroll_and_jam, "{level}");
+        assert!(!pipeline(&[level, "-fno-loop-unroll-and-jam"]).unroll_and_jam, "{level}");
+    }
+}
+
 /// `-disable-lsr` (LLVM's TargetPassConfig option, also `-mllvm -disable-lsr`)
 /// turns off the loop strength reduction alone: no flag turned off `lsr`
 /// without `indvars`, `window` and the other address passes, so an on/off

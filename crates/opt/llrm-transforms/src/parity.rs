@@ -268,6 +268,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Translated,
         "loopinterchange.rs, loopinterchange_transform.rs; deviations D1-D6 of its header (LoopInfo made again after a swap, no LoopCacheAnalysis so the cache rule decides nothing, no remarks); output equal to opt's on 108 runs of the pin's LoopInterchange tests (tools/loopinterchange_oracle.py)",
     ),
+    // l.1474: a loop pass manager of its own, before LoopUnrollPass.
+    entry(
+        "loop-unroll-and-jam@1474",
+        Late,
+        "loop-unroll-and-jam",
+        Translated,
+        "loopunrollandjam.rs, loopunrollruntime.rs (the epilog subset of UnrollRuntimeLoopRemainder); parity with the pin: output equal to opt's on 16 of the 24 runs of the pin's LoopUnrollAndJam tests, the other 8 classified in tools/loopunrollandjam_expected.toml (tools/loopunrollandjam_oracle.py); deviations D1-D7 of its header: D1 on at -O3 and -Omax only (the pin's default pipelines have it off), exit none, the particle -O3 row; D2 no loop metadata; D3 LoopInfo made again; D4 epilog only; D5 no remarks; D6 BasicAA lacks aliasPHI (exit: BasicAA); D7 isKnownViaInduction is a stub (exit: S5)",
+    ),
     // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
     // vector width (no vector registers on llrm's targets).
     partial(
@@ -280,7 +288,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg@1438",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (foldValueComparisonIntoPredecessors SimplifyCFG.cpp:1475, simplifySwitchOnSelect :5192; switchvalue.rs holds simplifyEqualityComparisonWithOnlyPredecessor); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (foldValueComparisonIntoPredecessors SimplifyCFG.cpp:1475, simplifySwitchOnSelect :5192; switchvalue.rs holds simplifyEqualityComparisonWithOnlyPredecessor); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),

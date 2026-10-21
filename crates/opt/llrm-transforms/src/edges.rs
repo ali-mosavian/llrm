@@ -312,6 +312,19 @@ pub fn split_block_predecessors(
     bb: BlockId,
     preds: &[BlockId],
 ) -> BlockId {
+    split_block_predecessors_of(function, bb, preds, false)
+}
+
+/// `SplitBlockPredecessors(BB, Preds, ..., PreserveLCSSA)` of a loop's exit
+/// block (`HasLoopExit`): each phi of `bb` gets a phi in the new block even
+/// where the `preds` agree on its value, so the value leaves the loop through
+/// a phi.
+pub fn split_block_predecessors_of(
+    function: &mut Function,
+    bb: BlockId,
+    preds: &[BlockId],
+    has_loop_exit: bool,
+) -> BlockId {
     assert!(!preds.is_empty(), "predecessors to split off");
     let void = function.instruction(function.terminator(bb).expect("a terminated block")).ty;
     let new = function.create_block(None);
@@ -325,14 +338,26 @@ pub fn split_block_predecessors(
     for phi in phis(function, bb) {
         let mut incoming = arms(function, phi);
         let coming: Vec<Operand> = incoming.iter().filter(|(_, from)| preds.contains(from)).map(|&(v, _)| v).collect();
-        let common = coming.first().filter(|first| coming.iter().all(|one| one == *first)).copied();
+        let common = coming.first().filter(|first| !has_loop_exit && coming.iter().all(|one| one == *first)).copied();
         let value = match common {
             Some(value) => value,
             None => {
                 let ty = function.instruction(phi).ty;
                 let gathered: Vec<_> = incoming.iter().filter(|(_, from)| preds.contains(from)).copied().collect();
-                let gather =
-                    function.create_instruction(Opcode::Phi, ty, from_arms(&gathered), Flags::default(), Some("ph"));
+                let gather = function.create_instruction(
+                    Opcode::Phi,
+                    ty,
+                    from_arms(&gathered),
+                    Flags::default(),
+                    Some(&format!(
+                        "{}.ph",
+                        function
+                            .value(function.instruction(phi).result.expect("a phi's value"))
+                            .name
+                            .clone()
+                            .unwrap_or_default()
+                    )),
+                );
                 function.insert(gather, Position::Before(jump)).expect("a placed phi");
                 Operand::Value(function.instruction(gather).result.expect("a phi's value"))
             }
