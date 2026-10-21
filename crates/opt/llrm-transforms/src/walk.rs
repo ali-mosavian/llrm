@@ -362,6 +362,21 @@ impl ProgramPass for Walk {
                             modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                             (self.simplify)(module, &mut modules[at], id, "walk.trial.");
                             let tried = body_size(module, &program.layout, tti, id);
+                            // The callee goes only if no call to it is left in
+                            // the
+                            // caller: a recursive body inlined once still calls
+                            // it, unless tail-call
+                            // elimination made it a loop.
+                            let target = trials[&calls[0]].callee.expect("a callee");
+                            let credit = if credit > 0
+                                && calls_of(&module.context, module.global(id).function().expect("a procedure"))
+                                    .iter()
+                                    .any(|(one, count)| *one == target && *count > 0)
+                            {
+                                0
+                            } else {
+                                credit
+                            };
                             if remarks {
                                 eprintln!(
                                     "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",

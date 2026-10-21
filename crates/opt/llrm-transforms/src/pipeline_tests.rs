@@ -2554,6 +2554,49 @@ done:
     assert!(!printed.contains("@gcd"), "the callee or a call to it stayed:\n{printed}");
 }
 
+/// A local recursive callee that is not a tail recursion is not removed by
+/// inlining its one call: the copy still calls it. The trial credited the
+/// callee's body anyway and `fib`, `hanoi`, `recpow` and `queens` grew 18 to
+/// 36 percent at -Os.
+#[test]
+fn at_os_a_recursive_callee_the_copy_still_calls_is_not_inlined() {
+    let text =
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+define internal i16 @fib(i16 %n) {
+b0:
+  %c = icmp slt i16 %n, 2
+  br i1 %c, label %done, label %rec
+rec:
+  %a1 = sub i16 %n, 1
+  %x = call i16 @fib(i16 %a1)
+  %a2 = sub i16 %n, 2
+  %y = call i16 @fib(i16 %a2)
+  %s = add i16 %x, %y
+  ret i16 %s
+done:
+  ret i16 %n
+}
+
+define i16 @main(i16 %n) addrspace(1) {
+b0:
+  %r = call i16 @fib(i16 20)
+  ret i16 %r
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let printed = llrm_mir::print::module(&module);
+    let main = printed.split("define").find(|one| one.contains("@main")).expect("main");
+    assert!(!main.contains("icmp") && !main.contains("phi"), "fib was copied into main:\n{printed}");
+}
+
 /// The pin builds `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`: the slot
 /// copied a loop for each way of an invariant branch at -O3 only, where
 /// the old `unswitch` pass ran after the fixed point and judged candidates on
