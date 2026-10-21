@@ -1059,6 +1059,34 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&across(2)).is_none_or(|roots| roots.is_empty()));
     }
 
+    /// A value in no width table is held as wide as the widest: the complement
+    /// of a split has no entry until `note_split_from` gives it its parent's,
+    /// and read as narrow it was placed in `esi` across a call that destroys
+    /// the high half (crc.bas -O2 m16 printed 14630 for -873187034).
+    #[test]
+    fn test_a_value_in_no_width_table_is_held_against_a_call_that_destroys_a_high_half() {
+        let insns: Vec<Arc<Insn>> = (0..10).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let masks = CallMasks::of(
+            vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
+            Vec::new(),
+            widths(&[(1, 4)]),
+        );
+        let mut li = LiveInterval::new(9, 1.0);
+        let v = li.get_next_value(at(2));
+        li.add_segment(Segment::new(at(2), at(8), Some(v)));
+        assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
+    }
+
     /// An instruction that reads the data segment register without naming it
     /// takes it from a range that ends at it: a far array's selector placed in
     /// `ds` was loaded with the stack's, and matmul.bas stored into the stack
