@@ -1,0 +1,230 @@
+== -unroll-runtime -unroll-partial-threshold=60
+@function
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B7
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B7
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  br label %B3
+B3:
+  %v6 = phi i8 [ %v11, %B5 ], [ %v4, %B2 ]
+  %v7 = phi ptr [ %src, %B2 ], [ %v10, %B5 ]
+  %v8 = phi i32 [ %v37, %B5 ], [ 0, %B2 ]
+  %v9 = phi ptr [ %dst, %B2 ], [ %v36, %B5 ]
+  %v10 = getelementptr inbounds i8, ptr %v7, i64 %v0
+  %v11 = load i8, ptr %v10
+  br label %B4
+B4:
+  %v12 = phi i8 [ %v11, %B3 ], [ %v25, %B4 ]
+  %v13 = phi i8 [ %v19, %B4 ], [ %v6, %B3 ]
+  %v14 = phi i64 [ %v17, %B4 ], [ 0, %B3 ]
+  %v15 = zext i8 %v13 to i32
+  %v16 = mul nsw i32 %v15, %A
+  %v17 = add nuw nsw i64 %v14, 1
+  %v18 = getelementptr inbounds i8, ptr %v7, i64 %v17
+  %v19 = load i8, ptr %v18
+  %v20 = zext i8 %v19 to i32
+  %v21 = mul nsw i32 %v20, %B
+  %v22 = zext i8 %v12 to i32
+  %v23 = mul nsw i32 %v22, %C
+  %v24 = getelementptr inbounds i8, ptr %v10, i64 %v17
+  %v25 = load i8, ptr %v24
+  %v26 = zext i8 %v25 to i32
+  %v27 = mul nsw i32 %v26, %D
+  %v28 = add i32 %v16, 32
+  %v29 = add i32 %v28, %v21
+  %v30 = add i32 %v29, %v23
+  %v31 = add i32 %v30, %v27
+  %v32 = lshr i32 %v31, 6
+  %v33 = trunc i32 %v32 to i8
+  %v34 = getelementptr inbounds i8, ptr %v9, i64 %v14
+  store i8 %v33, ptr %v34
+  %v35 = icmp eq i64 %v17, %v5
+  br i1 %v35, label %B5, label %B4
+B5:
+  %v36 = getelementptr inbounds i8, ptr %v9, i64 %v3
+  %v37 = add nuw nsw i32 %v8, 1
+  %v38 = icmp eq i32 %v37, %height
+  br i1 %v38, label %B6, label %B3
+B6:
+  br label %B7
+B7:
+  ret void
+@function2
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B7
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B7
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  br label %B3
+B3:
+  %v6 = phi i8 [ %v11, %B5 ], [ %v4, %B2 ]
+  %v7 = phi ptr [ %src, %B2 ], [ %v10, %B5 ]
+  %v8 = phi i32 [ %v37, %B5 ], [ 0, %B2 ]
+  %v9 = phi ptr [ %dst, %B2 ], [ %v36, %B5 ]
+  %v10 = getelementptr inbounds i8, ptr %v7, i64 %v0
+  %v11 = load i8, ptr %v10
+  br label %B4
+B4:
+  %v12 = phi i8 [ %v11, %B3 ], [ %v25, %B4 ]
+  %v13 = phi i8 [ %v19, %B4 ], [ %v6, %B3 ]
+  %v14 = phi i64 [ %v17, %B4 ], [ 0, %B3 ]
+  %v15 = zext i8 %v13 to i32
+  %v16 = mul nsw i32 %v15, %A
+  %v17 = add nuw nsw i64 %v14, 1
+  %v18 = getelementptr inbounds i8, ptr %v7, i64 %v17
+  %v19 = load i8, ptr %v18
+  %v20 = zext i8 %v19 to i32
+  %v21 = mul nsw i32 %v20, %B
+  %v22 = zext i8 %v12 to i32
+  %v23 = mul nsw i32 %v22, %C
+  %v24 = getelementptr inbounds i8, ptr %v10, i64 %v17
+  %v25 = load i8, ptr %v24
+  %v26 = zext i8 %v25 to i32
+  %v27 = mul nsw i32 %v26, %D
+  %v28 = add i32 %v16, 32
+  %v29 = add i32 %v28, %v21
+  %v30 = add i32 %v29, %v23
+  %v31 = add i32 %v30, %v27
+  %v32 = lshr i32 %v31, 6
+  %v33 = trunc i32 %v32 to i8
+  %v34 = getelementptr inbounds i8, ptr %v9, i64 %v14
+  store i8 %v33, ptr %v34
+  %v35 = icmp eq i64 %v17, %v5
+  br i1 %v35, label %B5, label %B4
+B5:
+  %v36 = getelementptr inbounds i8, ptr %v9, i64 %v3
+  %v37 = add nuw nsw i32 %v8, 1
+  %v38 = icmp eq i32 %v37, %height
+  br i1 %v38, label %B6, label %B3
+B6:
+  br label %B7
+B7:
+  ret void
+== -unroll-runtime -unroll-partial-threshold=60
+@function
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B7
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B7
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  br label %B3
+B3:
+  %v6 = phi i8 [ %v11, %B5 ], [ %v4, %B2 ]
+  %v7 = phi ptr [ %src, %B2 ], [ %v10, %B5 ]
+  %v8 = phi i32 [ %v37, %B5 ], [ 0, %B2 ]
+  %v9 = phi ptr [ %dst, %B2 ], [ %v36, %B5 ]
+  %v10 = getelementptr inbounds i8, ptr %v7, i64 %v0
+  %v11 = load i8, ptr %v10
+  br label %B4
+B4:
+  %v12 = phi i8 [ %v11, %B3 ], [ %v25, %B4 ]
+  %v13 = phi i8 [ %v19, %B4 ], [ %v6, %B3 ]
+  %v14 = phi i64 [ %v17, %B4 ], [ 0, %B3 ]
+  %v15 = zext i8 %v13 to i32
+  %v16 = mul nsw i32 %v15, %A
+  %v17 = add nuw nsw i64 %v14, 1
+  %v18 = getelementptr inbounds i8, ptr %v7, i64 %v17
+  %v19 = load i8, ptr %v18
+  %v20 = zext i8 %v19 to i32
+  %v21 = mul nsw i32 %v20, %B
+  %v22 = zext i8 %v12 to i32
+  %v23 = mul nsw i32 %v22, %C
+  %v24 = getelementptr inbounds i8, ptr %v10, i64 %v17
+  %v25 = load i8, ptr %v24
+  %v26 = zext i8 %v25 to i32
+  %v27 = mul nsw i32 %v26, %D
+  %v28 = add i32 %v16, 32
+  %v29 = add i32 %v28, %v21
+  %v30 = add i32 %v29, %v23
+  %v31 = add i32 %v30, %v27
+  %v32 = lshr i32 %v31, 6
+  %v33 = trunc i32 %v32 to i8
+  %v34 = getelementptr inbounds i8, ptr %v9, i64 %v14
+  store i8 %v33, ptr %v34
+  %v35 = icmp eq i64 %v17, %v5
+  br i1 %v35, label %B5, label %B4
+B5:
+  %v36 = getelementptr inbounds i8, ptr %v9, i64 %v3
+  %v37 = add nuw nsw i32 %v8, 1
+  %v38 = icmp eq i32 %v37, %height
+  br i1 %v38, label %B6, label %B3
+B6:
+  br label %B7
+B7:
+  ret void
+@function2
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B7
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B7
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  br label %B3
+B3:
+  %v6 = phi i8 [ %v11, %B5 ], [ %v4, %B2 ]
+  %v7 = phi ptr [ %src, %B2 ], [ %v10, %B5 ]
+  %v8 = phi i32 [ %v37, %B5 ], [ 0, %B2 ]
+  %v9 = phi ptr [ %dst, %B2 ], [ %v36, %B5 ]
+  %v10 = getelementptr inbounds i8, ptr %v7, i64 %v0
+  %v11 = load i8, ptr %v10
+  br label %B4
+B4:
+  %v12 = phi i8 [ %v11, %B3 ], [ %v25, %B4 ]
+  %v13 = phi i8 [ %v19, %B4 ], [ %v6, %B3 ]
+  %v14 = phi i64 [ %v17, %B4 ], [ 0, %B3 ]
+  %v15 = zext i8 %v13 to i32
+  %v16 = mul nsw i32 %v15, %A
+  %v17 = add nuw nsw i64 %v14, 1
+  %v18 = getelementptr inbounds i8, ptr %v7, i64 %v17
+  %v19 = load i8, ptr %v18
+  %v20 = zext i8 %v19 to i32
+  %v21 = mul nsw i32 %v20, %B
+  %v22 = zext i8 %v12 to i32
+  %v23 = mul nsw i32 %v22, %C
+  %v24 = getelementptr inbounds i8, ptr %v10, i64 %v17
+  %v25 = load i8, ptr %v24
+  %v26 = zext i8 %v25 to i32
+  %v27 = mul nsw i32 %v26, %D
+  %v28 = add i32 %v16, 32
+  %v29 = add i32 %v28, %v21
+  %v30 = add i32 %v29, %v23
+  %v31 = add i32 %v30, %v27
+  %v32 = lshr i32 %v31, 6
+  %v33 = trunc i32 %v32 to i8
+  %v34 = getelementptr inbounds i8, ptr %v9, i64 %v14
+  store i8 %v33, ptr %v34
+  %v35 = icmp eq i64 %v17, %v5
+  br i1 %v35, label %B5, label %B4
+B5:
+  %v36 = getelementptr inbounds i8, ptr %v9, i64 %v3
+  %v37 = add nuw nsw i32 %v8, 1
+  %v38 = icmp eq i32 %v37, %height
+  br i1 %v38, label %B6, label %B3
+B6:
+  br label %B7
+B7:
+  ret void

@@ -1,0 +1,77 @@
+== 
+@main
+B0:
+  %v0 = alloca [216 x float]
+  %v1 = alloca [216 x float]
+  %v2 = getelementptr i8, ptr %v0, i64 -52
+  %v3 = getelementptr i8, ptr %v1, i64 -52
+  br label %B1
+B1:
+  %v4 = getelementptr i8, ptr %v2, i64 20
+  %v5 = getelementptr i8, ptr %v3, i64 4
+  %v6 = getelementptr i8, ptr %v2, i64 20
+  %v7 = getelementptr i8, ptr %v3, i64 8
+  %v8 = getelementptr i8, ptr %v2, i64 20
+  %v9 = getelementptr i8, ptr %v3, i64 12
+  %v10 = getelementptr i8, ptr %v2, i64 20
+  %v11 = getelementptr i8, ptr %v3, i64 16
+  %v12 = getelementptr i8, ptr %v2, i64 20
+  %v13 = getelementptr i8, ptr %v3, i64 20
+  %v14 = getelementptr i8, ptr %v2, i64 20
+  %v15 = getelementptr i8, ptr %v3, i64 24
+  br label %B2
+B2:
+  %v16 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v17 = phi i64 [ %v32, %B2 ], [ 1, %B1 ]
+  %v18 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v19 = phi i64 [ %v37, %B2 ], [ 1, %B1 ]
+  %v20 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v21 = phi i64 [ %v42, %B2 ], [ 1, %B1 ]
+  %v22 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v23 = phi i64 [ %v47, %B2 ], [ 1, %B1 ]
+  %v24 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v25 = phi i64 [ %v52, %B2 ], [ 1, %B1 ]
+  %v26 = phi i64 [ 0, %B2 ], [ 1, %B1 ]
+  %v27 = phi i64 [ %v57, %B2 ], [ 1, %B1 ]
+  %v28 = mul nuw nsw i64 %v16, 144
+  %v29 = getelementptr i8, ptr %v4, i64 %v28
+  %v30 = getelementptr i8, ptr %v5, i64 %v28
+  %v31 = load float, ptr %v30
+  store float %v31, ptr %v29
+  %v32 = add nuw nsw i64 %v17, 1
+  %v33 = mul nuw nsw i64 %v18, 144
+  %v34 = getelementptr i8, ptr %v6, i64 %v33
+  %v35 = getelementptr i8, ptr %v7, i64 %v33
+  %v36 = load float, ptr %v35
+  store float %v36, ptr %v34
+  %v37 = add nuw nsw i64 %v19, 1
+  %v38 = mul nuw nsw i64 %v20, 144
+  %v39 = getelementptr i8, ptr %v8, i64 %v38
+  %v40 = getelementptr i8, ptr %v9, i64 %v38
+  %v41 = load float, ptr %v40
+  store float %v41, ptr %v39
+  %v42 = add nuw nsw i64 %v21, 1
+  %v43 = mul nuw nsw i64 %v22, 144
+  %v44 = getelementptr i8, ptr %v10, i64 %v43
+  %v45 = getelementptr i8, ptr %v11, i64 %v43
+  %v46 = load float, ptr %v45
+  store float %v46, ptr %v44
+  %v47 = add nuw nsw i64 %v23, 1
+  %v48 = mul nuw nsw i64 %v24, 144
+  %v49 = getelementptr i8, ptr %v12, i64 %v48
+  %v50 = getelementptr i8, ptr %v13, i64 %v48
+  %v51 = load float, ptr %v50
+  store float %v51, ptr %v49
+  %v52 = add nuw nsw i64 %v25, 1
+  %v53 = mul nuw nsw i64 %v26, 144
+  %v54 = getelementptr i8, ptr %v14, i64 %v53
+  %v55 = getelementptr i8, ptr %v15, i64 %v53
+  %v56 = load float, ptr %v55
+  store float %v56, ptr %v54
+  %v57 = add nuw nsw i64 %v27, 1
+  %v58 = icmp eq i64 %v57, 7
+  br i1 %v58, label %B3, label %B2
+B3:
+  br label %B4
+B4:
+  ret void
