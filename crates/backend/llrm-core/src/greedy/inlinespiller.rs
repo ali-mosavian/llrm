@@ -28,7 +28,7 @@
 //! once over the edited function. Costs memory operands where a home held.
 //!
 //! DEVIATE D-C: a spill slot is a `Frame` cell per spilled register (one for
-//! the siblings a plain copy joins, D-F2), shared
+//! the siblings of an original, D-F2), shared
 //! afterwards by `slots_colored`, over the homes' ranges this spiller merges
 //! as it spills (`LiveStacks`, `Frame::stacks`). LLVM's `StackSlotColoring`
 //! gives a slot its weight and order from the same ranges; ours keeps the
@@ -138,9 +138,9 @@ pub struct InlineSpiller<'a> {
     /// DEVIATE D-F2: LLVM shares one slot among all descendants of `Original`,
     /// because siblings hold one value wherever they are live together. A
     /// parallel copy gives the old and the new value of one register one index,
-    /// where siblings hold two values, so a register shares the home of a
-    /// sibling it is joined to by a plain copy, and of no other. Exit:
-    /// parallel copies sequenced before allocation (D-F).
+    /// where siblings hold two values, so a register whose value is live where
+    /// a sibling's is in the home, or meets it at a parallel copy, has a home
+    /// of its own. Exit: parallel copies sequenced before allocation (D-F).
     key: u32,
     /// The ranges spilled to each home, by the register that names it.
     homed: HashMap<u32, Vec<(u32, LiveRange)>>,
@@ -772,35 +772,17 @@ pub fn native_units() -> usize {
 }
 
 impl InlineSpiller<'_> {
-    /// The register that names the home `reg` is spilled to: that of a sibling
-    /// a plain copy joins it to, unless a value of that home is live where
-    /// `range` is or meets it at a parallel copy; else its own.
+    /// The register that names the home `reg` is spilled to: the original's
+    /// (or the home a hoist of its value was stored in), unless a value of that
+    /// home is live where `range` is or meets it at a parallel copy; else its
+    /// own.
     fn shared_key(
         &self,
         lis: &LiveIntervals,
-        matrix: &LiveRegMatrix,
         range: Option<&LiveRange>,
     ) -> u32 {
         let reg = self.reg;
-        let joined = self
-            .keys
-            .get(&reg)
-            .copied()
-            .or_else(
-                || lis.operands(reg)
-                    .iter()
-                    .find_map(
-                        |operand| {
-                            let one = lis.instr(operand.instr);
-                            let (dst, src) = crate::backend::coalesce::_copy(one).filter(|_| one.group.is_none())?;
-                            let other = if dst == reg { src } else { dst };
-                            (other != reg && matrix.vrm.get_original(other) == self.original)
-                                .then(|| self.keys.get(&other).copied())
-                                .flatten()
-                        },
-                    ),
-            );
-        let Some(key) = joined else { return reg };
+        let key = self.keys.get(&reg).copied().unwrap_or(self.original);
         let clear = range.is_none_or(|range| {
             self.homed.get(&key).is_none_or(|ranges| {
                 !ranges
@@ -1153,7 +1135,7 @@ impl Spiller for InlineSpiller<'_> {
             edit.erase_virt_reg(lis, reg);
             return;
         }
-        self.key = self.shared_key(lis, matrix, range.as_ref());
+        self.key = self.shared_key(lis, range.as_ref());
         if let Some(range) = &range {
             self.homed.entry(self.key).or_default().push((reg, range.clone()));
         }
