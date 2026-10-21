@@ -69,3 +69,21 @@ def test_counters_are_read_by_event_and_the_best_cycle_count_is_the_figure(monke
     monkeypatch.setattr(m, "run", lambda *a, **k: type("D", (), {"stderr": next(runs)})())
     got = m.cycles(["x"], runs=2)
     assert got["cycles_M"] == 0.001 and got["spread_pct"] == 50 and got["ipc"] == 2
+
+
+def test_the_step_table_lists_the_small_rows_as_one_line_so_it_sums_to_the_instrumented_total():
+    """Rows under 0.5% were left out: ~19 M of a 1259 M d_faces compile were in no line of the table."""
+    import re
+
+    rows = [{"name": "regalloc big", "count": 1, "own_M": 900.0, "total_M": 900.0, "category": "regalloc", "owner": "allocator"}]
+    rows += [{"name": f"small {i}", "count": 2, "own_M": 4.0, "total_M": 4.0, "category": "mir passes", "owner": None} for i in range(25)]
+    result = {
+        "header": {"commit": "c", "llrm": "l", "gcc": "g", "clang": "k"},
+        "total_M": 1000.0, "instrumented_M": 1000.0, "rows_sum_M": 1000.0, "outside_every_step_M": 0.0, "scale": 1.0,
+        "gcc_total_M": 100.0, "clang_total_M": 80.0, "rows": rows,
+        "categories": {"regalloc": {"llrm_M": 900.0, "gcc_M": 1.0, "clang_M": 1.0}, "mir passes": {"llrm_M": 100.0, "gcc_M": 1.0, "clang_M": 1.0}},
+    }
+    text = m.show(result)
+    assert "other (25 rows under 0.5%)" in text
+    listed = sum(float(m_[1]) for m_ in re.finditer(r"^(?:regalloc big|other \(25 rows under 0.5%\)) +\d+ +(\d+)", text, re.M))
+    assert abs(listed - 1000.0) <= 20.0
