@@ -404,6 +404,13 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
             let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
             let built: Vec<_> = held.iter().map(|one| one.0).collect();
             let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
+            // The slots the options leave out, as `Fixed::linear` names them:
+            // the jam is off below -O3.
+            let off: Vec<_> = parity::REGISTRY
+                .iter()
+                .filter(|one| one.phase == phase && !on.options.wanted(one.slot))
+                .map(|one| one.slot)
+                .collect();
             let checked = parity::check_phase_with(
                 phase,
                 &built,
@@ -411,7 +418,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 on.options.sroa,
                 on.options.mem2reg,
                 on.options.rotate_slot,
-                &[],
+                &off,
                 &held,
             );
             assert_eq!(checked, Ok(()), "{phase:?} {level:?}");

@@ -299,8 +299,12 @@ fn test_the_exit_phis_go_when_the_loop_passes_are_done() {
     let mut module = parsed(LOOP_WITH_EXIT_USE);
     closed(f(&mut module)).unwrap();
     assert!(printed(&module).contains(" = phi i16 [ %carried, %b1 ]"), "{}", printed(&module));
-    assert!(!opened_in(f(&mut module), false).unwrap(), "the phi outside loop exits go; this one is at the exit");
-    assert!(opened_in(f(&mut module), true).unwrap());
+    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
+    assert!(
+        !opened_in(f(&mut module), &shape, false).unwrap(),
+        "the phi outside loop exits go; this one is at the exit"
+    );
+    assert!(opened_in(f(&mut module), &shape, true).unwrap());
     let after = printed(&module);
     assert!(!after.contains("lcssa"), "{after}");
     assert!(after.contains("%answer = add i16 %carried, 7"), "{after}");
@@ -311,4 +315,12 @@ fn test_only_the_values_read_outside_get_exit_phis() {
     let closed = closed_once(LOOP_WITH_EXIT_USE);
     assert_eq!(closed.matches(".lcssa = phi").count(), 1, "{closed}");
     assert!(closed.contains("%carried.lcssa = phi i16 [ %carried, %b1 ]"), "{closed}");
+}
+
+#[test]
+fn test_closing_over_a_held_shape_is_closing() {
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
+    assert!(super::closed_in(f(&mut module), &shape).unwrap());
+    assert_eq!(printed(&module), closed_once(LOOP_WITH_EXIT_USE));
 }
