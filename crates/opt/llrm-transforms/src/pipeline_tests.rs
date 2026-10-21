@@ -1118,6 +1118,82 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
+/// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
+/// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
+/// runs before the jam, and leave no nest to jam),
+/// through the whole pipeline at -O3 with and without unroll-and-jam, and at
+/// -O2: the jam changes the code of -O3 alone, and the nest computes what it
+/// did. The slot was built with the jam's `on` option off, so -O3 made the
+/// same text as -O3 without the jam and the particle row never gained.
+#[test]
+fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
+    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@p = global [100 x i16] [{}]
+@v = global [100 x i16] [{}]
+
+define i16 @main() {{
+b0:
+  br label %outer
+
+outer:
+  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
+  %go = icmp slt i16 %t, 60
+  br i1 %go, label %pre, label %done
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
+  %more = icmp slt i16 %j, 100
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  store i16 %s, ptr %pp
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %tn = add i16 %t, 1
+  br label %outer
+
+done:
+  %q = getelementptr i8, ptr @p, i16 40
+  %w = load i16, ptr %q
+  ret i16 %w
+}}
+",
+        cells(1),
+        cells(3)
+    );
+    let through = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(&text);
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+            pipeline::applied(program, &Applied { options, ..Applied::default() })
+        })
+        .and_then(|done| done)
+        .unwrap();
+        (llrm_mir::print::module(&module), interpret::run(&module, "main", Vec::new(), FUEL))
+    };
+    let before = interpret::run(&llrm_analysis::testing::parsed(&text), "main", Vec::new(), FUEL);
+    let (jammed, result) = through(pipeline::Options::speed());
+    let (plain, plain_result) = through(pipeline::Options { unroll_and_jam: false, ..pipeline::Options::speed() });
+    assert_eq!((&result, &plain_result), (&before, &before), "{jammed}");
+    assert_ne!(jammed, plain);
+    assert_eq!(
+        through(pipeline::Options::default()).0,
+        through(pipeline::Options { unroll_and_jam: false, ..Default::default() }).0
+    );
+}
+
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1388,7 +1464,15 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["loop-interchange@1631", "loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        [
+            "loop-interchange@1631",
+            "loop-load-elim@1400",
+            "simplifycfg@1438",
+            "float2int@1594",
+            "instsimplify@1662",
+            "simplifycfg@1682",
+            "simplifycfg@2376"
+        ]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
@@ -2161,7 +2245,15 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["loop-interchange@1631", "loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        [
+            "loop-interchange@1631",
+            "loop-load-elim@1400",
+            "simplifycfg@1438",
+            "float2int@1594",
+            "instsimplify@1662",
+            "simplifycfg@1682",
+            "simplifycfg@2376"
+        ]
     );
 }
 

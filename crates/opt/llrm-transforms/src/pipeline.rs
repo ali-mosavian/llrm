@@ -743,13 +743,13 @@ pub(crate) fn llvm_order(
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
-            // before LoopUnrollPass.
+            // before LoopUnrollPass; the nest is in simplify form and LCSSA.
             slot(
                 "loop-unroll-and-jam@1474",
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: Default::default(),
+                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
