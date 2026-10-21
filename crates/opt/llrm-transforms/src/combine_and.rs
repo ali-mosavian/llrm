@@ -11,8 +11,7 @@
 //! DEVIATE 1: no vectors (`foldVectorBinop`).
 //!
 //! DEVIATE 2: `SimplifyDemandedInstructionBits` (`combine_demanded`),
-//! `foldComplexAndOrPatterns`, `foldUsingDistributiveLaws` and
-//! `foldBinOpShiftWithShift` are the next strip or another family's.
+//! `foldComplexAndOrPatterns` are the next strip or another family's.
 //!
 //! DEVIATE 3: of the shifted-power-of-two folds (:2688-:2740) only the
 //! single-shift one is translated; the two double-shift ones follow.
@@ -44,11 +43,13 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_and_select::fold_and_select;
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, commutative, has_one_use, inst_def, parts, query, simplify_associative_or_commutative, simplify_visited,
     width,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 /// `m_Not(m_Value())` of `v`.
 fn not_of(
@@ -424,8 +425,13 @@ pub fn visit_and(
     if let Some(found) = fold_and_to_xor(c, inst, op0, op1) {
         return found;
     }
-    // DEVIATE 2: foldComplexAndOrPatterns, foldUsingDistributiveLaws,
-    // foldBinOpShiftWithShift.
+    // DEVIATE 2: foldComplexAndOrPatterns.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
+    if let Some(r) = fold_binop_shift_with_shift(c, inst) {
+        return r;
+    }
     let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 7] = [
         fold_one_shifted_by,
         fold_negated_low_bit,

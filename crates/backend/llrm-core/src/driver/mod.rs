@@ -76,6 +76,9 @@ pub struct Options {
     /// `-mcode-segment=`: the segment every module's code is in, where it is
     /// not its own `<MODULE>_TEXT`.
     pub code_segment: Option<String>,
+    /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
+    /// attribute), whichever frontend made them.
+    pub no_inline: Vec<String>,
 }
 
 impl Options {
@@ -100,6 +103,7 @@ impl Options {
             float_store: false,
             rounds_float_spills: false,
             code_segment: None,
+            no_inline: Vec::new(),
         }
     }
 
@@ -149,6 +153,46 @@ impl Options {
             self.rounds_float_spills,
         )
     }
+}
+
+/// Whether the global `have` is the function `asked` for: the same name in
+/// either case, or with a BASIC type suffix (`%&!#$`) that `asked` leaves
+/// off (`BENCHFIB&` is `BenchFib`).
+fn is_named(
+    have: &str,
+    asked: &str,
+) -> bool {
+    have.eq_ignore_ascii_case(asked)
+        || have.strip_suffix(['%', '&', '!', '#', '$']).is_some_and(|bare| bare.eq_ignore_ascii_case(asked))
+}
+
+/// Each function of `names` defined in `program` marked `noinline`, as the
+/// pin's attribute does; a name that no function has is an error, not a flag
+/// that did nothing. A name matches as `is_named` says.
+fn no_inlined(
+    program: &mut Program,
+    names: &[String],
+) -> Result<(), String> {
+    for name in names {
+        let mut found = false;
+        for module in &mut program.modules {
+            for global in &mut module.globals {
+                if !global.name.as_deref().is_some_and(|have| is_named(have, name)) {
+                    continue;
+                }
+                if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                    && !function.is_declaration()
+                {
+                    function.attrs.push(llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Never).carrier());
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            return Err(format!("-fno-inline={name}: the program defines no function of that name"));
+        }
+    }
+    Ok(())
 }
 
 /// `program` compiled for the machine: emitted, optimized, then each module
@@ -385,6 +429,7 @@ pub fn optimized(
     program: &mut Program,
     options: &Options,
 ) -> Result<(), String> {
+    no_inlined(program, &options.no_inline)?;
     let applied = llrm_transforms::pipeline::Applied {
         options: options.pipeline.clone(),
         dump: options.dump.clone(),

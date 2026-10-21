@@ -2839,6 +2839,27 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
 }
 
 #[test]
+fn test_a_far_load_whose_selector_is_required_in_es_still_folds_into_its_widening_use() {
+    // bench/huge -O2: `mov cx,es:[di]; movsx ecx,cx` ran 40,200 times beside
+    // `movsx ecx,es:[di]`, because the load's requirement of ES refused the
+    // fold.
+    let (cell, narrow, wide) = narrow_load_parts();
+    let mut far = (*narrow).clone();
+    far.requires = vec![(Held { value: 9, width: 2 }, RegId::ES)];
+    let used =
+        plain(2, Operation::Binary, "add", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::EDX, 4)], None);
+    let input = body("far-load-extend", 0, vec![block(0, vec![Arc::new(far), wide, used], vec![]).into()]);
+
+    let result = extensions(rules(), &input);
+    let emitted: Vec<Arc<Insn>> =
+        result.insns().into_iter().filter(|one| one.what.as_ref().unwrap().op != Operation::Nothing).collect();
+
+    assert_eq!(emitted[0].what, Some(sem(Operation::Extend, "movsx", vec![rl(RegId::EDX, 4)], vec![Loc::Mem(cell)])));
+    assert_eq!(emitted[0].requires, [(Held { value: 9, width: 2 }, RegId::ES)], "the selector stays required");
+    assert_eq!(emitted.len(), 2);
+}
+
+#[test]
 fn test_shared_narrow_load_is_not_folded_into_one_widening_use() {
     // The load must remain when another instruction still reads its narrow
     // value.

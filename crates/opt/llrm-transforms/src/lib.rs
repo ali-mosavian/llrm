@@ -105,6 +105,9 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+pub mod combine_distribute;
+#[cfg(test)]
+mod combine_flags_result_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_index;
@@ -128,6 +131,7 @@ pub mod combine_select_op_op;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
+pub mod combine_shift_binop;
 pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
