@@ -60,14 +60,12 @@ spellings are never proof that two physical addresses differ.
 At a target with one address space a pointer is the whole 32-bit linear address, and the program holds addresses in variables:
 
 - `VARPTR(x)` is the address of `x`; `VARSEG(x)` is 0.
-- `DEF SEG = value` is refused: *DEF SEG with a non-default segment is not supported at one address space*, at the line. A segment
-  has no meaning where the address is one number: `PEEK` and `POKE` read and wrote other bytes without a word (far3: a string flipped
-  in case through `DEF SEG = VARSEG(a$)` and `SADD` printed unchanged, n = 0). A bare `DEF SEG` is ignored, and the compiler says so:
-  *warning: DEF SEG is ignored at one address space*.
+- `DEF SEG` (with or without a value) is ignored, and the compiler says so at every one: *warning: DEF SEG is ignored at one
+  address space*.
 - `PEEK`, `POKE`, `BLOAD` and `BSAVE` take that address: `p& = VARPTR(a%(1)): POKE p&, 7`.
 - An absolute address, video memory above all, is ported by hand into a variable, as `vram& = &HB8000: POKE vram& + 160, 65`; it
   does not become one by itself. A program that writes `DEF SEG = &HB800` and `POKE 160, 65` would write low memory (the interrupt
-  table) here, so it is refused. A port of a probe sits beside it as `NAME.flat.bas`, which the harnesses build for m32 and compare with the original's
+  table) here. A port of a probe sits beside it as `NAME.flat.bas`, which the harnesses build for m32 and compare with the original's
   BCOM45 output (`tests/qbrt/screen_text.flat.bas`).
 - `SADD(s$)` is the flat address of the string's characters, and `VARPTR$(v)` is the string of the variable's type byte and its flat
   address: 3 bytes at m16 (a 16-bit offset), 5 at m32 (a 32-bit address). DRAW and PLAY read through it: `=` + `VARPTR$(v)` takes the
