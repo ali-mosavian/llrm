@@ -1194,19 +1194,22 @@ impl<'a> Dse<'a> {
     }
 
     /// `isInstructionTriviallyDead`, after `gone` is out: its result is used by
-    /// nothing else, and it has no effects.
+    /// nothing else, and it has no effects (Local.cpp's
+    /// `wouldInstructionBeTriviallyDead`, a call with none included).
     fn trivially_dead(
         &self,
         inst: InstId,
         gone: InstId,
     ) -> bool {
-        let instruction = self.function.instruction(inst);
-        let Some(result) = instruction.result else { return false };
-        let pure = matches!(
-            instruction.opcode,
-            Opcode::GetElementPtr { .. } | Opcode::Cast(_) | Opcode::Binary(..) | Opcode::Select
-        );
-        pure && self.function.users(result).iter().all(|one| one.user == gone || self.to_remove.contains(&one.user))
+        let Some(result) = self.function.instruction(inst).result else { return false };
+        self.function.users(result).iter().all(|one| one.user == gone || self.to_remove.contains(&one.user))
+            && crate::local::would_instruction_be_trivially_dead(
+                self.context,
+                self.callees,
+                &self.aa.unit().globals,
+                self.function,
+                inst,
+            )
     }
 
     // ---- driver -------------------------------------------------------------
