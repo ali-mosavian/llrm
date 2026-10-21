@@ -4,7 +4,7 @@ architecture-order: 521
 ---
 # One ScalarEvolution per function
 
-TL;DR: the pin builds ScalarEvolution once per function and keeps it through every loop pass; llrm builds it at 19 call sites, each from nothing. `indvars` over d_faces -O2 fell from 48.9 M to 25.8 M instructions when its six steps shared one (21 M of the 49.7 M were trip counts worked out again). The rest of the loop passes and LSR follow, through the manager's `Scevs` entry.
+TL;DR: the pin builds ScalarEvolution once per function and keeps it through every loop pass; llrm builds it at 19 call sites, each from nothing. SE work called from passes is 93.9 M Ir of the 1,318 M d_faces -O2 compile; the pin's is 34.2 M (opt 29.3, llc 4.9): about 60 M is the prize. Step 1 (one SE per loop inside `delete_loops` and `unroll_loops`, PR 2026-11-06) is the cheap part; the manager-held SE (PR 2026-11-16) is the rest.
 
 ## The pin's rule
 
@@ -41,6 +41,33 @@ The manager has `Scevs` (`scev/analysis.rs`: one `ScalarEvolution` per function,
 3. A pass that does not keep SE true (or changes the CFG, assumptions, or loop info) does not name it; the manager drops it with the entry's dependencies (`dominators`, `loops`, `assumes`), the pin's rule.
 4. A check, not trust: a verify mode (`LLRM_VERIFY`) recomputes each cached expression of a function after a pass that named `Scevs` and compares (LLVM's `ScalarEvolution::verify`, `ScalarEvolution.cpp#L14821`). The manager's replay check cannot do it: `ScevCache::eq` is always true by design. This is the first piece to build, so a missed `forget` fails a test instead of miscompiling.
 
+## The bill, d_faces -O2 (callgrind Ir, 2026-10-22)
+
+Inclusive Ir of the calls a pass makes into `ScalarEvolution` (callers outside SE itself, so no call is counted twice). Ours: w-3's callgrind of the dist of d7d4e23a4 (`~/scratch/w3-cg/cg.out`, d_faces -m32 -O2). The pin: its `opt` on our IR and its `llc` (`~/scratch/ledger2/cg-opt.out`, `cg-llc.out`). Different inputs, so read the shape, not the last digit.
+
+| Pass | ours M | pin M | Pin's pass |
+| --- | --- | --- | --- |
+| indvars (simplifyindvar 23.7, exitopt 5.1, indvars 2.9, lftr 0.4) | 32.1 | 12.8 | SimplifyIndVar 12.6, IndVarSimplify 0.1 |
+| loop-unroll | 9.2 | 3.4 | LoopUnrollPass 3.3, LoopPeel 0.3 |
+| loop-deletion | 7.6 | 0.05 | LoopUtils (the pin's BTC is cached) |
+| loop-idiom | 5.7 | 3.7 | LoopIdiomRecognize |
+| LSR (ivusers 5.7, lsr_* 6.6) | 12.3 | 4.9 | IVUsers 2.0, LoopStrengthReduce 1.7, SE 1.3 |
+| loop-load-elim and the access checks | 3.9 | 2.8 | LoopAccessAnalysis |
+| decide, algebraic | 10.1 | 0 | none: ours reads SE where the pin's CVP, SimplifyCFG and InstCombine do not |
+| SE's own helpers (scev-other) | 9.5 | 2.4 | ScalarEvolution |
+| rotate, loop-simplify, SLP, vectorize | 0 | 3.6 | LoopRotationUtils 1.8, LoopSimplify 0.65, SLP 0.9, others 0.3: ours asks SE nowhere in this compile |
+| total | 93.9 | 34.2 | |
+
+Two things are not the cold SE: `decide`'s and `algebraic`'s 10.1 M is a use the pin does not make (a numbered DEVIATE of theirs, not this note's), and `get_exact_sdiv` in LSR is 1.64 M with 39% repeated keys (closed, no cache).
+
+The cold-SE part is IVUsers' `get_scev` (4.4 M over 240 calls: the first build of each SCEV in LSR's own session), `delete_loops` (34 fresh SEs for 17 loops, 7.6 M of backedge-taken work, about 3.8 M if each loop's were worked out once), `unroll_loops` (40 fresh SEs, 7.9 M) and the same trip counts again in each of indvars' steps once a session is not shared across runs. Of the 41.1 M that `indvars` costs over 17 runs, 32.1 M is SE; the pin's whole IndVarSimplify is 18.0 M, 12.8 M of it SE.
+
+## Who reads and who invalidates SCEV
+
+Readers that build a session of their own today: indvars (one per run) with simplifyindvar, exitopt, exitvalues, congruentiv, canonexit and lftr; LSR (`ivusers`, `lsr_*`); `loopunrollpass` (40) and `loopunrollandjam`; `loopdeletion` (34); `loopidiom` (5); `looploadelim`; `loopinterchange`; `simpleloopunswitch`; `rotate` (3); `valuefacts`. `decide` and `algebraic` read the manager's `Scevs` through `LazyScevView`. LICM asks no SE.
+
+Passes that edit what SE has seen, and so must forget: indvars (widening, exit values, LFTR), LSR (new recurrences), unroll and peel, loop-deletion, loop-idiom, rotate, unswitch, `fold`, `algebraic`, `dead`, `gvn` and the other function passes: the last group names no `Scevs`, so the manager drops it, as the pin does for the passes in the table above.
+
 ## Invalidation map: what each of our slots must forget
 
 | Slot | Edits | Forgets in the pin (count in the file) |
@@ -58,7 +85,7 @@ The manager has `Scevs` (`scev/analysis.rs`: one `ScalarEvolution` per function,
 ## Order of work
 
 1. The verify mode, with a test that a missed `forget` is caught (fail-first).
-2. PR 1: indvars and LSR read `Scevs` from the manager and name it; rows pair and d_faces callgrind (`indvars` slot, LSR `IvUsers::of`). Due 2026-10-28.
+2. Step 1, PR 2026-11-06: `delete_loops` and `unroll_loops` ask one SE per loop (the second ask reuses the first's backedge-taken count; about -3.8 M and -2 M). Then PR 2026-11-16: indvars, LSR, unroll, loop-deletion and idiom read `Scevs` from the manager and name it; rows pair and d_faces callgrind.
 3. PR 2: rotate, loop-interchange, profit/unroll/peel, loop-load-elim, then loop-idiom, licm, unswitch, as their owners are free (unroll wiring: w-3).
 4. Cost still above the pin after sharing (`get_backedge_taken_count` 5x and `isImpliedCond` 7x per loop at LSR) is a separate item: a missing cache or repeated work inside SCEV, measured with callgrind on the same input.
 
