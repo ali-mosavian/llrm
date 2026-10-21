@@ -102,9 +102,10 @@ impl FunctionPass for LoopClosedSSA {
     fn run(
         &mut self,
         unit: &mut Unit,
-        _: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        match closed(unit.function) {
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        match closed_in(unit.function, &shape) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("lcssa: {error}"),
@@ -115,20 +116,36 @@ impl FunctionPass for LoopClosedSSA {
 /// `function` with every supported natural loop in closed SSA form; whether
 /// anything changed.
 pub fn closed(function: &mut Function) -> Result<bool, String> {
-    let opened = _opened(function)?;
-    Ok(formed(function)? | opened)
+    let shape = cfg::Shape::of(function);
+    closed_in(function, &shape)
+}
+
+/// [`closed`] over the `shape` the caller holds: the loops are found once.
+pub fn closed_in(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
+    let opened = _opened(function, shape)?;
+    Ok(formed_in(function, shape)? | opened)
 }
 
 /// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
 /// is taken away, as `closed` does first for the phis no loop closes at.
 pub fn formed(function: &mut Function) -> Result<bool, String> {
+    formed_in(function, &cfg::Shape::of(function))
+}
+
+fn formed_in(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
     let mut changed = false;
     // Loops come inner first. Closing an inner loop first makes its exit
     // value an ordinary definition in an enclosing loop.
     // The dominators of the body, found once for as long as no exit is merged.
     let mut dominance = None;
-    for loop_ in cfg::Shape::of(function).loops {
-        changed |= _closed_loop(function, &loop_, &mut dominance)?;
+    for loop_ in &shape.loops {
+        changed |= _closed_loop(function, loop_, &mut dominance)?;
     }
     Ok(changed)
 }
@@ -182,10 +199,13 @@ pub(crate) fn place_phi(
 
 /// Without the phis outside any loop exit that name one value: no loop
 /// closes there any longer (unrolled or peeled away), and each is a copy.
-fn _opened(function: &mut Function) -> Result<bool, String> {
+fn _opened(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
-    for loop_ in cfg::Shape::of(function).loops {
+    for loop_ in &shape.loops {
         exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
     }
     let one = |function: &Function, phi: InstId| {
