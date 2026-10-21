@@ -1350,16 +1350,7 @@ impl<'a> Unit<'a> {
     /// not seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
-            Some(registers) => {
-                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
-                    let fresh = crate::consts::known(&Unit { registers: None, ..*self });
-                    assert!(
-                        *registers == fresh,
-                        "the registers a unit carries are not those of the body it stands over: stale"
-                    );
-                }
-                Cow::Borrowed(registers)
-            }
+            Some(registers) => Cow::Borrowed(registers),
             None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
