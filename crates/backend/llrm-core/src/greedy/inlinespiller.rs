@@ -456,8 +456,16 @@ impl InlineSpiller<'_> {
     /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
     /// spill rounds, not one class width, where the language follows the pin
     /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
-    /// as only a store the program writes rounds there (stft_single). Exit: the class width once the
-    /// classes are split.
+    /// as only a store the program writes rounds there (stft_single). Exit: the
+    /// class width once the classes are split.
+    ///
+    /// OPEN D-RFP3 (RFP-5, owner w-1, 2026-10-31): where the qword is kept (Nib
+    /// fast), a promoted float phi lives unrounded in a register or cell next
+    /// to the f32 memory copy a store wrote, so which one a read sees
+    /// follows the spill choice (nbody_single.bas printed 86015 or 86016
+    /// across unrelated commits; BASIC now rounds each assignment, Nib has
+    /// no row that shows it). Exit: a Nib row that fails, then rounding
+    /// where promotion splits a copy.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
     /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
@@ -524,7 +532,8 @@ impl InlineSpiller<'_> {
 /// a value is the program's, else that of the values it is copied from or
 /// to. A web joined to values of two types has the wider.
 pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
-    // No width table: the target does not round a spill (`rounds_float_spills`).
+    // No width table: the target does not round a spill
+    // (`rounds_float_spills`).
     if body.float_bytes.is_empty() {
         return HashMap::default();
     }
@@ -591,7 +600,10 @@ pub fn float_precisions(body: &LirBody) -> HashMap<u32, u32> {
                 let Some(what) = &one.what else { continue };
                 // `fild` reads an integer: its width says nothing of the float.
                 if what.name.as_deref().is_some_and(|name| name.starts_with("fild"))
-                    || !matches!(what.op, Operation::FloatLoad | Operation::FloatArith | Operation::FloatUnary)
+                    || !matches!(
+                        what.op,
+                        Operation::FloatLoad | Operation::FloatArith | Operation::FloatUnary
+                    )
                 {
                     continue;
                 }
