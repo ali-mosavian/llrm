@@ -1716,20 +1716,9 @@ impl<'h> Standing<'h> {
 
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what
 /// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
-/// Whether operand `at` of `inst` hands out no address that outlives it: a
-/// lifetime marker's, or a call argument the callee keeps no copy of
-/// (`nocapture`).
-pub fn kept_by(
-    unit: &Unit,
-    inst: InstId,
-    at: usize,
-) -> bool {
-    is_lifetime_marker(unit, inst) || crate::alias::no_capture_argument(unit, inst, at)
-}
-
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
     llrm_mir::counts::bump(llrm_mir::counts::Event::ExposedFrames);
-    crate::frameescape::exposed_allocas(unit.function, |inst, at| kept_by(unit, inst, at))
+    crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
 }
 
 /// The object `root` is the address of, where it is an object's own: an
@@ -1751,7 +1740,7 @@ pub fn object_of(
             // is exposed.
             let exposed = match unit.exposed {
                 Some(found) => found.contains(&value),
-                None => crate::frameescape::exposes(unit.function, value, |inst, at| kept_by(unit, inst, at)),
+                None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
             };
             Some(ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
