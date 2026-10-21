@@ -312,9 +312,25 @@ impl ProgramPass for Walk {
                         for (callee, mut calls) in by_callee {
                             calls.sort();
                             let global = module.global(callee);
+                            // The callee goes if nothing but this caller and
+                            // its own
+                            // calls (a recursive callee) refer to it: the
+                            // references
+                            // were counted before the caller's splices.
+                            let here = was.iter().find(|(one, _)| *one == callee).map_or(0, |(_, count)| *count);
+                            let own = global
+                                .function()
+                                .map_or(
+                                    0,
+                                    |body| body.walk()
+                                        .filter(|&(_, inst)| {
+                                            llrm_mir::memory::callee(&module.context, body, inst) == Some(callee)
+                                        })
+                                        .count(),
+                                );
                             let goes = crate::inlinecost::local_linkage(global.linkage)
                                 && !addressed.contains(&callee)
-                                && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                && live.references().get(&callee).copied().map(|all| all - here) == Some(own as i64);
                             if goes {
                                 units.push((calls, body_size(module, &program.layout, tti, callee)));
                             } else {

@@ -2499,9 +2499,10 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
 }
 
 /// A local recursive callee bigger than its call is tried at its two sites at
-/// -Os (D11, D12): the call with constants folds to a constant, the other is
-/// kept only if the caller is smaller. `recgcd` grew 99 to 129 bytes when the
-/// size rule refused the sites without trying them.
+/// -Os (D11, D12): the site with constants folds and is inlined, the other is
+/// kept because the callee then goes, its own recursive calls with it. `recgcd`
+/// grew 99 to 118 bytes when the trial counted those calls as references and
+/// left the callee in the module.
 #[test]
 fn at_os_a_refused_site_is_tried_and_kept_if_the_caller_shrinks() {
     let text =
@@ -2521,10 +2522,24 @@ done:
 
 define i16 @main(i16 %n) addrspace(1) {
 b0:
-  %x = call i16 @gcd(i16 %n, i16 5)
-  %y = call i16 @gcd(i16 90, i16 360)
-  %r = add i16 %x, %y
-  ret i16 %r
+  br label %h
+h:
+  %i = phi i16 [ 1, %b0 ], [ %i1, %h ]
+  %t = phi i16 [ 0, %b0 ], [ %t2, %h ]
+  %m = mul i16 %i, 7
+  %a = add i16 %m, 3
+  %k = mul i16 %i, 5
+  %b = add i16 %k, 2
+  %x = call i16 @gcd(i16 %a, i16 %b)
+  %c = add i16 %i, 90
+  %y = call i16 @gcd(i16 %c, i16 360)
+  %s = add i16 %x, %y
+  %t2 = add i16 %t, %s
+  %i1 = add i16 %i, 1
+  %e = icmp sgt i16 %i1, %n
+  br i1 %e, label %done, label %h
+done:
+  ret i16 %t2
 }
 ";
     let mut module = llrm_analysis::testing::parsed(text);
