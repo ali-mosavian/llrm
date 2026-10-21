@@ -687,7 +687,7 @@ pub(crate) fn llvm_order(
         };
         Box::new(Together { name, parts })
     };
-    let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
+    let earlycse = |name, memory_ssa| slot(name, Box::new(crate::earlycse::EarlyCse { memory_ssa }));
     // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
     // `LLRM_NO_LICM` the slot stays and holds nothing.
     let licm = |name, speculate| -> Box<dyn FunctionPass> {
@@ -708,7 +708,7 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180", false)]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -761,7 +761,7 @@ pub(crate) fn llvm_order(
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
         Phase::Simplify => {
-            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
+            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649", true)];
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
