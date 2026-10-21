@@ -298,12 +298,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0 };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -473,11 +473,11 @@ b0:
 
 /// stft_single.bas -Os: a call in front of `unreachable` is held to threshold
 /// 0, and the walk stopped at cost 0; `cost < max(1, threshold)` is
-/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138), so
-/// the 350-instruction benchmark body was copied into `__main` and kept.
+/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138),
+/// so the 350-instruction benchmark body was copied into `__main` and kept.
 #[test]
 fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
-    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0 }.is_ok());
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }

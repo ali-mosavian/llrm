@@ -1,0 +1,69 @@
+== 
+@p0
+  none!
+  confused!
+  none!
+@p1
+  none!
+  none!
+  none!
+@p2
+  output [* * *]!
+  flow [* *|<]!
+  confused!
+  input [* * *]!
+  confused!
+  confused!
+@p4
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@p5
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@p6
+  none!
+  flow [2]!
+  confused!
+  none!
+  confused!
+  none!
+@p7
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@p8
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@p9
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@p10
+  none!
+  flow [|<]!
+  confused!
+  none!
+  confused!
+  none!
+@foo
+  input [*]!
+  anti [*|<]!
+  output [*]!

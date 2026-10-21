@@ -1,0 +1,26 @@
+== --disable-delinearization-checks --tbaa
+@t1
+  none!
+  anti [1 -2]!
+  none!
+@t2
+  input [0 0 0 * 0]!
+  anti [1 -2 0 * 2]!
+  output [0 0 0 * 0]!
+@t3
+  input [* *]!
+  anti [* *|<]!
+  output [* *]!
+== --tbaa
+@t1
+  input [* *]!
+  anti [* *|<]!
+  output [* *]!
+@t2
+  input [* * * * *]!
+  anti [* * * * *|<]!
+  output [* * * * *]!
+@t3
+  input [* *]!
+  anti [* *|<]!
+  output [* *]!

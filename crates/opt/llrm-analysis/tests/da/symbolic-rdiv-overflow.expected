@@ -1,0 +1,9 @@
+== --tbaa
+@symbolicrdiv_prod_ovfl
+  none!
+  output [*|<]!
+  none!
+@symbolicrdiv_delta_ovfl
+  none!
+  output [*|<]!
+  none!

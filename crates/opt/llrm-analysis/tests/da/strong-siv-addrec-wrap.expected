@@ -1,0 +1,10 @@
+== --tbaa
+@strong_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  output [*]!
+== --test strong-siv --tbaa
+@strong_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  output [*]!
