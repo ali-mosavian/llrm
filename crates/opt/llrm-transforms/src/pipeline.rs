@@ -820,6 +820,8 @@ pub(crate) fn llvm_order(
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
+            // What the unroll makes, for the slot after it.
+            let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
                 slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
@@ -831,8 +833,12 @@ pub(crate) fn llvm_order(
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        created: std::rc::Rc::clone(&created),
                     }),
                 ),
+                // The loops the unroll made go on to LPM2's passes: indvars on
+                // them.
+                slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at

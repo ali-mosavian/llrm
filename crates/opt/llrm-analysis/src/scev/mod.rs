@@ -75,6 +75,7 @@ mod trip_tests;
 pub mod values;
 #[cfg(test)]
 mod values_tests;
+pub mod verify;
 pub mod wrap_proof;
 
 use llrm_mir::context::Context;

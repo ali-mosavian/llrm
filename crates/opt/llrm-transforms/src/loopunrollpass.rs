@@ -115,6 +115,9 @@ pub struct Run<'a> {
     pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
+    /// The headers of the loops this run made: those that were no loop's header
+    /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
+    pub created: Vec<BlockId>,
 }
 
 /// `TransformationMode`.
@@ -1585,6 +1588,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let simplified = crate::loopsimplify::simplified(run.function);
     let closed = crate::lcssa::closed(run.function).unwrap_or(false);
     let mut analyzed = Analyzed::of(run);
+    let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -1678,6 +1682,16 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     }
     let emptied = std::mem::take(&mut run.emptied);
     run.function.erase_blocks(&emptied).expect("blocks merged away are empty and unnamed");
+    if changed {
+        analyzed = Analyzed::of(run);
+    }
+    run.created = analyzed
+        .loops
+        .get_loops_in_preorder()
+        .iter()
+        .map(|one| one.get_header())
+        .filter(|header| !at_first.contains(header))
+        .collect();
     changed
 }
 
@@ -1688,6 +1702,9 @@ pub struct LoopFullUnroll {
     /// `OnlyWhenForced`: only a loop that asks to be unrolled is
     /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
     pub only_when_forced: bool,
+    /// The headers of the loops the last run made, for the slot after it: the
+    /// loop pass manager's worklist.
+    pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -1719,6 +1736,7 @@ impl FunctionPass for LoopFullUnroll {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            created: Vec::new(),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -1727,7 +1745,9 @@ impl FunctionPass for LoopFullUnroll {
                 prepare_for_lto: false,
             },
         };
-        if unroll_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        let changed = unroll_loops(&mut run);
+        *self.created.borrow_mut() = std::mem::take(&mut run.created);
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -1769,6 +1789,7 @@ pub fn unroll_function(
         options,
         emptied: Vec::new(),
         peeled: Default::default(),
+        created: Vec::new(),
     };
     Ok(unroll_loops(&mut run))
 }

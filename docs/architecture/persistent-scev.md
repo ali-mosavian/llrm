@@ -4,7 +4,7 @@ architecture-order: 521
 ---
 # One ScalarEvolution per function
 
-TL;DR: calls into `ScalarEvolution` from passes cost 93.8 M Ir in w-3's d_faces -O2 compile (1,434.9 M) against the pin's 34.1 M (opt 285.2 M plus llc 214.5 M). Cold-SE passes alone are worth 49.6 M (83.7 - 34.1); `decide`'s and `algebraic`'s SE steps (10.1 M) are a use the pin does not make and go to their own item. Step 1 (one SE per loop inside `delete_loops` and `unroll_loops`, PR 2026-11-06) is the cheap part; the manager-held SE (PR 2026-11-16) is the rest.
+TL;DR: the pin builds ScalarEvolution once per function and keeps it through every loop pass; llrm builds it at 19 call sites, each from nothing. Measured 2026-10-22: keeping it across every session on a function (the history log drops what edits touched, `LLRM_VERIFY` checks it) saves 2.7 M Ir of 1,531 M on d_faces -O2 (25 hits in 47 sessions), so sharing is a correctness property of the translation, not a cost item. The SE bill below is per-operation cost (about 1.3x the pin's on the same IR for IndVars and LSR) and passes that run more often than the pin's.
 
 ## The pin's rule
 
@@ -66,6 +66,8 @@ Inclusive callgrind Ir (3.25.1) of the calls a pass makes into `ScalarEvolution`
 
 The stated totals are 93.94 M (ours) and 34.23 M (pin): the 0.12 M and 0.09 M left over are callers too small to name.
 
+Measured afterwards (2026-10-22): the bill is not mostly repeated work. A `ScevSession` that took the expressions the last session on the same function left, less what `Function::touched_since` says the edits touched, hit 25 times in 47 sessions and saved 2.7 M (1,531.02 M -> 1,528.31 M, release profile, objects identical). On the same IR, the pin's LSR is 18.39 M and ours 23.9 M (1.3x); IndVars is 12.42 M and 15.95 M (1.28x). The table's pin column is the pin compiling the source, whose loops are its own IR after its own passes, so it overstates the gap; the same-IR ratios do not.
+
 The prize is stated twice:
 
 - Cold-SE passes only: 83.7 - 34.1 = 49.6 M. This is what the persistent SE (steps below) can take.
@@ -98,7 +100,7 @@ Passes that edit what SE has seen, and so must forget: indvars (widening, exit v
 ## Order of work
 
 1. The verify mode, with a test that a missed `forget` is caught (fail-first).
-2. Step 1, PR 2026-11-06: `delete_loops` and `unroll_loops` ask one SE per loop (the second ask reuses the first's backedge-taken count; about -3.8 M and -2 M). Then PR 2026-11-16: indvars, LSR, unroll, loop-deletion and idiom read `Scevs` from the manager and name it; rows pair and d_faces callgrind.
+2. Withdrawn as a cost item. Step 1 (one SE per loop in `delete_loops`) measured 5 K Ir: parity returns on `mustprogress` before the dead check builds an SE. Holding the SE in the manager stays a goal for matching the pin's invalidation, with the verify mode first.
 3. PR 2: rotate, loop-interchange, profit/unroll/peel, loop-load-elim, then loop-idiom, licm, unswitch, as their owners are free (unroll wiring: w-3).
 4. Cost still above the pin after sharing (`get_backedge_taken_count` 5x and `isImpliedCond` 7x per loop at LSR) is a separate item: a missing cache or repeated work inside SCEV, measured with callgrind on the same input.
 
