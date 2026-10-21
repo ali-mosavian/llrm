@@ -956,3 +956,74 @@ x:
     assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
     assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
 }
+
+mod last_run {
+    use llrm_mir::passes::{FunctionPass, PassManager, PreservedAnalyses};
+
+    use super::super::SimplifyCfg;
+    use crate::testing::{parsed, printed};
+
+    const TEXT: &str = "declare void @g()
+define void @f(i1 %c) {
+b0:
+  br i1 %c, label %t, label %e
+t:
+  call void @g()
+  ret void
+e:
+  ret void
+}
+";
+
+    /// A pass that makes the branch condition `true` and says it changed the
+    /// function, or does not.
+    struct Spoil {
+        reports_a_change: bool,
+    }
+
+    impl FunctionPass for Spoil {
+        fn name(&self) -> &'static str {
+            "spoil"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut llrm_mir::passes::Unit,
+            _: &mut llrm_mir::passes::Analyses,
+        ) -> PreservedAnalyses {
+            let block = unit.function.entry().expect("an entry");
+            let branch = unit.function.terminator(block).expect("a branch");
+            let on = llrm_mir::module::Operand::Constant(unit.context.int(unit.context.types.int(1), 1));
+            unit.function.set_operand(branch, 0, on);
+            if self.reports_a_change { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        }
+    }
+
+    /// `TEXT` through `SimplifyCfg`, `Spoil`, `SimplifyCfg`.
+    fn simplify_spoil_simplify(reports_a_change: bool) -> String {
+        let mut module = parsed(TEXT);
+        let mut manager = PassManager::default();
+        manager.add(SimplifyCfg::default());
+        manager.add(Spoil { reports_a_change });
+        manager.add(SimplifyCfg::default());
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    }
+
+    /// A pass that changed the function in between drops what `SimplifyCFG`
+    /// last saw: the second run folds `br i1 true`.
+    #[test]
+    fn a_changing_pass_between_two_runs_makes_the_second_run_visit() {
+        let out = simplify_spoil_simplify(true);
+        assert!(!out.contains("br i1"), "{out}");
+    }
+
+    /// With nothing reported changed since the last run in the slot, the
+    /// second is skipped: 84 of the 99 runs at d_faces -O2 found nothing, and
+    /// each walked every block again (30.7 M instructions, the pin's 11.9).
+    #[test]
+    fn a_run_with_nothing_changed_since_the_last_is_skipped() {
+        let out = simplify_spoil_simplify(false);
+        assert!(out.contains("br i1 true"), "{out}");
+    }
+}

@@ -221,11 +221,25 @@ impl FunctionPass for SimplifyCfg {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // DEVIATE S1 (w-4, 2026-11-02): the pin runs `SimplifyCFGPass` every
+        // slot; a run after which nothing has changed the function, in the same
+        // slot, is skipped as `InstCombinePass` skips at `LRT.shouldSkip`.
+        // Fact: 84 of 99 runs at d_faces -O2 changed nothing. Exit: remove if
+        // an object differs from the pin's; the pin's SimplifyCFG is cheap.
+        let bits = self.options.bits();
+        let last = analyses.get::<crate::combine_pass::LastRunTracking>(unit.context, unit.layout, unit.function);
+        if last.simplifycfg_skips(bits) {
+            llrm_support::debug::counted("simplifycfg skipped", true);
+            return PreservedAnalyses::all();
+        }
+        llrm_support::debug::counted("simplifycfg skipped", false);
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified_with(&self.options, unit.context, &spec, unit.declared, unit.function) {
-            PreservedAnalyses::none()
+        let changed = simplified_with(&self.options, unit.context, &spec, unit.declared, unit.function);
+        last.simplifycfg_ran(bits, changed);
+        if changed {
+            PreservedAnalyses::none().preserve::<crate::combine_pass::LastRunTracking>()
         } else {
             PreservedAnalyses::all()
         }
@@ -256,6 +270,22 @@ pub struct Options {
 }
 
 impl Options {
+    /// The options as bits: two runs in one slot have equal bits.
+    pub fn bits(&self) -> u16 {
+        [
+            self.need_canonical_loop,
+            self.speculate_blocks,
+            self.hoist_common_insts,
+            self.sink_common_insts,
+            self.forward_switch_cond_to_phi,
+            self.convert_switch_range_to_icmp,
+            self.convert_switch_to_arithmetic,
+            self.convert_switch_to_lookup_table,
+        ]
+        .iter()
+        .fold(0, |bits, on| bits << 1 | u16::from(*on))
+    }
+
     /// The slot at
     /// [L1438](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1438):
     /// the extra sinking can create larger blocks, so loops need not stay

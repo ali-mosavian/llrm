@@ -35,6 +35,33 @@ pub struct LastRunTracking;
 #[derive(Debug, Default)]
 pub struct LastRun {
     instcombine: Cell<bool>,
+    /// The slot (`simplifycfg::Options::bits`) `SimplifyCFG` last ran in with
+    /// nothing changed since.
+    simplifycfg: Cell<Option<u16>>,
+}
+
+impl LastRun {
+    /// `SimplifyCFG` last ran in the slot `bits` and nothing has changed the
+    /// function since.
+    pub fn simplifycfg_skips(
+        &self,
+        bits: u16,
+    ) -> bool {
+        self.simplifycfg.get() == Some(bits)
+    }
+
+    /// `SimplifyCFG` ran in the slot `bits`; a run that changed the function
+    /// leaves the other passes' marks cleared.
+    pub fn simplifycfg_ran(
+        &self,
+        bits: u16,
+        changed: bool,
+    ) {
+        if changed {
+            self.instcombine.set(false);
+        }
+        self.simplifycfg.set(Some(bits));
+    }
 }
 
 /// What it holds is bookkeeping of the pass manager, not a fact about the
@@ -100,6 +127,7 @@ impl FunctionPass for Combine {
         );
         last.instcombine.set(true);
         if changed {
+            last.simplifycfg.set(None);
             PreservedAnalyses::none().preserve_cfg().preserve::<LastRunTracking>()
         } else {
             PreservedAnalyses::all()
