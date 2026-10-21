@@ -525,3 +525,22 @@ fn test_a_variable_read_after_a_raising_statement_stays_in_the_frame() {
     let cell = cell.unwrap_or_else(|| panic!("x is not stored in the frame: {keep}"));
     assert!(keep.contains(&format!("push word ptr [bp-{cell}]\n    call far ptr B$PEI2")), "{keep}");
 }
+
+/// The module body, which owns the module-wide handler, was given every local
+/// (`$held` and the bounds' cells) although the handler runs as a function of
+/// its own and reads none of them: UBOUND of a static array was tested against
+/// a frame cell nothing wrote (`cmp word ptr ss:$QB$FRAME+2, 0`) and its cells
+/// were set again before each statement (qb/bounds.bas +181 B at -Os).
+#[test]
+fn test_the_module_body_is_given_the_locals_resume_reads_only() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "OWNER.BAS",
+        b"DEFINT A-Z\r\nDIM s(3 TO 4)\r\nON ERROR GOTO h\r\nPRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND\r\nh:\r\nRESUME NEXT\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
+    assert!(main.contains("pushw 4\n    call far ptr B$PEI2"), "{main}");
+    assert!(!main.contains("cmp word ptr ss:$QB$FRAME+"), "{main}");
+}
