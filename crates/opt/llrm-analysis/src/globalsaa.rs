@@ -95,10 +95,11 @@ use crate::memory::Unit;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
     tracked: BTreeSet<GlobalId>,
-    /// Globals the use scan calls escaped (as the pin's does, a `phi` or
-    /// `select` of the address is an escape) that escape by no use but being
-    /// joined: reached by name only, to a body that follows a pointer through
-    /// its joins. `covers` takes one for what it was.
+    /// Globals the use scan calls escaped (the pin's `AnalyzeUsesOfPointer`,
+    /// GlobalsModRef.cpp#L312, has no `phi` or `select` case, so one is an
+    /// escape) that escape by no use but being joined: reached by name only, to
+    /// a body that follows a pointer through its joins. `covers` takes one for
+    /// what it was.
     joined: BTreeSet<GlobalId>,
     /// The `!llrm.named` globals.
     named: BTreeSet<GlobalId>,

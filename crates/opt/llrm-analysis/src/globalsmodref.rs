@@ -425,7 +425,16 @@ pub fn escaping_among_joins(
         through_joins: true,
         seen: Default::default(),
     };
-    candidates.iter().copied().filter(|&id| analysis.escapes(Root::Global(id), &mut None, &mut None)).collect()
+    // The joins seen are one candidate's: another reaching the same join must
+    // follow it too.
+    candidates
+        .iter()
+        .copied()
+        .filter(|&id| {
+            analysis.seen.borrow_mut().clear();
+            analysis.escapes(Root::Global(id), &mut None, &mut None)
+        })
+        .collect()
 }
 
 /// `GlobalsAAResult::analyzeModule`.

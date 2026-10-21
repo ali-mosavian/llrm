@@ -671,3 +671,49 @@ fn a_stepped_pointer_phi_that_is_returned_is_not_covered() {
     let (before, after) = indexed_and_stepped("", "", ("ptr", "%p"));
     assert!(!before.covers(&after));
 }
+
+/// Two globals reaching one pointer phi that is passed to a call: both
+/// escape. The joins seen were one set for every candidate, so `@b` found the
+/// phi already seen from `@a` and was judged not to escape (w-7's review). The
+/// held result tracks `@b` only (`@a` is stored in `@hold`), so `@a`'s own
+/// refusal cannot hide it.
+#[test]
+fn a_global_joined_into_a_phi_with_another_that_is_passed_to_a_call_is_not_covered() {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@b = internal global [128 x i8] zeroinitializer
+@hold = internal global [2 x i8] zeroinitializer
+declare void @ext(ptr)
+"
+    );
+    let before = format!(
+        "{head}define i16 @f(i16 %n) {{
+b0:
+  store ptr @a, ptr @hold
+  %w = load i16, ptr @b
+  ret i16 %w
+}}
+"
+    );
+    let after = format!(
+        "{head}define i16 @f(i1 %c) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi ptr [ @a, %b1 ], [ @b, %b2 ]
+  call void @ext(ptr %p)
+  ret i16 0
+}}
+"
+    );
+    let (before, after) = (globals_of(&before), globals_of(&after));
+    assert!(!before.tracked(GlobalId(0)) && before.tracked(GlobalId(1)));
+    assert!(!before.covers(&after));
+}
