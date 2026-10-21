@@ -73,6 +73,9 @@ pub struct Options {
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
     /// `rounds_float_spills`): set by llrm-c, which follows the pin.
     pub rounds_float_spills: bool,
+    /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
+    /// `spills_extended`): set by llrm-qb, which follows real BC.
+    pub spills_extended: bool,
     /// `-mcode-segment=`: the segment every module's code is in, where it is
     /// not its own `<MODULE>_TEXT`.
     pub code_segment: Option<String>,
@@ -102,6 +105,7 @@ impl Options {
             abi: None,
             float_store: false,
             rounds_float_spills: false,
+            spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
         }
@@ -151,6 +155,7 @@ impl Options {
             self.float_store,
             self.pipeline.aggressive_codegen(),
             self.rounds_float_spills,
+            self.spills_extended,
         )
     }
 }
