@@ -58,20 +58,20 @@ def check(
     return out
 
 
-STRINGS = "strcmp_smoke"
+STRINGS = ("strcmp_smoke", "pow_unrolled")
 
 
 def strings(
     run: Callable[[], tuple[int, str]],
 ) -> list[str]:
-    """The string-relation program tests/run/qb/strcmp_smoke.bas (`' flags: -O1 | -O2 | -O3 | -Os`, the qb45 runtime, m16) through tests/run: one
-    line per level in its verdict. A compiler that cannot compile a comparison (`@llrm.qb.B$SCMP's flags read other than by a comparison`:
-    str_slices on the tip) or prints another answer is red."""
+    """The tests/run programs that read the compiler's answers where the output is the language's: strcmp_smoke (a string compare, `' flags: -O1 | -O2 |
+    -O3 | -Os`), pow_unrolled (`^` in an unrolled loop, the same four levels, expected = real BC's text), all m16 on the qb45 runtime, through run_tests. A compiler that cannot compile a comparison (`@llrm.qb.B$SCMP's flags read other than by a comparison`)
+    or prints another number is red; one line per program that passes, one per failing run."""
     code, text = run()
-    failed = [one.strip() for one in text.splitlines() if one.startswith("FAIL")]
+    failed = [one.strip() for one in text.splitlines() if one.startswith(("FAIL", "KNOWN"))]  # a known failure is still a wrong answer here
     if code == 0 and not failed and ", 0 fail" in text:
-        return [f"ok {STRINGS} m16 {level}" for level in ("-O1", "-O2", "-O3", "-Os")]
-    return [f"WRONG {STRINGS} m16: {one[:240]}" for one in failed] or [f"WRONG {STRINGS} m16: exit {code}: {text.strip()[-240:]}"]
+        return [f"ok {name} m16" for name in STRINGS]
+    return [f"WRONG m16: {one[:240]}" for one in failed] or [f"WRONG m16: exit {code}: {text.strip()[-240:]}"]
 
 
 def demo_lines(results: dict) -> list[str]:
@@ -123,7 +123,7 @@ def demos(work: Path) -> list[str]:
 
 def string_run(work: Path) -> tuple[int, str]:
     done = subprocess.run(
-        [sys.executable, str(dosbatch.ROOT / "tools" / "dosbatch" / "run_tests.py"), STRINGS, "--work", str(work / "strings")],
+        [sys.executable, str(dosbatch.ROOT / "tools" / "dosbatch" / "run_tests.py"), *STRINGS, "--work", str(work / "strings")],
         capture_output=True,
         text=True,
         env={**os.environ, "LLRM_BIN": str(dosbatch.BIN)},
