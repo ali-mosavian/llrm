@@ -17,7 +17,7 @@ from pathlib import Path
 
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_32, Uc, UcError
 from unicorn.x86_const import (
-    UC_X86_REG_CS, UC_X86_REG_DS, UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDI, UC_X86_REG_EDX, UC_X86_REG_EFLAGS, UC_X86_REG_ES,
+    UC_X86_REG_CS, UC_X86_REG_DS, UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDI, UC_X86_REG_EDX, UC_X86_REG_EFLAGS, UC_X86_REG_EIP, UC_X86_REG_ES,
     UC_X86_REG_ESI, UC_X86_REG_ESP, UC_X86_REG_FS, UC_X86_REG_GDTR, UC_X86_REG_GS, UC_X86_REG_SS,
 )
 from iced_x86 import Decoder, Mnemonic
@@ -63,9 +63,37 @@ def _segments(image: Path) -> list[tuple[int, bytes, int]]:
     return out
 
 
+def layout_errors(image: Path) -> list[str]:
+    """What is wrong with the file layout of an ELF `jwlink` wrote: a loadable segment that starts before the one below it ends, or a table
+    (relocations, symbols, strings) that starts before the last segment's bytes end, so that the tables are written over the program. A frames
+    image linked with 5 LOADs (a 4 KiB gap before CONST2) had its relocation tables at 0x102f, inside code that runs to 0x19f5: the emulator ran
+    the relocation records, `Invalid memory read`, 21 of 39 bq32 rows with no clocks."""
+    data = image.read_bytes()
+    (phoff,) = struct.unpack_from("<I", data, 28)
+    phentsize, phnum = struct.unpack_from("<HH", data, 42)
+    loads = [struct.unpack_from("<8I", data, phoff + at * phentsize) for at in range(phnum)]
+    loads = [(offset, filesz) for kind, offset, _, _, filesz, *_ in loads if kind == 1]
+    errors = []
+    end = 0
+    for offset, filesz in loads:
+        if offset < end:
+            errors.append(f"a loadable segment at file offset {offset:#x} starts inside the one before it, which ends at {end:#x}")
+        end = max(end, offset + filesz)
+    (shoff,) = struct.unpack_from("<I", data, 32)
+    shentsize, shnum = struct.unpack_from("<HH", data, 46)
+    for at in range(shnum if shoff else 0):
+        _, kind, _, addr, offset, size = struct.unpack_from("<6I", data, shoff + at * shentsize)
+        if addr == 0 and size and kind not in (0, 8) and offset < end:
+            errors.append(f"section {at} (type {kind}) is written at file offset {offset:#x}, over the program that ends at {end:#x}")
+    return errors
+
+
 def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
     """`image` from its entry; the counts are of the function `region` (a symbol) and what it calls. Files the program opens live in `cwd`."""
     result = icount.Run()
+    if layout := layout_errors(image):
+        result.error = "jwlink wrote a corrupt ELF: " + "; ".join(layout)
+        return result
     entry_of = symbol(image, region)
     if entry_of is None:
         result.error = f"{region} is not in the image's symbols"
@@ -206,7 +234,7 @@ def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
     try:
         uc.emu_start(entry, 0, count=limit)
     except UcError as error:
-        result.error = result.error or f"emulator: {error} at {read(UC_X86_REG_CS):x}"
+        result.error = result.error or f"emulator: {error} at eip {uc.reg_read(UC_X86_REG_EIP):#x}"
     if state["done"]:
         result.region = counts
     elif not result.error:

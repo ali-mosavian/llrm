@@ -104,3 +104,21 @@ def test_a_kernel_that_does_not_return_says_which_reason_it_stopped_for(tmp_path
 
     huge = flatcount.LIMIT
     assert bench.flat_clocks(("grep", "bq32", "O2"), tmp_path / "x.elf", "BenchGrep", huge, tmp_path) == {}, "no emulator run for a kernel that long"
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_an_elf_whose_tables_are_written_over_its_code_is_refused_not_run(tmp_path):
+    """frames at bq32 linked with a 4 KiB gap before CONST2: jwlink put the relocation tables at 0x102f, inside the code to 0x19f5, and the emulator
+    ran them (`Invalid memory read`): 21 of 39 bq32 rows had no clocks."""
+    ran = flatcount.run(FIXTURES / "frames_tables_over_code.elf", "BENCHFRAMES", tmp_path)
+    assert ran.region is None and ran.error.startswith("jwlink wrote a corrupt ELF: "), ran.error
+    assert flatcount.layout_errors(FIXTURES / "frames_tables_after_image.elf") == []
+
+
+def test_an_emulator_fault_names_the_instruction_that_faulted_not_a_segment_selector(tmp_path):
+    """The warning said `at 8`: the code selector, which every fault in the flat image has."""
+    elf = image(tmp_path, b"\xa1\x00\x00\x00\x0b\xc3")  # mov eax,[0xb000000]; ret: above the emulated memory
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert ran.error and f"eip {KERNEL:#x}" in ran.error, ran.error
