@@ -284,7 +284,7 @@ b2:
 ",
     );
     assert_eq!(
-        managed(&mut module, Decide),
+        managed(&mut module, Decide { constants: true }),
         "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 1, 1
@@ -305,7 +305,7 @@ fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided_after_fold() {
     );
     let mut module = parsed(&format!("{DOS}{text}"));
     managed(&mut module, crate::fold::Fold);
-    let after = managed(&mut module, Decide);
+    let after = managed(&mut module, Decide { constants: true });
     assert!(!after.contains("br i1"), "{after}");
 }
 
@@ -323,7 +323,7 @@ fn decide_solves_no_memory() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, false, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
 }
 
@@ -341,7 +341,7 @@ fn decide_asks_no_memory_annotations_or_points_to() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, false, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
     assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
 }
@@ -820,7 +820,7 @@ b25:
 ";
     let mut module = parsed(text);
     jump_threaded(&mut module);
-    managed(&mut module, Decide);
+    managed(&mut module, Decide { constants: true });
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
 }
@@ -871,4 +871,23 @@ b1:
     );
     assert!(decide(&mut module));
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", printed(&module));
+}
+
+/// In LLVM's order `Decide` leaves the numbers to SimplifyCFG, CVP and SCCP
+/// (no row of the 71 programs needed them here) and keeps what the guards and
+/// ScalarEvolution prove: constants off, a switch on a known number stays and
+/// a compare the dominating edge settles goes.
+#[test]
+fn test_without_constants_decide_keeps_the_implied_branches_only() {
+    let mut switch = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %s = add i16 1, 1\n  switch i16 %s, label %d [ i16 1, label %a\n                            i16 2, label %b ]\na:\n  ret i16 10\nb:\n  ret i16 %x\nd:\n  ret i16 30\n}\n",
+    );
+    let before = printed(&switch);
+    managed(&mut switch, Decide { constants: false });
+    assert_eq!(printed(&switch), before, "a switch on a known number is not Decide's here");
+    let mut implied = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %c = icmp slt i16 %x, 5\n  br i1 %c, label %b1, label %b3\nb1:\n  %d = icmp slt i16 %x, 10\n  br i1 %d, label %b2, label %b3\nb2:\n  ret i16 1\nb3:\n  ret i16 0\n}\n",
+    );
+    managed(&mut implied, Decide { constants: false });
+    assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
 }
