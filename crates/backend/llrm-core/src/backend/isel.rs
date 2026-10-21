@@ -3842,6 +3842,27 @@ impl Selector<'_, '_, '_> {
             self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
             return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset });
         }
+        // A selector alone cast back to a far pointer is that selector:0 (the
+        // offset the near address had was dropped when the selector was
+        // taken).
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
+            &self.module.context.get(id).kind
+            && let Type::Pointer(from) = self.types().get(self.module.context.get(*value).ty)
+            && self.layout.is_non_integral_address_space(*from)
+            && let Ok((global, _)) = crate::backend::globals::target(self.module, &self.layout, *value)
+        {
+            let Some(block) = self.current else { return refuse("a far constant outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let (space, index) = if self.module.global(global).address_space == self.spaces.near {
+                crate::hir::symbols::DGROUP
+            } else {
+                (Space::Group, crate::backend::globals::segment_of(global))
+            };
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset: 0 });
+        }
         // An address no global owns, near: its number, read as a direct
         // address.
         if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id)
