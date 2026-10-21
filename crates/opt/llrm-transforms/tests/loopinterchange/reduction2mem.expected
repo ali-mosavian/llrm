@@ -1,0 +1,44 @@
+== -loop-interchange-reduction-to-mem -loop-interchange-profitabilities=ignore
+@func
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v21, %B7 ], [ 0, %B1 ]
+  %v1 = phi double [ %v19, %B7 ], [ fp(0000000000000000), %B1 ]
+  %v2 = phi i1 [ false, %B7 ], [ true, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v3 = phi i64 [ %v17, %B6 ], [ 0, %B3 ]
+  %v4 = getelementptr inbounds nuw double, ptr %s, i64 %v3
+  %v5 = getelementptr inbounds nuw double, ptr %a, i64 %v3
+  %v6 = getelementptr inbounds nuw double, ptr %b, i64 %v3
+  br label %B5
+B5:
+  %v7 = load double, ptr %v4
+  %v8 = select i1 %v2, double fp(0000000000000000), double %v7
+  %v9 = getelementptr inbounds nuw [100 x double], ptr %v5, i64 %v0
+  %v10 = load double, ptr %v9
+  %v11 = getelementptr inbounds nuw [100 x double], ptr %v6, i64 %v0
+  %v12 = load double, ptr %v11
+  %v13 = fmul fast double %v12, %v10
+  %v14 = fadd reassoc nnan nsz arcp contract afn double %v13, %v8
+  store double %v14, ptr %v4
+  %v15 = add nuw nsw i64 %v0, 1
+  %v16 = icmp eq i64 %v15, 100
+  br label %B6
+B6:
+  %v17 = add nuw nsw i64 %v3, 1
+  %v18 = icmp eq i64 %v17, 100
+  br i1 %v18, label %B7, label %B4
+B7:
+  %v19 = phi double [ %v14, %B6 ]
+  %v20 = phi double [ %v14, %B6 ]
+  %v21 = add nuw nsw i64 %v0, 1
+  %v22 = icmp eq i64 %v21, 100
+  br i1 %v22, label %B8, label %B2
+B8:
+  ret void

@@ -1,0 +1,46 @@
+== -loop-interchange-profitabilities=ignore
+@inner_header_br_dup
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v5, %B4 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v3, %B3 ], [ 0, %B1 ]
+  br i1 %cond, label %B3, label %B3
+B3:
+  %v2 = getelementptr [8 x i8], ptr %A, i64 %v1, i64 %v0
+  store i8 0, ptr %v2
+  %v3 = add i64 %v1, 1
+  %v4 = icmp eq i64 %v3, 8
+  br i1 %v4, label %B4, label %B2
+B4:
+  %v5 = add i64 %v0, 1
+  %v6 = icmp eq i64 %v5, 8
+  br i1 %v6, label %B5, label %B1
+B5:
+  ret void
+@inner_header_switch_dup0
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %i.inc, %outer.latch ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %j.inc, %inner.latch ], [ 0, %B1 ]
+  switch i8 %sel, label %inner.latch [
+  i8 0, label %inner.latch
+  i8 1, label %inner.body
+  ]
+@inner_header_switch_dup1
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %i.inc, %outer.latch ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %j.inc, %inner.latch ], [ 0, %B1 ]
+  switch i8 %sel, label %inner.latch [
+  i8 0, label %inner.latch
+  i8 1, label %inner.latch
+  ]

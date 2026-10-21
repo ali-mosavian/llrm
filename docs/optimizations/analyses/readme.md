@@ -2,12 +2,11 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 73 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 71 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
-| access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: none in | [access](access.md) |
 | accessanalysis | `AccessAnalysis`: the memory accesses of a loop, grouped by what they may alias, for the dependence checker and the runtime checks. |  | [accessanalysis](accessanalysis.md) |
 | aggregate | `AAResults::addAAResult` of `AliasAnalysis.cpp` at d1106deb71cc: several alias analyses asked as one. | `AggregateAA`. | [aggregate](aggregate.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
@@ -30,7 +29,6 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 73 documented, 0 undoc
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |
 | demandedbits | Which bits of each integer value anything reads: a translation of LLVM's `DemandedBits` (`DemandedBits.cpp` at d1106deb71cc). | `DemandedBits::of`, then `demanded_bits`, `demanded_bits_of_use`, | [demandedbits](demandedbits.md) |
-| dependence | Data dependence distances over a two-deep loop nest, and whether its two loops may swap. | `distances`, `interchangeable`, `walk_cost`. Consumer: `loopinterchange`. | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |
 | equivalence | `EquivalenceClasses`: disjoint sets of values with a stable member order. |  | [equivalence](equivalence.md) |

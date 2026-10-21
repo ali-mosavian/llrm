@@ -108,7 +108,7 @@ fn two_sign_tests_ored_are_one_sign_test_of_the_or() {
     let metadata = module.metadata.clone();
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::combine::combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared);
+    crate::combine::combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
     declared.place(&mut module).expect("placed");
     let out = printed(&module);
     assert!(out.contains("or i16 %a, %b") && out.contains("icmp slt i16 %"), "{out}");

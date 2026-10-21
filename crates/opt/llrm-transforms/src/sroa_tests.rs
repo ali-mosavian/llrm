@@ -484,3 +484,27 @@ b3:
     assert!(!after.contains("phi"), "{after}");
     assert!(after.contains("load float, ptr %s"), "{after}");
 }
+
+/// `isInstructionTriviallyDead` named opcodes only: the pure call whose value
+/// only a dead user of the alloca (an unused address) held stayed after SROA
+/// deleted that user.
+#[test]
+fn test_the_pure_call_only_a_dead_alloca_user_held_goes_with_it() {
+    let after = sroa(
+        "define internal i32 @pure(i32 %a) memory(none) nounwind willreturn {
+b0:
+  %r = add i32 %a, 1
+  ret i32 %r
+}
+
+define i32 @f(i32 %a) {
+b0:
+  %s = alloca [4 x i32]
+  %v = call i32 @pure(i32 %a)
+  %p = getelementptr [4 x i32], ptr %s, i32 0, i32 %v
+  ret i32 %a
+}
+",
+    );
+    assert!(!after.contains("call i32 @pure"), "{after}");
+}

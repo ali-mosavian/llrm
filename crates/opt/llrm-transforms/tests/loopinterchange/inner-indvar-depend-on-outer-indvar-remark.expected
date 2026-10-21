@@ -1,0 +1,65 @@
+== 
+@interchange_01
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v7, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v5, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [100 x [100 x i64]], ptr @A, i64 0, i64 %v1, i64 %v0
+  %v3 = load i64, ptr %v2
+  %v4 = add nsw i64 %v3, %k
+  store i64 %v4, ptr %v2
+  %v5 = add nuw nsw i64 %v1, 1
+  %v6 = icmp eq i64 %v1, %v0
+  br i1 %v6, label %B3, label %B2
+B3:
+  %v7 = add nuw nsw i64 %v0, 1
+  %v8 = icmp eq i64 %v0, 99
+  br i1 %v8, label %B4, label %B1
+B4:
+  ret void
+@interchange_02
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v8, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v6, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [100 x [100 x i64]], ptr @A, i64 0, i64 %v1, i64 %v0
+  %v3 = load i64, ptr %v2
+  %v4 = add nsw i64 %v3, %k
+  store i64 %v4, ptr %v2
+  %v5 = add nuw nsw i64 %v1, %v0
+  %v6 = add nuw nsw i64 %v1, 1
+  %v7 = icmp eq i64 %v5, 100
+  br i1 %v7, label %B3, label %B2
+B3:
+  %v8 = add nuw nsw i64 %v0, 1
+  %v9 = icmp eq i64 %v0, 99
+  br i1 %v9, label %B4, label %B1
+B4:
+  ret void
+@interchange_03
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v7, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v5, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [100 x [100 x i64]], ptr @A, i64 0, i64 %v1, i64 %v0
+  %v3 = load i64, ptr %v2
+  %v4 = add nsw i64 %v3, %k
+  store i64 %v4, ptr %v2
+  %v5 = add nuw nsw i64 %v1, 1
+  %v6 = icmp ne i64 %v0, %v1
+  br i1 %v6, label %B2, label %B3
+B3:
+  %v7 = add nuw nsw i64 %v0, 1
+  %v8 = icmp eq i64 %v0, 99
+  br i1 %v8, label %B4, label %B1
+B4:
+  ret void

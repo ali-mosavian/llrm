@@ -10,7 +10,7 @@ fn combined(module: &mut Module) -> bool {
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared)
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared)
 }
 
 fn check(
@@ -171,6 +171,7 @@ fn without_sinking_it_stays() {
     let changed = super::combine_with_sinking(
         context,
         &globals,
+        &Default::default(),
         &metadata,
         &DataLayout::default(),
         function,
@@ -180,4 +181,20 @@ fn without_sinking_it_stays() {
     );
     assert!(!changed);
     assert_eq!(printed(&module), printed(&parsed(SINKABLE)));
+}
+
+/// `isInstructionTriviallyDead` named opcodes only: a dead call to a readnone
+/// nounwind willreturn function stayed (the pin deletes it).
+#[test]
+fn a_dead_pure_call_is_deleted() {
+    let mut module = parsed(
+        "declare i32 @pure(i32) nounwind willreturn memory(none)\n\ndefine i32 @f(i32 %a) {\nb0:\n  %x = call i32 @pure(i32 %a)\n  ret i32 %a\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    combine(context, &globals, &callees, &metadata, &DataLayout::default(), function, &mut declared);
+    assert!(!printed(&module).contains("call i32 @pure"), "{}", printed(&module));
 }

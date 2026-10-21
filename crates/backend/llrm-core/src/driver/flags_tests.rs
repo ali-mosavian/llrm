@@ -93,9 +93,8 @@ fn each_level_selects_gcc_s_passes() {
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
-    // -O1 has gcc's `-finline-functions-called-once` and no
-    // `-finline-small-functions`.
-    assert_eq!(row("-O1"), (scalar, true, false, false, false, true, false, false, false, true));
+    // -O1 inlines as the pin's does (225, #3249).
+    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
@@ -115,7 +114,7 @@ fn each_level_selects_gcc_s_passes() {
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
-        (0, 225, 250)
+        (225, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
@@ -324,17 +323,15 @@ fn omax_unswitches_loops() {
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
 
-/// gcc turns `-floop-interchange` on at -O3 and no lower (opts.cc:677);
-/// -Omax is everything.
+/// The pin's default pipelines hold `LoopInterchange` at every level but -O0
+/// (`enable-loopinterchange`, PassBuilderPipelines.cpp#L219); it was on at -O3
+/// and -Omax only, gcc's choice.
 #[test]
-fn only_o3_and_omax_interchange_loops_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).interchange);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).interchange, "{level}");
-        assert!(pipeline(&[level, "-floop-interchange"]).interchange, "{level}");
+fn every_optimized_level_interchanges_loops_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-O3", "-Omax"] {
+        assert!(pipeline(&[level]).interchange, "{level}");
+        assert!(!pipeline(&[level, "-fno-loop-interchange"]).interchange, "{level}");
     }
-    assert!(pipeline(&["-O3"]).interchange);
-    assert!(!pipeline(&["-O3", "-fno-loop-interchange"]).interchange);
 }
 
 /// `-disable-lsr` (LLVM's TargetPassConfig option, also `-mllvm -disable-lsr`)
