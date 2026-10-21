@@ -13,3 +13,9 @@ The selector-alone space (`[spaces].segment`, `ni:` in the datalayout) drops the
 | `sroa.rs`, `mem2reg.rs`, `memcpyopt.rs`, `deadstore.rs`, `spill.rs`, `tailcallelim.rs`, `splitcopy.rs`, `combine_loadstore.rs` | look through casts on accesses | not audited one by one: they follow a pointer to its access, not its identity |
 
 How the symptoms became visible: the pair became foldable with the ConstantFolding translation (4a2b1b423a, 2026-10-18) and visitTrunc (bae70570c1). far3's wrong output was masked by a compile failure fixed by cb2ce8f3e; far1's compile failure appeared with fbbe81205 (#3262), which unmasked the folded shape.
+
+## Rows above main
+
+| Row | What | Owner | Exit | Review |
+|---|---|---|---|---|
+| FORGED-SEL-1 | deedlines -Os +201 B (0.6%) above main and above base: a forged selector (DEF SEG = VARSEG, POKE) leaves no global tracked, so loads and stores of the program's globals are kept in memory | funcattrs-port | prove non-aliasing where the selector provably is not DS | 2026-11-30 |
