@@ -457,6 +457,17 @@ struct CallMasks {
 
 thread_local! {
     static CALLS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// (searches for the regmask slots of a range, runs read for a block) on
+    /// this thread.
+    static RANGE_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BLOCK_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread searched the regmask slots for a block's range,
+/// and how many times it read the block's run: for a test that the interference
+/// cache and the region splitter do the second.
+pub fn regmask_lookups() -> (usize, usize) {
+    (RANGE_SEARCHES.with(std::cell::Cell::get), BLOCK_RUNS.with(std::cell::Cell::get))
 }
 
 /// The calls `reg_mask_clobbered` has looked at on this thread, for a test that
@@ -569,7 +580,22 @@ impl PhysInterference for CallMasks {
         start: SlotIndex,
         stop: SlotIndex,
     ) -> std::ops::Range<usize> {
+        #[cfg(test)]
+        RANGE_SEARCHES.with(|searches| searches.set(searches.get() + 1));
         self.calls.partition_point(|(slot, ..)| *slot < start)..self.calls.partition_point(|(slot, ..)| *slot < stop)
+    }
+
+    /// `LiveIntervals::getRegMaskSlotsInBlock` (LiveIntervals.h#L400): the run
+    /// the block was given when the calls were collected.
+    fn reg_mask_range_in_block(
+        &self,
+        mbb: usize,
+        _start: SlotIndex,
+        _stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        #[cfg(test)]
+        BLOCK_RUNS.with(|runs| runs.set(runs.get() + 1));
+        self.blocks[mbb].2.clone()
     }
 
     fn reg_mask_slot(
@@ -859,6 +885,19 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+
+    /// The interference cache searched the regmask slots twice (two binary
+    /// searches over `SlotIndex`es, 364 instructions) for every block it
+    /// computed: 3.9 M of d_faces -O2's 1,548 M. A block's run is read as
+    /// `getRegMaskSlotsInBlock` does.
+    #[test]
+    fn test_a_block_s_regmask_slots_are_read_not_searched() {
+        let (searched, read) = regmask_lookups();
+        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
+        let (searched_now, read_now) = regmask_lookups();
+        assert!(read_now > read, "premise: some block's interference was computed");
+        assert_eq!(searched_now - searched, 0, "searches for a block's regmask slots");
+    }
 
     /// Under RFP an x87 value takes one of FP0..FP6 or is
     /// spilled: nine live at once over seven registers, two at least go to
