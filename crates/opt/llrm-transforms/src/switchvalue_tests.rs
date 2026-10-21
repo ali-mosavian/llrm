@@ -1161,3 +1161,170 @@ end:
         &[&[0], &[3], &[7], &[9]],
     );
 }
+
+/// A conditional branch on `%x == 1` reached only from a branch on the same
+/// compare, taking its false arm: its own true arm is dead (`opt` leaves one
+/// branch and drops `%u`). `simplifyCondBranch`'s call of
+/// `simplifyEqualityComparisonWithOnlyPredecessor` was not made.
+#[test]
+fn test_a_branch_on_the_value_its_only_predecessor_compared_is_a_jump() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  %d = icmp eq i16 %x, 1
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  store i16 3, ptr @g
+  br label %common.ret
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[1], &[7]],
+    );
+}
+
+/// A branch block of only its compare folds into the predecessor that compares
+/// the same value, which becomes a `switch`
+/// (`foldValueComparisonIntoPredecessors` for a `br`).
+#[test]
+fn test_a_branch_of_only_its_compare_folds_into_the_predecessors_branch() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  %d = icmp eq i16 %x, 7
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %v [
+    i16 1, label %t
+    i16 7, label %u
+  ]
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 2, %u ], [ 3, %v ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+
+u:
+  store i16 2, ptr @g
+  br label %common.ret
+
+v:
+  store i16 3, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[1], &[7]],
+    );
+}
+
+/// The same with `ne`: the compare's sense picks which arm is the case.
+#[test]
+fn test_a_ne_branch_reached_by_the_equal_value_is_a_jump_to_the_other_arm() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp ne i16 %x, 3
+  br i1 %c, label %b1, label %t
+
+b1:
+  %d = icmp eq i16 %x, 3
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp ne i16 %x, 3
+  br i1 %c, label %b1, label %t
+
+b1:
+  store i16 3, ptr @g
+  br label %common.ret
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[3], &[7]],
+    );
+}
