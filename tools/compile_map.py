@@ -237,6 +237,7 @@ def build_map(args) -> dict:
                    "clang": f"clang {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}"},
         "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None, "startup_M": startup,
         "outside_every_step_M": step_total[2] if step_total else None,
+        "load_average": list(os.getloadavg()),
         "rows": [], "categories": {},
     }
     for count, own, whole, name in sorted(rows, key=lambda r: -r[1]):
@@ -314,6 +315,8 @@ def show(result: dict, old: dict | None = None) -> str:
     inst = result["instrumented_M"]
     thread = result["debug_total_M"] if result.get("debug_total_M") is not None else inst  # an old map without the thread total: the instrumented total
     gap = thread - result["rows_sum_M"]  # the rows add up to the timed thread; the instrumented total also holds the process around it
+    load = result.get("load_average")
+    out += [f"Host load average at the run (1/5/15 min): {' / '.join(f'{one:.1f}' for one in load)}; instruction counts do not depend on it, a cycles figure does." if load else "Host load average: not recorded."]
     out += [f"Output kind: {result['header'].get('output', 'asm')} for llrm, gcc and clang alike (asm = -S, the listing is written; obj = an object file).",
             "Accounting (M instructions; quote it with any figure of this map):"] + [f"  {label:56}{value:>9,.1f}" for label, value in accounting(result)]
     out.append(f"The rows sum to {100 * result['rows_sum_M'] / thread:.1f}% of the timed thread and {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total (the instrument's own cost and the process around the thread are in the second only). Tolerance: rows within 2% of the timed thread, else the map is wrong.")
