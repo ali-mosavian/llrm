@@ -12,7 +12,7 @@
 //! `undef` lanes are not matched or made).
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `foldXorToXor`, `foldUsingDistributiveLaws`,
+//! each named where it stood: `foldXorToXor`,
 //! `SimplifyDemandedInstructionBits` (`combine_demanded`), `foldNot`,
 //! `foldBinOpShiftWithShift`, `visitMaskedMerge`, the `ctlz`/`cttz` and
 //! `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
@@ -38,6 +38,7 @@ use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef;
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
@@ -645,8 +646,11 @@ pub fn visit_xor(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: foldXorToXor, foldUsingDistributiveLaws,
-    // SimplifyDemandedInstructionBits, foldNot, foldBinOpShiftWithShift.
+    // DEVIATE 2: foldXorToXor, SimplifyDemandedInstructionBits, foldNot,
+    // foldBinOpShiftWithShift.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
     let (op0, op1, _) = parts(c, inst);
     FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)).unwrap_or(Visit::None)
 }
