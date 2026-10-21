@@ -47,11 +47,13 @@ def test_a_demo_that_differs_or_could_not_be_played_is_not_a_right_answer():
     assert not any(one.startswith("ok") for one in lines if "m32" in one or one.startswith("X"))
 
 
-def test_a_string_compare_that_does_not_compile_or_answers_wrong_is_red():
-    """str_slices on the tip: `@llrm.qb.B$SCMP's flags read other than by a comparison`, a compile failure at every level that the program smoke
-    never reached."""
-    green = answer_smoke.strings(lambda: (0, "4 programs: 4 pass, 0 known, 0 fail\n"))
-    assert green == [f"ok strcmp_smoke m16 {level}" for level in ("-O1", "-O2", "-O3", "-Os")]
-    red = answer_smoke.strings(lambda: (1, "FAIL  qb/strcmp_smoke.bas: compile: llrm-qb: @__main: @llrm.qb.B$SCMP's flags read other than by a comparison\n1 programs: 0 pass, 0 known, 1 fail\n"))
-    assert len(red) == 1 and red[0].startswith("WRONG") and "B$SCMP" in red[0]
-    assert answer_smoke.strings(lambda: (2, "")) [0].startswith("WRONG")
+def test_a_string_compare_or_a_float_print_that_is_not_real_bcs_is_red():
+    """str_slices on the tip: `@llrm.qb.B$SCMP's flags read other than by a comparison`; real_print_wide / pow_unrolled: `10# ^ i%` printed 10000000
+    where real BC prints 9999999.999999994, at every level."""
+    green = answer_smoke.strings(lambda: (0, "9 programs: 9 pass, 0 known, 0 fail\n"))
+    assert green == [f"ok {name} m16" for name in ("strcmp_smoke", "pow_unrolled")]
+    red = answer_smoke.strings(lambda: (1, "FAIL  qb/pow_unrolled.bas [-Os]: line 1: want ' 9999999.999999994', got ' 10000000'\n1 programs: 0 pass, 0 known, 1 fail\n"))
+    assert len(red) == 1 and red[0].startswith("WRONG") and "pow_unrolled" in red[0]
+    assert answer_smoke.strings(lambda: (2, ""))[0].startswith("WRONG")
+    known = answer_smoke.strings(lambda: (0, "KNOWN qb/pow_unrolled.bas [-Os] (#3486): line 1: want 'x'\n4 programs: 0 pass, 4 known, 0 fail\n"))
+    assert len(known) == 1 and known[0].startswith("WRONG"), "a program marked known is still a wrong answer in the smoke"
