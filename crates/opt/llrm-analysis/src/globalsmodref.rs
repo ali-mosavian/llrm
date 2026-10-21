@@ -252,6 +252,12 @@ struct Analysis<'a> {
     /// A global in an initializer escapes (the pin's `isConstantUsed` rule).
     /// GlobalsAA turns it off and reads initializers through their holders.
     initializers_escape: bool,
+    /// A `phi` or `select` of the pointer is followed as a `getelementptr` is,
+    /// each once. The pin's `AnalyzeUsesOfPointer` has no such case: any other
+    /// user is an escape. Asked only to tell a global that escapes by a join
+    /// from one that escapes by what the join leads to.
+    through_joins: bool,
+    seen: std::cell::RefCell<BTreeSet<(GlobalId, ValueId)>>,
 }
 
 impl Analysis<'_> {
@@ -312,6 +318,19 @@ impl Analysis<'_> {
                 Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => {
                     let Some(result) = op.result else { return true };
                     if self.escapes(Root::Value(f, result), readers, writers) {
+                        return true;
+                    }
+                }
+                Opcode::Phi | Opcode::Select if self.through_joins => {
+                    let Some(result) = op.result else { return true };
+                    // A select's condition is no pointer, and a compare of it
+                    // is no use of one; a join already followed is not again.
+                    if at == 0 && matches!(op.opcode, Opcode::Select) {
+                        return true;
+                    }
+                    if self.seen.borrow_mut().insert((f, result))
+                        && self.escapes(Root::Value(f, result), readers, writers)
+                    {
                         return true;
                     }
                 }
@@ -382,8 +401,40 @@ pub fn escaping_among(
     module: &Module,
     candidates: &BTreeSet<GlobalId>,
 ) -> BTreeSet<GlobalId> {
-    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: false };
+    let analysis = Analysis {
+        module,
+        sites: Sites::of(module),
+        initializers_escape: false,
+        through_joins: false,
+        seen: Default::default(),
+    };
     candidates.iter().copied().filter(|&id| analysis.escapes(Root::Global(id), &mut None, &mut None)).collect()
+}
+
+/// [`escaping_among`], a `phi` or `select` of a global's address followed like
+/// a `getelementptr` (each join once): the globals that escape by what they are
+/// used for, not by being joined.
+pub fn escaping_among_joins(
+    module: &Module,
+    candidates: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let analysis = Analysis {
+        module,
+        sites: Sites::of(module),
+        initializers_escape: false,
+        through_joins: true,
+        seen: Default::default(),
+    };
+    // The joins seen are one candidate's: another reaching the same join must
+    // follow it too.
+    candidates
+        .iter()
+        .copied()
+        .filter(|&id| {
+            analysis.seen.borrow_mut().clear();
+            analysis.escapes(Root::Global(id), &mut None, &mut None)
+        })
+        .collect()
 }
 
 /// `GlobalsAAResult::analyzeModule`.
@@ -416,7 +467,13 @@ fn declaration_info(function: &Function) -> Option<FunctionInfo> {
 }
 
 pub fn compute(module: &Module) -> GlobalsModRef {
-    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: true };
+    let analysis = Analysis {
+        module,
+        sites: Sites::of(module),
+        initializers_escape: true,
+        through_joins: false,
+        seen: Default::default(),
+    };
     let mut result = GlobalsModRef::default();
     let mut tracked_functions: BTreeSet<GlobalId> = BTreeSet::new();
     let mut infos: BTreeMap<GlobalId, FunctionInfo> = BTreeMap::new();
