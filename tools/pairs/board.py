@@ -10,6 +10,7 @@ phases of `LLRM_DEBUG=time` (own Minstr, a step's analyses under their own names
 from __future__ import annotations
 
 import collections
+import hashlib
 import os
 import re
 import subprocess
@@ -26,6 +27,27 @@ def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
     if done.returncode:
         sys.exit(f"failed: {' '.join(cmd[:4])}\n{done.stderr[-400:]}")
     return done
+
+
+def md5(path) -> str:
+    return hashlib.md5(Path(path).resolve().read_bytes()).hexdigest()
+
+
+def header(source, includes: list[str], clang: str, builds: list, up: str) -> list[str]:
+    """Every input of the numbers, one `field: value` line each: the file measured and what is in it, the pinned clang (path as given, the
+    binary it names, its md5 and `--version`), the include list, each llrm build's path and md5, and the host's `uptime`. Two boards are
+    comparable only when these lines are."""
+    version = run([clang, "--version"]).stdout.splitlines()[0]
+    lines = [
+        f"input: {source} md5 {md5(source)}",
+        f"clang: {clang} -> {Path(clang).resolve()}",
+        f"clang md5: {md5(clang)}",
+        f"clang version: {version}",
+        f"includes: {' '.join(includes)}",
+    ]
+    lines += [f"llrm {name}: {llrm} md5 {md5(llrm)}" for name, llrm in builds]
+    lines.append(f"uptime: {up}")
+    return lines
 
 
 def instructions(cmd: list[str]) -> float:
@@ -63,9 +85,10 @@ def main() -> int:
     includes = [f for d in ("", "render", "game", "host", "qgl") for f in ("-I", str(qc / d))]
     source = str(qc / "render/d_faces.c")
     sink = os.path.join(tempfile.mkdtemp(prefix="board-"), "out.o")
-    print(f"d_faces compile, M instructions:u (min of 3), -m32 -march=i486; clang {run([clang, '--version']).stdout.splitlines()[0]}")
-    header = ["level", *(f"{n} {v}" for n, _ in builds for v in ("inline", "noinl")), "clang inline", "clang noinl"]
-    print(" | ".join(header))
+    print("d_faces compile, M instructions:u (min of 3), -m32 -march=i486")
+    print("\n".join(header(source, includes, clang, builds, run(["uptime"]).stdout.strip())))
+    columns = ["level", *(f"{n} {v}" for n, _ in builds for v in ("inline", "noinl")), "clang inline", "clang noinl"]
+    print(" | ".join(columns))
     table = {}
     for level in levels:
         row = {}
@@ -75,7 +98,7 @@ def main() -> int:
         for tag, extra in (("inline", []), ("noinl", ["-fno-inline-functions"])):
             row[f"clang {tag}"] = instructions([clang, "-w", "-m32", "-march=i486", f"-{level}", *extra, *KEYWORDS, *includes, "-c", "-o", sink, source])
         table[level] = row
-        print(f"-{level} | " + " | ".join(f"{row[h]:.0f}" for h in header[1:]), flush=True)
+        print(f"-{level} | " + " | ".join(f"{row[h]:.0f}" for h in columns[1:]), flush=True)
     for level in levels:
         for name, llrm in builds:
             own = phases(llrm, f"-{level}", [*KEYWORDS, *includes, "-o", sink, source])
