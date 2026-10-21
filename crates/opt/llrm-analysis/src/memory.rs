@@ -1875,9 +1875,11 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
-/// The accesses worked out for a version of a function, and which version.
+/// The accesses worked out for a version of a function, and which version:
+/// of its text, the spaces and the globals the unit lists (a unit with none
+/// finds no root a global variable, `object`).
 struct Held {
-    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces, usize),
     seen: std::rc::Rc<
         std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, (Option<std::rc::Rc<MemRef>>, Option<u32>)>>,
     >,
@@ -2052,7 +2054,7 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let key = (unit.function.mark(), unit.spaces());
+        let key = (unit.function.mark(), unit.spaces(), unit.globals.len());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
             held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
