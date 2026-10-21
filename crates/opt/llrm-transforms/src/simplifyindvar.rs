@@ -189,8 +189,9 @@ pub fn simplified_loop_ivs(
         e.function.iter_block(header).take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi).collect();
     let mut changed = false;
     for phi in phis {
-        let mut info = WideIvInfo { narrow_iv: phi, widest_native_type: None, is_signed: false };
-        changed |= simplify_users_of_iv(&mut e, header, phi, &mut info);
+        // `simplifyLoopIVs` passes no visitor: a cast of the IV is looked
+        // through.
+        changed |= simplify_users_of_iv(&mut e, header, phi, None);
     }
     changed
 }
@@ -215,7 +216,8 @@ pub fn simplified_and_extended(
     simplified_and_extended_in(&mut session, context, layout, function, declared, outer)
 }
 
-/// [`simplified_and_extended`] over `session`, whose expressions are valid for `function`.
+/// [`simplified_and_extended`] over `session`, whose expressions are valid for
+/// `function`.
 pub fn simplified_and_extended_in(
     session: &mut ScevSession,
     context: &mut Context,
@@ -245,11 +247,7 @@ pub fn simplified_and_extended_in(
         // form.
         let simple = {
             let cx = e.env.cx(&*e.context, &*e.function);
-            cx.loops
-                .get_loop_for(header)
-                .is_some_and(
-                    |found| found.is_loop_simplify_form(cx.function),
-                )
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
         };
         if simple {
             changed |= simplify_and_extend(&mut e, header, has_guards);
@@ -284,7 +282,7 @@ fn simplify_and_extend(
         while let Some(curr_iv) = loop_phis.pop() {
             // Information about sign/zero extensions of CurrIV.
             let mut info = WideIvInfo { narrow_iv: curr_iv, widest_native_type: None, is_signed: false };
-            changed |= simplify_users_of_iv(e, header, curr_iv, &mut info);
+            changed |= simplify_users_of_iv(e, header, curr_iv, Some(&mut info));
             if info.widest_native_type.is_some() {
                 wide_ivs.push(info);
             }
@@ -308,7 +306,7 @@ fn simplify_users_of_iv(
     e: &mut Edit,
     header: BlockId,
     curr_iv: InstId,
-    info: &mut WideIvInfo,
+    mut info: Option<&mut WideIvInfo>,
 ) -> bool {
     let Some(result) = e.function.instruction(curr_iv).result else { return false };
     {
@@ -370,7 +368,9 @@ fn simplify_users_of_iv(
             push_iv_users_of(e, header, iv_operand, &mut simplified, &mut simple_iv_users);
         }
 
-        if let Opcode::Cast(_) = e.function.instruction(use_inst).opcode {
+        if let Opcode::Cast(_) = e.function.instruction(use_inst).opcode
+            && let Some(info) = info.as_deref_mut()
+        {
             visit_iv_cast(e, use_inst, info);
             continue;
         }
@@ -440,7 +440,7 @@ fn eliminate_iv_user(
 /// decides, or gives it the `samesign` flag.
 fn eliminate_iv_comparison_edit(
     e: &mut Edit,
-    _header: BlockId,
+    header: BlockId,
     icmp: InstId,
     iv_operand: InstId,
     changed: &mut bool,
@@ -500,6 +500,10 @@ fn eliminate_iv_comparison_edit(
         *changed = true;
         return;
     }
+    if make_iv_comparison_invariant(e, header, icmp, iv_operand) {
+        *changed = true;
+        return;
+    }
     // Set the samesign flag on the compare if legal, and canonicalize to the
     // unsigned variant (for signed compares) hoping that it will open the doors
     // for other optimizations.
@@ -517,6 +521,63 @@ fn eliminate_iv_comparison_edit(
         e.function.set_flags(icmp, flags);
         *changed = true;
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L204
+/// `makeIVComparisonInvariant`: a comparison of an IV that is the same on every
+/// iteration but the first (or the last) is rewritten to compare loop-invariant
+/// values, computed in the preheader. Whether it was.
+fn make_iv_comparison_invariant(
+    e: &mut Edit,
+    header: BlockId,
+    icmp: InstId,
+    iv_operand: InstId,
+) -> bool {
+    use llrm_analysis::scev::expand_cost::MachineCosts;
+    let (invariant, preheader_term) = {
+        let cx = e.env.cx(&*e.context, &*e.function);
+        let Some(l) = cx.loops.get_loop_for(header) else { return false };
+        let Some(preheader) = l.get_loop_preheader(cx.function) else { return false };
+        let instruction = cx.function.instruction(icmp);
+        let Opcode::ICmp(mut pred) = instruction.opcode else { return false };
+        let Some(iv_result) = cx.function.instruction(iv_operand).result else { return false };
+        let mut iv_oper_idx = 0;
+        if Operand::Value(iv_result) != instruction.operands[0] {
+            // Swapped
+            iv_oper_idx = 1;
+            pred = pred.swapped();
+        }
+        // The SCEVs of the compare's operands, in the context of the current
+        // loop.
+        let icmp_loop =
+            cx.function.parent(icmp).and_then(|block| cx.loops.get_loop_for(block)).map(|one| one.get_header());
+        let s = e.se.get_scev_at_scope_of_value(&cx, instruction.operands[iv_oper_idx], icmp_loop).scev;
+        let x = e.se.get_scev_at_scope_of_value(&cx, instruction.operands[1 - iv_oper_idx], icmp_loop).scev;
+        let Some(found) = e.se.get_loop_invariant_predicate(&cx, pred, s, x, header, Some(icmp)) else {
+            return false;
+        };
+        // Do not generate something ridiculous.
+        let Some(term) = cx.function.terminator(preheader) else { return false };
+        let tti = MachineCosts { tti: e.outer.target().tti(), minimum_size: false };
+        let expander = llrm_analysis::scev::expander::Expander::new("indvars");
+        if expander.is_high_cost_expansion(&cx, e.se, &[found.lhs, found.rhs], header, 2 * 4, &tti, term)
+            || !expander.is_safe_to_expand_at(&cx, e.se, found.lhs, term)
+            || !expander.is_safe_to_expand_at(&cx, e.se, found.rhs, term)
+        {
+            return false;
+        }
+        (found, term)
+    };
+    e.rewriter.set_insert_point(preheader_term);
+    let scev_ty = { e.se.type_of(invariant.lhs) };
+    let new_lhs =
+        e.rewriter.expand_code_for(&e.env, e.context, e.declared, e.function, e.se, invariant.lhs, Some(scev_ty));
+    let new_rhs =
+        e.rewriter.expand_code_for(&e.env, e.context, e.declared, e.function, e.se, invariant.rhs, Some(scev_ty));
+    e.function.set_icmp_predicate(icmp, invariant.pred);
+    e.function.set_operand(icmp, 0, new_lhs);
+    e.function.set_operand(icmp, 1, new_rhs);
+    true
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L145
