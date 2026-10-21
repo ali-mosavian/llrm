@@ -1199,6 +1199,47 @@ mod tests {
         assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
     }
 
+    /// A local range may take the register of a cheaper local one when that one
+    /// can move to a free register (`canReassign`, on in the pin: the subtarget
+    /// answers true). Without it the heavier range took the first register it
+    /// found and the other range, with a single register to go to, was spilled.
+    #[test]
+    fn test_a_local_range_is_evicted_when_it_can_move_to_a_free_register() {
+        let none = || Arc::new(Insn::new(0, None, None, vec![], vec![]));
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        // 1 and 2 are long and lightly used (1 more than 2); 3 is short and
+        // heavy.
+        let mut insns = vec![insn(&[1], &[]), insn(&[2], &[]), insn(&[3], &[])];
+        insns.extend((0..4).map(|_| insn(&[], &[3])));
+        insns.push(insn(&[], &[1]));
+        insns.extend((0..11).map(|_| none()));
+        insns.extend([insn(&[], &[1]), insn(&[], &[1]), insn(&[], &[2])]);
+        let body = LirBody::new(
+            "reassign",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |value: u32| match value {
+            1 => vec![RegId::EAX],
+            2 => vec![RegId::EBX, RegId::ECX],
+            3 => vec![RegId::EAX, RegId::EBX],
+            _ => vec![RegId::EAX],
+        };
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+            sets: None,
+        };
+        let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+        assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
+    }
+
     /// A range live at the two ends of a function and not between them was
     /// checked against every call between: a step per call in the hole
     /// (`reg_mask_clobbered`: 8.4 M of d_faces' register allocation). The calls
