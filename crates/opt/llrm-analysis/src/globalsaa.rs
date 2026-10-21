@@ -364,7 +364,8 @@ pub fn analysis(
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found = found_with(module, &program, &elsewhere, Some(&mut memo.per));
+    let forged = *analyses.get::<crate::manager::ForgedSelectors>(module);
+    let found = found_with(module, &program, &elsewhere, forged, Some(&mut memo.per));
     *analyses.memo::<Bodies>() = memo;
     found
 }
@@ -376,13 +377,14 @@ pub fn found(
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
 ) -> Result<Globals, String> {
-    found_with(module, program, elsewhere, None)
+    found_with(module, program, elsewhere, crate::forging::forges_selector(module, program.spaces), None)
 }
 
 fn found_with(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
+    forged: bool,
     mut kept: Option<&mut IndexMap<GlobalId, (Mark, Rc<Contribution>)>>,
 ) -> Result<Globals, String> {
     let (named, writes) = promised(module, &program.runtime);
@@ -446,6 +448,12 @@ fn found_with(
     let held = held_from(module, retained);
     tracked.retain(|one| !held.contains(one));
     joined.retain(|one| !held.contains(one));
+    // A pointer forged into the data segment reaches any global, one whose
+    // address nobody computed among them (`forging`).
+    if forged {
+        tracked.clear();
+        joined.clear();
+    }
     let mut taken = referenced_from(module, plain);
     taken.extend(&elsewhere.taken);
     let entries = bodies

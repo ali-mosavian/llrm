@@ -717,3 +717,68 @@ b3:
     assert!(!before.tracked(GlobalId(0)) && before.tracked(GlobalId(1)));
     assert!(!before.covers(&after));
 }
+
+/// `GlobalsAA` of the one-module program `text` on real mode.
+fn globals_on_dos(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A body that makes a far pointer from `selector`, an `i16`, and reads a
+/// byte through it, beside `@a`, an internal global nobody takes the address
+/// of (`rest` follows).
+fn forged_over_a(
+    selector: &str,
+    rest: &str,
+) -> crate::globalsaa::Globals {
+    globals_on_dos(&format!(
+        "{DOS}@a = internal global [8 x i8] zeroinitializer
+@w = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {{
+b0:
+  %s = inttoptr i16 {selector} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %v = load volatile i8, ptr addrspace(1) %p
+  %w = load i16, ptr @a
+  ret i16 %w
+}}
+{rest}"
+    ))
+}
+
+/// far6.bas: z, a DIM SHARED whose address nobody took, was promoted to a
+/// register (z's loads 4 -> 1) while `DEF SEG = VARSEG(w)` and a POKE at a
+/// scanned offset wrote it: 21257 where BC printed 100. A selector made of an
+/// integer that is no plain number may name the data segment, so no global is
+/// reached by name only; a plain number names a segment no object occupies.
+#[test]
+fn a_selector_forged_from_a_computed_integer_leaves_no_global_tracked() {
+    let a = GlobalId(0);
+    assert!(forged_over_a("-18432", "").tracked(a), "premise: a numeric segment (&HB800) forges nothing");
+    assert!(!forged_over_a("%n", "").tracked(a), "a selector computed from a parameter");
+    let varseg = "ptrtoint (ptr addrspace(2) addrspacecast (ptr @w to ptr addrspace(2)) to i16)";
+    assert!(!forged_over_a(varseg, "").tracked(a), "VARSEG(w): the data segment's own value");
+}
+
+/// The runtime's bodies come `available_externally` and are no forger of the
+/// program's globals (`!llrm.named` is the same trust boundary).
+#[test]
+fn a_runtime_body_that_forges_a_selector_does_not_untrack_the_programs_globals() {
+    let runtime = "
+define available_externally i16 @rt(i16 %n) {
+b0:
+  %s = inttoptr i16 %n to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  %z = zext i8 %v to i16
+  ret i16 %z
+}
+";
+    assert!(forged_over_a("-18432", runtime).tracked(GlobalId(0)));
+}

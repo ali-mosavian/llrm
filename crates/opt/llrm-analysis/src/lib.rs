@@ -119,6 +119,7 @@ pub mod effects;
 pub mod equivalence;
 pub mod floatbounds;
 pub mod floatfacts;
+pub mod forging;
 pub mod frameescape;
 pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
