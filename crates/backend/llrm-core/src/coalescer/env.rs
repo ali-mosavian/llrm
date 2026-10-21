@@ -4,7 +4,9 @@
 //! `TargetEnv` answers `CoalescerEnv::can_share` from the old coalescer's own
 //! facts: two values may share a register when the registers each may take
 //! (their class palettes) have one in common and they are not pinned to
-//! different registers. `joined` numbers the body, builds its live intervals,
+//! different registers. A join narrows the surviving value's palette to the
+//! registers both had, so the next join is judged against the merged value.
+//! `joined` numbers the body, builds its live intervals,
 //! runs the driver and returns the body with the copies joined away.
 //! `LLRM_CHECK_LIVEINTERVALS=1` checks every interval the joins left against
 //! one made afresh (points live, touching segments as one).
@@ -22,6 +24,7 @@
 //! # Used by
 //! `backend::coalesce`.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
@@ -34,7 +37,7 @@ use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
 pub struct TargetEnv {
-    pub palettes: IndexMap<u32, BTreeSet<RegId>>,
+    pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
 }
@@ -54,9 +57,25 @@ impl CoalescerEnv for TargetEnv {
                 return false;
             }
         }
-        match (self.palettes.get(&a), self.palettes.get(&b)) {
+        let palettes = self.palettes.borrow();
+        match (palettes.get(&a), palettes.get(&b)) {
             (Some(x), Some(y)) => x.intersection(y).next().is_some(),
             _ => true,
+        }
+    }
+
+    fn narrow(
+        &self,
+        dst: u32,
+        src: u32,
+    ) {
+        let mut palettes = self.palettes.borrow_mut();
+        let Some(from) = palettes.get(&src).cloned() else { return };
+        match palettes.get_mut(&dst) {
+            Some(into) => into.retain(|register| from.contains(register)),
+            None => {
+                palettes.insert(dst, from);
+            }
         }
     }
 }
