@@ -1589,7 +1589,7 @@ fn resumable_groups(
     for block in &function.blocks {
         let (mut read, mut wrote): (HashSet<usize>, HashSet<usize>) = Default::default();
         for one in &block.instructions {
-            let mut reads = |operand: &Operand, read: &mut HashSet<usize>, wrote: &HashSet<usize>| {
+            let reads = |operand: &Operand, read: &mut HashSet<usize>, wrote: &HashSet<usize>| {
                 if let Some((at, _)) = named(operand) {
                     if !wrote.contains(&at) {
                         read.insert(at);
