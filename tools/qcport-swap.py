@@ -8,8 +8,8 @@ Every module but MODULE is built once by BASE at -O2; each arm swaps in MODULE b
 executes in the dosrun emulator on virtual time and prints the instructions it executed, the md5 of each arm's EXE and of MODULE's object.
 BASE runs twice: the repeat must match the first within 0.001% (the work directory's path moves the count by ~100), and arms with the same EXE
 must match exactly, or the instrument is wrong.
-Arms that draw a different frame or polygon count did different work: no comparison is made. Per-function counts are not read (the
-emulator's profile is unsized for QCport).
+Arms that draw a different frame or polygon count did different work: no comparison is made. Per-function counts (the emulator's profile, unsized for QCport: trust a total, not a split) are flagged only above the
+largest move of a function between BASE and its repeat, whose objects are the same: EMS paging order moves millions in balanced pairs.
 """
 from __future__ import annotations
 
@@ -42,6 +42,41 @@ def verdict(arms: list[dict]) -> list[str]:
     if len(work) > 1:
         problems.append("the arms drew different work (frames, polys): " + ", ".join(f"{one['name']} {one['frames']}/{one['polys']}" for one in arms))
     return problems
+
+
+def functions_of(events: str) -> dict[str, int]:
+    """The emulator's profile: instructions executed in each function itself, by name."""
+    out: dict[str, int] = {}
+    for line in events.splitlines():
+        if '"ev":"profile"' in line:
+            out.update({one["name"]: one["self"] for one in json.loads(line)["functions"]})
+    return out
+
+
+def deltas(
+    base: dict[str, int],
+    other: dict[str, int],
+) -> dict[str, int]:
+    return {name: other.get(name, 0) - count for name, count in base.items() if other.get(name, 0) != count}
+
+
+def noise(
+    base: dict[str, int],
+    again: dict[str, int],
+) -> tuple[int, int]:
+    """What a run of identical objects moves: the sum of the rises and of the falls of its functions. EMS paging order moves
+    millions between functions in balanced pairs (QGLGEMMAP +7.4M, QGLGEMFREE -7.4M) with the objects the same."""
+    moved = deltas(base, again).values()
+    return sum(one for one in moved if one > 0), -sum(one for one in moved if one < 0)
+
+
+def flagged(
+    base: dict[str, int],
+    other: dict[str, int],
+    floor: int,
+) -> dict[str, int]:
+    """The functions whose change is more than the noise of identical objects."""
+    return {name: change for name, change in deltas(base, other).items() if abs(change) > floor}
 
 
 def report(arms: list[dict]) -> str:
@@ -102,14 +137,25 @@ def main() -> int:
         if not (side / "QCPORT.EXE").exists():
             sys.exit(f"{name}: link failed")
         data = tuple(side / one for one in qr.DATA if (side / one).exists())
-        job = dosbatch.Job("J", "exe", side / "QCPORT.EXE", files=data, args=qr.ARGUMENTS, screen=True, budget_ms=120_000)
+        sidecar = work / f"map-{name}"
+        sidecar.mkdir()
+        shutil.copy(side / "QCPORT.MAP", sidecar / "J.MAP")
+        job = dosbatch.Job("J", "exe", side / "QCPORT.EXE", files=(*data, sidecar / "J.MAP"), args=qr.ARGUMENTS, screen=True, budget_ms=120_000, profile=True)
         done = dosbatch.run([job], work / f"run-{name}", conf=dosbatch.CONF.replace("[mixer]\nnosound=true\n", "[mixer]\nnosound=true\n[sblaster]\nsbtype=sb16\nsbbase=220\nirq=7\ndma=1\nhdma=5\n"))["J"]
         if done.status != "ok":
             sys.exit(f"{name}: run {done.status} {done.detail}")
         seen = dict(re.findall(r"^(frames|polys)\s+(\d+)", (work / f"run-{name}" / "BENCH.TXT").read_text(), re.M))
         results.append({"name": name, "exe": md5(side / "QCPORT.EXE"), "obj": md5(side / f"{module}.obj"), "frames": seen.get("frames"), "polys": seen.get("polys"),
-                        "instructions": instructions_of((work / f"run-{name}" / "events.txt").read_text())})
+                        "instructions": instructions_of((work / f"run-{name}" / "events.txt").read_text()),
+                        "functions": functions_of((work / f"run-{name}" / "events.txt").read_text())})
     print(report(results))
+    again = results[1]["functions"]
+    floor = max((abs(one) for one in deltas(results[0]["functions"], again).values()), default=0)
+    rises, falls = noise(results[0]["functions"], again)
+    print(f"noise of identical objects (base-again): functions up {rises}, down {falls}; a function is flagged above {floor}")
+    for one in results[2:]:
+        for name, change in sorted(flagged(results[0]["functions"], one["functions"], floor).items(), key=lambda pair: -abs(pair[1]))[:10]:
+            print(f"  {one['name']}: {name} {change:+}")
     problems = verdict(results)
     print(*problems, sep="\n")
     if not problems:

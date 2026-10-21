@@ -48,3 +48,20 @@ def test_the_end_event_is_the_count_and_a_run_without_one_is_refused():
     except RuntimeError:
         return
     raise AssertionError("no end event accepted")
+
+
+def test_two_identical_runs_have_no_function_above_their_own_noise():
+    """EMS paging order moved QGLGEMMAP +7.4M and QGLGEMFREE -7.4M between runs of byte-identical objects: a per-function
+    delta below that is not a finding."""
+    base = {"QGLGEMMAP": 20_000_000, "QGLGEMFREE": 9_000_000, "_d_draw_faces@3": 24_000_000}
+    again = {"QGLGEMMAP": 27_400_000, "QGLGEMFREE": 1_600_000, "_d_draw_faces@3": 24_000_100}
+    rises, falls = qcport_swap.noise(base, again)
+    assert (rises, falls) == (7_400_100, 7_400_000)
+    floor = max(abs(one) for one in qcport_swap.deltas(base, again).values())
+    assert qcport_swap.flagged(base, again, floor) == {}
+
+
+def test_a_change_above_the_noise_is_flagged_and_one_below_it_is_not():
+    base = {"QGLGEMMAP": 20_000_000, "_d_draw_faces@3": 24_000_000, "_clip_w@3": 100_000}
+    arm = {"QGLGEMMAP": 20_100_000, "_d_draw_faces@3": 33_000_000, "_clip_w@3": 150_000}
+    assert qcport_swap.flagged(base, arm, 7_400_000) == {"_d_draw_faces@3": 9_000_000}
