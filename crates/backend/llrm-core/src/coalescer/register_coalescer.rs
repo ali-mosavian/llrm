@@ -267,6 +267,13 @@ fn re_materialize_def(
     copy: InstrKey,
 ) -> bool {
     let copy_insn = Arc::clone(lis.instr(copy));
+    // DEVIATE C11: a member of a parallel copy stays one. The move that takes
+    // its place is no member, so it writes before the others read: seed 91 of
+    // the generated bodies stored 0x45 where the program stored 0. Exit:
+    // parallel copies sequenced before the coalescer (D-F).
+    if copy_insn.group.is_some() {
+        return false;
+    }
     let Some((dst, src)) = full_copy(&copy_insn) else { return false };
     let at = lis.indexes.get_instruction_index(copy);
     let Some(value) = lis.interval(src.value).query(&at).value_in().filter(|vn| !vn.is_phi_def() && !vn.is_unused())
@@ -286,7 +293,9 @@ fn re_materialize_def(
     let block = lis.indexes.get_mbb_from_index(&at);
     // The copy's value is defined at the copy's index; the new instruction
     // takes that index over.
-    lis.rewrite_instr(block, copy, def_insn.renamed(&|v| if v == src.value { dst.value } else { v }));
+    let made = def_insn.renamed(&|v| if v == src.value { dst.value } else { v });
+    let made_id = made.id();
+    lis.rewrite_instr(block, copy, made);
     state.erased.insert(copy);
     // The source interval can become smaller because we removed a use, and
     // its definition may now be dead.
@@ -295,6 +304,20 @@ fn re_materialize_def(
         if lis.all_defs_are_dead(key) {
             state.erased.insert(key);
             dead.extend(lis.erase_dead_def(key));
+        }
+    }
+    // The move owns the definition's bytes only where the definition went; else
+    // two instructions claim them.
+    if !state.erased.contains(&def) {
+        let one = Arc::clone(lis.instr(made_id));
+        if let Some((from, to)) = one.covers.filter(|(from, to)| from != to) {
+            let _ = to;
+            let mut anchor = (*one).clone();
+            anchor.covers = Some((from, from));
+            let anchor = Arc::new(anchor);
+            let new = anchor.id();
+            lis.rewrite_instr(block, made_id, anchor);
+            state.moved.insert(made_id, new);
         }
     }
     true
