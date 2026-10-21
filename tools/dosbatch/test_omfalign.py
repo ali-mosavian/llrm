@@ -98,3 +98,20 @@ def test_a_segment_is_a_multiple_of_a_dword_long_so_the_next_objects_variables_s
     one = obj(tmp_path / "n.obj", ("_BSS", "BSS", 5), ("CODE1", "CODE", 3), size=265)
     (copy,) = omfalign.dword_laid_out([one], tmp_path / "out")
     assert sizes(copy) == {"_BSS": 268, "CODE1": 268} and sizes(one) == {"_BSS": 265, "CODE1": 265}
+
+
+def test_two_images_linked_at_once_do_not_share_their_object_copies(tmp_path):
+    """The bench builds its rows in threads in one work directory: the copies were named by their place in the link, so two rows wrote 014-rtterm.obj
+    under each other's jwlink (E2146, `an invalid object file`) and the rows had no build."""
+    program = obj(tmp_path / "p.obj", ("CONST2", "DATA", 3))
+    recipe = {"first": [], "last": [], "final": [], "format": ["format", "os2", "le"]}
+    commands: list[list[str]] = []
+    with (
+        mock.patch.object(dosbatch, "_host", side_effect=commands.append),
+        mock.patch.object(dosbatch, "target_link", return_value=recipe),
+        mock.patch.object(dosbatch, "os_defines", return_value=()),
+    ):
+        for name in ("a", "b"):
+            dosbatch.link_target("t", program, tmp_path / f"{name}.exe", tmp_path, image=tmp_path / f"{name}.elf")
+    copies = [Path(command[command.index("file") + 1]) for command in commands if "elf" in command]
+    assert len(copies) == 2 and copies[0] != copies[1] and copies[0].parent != copies[1].parent
