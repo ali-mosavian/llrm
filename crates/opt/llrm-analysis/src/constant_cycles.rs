@@ -494,9 +494,10 @@ pub fn propagated(
             if changed || !pending.is_empty() {
                 continue;
             }
-            // The seeds are no longer the fixed point of the body's constants (the
-            // manager keeps none, `Registers::run`): a body with no open phi may
-            // come to more than its seeds, and may not come to less or to other.
+            // The seeds are no longer the fixed point of the body's constants
+            // (the manager keeps none, `Registers::run`): a body
+            // with no open phi may come to more than its seeds, and
+            // may not come to less or to other.
             assert!(
                 open || seeds.iter().all(|(value, fact)| facts.get(value) == Some(fact)),
                 "constant cycles: a body with no open phi contradicted its seeds"

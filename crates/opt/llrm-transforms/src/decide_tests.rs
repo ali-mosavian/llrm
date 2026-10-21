@@ -120,7 +120,8 @@ b3:
     );
 }
 
-/// A switch on a constant is a jump to its case (the constant is folded into the operand, as the pin's IRBuilder leaves it).
+/// A switch on a constant is a jump to its case (the constant is folded into
+/// the operand, as the pin's IRBuilder leaves it).
 #[test]
 fn test_a_switch_on_a_known_number_is_a_jump_to_its_case() {
     check(

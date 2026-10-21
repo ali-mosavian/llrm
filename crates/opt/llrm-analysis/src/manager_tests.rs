@@ -191,7 +191,10 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
                 "{at}"
             );
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
-            assert!(analyses.get::<Registers>(&module.context, &layout, function).is_empty(), "{at}: the manager keeps no map of constants");
+            assert!(
+                analyses.get::<Registers>(&module.context, &layout, function).is_empty(),
+                "{at}: the manager keeps no map of constants"
+            );
             assert_eq!(
                 analyses
                     .get::<DominatedEdges>(&module.context, &layout, function)
@@ -450,7 +453,8 @@ fn a_change_to_a_loops_bound_reaches_only_that_loop() {
         let before = analyses.get::<super::Counted>(context, &layout, function);
         assert_eq!(trips(&before, "h1", function), Some(crate::num::Num::from(5)));
         let d = value(function, "d");
-        let d = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(d)).unwrap();
+        let d =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(d)).unwrap();
         let seven = Operand::Constant(context.int(function.value(value(function, "j")).ty, 7));
         function.set_operand(d, 1, seven);
         analyses.invalidate(function, &PreservedAnalyses::none());
