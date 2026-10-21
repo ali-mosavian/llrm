@@ -708,6 +708,14 @@ def test_a_perf_pr_without_a_rows_line_is_refused():
     assert not ps.perf_needs_rows("", "")
 
 
+def test_a_feat_pr_that_wires_a_pass_into_the_pipeline_needs_a_rows_line():
+    """#3344 (feat: LoopInterchange, on at every level) had no rows requirement because its title was feat(: wiring pipeline.rs now needs a `Rows:` line."""
+    wiring = ["crates/opt/llrm-transforms/src/pipeline.rs", "crates/opt/llrm-transforms/src/loopinterchange.rs"]
+    assert ps.perf_needs_rows("feat(loopinterchange): the pin's pass", "Owner: x", wiring)
+    assert not ps.perf_needs_rows("feat(loopinterchange): the pin's pass", "Rows: pair p, 852 rows identical", wiring)
+    assert not ps.perf_needs_rows("feat(ivdescriptors): a port", "Owner: x", ["crates/opt/llrm-analysis/src/ivdescriptors.rs"])
+
+
 def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
     """A refactor( PR with a pass-code diff and no Rows line is refused; docs/test-only refactors, fix( and feat( are not."""
     code = ["crates/opt/llrm-analysis/src/globalsaa.rs", "docs/x.md"]
