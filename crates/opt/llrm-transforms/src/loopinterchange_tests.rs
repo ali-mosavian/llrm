@@ -225,3 +225,80 @@ fn every_run_of_the_pins_tests_makes_what_the_pin_makes() {
     }
     assert!(wrong.is_empty(), "differ from the pin: {wrong:?}");
 }
+
+/// `A[a * i]` is written on one cell every iteration if `%a` is zero. DA
+/// answers `[0]` for the store against itself under the runtime assumption
+/// `%a != 0` and `[S *]` without. `depends` was asked with assumptions on, so
+/// the dependence matrix took the first as a fact and read the nest as legal
+/// to go on with; the pin asks without (`UnderRuntimeAssumptions = false`) and
+/// gives up on the matrix.
+#[test]
+fn a_dependence_that_needs_a_runtime_assumption_gives_up_the_matrix() {
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::basicaa::BasicAA;
+    use llrm_analysis::depanalysis::DependenceInfo;
+    use llrm_analysis::scev::{Cx, ScalarEvolution};
+    use llrm_analysis::typebasedaa::TypeBasedAA;
+    use llrm_mir::domtree::DomTree;
+    use llrm_mir::loopinfo::LoopInfo;
+    use llrm_mir::valuetracking::AssumptionCache;
+
+    let text = r#"define void @f(ptr noalias %A, ptr noalias %B, i32 %a) {
+entry:
+  br label %outer
+
+outer:
+  %j = phi i32 [ 0, %entry ], [ %j.next, %outer.latch ]
+  br label %inner
+
+inner:
+  %i = phi i32 [ 0, %outer ], [ %i.next, %inner ]
+  %offset = phi i32 [ 0, %outer ], [ %offset.next, %inner ]
+  %gep.1 = getelementptr inbounds i8, ptr %A, i32 %offset
+  store i8 1, ptr %gep.1
+  %row = shl nuw nsw i32 %i, 6
+  %idx = add nuw nsw i32 %row, %j
+  %gep.2 = getelementptr inbounds i8, ptr %B, i32 %idx
+  store i8 2, ptr %gep.2
+  %i.next = add nuw nsw i32 %i, 1
+  %offset.next = add nuw nsw i32 %offset, %a
+  %ec = icmp eq i32 %i.next, 5
+  br i1 %ec, label %outer.latch, label %inner
+
+outer.latch:
+  %j.next = add nuw nsw i32 %j, 1
+  %ec2 = icmp eq i32 %j.next, 8
+  br i1 %ec2, label %exit, label %outer
+
+exit:
+  ret void
+}
+"#;
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (_, _, function) = module.functions().find(|(_, _, f)| !f.layout().is_empty()).expect("a body");
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
+    let mut aa = AggregateAA::new();
+    aa.add_aa_result(BasicAA::new(&unit));
+    aa.add_aa_result(TypeBasedAA::new(&unit));
+    let options = Options::default();
+    let mut info = DependenceInfo::new(&mut aa, &unit, &cx, options.da);
+    let mut se = ScalarEvolution::new();
+    let outermost = loops.top_level_loops().next().expect("a nest");
+    let mut matrix = Vec::new();
+    let found = super::populate_dependency_matrix(&mut matrix, 2, outermost, &mut info, &mut se, &cx, &options);
+    assert!(!found, "{matrix:?}");
+}

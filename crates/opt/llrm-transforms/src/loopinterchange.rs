@@ -283,7 +283,7 @@ fn populate_dependency_matrix<A: llrm_analysis::aa::AAResults>(
                 continue;
             }
             // Track output, flow and anti dependencies.
-            let Some(mut d) = info.depends(se, src, dst, true) else { continue };
+            let Some(mut d) = info.depends(se, src, dst, false) else { continue };
             // A negative direction vector is made non-negative.
             d.normalize(se, cx);
             let levels = d.levels();
