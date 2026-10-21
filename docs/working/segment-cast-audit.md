@@ -43,7 +43,7 @@ QB programs: three BASIC probes (`VARSEG(a)` then POKE onto `b`; far6 with `VARP
 | `globals.rs` `target()` | names the global behind a constant address (data initializers, isel constants) | unsafe in principle for a far pointer initialized from a selector; unreachable: selector values come from `VARSEG` and `DEF SEG`, computed at run time, never in a data initializer or a constant far pointer (isel `global()` lowers a constant selector cast to selector:0) |
 | `sroa.rs` | a cast of an alloca aborts the slice build | safe |
 | `mem2reg.rs` | a cast of an alloca is allowed only where only lifetime markers use it | safe |
-| `memcpyopt.rs` `strip_pointer_casts` (7 identity comparisons) | strips casts, selector casts included, to compare a call argument with the copy's source or destination | unsafe in principle; unreachable: it needs a copy or call argument that is the selector-made far pointer of the slot, and selector values only reach `PEEK` and `POKE` (single volatile bytes) |
+| `memcpyopt.rs` `strip_pointer_casts` (7 identity comparisons) | strips casts, selector casts included, to compare a call argument with the copy's source or destination | green probe, pinned: `test_a_call_through_the_selector_of_a_local_is_not_forwarded_into_its_copy`: a direct argument is forwarded into the copy, one that goes through the local's selector is not, with or without `ni:` (the pass bails on an argument whose pointer chain crosses a space). Two other shapes (a memcpy of `@a` onto its selector, a far argument) never fired in either layout either |
 | `memcpyopt.rs` use scan at L1272 | follows the uses of the source through casts | safe (follows uses) |
 | `deadstore.rs` | follows the uses of an alloca through casts to see it leave the function | safe (over-approximates) |
 | `tailcallelim.rs` | alloca-derived values through casts | safe (follows uses) |
@@ -51,4 +51,4 @@ QB programs: three BASIC probes (`VARSEG(a)` then POKE onto `b`; far6 with `VARP
 | `combine_loadstore.rs` | users of an alloca through casts, stores only | safe (follows uses; any other user ends it) |
 | `spill.rs` (L567, L591, L710, L750, L1115) | whether a value is a frame address, and the cost of rebuilding it | cost heuristics, no identity claim: safe |
 
-No program was found that reaches an unsafe site; the three BASIC probes and the MIR tests are above. If a pass starts to compare pointers by their stripped root, the rule is `valuetracking::object_below`.
+No program was found that reaches an unsafe site; the three BASIC probes and the MIR tests are above (memcpyopt: a green probe, pinned). If a pass starts to compare pointers by their stripped root, the rule is `valuetracking::object_below`.
