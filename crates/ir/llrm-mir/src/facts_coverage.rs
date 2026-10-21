@@ -90,6 +90,10 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("cold", By(&["test_a_frontend_cold_block_stays_cold_in_the_rich_mir"])),
     ("threeway", Unread("qcport-rich: a pass that folds a compare of a three-way result")),
     (
+        "flagsresult",
+        By(&["a_flags_result_read_other_than_by_a_comparison_is_refused", "a_sext_of_a_flags_compare_stays_a_compare"]),
+    ),
+    (
         "stackcheck",
         By(&[
             "the_limit_and_handler_come_from_the_runtime_description",

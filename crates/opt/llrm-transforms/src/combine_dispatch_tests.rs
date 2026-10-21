@@ -167,3 +167,22 @@ fn visit_or_isolates_the_lowest_set_bit() {
         &[" or i32"],
     );
 }
+
+/// B$SCMP's result is the machine flags: `sext (icmp slt v, 0)` became
+/// `ashr v, 15`, which instruction selection cannot read (str_slices and
+/// every string compare at -O1 failed to compile).
+#[test]
+fn a_sext_of_a_flags_compare_stays_a_compare() {
+    let mut module = parsed(
+        "declare i16 @cmp(ptr, ptr) flagsresult\n\
+         define i16 @f(ptr %a, ptr %b) {\nb0:\n  %v = call i16 @cmp(ptr %a, ptr %b)\n  %c = icmp slt i16 %v, 0\n  %r = sext i1 %c to i16\n  ret i16 %r\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
+    let out = printed(&module);
+    assert!(out.contains("icmp slt i16 %v, 0") && out.contains("sext i1"), "{out}");
+    assert!(!out.contains("ashr"), "{out}");
+}
