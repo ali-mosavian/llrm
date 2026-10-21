@@ -3160,3 +3160,43 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
         .collect::<Vec<_>>();
     assert!(!far.is_empty() && far.iter().all(|one| !one.contains("!tbaa")), "{sub}");
 }
+
+/// The `llrm.qb.frame` calls (the variables handed to the handler) of `name`.
+fn handed_variables(
+    source: &[u8],
+    name: &str,
+) -> usize {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "HANDED.BAS", source);
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    let start = text
+        .find(&format!("define "))
+        .and_then(
+            |_| text.match_indices("define ")
+                .map(|(at, _)| at)
+                .find(|at| text[*at..].lines().next().is_some_and(|line| line.contains(&format!("@{name}(")))),
+        );
+    let start = start.expect("the function");
+    let body = &text[start..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    body.matches("@llrm.qb.frame(").count()
+}
+
+/// A local read only at a label that only RESUME reaches is handed to the
+/// handler; one not read after any statement is not (premise: the same SUB
+/// without the read of `c%` hands one fewer).
+#[test]
+fn test_a_local_read_at_a_resume_label_is_handed_to_the_handler() {
+    let reads = handed_variables(
+        b"DECLARE SUB Lab ()\nLab\nEND\nSUB Lab\nON LOCAL ERROR GOTO lh\nc% = 41 + INT(RND * 0)\nERROR 7\nEXIT SUB\ndone:\nPRINT c%\nEXIT SUB\nlh:\nRESUME done\nEND SUB\n",
+        "LAB",
+    );
+    let unread = handed_variables(
+        b"DECLARE SUB Lab ()\nLab\nEND\nSUB Lab\nON LOCAL ERROR GOTO lh\nc% = 41 + INT(RND * 0)\nERROR 7\nEXIT SUB\ndone:\nPRINT 0\nEXIT SUB\nlh:\nRESUME done\nEND SUB\n",
+        "LAB",
+    );
+    assert_eq!(reads, unread + 1, "handed with the read {reads}, without it {unread}");
+}
