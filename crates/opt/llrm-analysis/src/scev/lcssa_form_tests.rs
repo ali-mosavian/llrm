@@ -40,10 +40,13 @@ b2:
             .iter()
             .flat_map(|&block| function.iter_block(block))
             .find(|&inst| {
-                function.instruction(inst).result.is_some_and(|v| {
-                    matches!(function.value(v).def, ValueDef::Instruction(_))
-                        && function.value(v).name.as_deref() == Some("next")
-                })
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(
+                        |v| matches!(function.value(v).def, ValueDef::Instruction(_))
+                            && function.value(v).name.as_deref() == Some("next"),
+                    )
             })
             .expect("%next");
         form_lcssa_for_instructions(context, &DataLayout::default(), function, &loops, &tree, vec![def]);

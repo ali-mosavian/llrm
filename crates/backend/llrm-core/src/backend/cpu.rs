@@ -523,7 +523,18 @@ pub fn tuned_optimizing(
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive, rounds_float_spills);
+    let key = (
+        arch.name(),
+        name.to_owned(),
+        size,
+        search,
+        exhaustive,
+        routes,
+        optimized,
+        float_store,
+        aggressive,
+        rounds_float_spills,
+    );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
