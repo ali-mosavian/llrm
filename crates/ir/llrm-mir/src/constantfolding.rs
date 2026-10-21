@@ -676,7 +676,16 @@ fn strip_and_accumulate_constant_offsets(
                 }
                 value = source;
             }
-            Some(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value: source }) => value = source,
+            // A selector alone is no pointer into the object it was made from:
+            // back to far it is segment:0 (DEVIATE C1).
+            Some(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value: source }) => {
+                if pointer_space(context, ty_of(context, source))
+                    .is_some_and(|space| layout.is_non_integral_address_space(space))
+                {
+                    return value;
+                }
+                value = source
+            }
             _ => return value,
         }
     }
@@ -685,6 +694,7 @@ fn strip_and_accumulate_constant_offsets(
 /// `getUnderlyingObject` of a constant.
 fn get_underlying_object(
     context: &Context,
+    layout: &DataLayout,
     c: ConstantId,
 ) -> ConstantId {
     let mut value = c;
@@ -696,6 +706,12 @@ fn get_underlying_object(
             Some(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
             Some(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
                 if !is_pointer(context, ty_of(context, source)) {
+                    return value;
+                }
+                // A selector alone names no object (DEVIATE C1).
+                if pointer_space(context, ty_of(context, source))
+                    .is_some_and(|space| layout.is_non_integral_address_space(space))
+                {
                     return value;
                 }
                 value = source;
@@ -1309,7 +1325,7 @@ fn constant_fold_load_from_const_ptr_at(
     mut offset: u128,
     width: u32,
 ) -> Option<ConstantId> {
-    let underlying = get_underlying_object(context, ptr);
+    let underlying = get_underlying_object(context, env.layout, ptr);
     let (global, initializer) = definitive_constant_initializer(env, context, underlying)?;
     let stripped = strip_and_accumulate_constant_offsets(context, env.layout, ptr, &mut offset, width, true);
     if let ConstantKind::Global(found) = context.get(stripped).kind
