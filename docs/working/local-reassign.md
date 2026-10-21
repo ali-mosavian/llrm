@@ -35,3 +35,26 @@ Three modules are bigger (+2, +4, +4): game/weapons, ui/menu, ui/screen; ui/menu
 | LR-3 | game/weapons | +2 B | w-1 (greedy), 2026-10-31 |
 
 Not held conditions (oversight). Exit: the allocation order of the evicted local range, the same family as QO-1 (`qcport-os-rows.md`).
+
+## Oversight's sweep of d3f08d2438: QCport -Os object bytes, main / parent / head
+
+Source: `~/scratch/democheck-run/qcport-os-3446.tsv` (OMF object-file bytes of `llrm-c -Os`, 65 modules; llrm-c md5 main 56f120bb59fa, parent 804e487fd4c9, head 0eff6c50903f). Modules whose bytes differ between parent and head; the other 50 are equal.
+
+| module | main | parent | head | head - parent |
+|---|--:|--:|--:|--:|
+| bench | 3068 | 3120 | 3092 | -28 |
+| combat | 7499 | 7456 | 7446 | -10 |
+| demo | 7005 | 7427 | 7424 | -3 |
+| dl | 4625 | 4878 | 4881 | +3 |
+| ent | 10251 | 10492 | 10490 | -2 |
+| host | 33681 | 34934 | 34933 | -1 |
+| loadscr | 2171 | 2219 | 2217 | -2 |
+| mdl | 8204 | 8510 | 8508 | -2 |
+| mdl_ai | 25850 | 26522 | 26514 | -8 |
+| mod_tex | 2299 | 2445 | 2412 | -33 |
+| sbar | 4656 | 5008 | 5006 | -2 |
+| sc | 11678 | 12272 | 12268 | -4 |
+| screen | 8899 | 9294 | 9297 | +3 |
+| triggers | 6604 | 7137 | 7135 | -2 |
+| weapons | 15478 | 15442 | 15444 | +2 |
+| TOTAL (65) | 321280 | 329187 | 329098 | -89 |
