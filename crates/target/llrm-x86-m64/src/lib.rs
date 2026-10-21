@@ -330,7 +330,8 @@ mod tests {
     #[test]
     fn the_register_file_names_sysv_amd64s_roles() {
         assert_eq!((M64.frame_register(), M64.stack_pointer()), (RegId::RBP, RegId::RSP));
-        // Each is the root its family is named by and the quadword a prologue pushes.
+        // Each is the root its family is named by and the quadword a prologue
+        // pushes.
         let (roots, pushed): (Vec<RegId>, Vec<RegId>) = M64.callee_saved().into_iter().unzip();
         assert_eq!(roots, [RegId::EBX, RegId::R12D, RegId::R13D, RegId::R14D, RegId::R15D]);
         assert_eq!(pushed, [RegId::RBX, RegId::R12, RegId::R13, RegId::R14, RegId::R15]);

@@ -102,9 +102,10 @@ impl FunctionPass for LoopClosedSSA {
     fn run(
         &mut self,
         unit: &mut Unit,
-        _: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        match closed(unit.function) {
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        match closed_in(unit.function, &shape) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("lcssa: {error}"),
@@ -115,20 +116,36 @@ impl FunctionPass for LoopClosedSSA {
 /// `function` with every supported natural loop in closed SSA form; whether
 /// anything changed.
 pub fn closed(function: &mut Function) -> Result<bool, String> {
-    let opened = _opened(function)?;
-    Ok(formed(function)? | opened)
+    let shape = cfg::Shape::of(function);
+    closed_in(function, &shape)
+}
+
+/// [`closed`] over the `shape` the caller holds: the loops are found once.
+pub fn closed_in(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
+    let opened = _opened(function, shape)?;
+    Ok(formed_in(function, shape)? | opened)
 }
 
 /// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
 /// is taken away, as `closed` does first for the phis no loop closes at.
 pub fn formed(function: &mut Function) -> Result<bool, String> {
+    formed_in(function, &cfg::Shape::of(function))
+}
+
+fn formed_in(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
     let mut changed = false;
     // Loops come inner first. Closing an inner loop first makes its exit
     // value an ordinary definition in an enclosing loop.
     // The dominators of the body, found once for as long as no exit is merged.
     let mut dominance = None;
-    for loop_ in cfg::Shape::of(function).loops {
-        changed |= _closed_loop(function, &loop_, &mut dominance)?;
+    for loop_ in &shape.loops {
+        changed |= _closed_loop(function, loop_, &mut dominance)?;
     }
     Ok(changed)
 }
@@ -160,6 +177,44 @@ pub(crate) fn definitions(
     defined
 }
 
+/// A read of a loop's value from outside it: the block of the reader, and for
+/// a phi the block its input comes from.
+pub(crate) struct Read {
+    pub home: i64,
+    pub from: Option<i64>,
+}
+
+/// The values defined in `body` that a reader outside it reads, each with its
+/// block and the reads. Found from the uses of what the loop defines (LLVM's
+/// formLCSSA), not by reading every instruction outside for each loop.
+pub(crate) fn outside_reads(
+    function: &Function,
+    body: &llrm_mir::forest::Body,
+) -> BTreeMap<ValueId, (i64, Vec<Read>)> {
+    let mut found: BTreeMap<ValueId, (i64, Vec<Read>)> = BTreeMap::new();
+    for &at in body {
+        let block = cfg::block(at);
+        for inst in function.iter_block(block) {
+            let Some(value) = function.instruction(inst).result else { continue };
+            for one in function.users(value) {
+                let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
+                if body.contains(&home) {
+                    continue;
+                }
+                let user = function.instruction(one.user);
+                let from = if user.opcode == Opcode::Phi {
+                    let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
+                    Some(cfg::id(from))
+                } else {
+                    None
+                };
+                found.entry(value).or_insert_with(|| (cfg::id(block), Vec::new())).1.push(Read { home, from });
+            }
+        }
+    }
+    found
+}
+
 /// A new, unplaced phi of `value`'s type and name, without inputs yet.
 pub(crate) fn exit_phi(
     function: &mut Function,
@@ -182,10 +237,13 @@ pub(crate) fn place_phi(
 
 /// Without the phis outside any loop exit that name one value: no loop
 /// closes there any longer (unrolled or peeled away), and each is a copy.
-fn _opened(function: &mut Function) -> Result<bool, String> {
+fn _opened(
+    function: &mut Function,
+    shape: &cfg::Shape,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
-    for loop_ in cfg::Shape::of(function).loops {
+    for loop_ in &shape.loops {
         exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
     }
     let one = |function: &Function, phi: InstId| {
@@ -227,43 +285,31 @@ pub fn _closed_loop(
         return Ok(false);
     }
 
-    let defined = definitions(function, &loop_.body);
-    if defined.is_empty() {
+    // Phi inputs are used on their incoming edge.  A phi in the dedicated
+    // exit is already the LCSSA boundary, so only downstream phis count here.
+    // Found from the uses of what the loop defines (LLVM's formLCSSA), keeping
+    // only the values something outside reads, not every value the loop makes.
+    let mut escaping: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
+    for (value, (home, reads)) in outside_reads(function, &loop_.body) {
+        for read in reads {
+            let site = match read.from {
+                Some(_) if read.home == exit_at => continue,
+                Some(from) => from,
+                None => read.home,
+            };
+            escaping.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
+        }
+    }
+    if escaping.is_empty() {
         return Ok(false);
     }
 
-    // Phi inputs are used on their incoming edge.  A phi in the dedicated
-    // exit is already the LCSSA boundary, so only downstream phis count here.
-    // Found from the uses of what the loop defines (LLVM's formLCSSA), not by
-    // reading every instruction outside it for each loop.
-    let mut use_sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for &value in defined.keys() {
-        for one in function.users(value) {
-            let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
-            if loop_.body.contains(&home) {
-                continue;
-            }
-            let user = function.instruction(one.user);
-            let site = if user.opcode == Opcode::Phi {
-                let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
-                if home == exit_at {
-                    continue;
-                }
-                cfg::id(from)
-            } else {
-                home
-            };
-            use_sites.entry(value).or_default().insert(site);
-        }
-    }
-
     let dominance = &*dominance.get_or_insert_with(|| cfg::Dominance::of(function));
-    let crossing = use_sites
+    let crossing = escaping
         .iter()
-        .filter(|(value, sites)| {
-            !sites.is_empty()
-                && sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
-                && sources.iter().all(|&source| dominance.dominates(function, defined[*value], source))
+        .filter(|(_, (home, sites))| {
+            sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
+                && sources.iter().all(|&source| dominance.dominates(function, *home, source))
         })
         .map(|(value, _)| *value)
         .collect::<Vec<_>>();

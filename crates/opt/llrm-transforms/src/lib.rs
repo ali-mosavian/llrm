@@ -96,6 +96,7 @@ pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
+pub mod combine_branch;
 pub mod combine_build;
 pub mod combine_casts;
 #[cfg(test)]
@@ -104,15 +105,13 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
-#[cfg(test)]
-mod combine_semantics_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
-pub mod combine_icmp_const;
-pub mod combine_icmp_logic;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
+pub mod combine_icmp_const;
+pub mod combine_icmp_logic;
 pub mod combine_loadstore;
 pub mod combine_muldivrem;
 #[cfg(test)]
@@ -126,6 +125,8 @@ pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
+#[cfg(test)]
+mod combine_semantics_tests;
 pub mod combine_shared;
 pub mod combine_shifts;
 pub mod combine_sink;
@@ -133,7 +134,6 @@ pub mod combine_sink;
 mod combine_sink_tests;
 pub mod combine_sub;
 pub mod combine_visit_select;
-pub mod combine_branch;
 pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
@@ -210,19 +210,18 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
-pub mod runtimechecks;
 pub mod loopdeletion;
 pub mod loopidiom;
 pub mod loopidioms;
-pub mod loopversioning;
-pub mod looploadelim;
 pub mod loopinterchange;
 pub mod loopinterchange_transform;
+pub mod looploadelim;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopunroll;
 pub mod loopunrollpass;
+pub mod loopversioning;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -271,6 +270,7 @@ pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
 pub mod rotate;
+pub mod runtimechecks;
 pub mod sccp;
 pub mod sccpsolver;
 pub mod settled;

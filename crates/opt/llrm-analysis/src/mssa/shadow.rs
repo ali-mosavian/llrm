@@ -275,6 +275,33 @@ pub fn same_as_fresh(
     ))
 }
 
+/// Whether a kept graph's answer `kept` is safe against `fresh`'s walk `now`:
+/// the same access, or one `now` dominates. A use keeps the answer it had
+/// before an edit took a clobber away, later than a fresh walk's; an earlier
+/// one would let a pass move past a clobber. The pin returns a cached
+/// optimized access without walking again (MemorySSA.cpp:2556), and resets it
+/// only for the uses an edit may have given a new clobber
+/// (MemorySSAUpdater.cpp:1253, 1441; MemorySSA.h:337-346), so a cached answer
+/// is older: nearer the use than a fresh walk, never past a clobber.
+pub fn answer_is_safe(
+    fresh: &Mssa,
+    kept: &Name,
+    now: &Name,
+) -> bool {
+    if kept == now {
+        return true;
+    }
+    let find = |name: &Name| match name {
+        Name::Live => Some(fresh.live_on_entry_def()),
+        Name::Phi(at) => fresh.get_memory_phi(cfg::block(*at)),
+        Name::Site(inst) => fresh.get_memory_access(*inst),
+    };
+    matches!(
+        (find(now), find(kept)),
+        (Some(now), Some(kept)) if fresh.dominates(now, kept)
+    )
+}
+
 /// What the walker answers for every load and store of `function`, in names:
 /// the clobbering access of each, a trivial phi taken for what it stands for.
 pub fn walked(

@@ -49,7 +49,17 @@ fn listed(channels: &str) -> String {
     let source = directory.path().join("t.bas");
     std::fs::write(&source, PROGRAM).expect("writes the source");
     let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")))
-        .args([source.to_str().unwrap(), "--dialect", "qb45", "--runtime", "qb45", "-O2", "-S", "-o", directory.path().join("t.asm").to_str().unwrap()])
+        .args([
+            source.to_str().unwrap(),
+            "--dialect",
+            "qb45",
+            "--runtime",
+            "qb45",
+            "-O2",
+            "-S",
+            "-o",
+            directory.path().join("t.asm").to_str().unwrap(),
+        ])
         .env_remove("LLRM_VERIFY")
         .env("LLRM_DEBUG", channels)
         .env("LLRM_TIME_TOP", "1000")
@@ -190,5 +200,8 @@ fn test_the_frontends_program_is_verified_under_the_check_mode_or_fverify_ir_onl
 #[test]
 fn test_the_assembly_listing_is_a_timed_step() {
     let report = listed("time");
-    assert!(report.lines().any(|one| one.starts_with("[time]") && one.ends_with(" masm text")), "no `masm text` step in:\n{report}");
+    assert!(
+        report.lines().any(|one| one.starts_with("[time]") && one.ends_with(" masm text")),
+        "no `masm text` step in:\n{report}"
+    );
 }

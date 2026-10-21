@@ -290,3 +290,18 @@ fn test_the_pass_keeps_what_the_function_returns() {
     assert!(printed(&module).contains("%carried.lcssa = phi"));
     assert_eq!(results(&module, inputs), expected);
 }
+
+#[test]
+fn test_only_the_values_read_outside_get_exit_phis() {
+    let closed = closed_once(LOOP_WITH_EXIT_USE);
+    assert_eq!(closed.matches(".lcssa = phi").count(), 1, "{closed}");
+    assert!(closed.contains("%carried.lcssa = phi i16 [ %carried, %b1 ]"), "{closed}");
+}
+
+#[test]
+fn test_closing_over_a_held_shape_is_closing() {
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
+    assert!(super::closed_in(f(&mut module), &shape).unwrap());
+    assert_eq!(printed(&module), closed_once(LOOP_WITH_EXIT_USE));
+}

@@ -306,3 +306,37 @@ e:
     let after = extended(text, &[&[0], &[50], &[200]]);
     assert!(!after.contains("trunc"), "{after}");
 }
+
+/// The inner loop starts `j` at the outer counter `o` and leaves when
+/// `j >= o`: the first trip decides it, so the compare reads the same values
+/// every trip and goes to the preheader as `o >= o`, true. The compare of
+/// `bench/shellsort`'s insertion loop stayed in the loop, with a block that
+/// never ran, because `makeIVComparisonInvariant` was not translated.
+#[test]
+fn test_a_compare_of_a_counter_with_its_start_is_decided_by_the_first_trip() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %outer
+outer:
+  %o = phi i16 [ 32, %entry ], [ %on, %latch ]
+  %more = icmp slt i16 %o, %n
+  br i1 %more, label %pre, label %done
+pre:
+  br label %inner
+inner:
+  %j = phi i16 [ %o, %pre ], [ %jn, %step ]
+  %big = icmp sge i16 %j, %o
+  br i1 %big, label %latch, label %step
+step:
+  %jn = add nuw nsw i16 %j, 1
+  br label %inner
+latch:
+  %on = add nuw nsw i16 %o, 1
+  br label %outer
+done:
+  ret i16 0
+}
+";
+    let (_, after) = simplified(text);
+    assert!(after.contains("br i1 true, label %latch"), "{after}");
+}

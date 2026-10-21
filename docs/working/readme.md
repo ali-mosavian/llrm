@@ -18,6 +18,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
 | [undef-table](undef-table.md) | MIR `undef`: each pass and pin function that treats it apart from poison, and its state |
 | [qb-float-rows](qb-float-rows.md) | The 41 QB float rows above main after BC's per-assignment rounding (#3352): the numbers, owner and exit |
+| [qcport-os-rows](qcport-os-rows.md) | The 12 QCport modules bigger at -Os after #3369: the numbers, owner and exit |
 
 ## Docs with the change
 
