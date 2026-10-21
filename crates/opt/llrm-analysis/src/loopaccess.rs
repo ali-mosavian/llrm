@@ -20,9 +20,9 @@
 //! # Example
 //! `getelementptr i32, ptr %p, i64 1` is consecutive after `%p`.
 
-use llrm_mir::context::{mask, signed};
 use std::collections::HashMap;
 
+use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags as IrFlags, Opcode};
 use llrm_mir::types::{Type, TypeId};
@@ -262,16 +262,22 @@ pub fn is_no_wrap(
         // For the above reasoning to apply, the pointer must be dereferenced in
         // every iteration.
         let found = cx.loops.get_loop_for(lp).expect("the header of a loop");
-        let dereferenced = cx.function.users(gep).into_iter().any(|user| {
-            if load_store_pointer_operand(cx, user.user) != Some(Operand::Value(gep)) {
-                return false;
-            }
-            let Some(user_block) = cx.function.parent(user.user) else { return false };
-            if !found.contains(user_block) {
-                return false;
-            }
-            !block_needs_predication(cx, user_block, lp)
-        });
+        let dereferenced = cx
+            .function
+            .users(gep)
+            .into_iter()
+            .any(
+                |user| {
+                    if load_store_pointer_operand(cx, user.user) != Some(Operand::Value(gep)) {
+                        return false;
+                    }
+                    let Some(user_block) = cx.function.parent(user.user) else { return false };
+                    if !found.contains(user_block) {
+                        return false;
+                    }
+                    !block_needs_predication(cx, user_block, lp)
+                },
+            );
         if found.get_loop_latch(cx.function) == Some(lp) || dereferenced {
             return true;
         }
@@ -372,9 +378,8 @@ pub fn find_forked_scevs(
     ptr: Operand,
     depth: u32,
 ) -> Vec<ForkedScev> {
-    let may_be_undef_or_poison = |operand: Operand| {
-        !is_guaranteed_not_to_be_undef_or_poison(&cx.query(None), operand, 0)
-    };
+    let may_be_undef_or_poison =
+        |operand: Operand| !is_guaranteed_not_to_be_undef_or_poison(&cx.query(None), operand, 0);
     let mut scev_list = Vec::new();
 
     // If our Value is a SCEVAddRecExpr, loop invariant, not an instruction, or

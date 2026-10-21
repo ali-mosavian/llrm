@@ -114,7 +114,13 @@ fn safe_to_hoist(
         return false;
     }
     if flags & SKIP_IMPLICIT_CONTROL_FLOW != 0
-        && !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(context, spec.layout, function, spec.outer, inst)
+        && !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(
+            context,
+            spec.layout,
+            function,
+            spec.outer,
+            inst,
+        )
     {
         return false;
     }

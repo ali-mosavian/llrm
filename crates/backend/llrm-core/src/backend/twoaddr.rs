@@ -204,12 +204,15 @@ pub fn tied(body: &LirBody) -> LirBody {
 /// copy the coalescer may refuse is gone and no interval grows.
 fn _reused(body: &LirBody) -> LirBody {
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
+    let mut read: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             *defined.entry(*value).or_insert(0) += 1;
         }
+        for value in &one.uses {
+            *read.entry(*value).or_insert(0) += 1;
+        }
     }
-    let rows = allocate::live_rows(body);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -253,8 +256,10 @@ fn _reused(body: &LirBody) -> LirBody {
             {
                 continue;
             }
+            // Defined once and read once in the whole body: not live out, and
+            // the one reader is found below.
             if defined.get(&into.value) != Some(&1)
-                || rows.live_out(block.at, into.value)
+                || read.get(&into.value) != Some(&1)
                 || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
             {
                 continue;
@@ -1001,5 +1006,43 @@ mod tests {
         let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
         let fixed = fixed(&insn).expect("untied");
         assert_eq!(fixed[1].uses, [900]);
+    }
+
+    /// Update in place and the tied rewrite each walked the body for liveness
+    /// rows: twice a body, 4.0 M of TwoAddress's 10.0 M at d_faces -O2. The
+    /// update in place asks only whether a value read once is read in its own
+    /// block, which the use counts answer.
+    #[test]
+    fn test_two_address_walks_the_body_for_liveness_once() {
+        let add = |at: i64, into: u32, first: u32, second: u32| {
+            let what = Semantics {
+                name: Some("add".to_owned()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(first, 4), held(second, 4)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+        };
+        let copy = |at: i64, into: u32, from: u32| {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(from, 4)],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]))
+        };
+        let input = LirBody::new(
+            "update",
+            0,
+            vec![LirBlock::new(0, vec![add(0, 4, 5, 7), copy(1, 5, 4)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let before = crate::backend::allocate::live_rows_walks(&input);
+        let got = tied(&input);
+        let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names, ["add", "mov"], "the premise: the update in place was found: {names:?}");
+        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
     }
 }

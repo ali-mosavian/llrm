@@ -145,13 +145,19 @@ impl Dependence {
     /// `isPossiblyBackward`: may be a lexically backward dependence type
     /// (includes `Unknown`).
     pub fn is_possibly_backward(&self) -> bool {
-        self.is_backward() || matches!(self.ty, DepType::Unknown | DepType::IndirectUnsafe | DepType::InvariantUnsafe)
+        self.is_backward() || matches!(
+            self.ty,
+            DepType::Unknown | DepType::IndirectUnsafe | DepType::InvariantUnsafe
+        )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L1990
     /// `isForward`: lexically forward.
     pub fn is_forward(&self) -> bool {
-        matches!(self.ty, DepType::Forward | DepType::ForwardButPreventsForwarding)
+        matches!(
+            self.ty,
+            DepType::Forward | DepType::ForwardButPreventsForwarding
+        )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L2651
