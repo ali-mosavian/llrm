@@ -28,6 +28,10 @@ pub const ONLOCALERROR: &str = "llrm.qb.onlocalerror";
 /// makes the call is not copied into another frame: like `returns_twice` for
 /// `setjmp`, which `CallAnalyzer::visitCallBase` and `isInlineViable` read.
 pub const FRAME_BOUND: &str = "frame_bound";
+/// Hands one of the function's variables to the runtime: its handler reads
+/// the frame's variables whenever a call raises, so no pass may keep one in a
+/// register across a call (D-EH1: the pin says `llvm.localescape`).
+pub const FRAME: &str = "llrm.qb.frame";
 /// ERR outside the handler: the runtime's error number.
 pub const ERR: &str = "llrm.qb.B$FERR";
 
@@ -41,6 +45,8 @@ pub struct Handled {
     pub pad: TypeId,
     /// Each statement's line, by its number: `[n x i16]`, and its type.
     pub lines: (ConstantId, TypeId),
+    /// `FRAME`, and its type.
+    pub frame: (ConstantId, TypeId),
 }
 
 /// Gives `function` the personality, declares ON ERROR GOTO -- ON LOCAL
@@ -73,8 +79,7 @@ pub fn handled(
     let onerror_type = types.intern(Type::Function { returns: void, parameters: vec![flag], variadic: false });
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
     let personality = declared(module, far, PERSONALITY, personality_type, 0, &[])?;
-    let onerror =
-        declared(
+    let onerror = declared(
         module,
         far,
         if local { ONLOCALERROR } else { ONERROR },
@@ -82,11 +87,14 @@ pub fn handled(
         BASIC,
         &["nounwind", FRAME_BOUND],
     )?;
+    let frame_type =
+        module.context.types.intern(Type::Function { returns: void, parameters: vec![ptr], variadic: false });
+    let frame = declared(module, far, FRAME, frame_type, BASIC, &["nounwind"])?;
     let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else {
         return Err("a handler outside a function".to_owned());
     };
     handled.personality = Some(personality);
-    Ok(Handled { onerror, onerror_type, pad, lines })
+    Ok(Handled { onerror, onerror_type, pad, lines, frame: (frame, frame_type) })
 }
 
 /// The slot keeping the number of the handler ON ERROR GOTO last named, 0

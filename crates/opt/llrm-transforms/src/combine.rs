@@ -418,6 +418,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::SExt) => &[visit_sext],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
+        Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         _ => &[],

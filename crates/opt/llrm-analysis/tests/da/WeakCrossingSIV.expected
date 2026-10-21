@@ -1,0 +1,50 @@
+== 
+@weakcrossing0
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@weakcrossing1
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@weakcrossing2
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@weakcrossing3
+  none!
+  flow [0|<]!
+  confused!
+  none!
+  confused!
+  none!
+@weakcrossing4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@weakcrossing5
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@weakcrossing6
+  none!
+  flow [<>]!
+  confused!
+  none!
+  confused!
+  none!

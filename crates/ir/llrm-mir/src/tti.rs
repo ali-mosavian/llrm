@@ -288,6 +288,14 @@ pub trait Tti {
         true
     }
 
+    /// The most an `optsize` caller's inline may add over the call it removes,
+    /// in inline-cost units, where the target prices it apart from LLVM's
+    /// `OptSizeThreshold` (SZ1); none: the pin's 50. X86: 0, a callee that
+    /// stays is not copied into a caller that is built for size.
+    fn opt_size_inline_threshold(&self) -> Option<i64> {
+        None
+    }
+
     /// The cost of an integer-to-float cast whose operand is a load, where the
     /// target prices it apart (X86: the extension of a narrow integer to i32 is
     /// free for a load, `FILD` reads it from memory); none: as any cast (T4).
@@ -639,7 +647,10 @@ pub trait Tti {
         &self,
         ty: Ty,
     ) -> bool {
-        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer)
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
+        )
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

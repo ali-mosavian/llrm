@@ -64,3 +64,14 @@ memmove:
  pop %edi
  pop %esi
  ret
+# the pinned clang turns a strlen loop into a call: byte loop, as the source writes it
+.globl strlen
+strlen:
+ mov 4(%esp),%eax
+1:
+ cmpb $0,(%eax)
+ lea 1(%eax),%eax
+ jne 1b
+ dec %eax
+ sub 4(%esp),%eax
+ ret

@@ -1,0 +1,71 @@
+== 
+@gcd0
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd1
+  output [* *]!
+  none!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd2
+  output [* *]!
+  none!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd3
+  output [* *]!
+  flow [<> *]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd4
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd5
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  none!
+@gcd6
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@gcd7
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@gcd8
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@gcd9
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
