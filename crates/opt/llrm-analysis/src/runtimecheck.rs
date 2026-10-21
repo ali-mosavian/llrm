@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use llrm_mir::context::{ConstantExpr, ConstantKind, Constant};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate};
 use llrm_mir::types::TypeId;
@@ -625,7 +625,10 @@ impl RuntimePointerChecking {
     /// What the dependence checker shares with the checks: the bounds already
     /// worked out, and the loop's guards.
     pub fn caches(&mut self) -> crate::memdepchecker::SharedCaches<'_> {
-        crate::memdepchecker::SharedCaches { pointer_bounds: &mut self.pointer_bounds, loop_guards: &mut self.loop_guards }
+        crate::memdepchecker::SharedCaches {
+            pointer_bounds: &mut self.pointer_bounds,
+            loop_guards: &mut self.loop_guards,
+        }
     }
 
     /// `reset`.
@@ -830,7 +833,8 @@ impl RuntimePointerChecking {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopAccessAnalysis.cpp#L613
-    /// `generateChecks()`: a check for each pair of groups that `needs_checking`.
+    /// `generateChecks()`: a check for each pair of groups that
+    /// `needs_checking`.
     fn make_checks(
         &mut self,
         se: &mut ScalarEvolution,
@@ -841,7 +845,8 @@ impl RuntimePointerChecking {
         for i in 0..self.checking_groups.len() {
             for j in i + 1..self.checking_groups.len() {
                 if self.groups_need_checking(i, j) {
-                    self.can_use_diff_check = self.can_use_diff_check && self.try_to_create_diff_check(se, cx, dc, i, j);
+                    self.can_use_diff_check =
+                        self.can_use_diff_check && self.try_to_create_diff_check(se, cx, dc, i, j);
                     checks.push((i, j));
                 }
             }

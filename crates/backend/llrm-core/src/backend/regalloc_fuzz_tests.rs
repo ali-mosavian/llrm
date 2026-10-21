@@ -169,14 +169,7 @@ impl Builder {
                     index: Some(Held { value: index, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
                 };
-                out.push(self.insn(
-                    Operation::Move,
-                    "mov",
-                    vec![held(d)],
-                    vec![Loc::Mem(cell)],
-                    &[d],
-                    &[base, index],
-                ));
+                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[base, index]));
             }
             5 => {
                 let base = self.role_copy(s, out);

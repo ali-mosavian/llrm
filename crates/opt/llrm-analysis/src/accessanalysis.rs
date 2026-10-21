@@ -42,9 +42,7 @@ use crate::loopaccess::{
 };
 use crate::memdepchecker::{DepType, MemoryDepChecker};
 use crate::mssa::alias::ModRef;
-use crate::runtimecheck::{
-    DepCandidates, MemAccessInfo, RuntimePointerChecking, get_non_affine_monotonic_bounds,
-};
+use crate::runtimecheck::{DepCandidates, MemAccessInfo, RuntimePointerChecking, get_non_affine_monotonic_bounds};
 use crate::scev::expr::{Kind, Scev, Ty};
 use crate::scev::{Cx, ScalarEvolution};
 
@@ -115,10 +113,15 @@ impl PtrAccessMap {
         access: MemAccessInfo,
         ty: Option<TypeId>,
     ) {
-        let entry = self.types.entry(access).or_insert_with(|| {
-            self.order.push(access);
-            Vec::new()
-        });
+        let entry = self
+            .types
+            .entry(access)
+            .or_insert_with(
+                || {
+                    self.order.push(access);
+                    Vec::new()
+                },
+            );
         if let Some(ty) = ty
             && !entry.contains(&ty)
         {
@@ -421,7 +424,10 @@ impl<'a, A: AAResults> AccessAnalysis<'a, A> {
                 }
                 for inst in [dep_checker.source(dep), dep_checker.destination(dep)] {
                     let pointer = load_store_pointer_operand(cx, inst).expect("a memory access");
-                    let writes = matches!(cx.function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Store { .. });
+                    let writes = matches!(
+                        cx.function.instruction(inst).opcode,
+                        llrm_mir::opcode::Opcode::Store { .. }
+                    );
                     dep_cands.erase_class(&(pointer, writes));
                 }
             }
@@ -575,7 +581,10 @@ impl<'a, A: AAResults> AccessAnalysis<'a, A> {
         rt_check.need = if can_do_rt { rt_check.number_of_checks() != 0 } else { may_need_rt_check };
 
         let can_do_rt_if_needed = !rt_check.need || can_do_rt;
-        debug_assert!(can_do_rt_if_needed == (can_do_rt || !may_need_rt_check), "CanDoRTIfNeeded depends on RtCheck.Need");
+        debug_assert!(
+            can_do_rt_if_needed == (can_do_rt || !may_need_rt_check),
+            "CanDoRTIfNeeded depends on RtCheck.Need"
+        );
         if !can_do_rt_if_needed && !allow_partial {
             rt_check.reset();
         }
@@ -696,5 +705,8 @@ fn is_null_pointer(
     cx: &Cx,
     operand: Operand,
 ) -> bool {
-    matches!(operand, Operand::Constant(id) if matches!(cx.context.get(id).kind, llrm_mir::context::ConstantKind::Null))
+    matches!(
+        operand,
+        Operand::Constant(id) if matches!(cx.context.get(id).kind, llrm_mir::context::ConstantKind::Null)
+    )
 }

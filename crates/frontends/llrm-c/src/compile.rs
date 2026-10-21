@@ -2888,8 +2888,11 @@ mod tests {
     fn test_m32_an_absolute_address_keeps_its_32_bits() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("vm.c");
-        std::fs::write(&source, "void __cdecl f(void) { *(volatile char *)0xB8000 = 65; *(volatile char *)0xB8001 = 66; }\n")
-            .unwrap();
+        std::fs::write(
+            &source,
+            "void __cdecl f(void) { *(volatile char *)0xB8000 = 65; *(volatile char *)0xB8001 = 66; }\n",
+        )
+        .unwrap();
         let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
             .expect("wccq records vm.c");
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
@@ -2924,9 +2927,10 @@ mod tests {
     }
 
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
-    /// qword, so a float reloaded from it kept double precision and nbody_single
-    /// printed 86015, the pin 86016. The cell is the float's own dword, as the
-    /// pin's RFP32 `fst dword` rounds; a double keeps its qword.
+    /// qword, so a float reloaded from it kept double precision and
+    /// nbody_single printed 86015, the pin 86016. The cell is the float's
+    /// own dword, as the pin's RFP32 `fst dword` rounds; a double keeps its
+    /// qword.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -2947,15 +2951,15 @@ mod tests {
                 ),
             )
             .unwrap();
-            let text =
-                super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
-                    .expect("wccq records spill.c");
+            let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+                .expect("wccq records spill.c");
             let argv: Vec<String> = ["-m32", "-O2", "-march=i486", "x.c"].map(str::to_owned).to_vec();
             let built = super::selected(&text, "spill", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
             llrm_core::backend::masm::text(&built).unwrap()
         };
         let spills = |asm: &str, width: &str| {
-            asm.lines().filter(|line| line.trim().starts_with("fstp") && line.contains(&format!("{width} ptr [e")))
+            asm.lines()
+                .filter(|line| line.trim().starts_with("fstp") && line.contains(&format!("{width} ptr [e")))
                 .count()
         };
         let single = listing("float");
