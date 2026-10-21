@@ -74,7 +74,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
-use llrm_analysis::manager::{Callbacks, GlobalsAA, Summaries};
+use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::footprint::{self, Footprint};
 use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand, Operand};
@@ -107,7 +107,7 @@ struct Record {
 pub struct Slice {
     own: u64,
     /// One number for each part of the module's facts
-    /// (`llrm_mir::passes::read`), in the order of its bits.
+    /// (`llrm_mir::passes::read`), in the order of its bits; bit 3 is unused.
     parts: [u64; 5],
 }
 
@@ -353,15 +353,6 @@ pub fn slice(
     };
     let globals =
         outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok()).map(|globals| globals.read_by(&named));
-    let callbacks = *cache
-        .callbacks
-        .get_or_insert_with(
-            || {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()).hash(&mut hasher);
-                hasher.finish()
-            },
-        );
     let hashed = |value: &dyn std::fmt::Debug| {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         format!("{value:?}").hash(&mut hasher);
@@ -369,7 +360,7 @@ pub fn slice(
     };
     let slice = Slice {
         own: own.finish(),
-        parts: [one_of(callees), one_of(known), hashed(&globals), callbacks, one_of(declared)],
+        parts: [one_of(callees), one_of(known), hashed(&globals), 0, one_of(declared)],
     };
     FACTS.with(|held| held.replace(cache));
     read::swap(saved);
@@ -384,7 +375,6 @@ struct Facts {
     /// Its declaration's number, what the callee does to memory and its
     /// summary.
     each: HashMap<GlobalId, (u64, Option<u64>, Option<u64>)>,
-    callbacks: Option<u64>,
 }
 
 thread_local! {

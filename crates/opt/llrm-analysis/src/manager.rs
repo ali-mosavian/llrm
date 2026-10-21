@@ -164,7 +164,7 @@ use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
+use crate::alias::{self, PointsTo, Procedure, Summary};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls, Known};
 use crate::floatfacts;
@@ -209,52 +209,10 @@ impl<'a> Unit<'a> {
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: None,
-            callbacks_from: Some(outer),
             loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
         }
-    }
-}
-
-/// What calling back into the module may do: the effects of GlobalsAA's
-/// entries added up. Every body that calls something unknown reads it, and it
-/// depends on the entries and the summaries alone, so it is made once for them
-/// and kept while both are the same results.
-pub struct Callbacks;
-
-/// The `GlobalsAA` and `Summaries` results `Callbacks` was last made from.
-#[derive(Default)]
-struct CallbacksSeen(Option<(Rc<Result<Globals, String>>, Rc<Result<IndexMap<String, Summary>, String>>)>);
-
-impl ModuleAnalysis for Callbacks {
-    type Result = Result<Option<Summary>, String>;
-    const NAME: &'static str = "callbacks";
-    fn run(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-    ) -> Self::Result {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses.memo::<CallbacksSeen>().0 = Some((Rc::clone(&globals), Rc::clone(&known)));
-        Ok(alias::callbacks_over(
-            Result::as_ref(&*globals).map_err(String::clone)?,
-            Result::as_ref(&*known).map_err(String::clone)?,
-        ))
-    }
-    fn unchanged(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-        _: &Self::Result,
-    ) -> bool {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses
-            .memo::<CallbacksSeen>()
-            .0
-            .as_ref()
-            .is_some_and(|(then, before)| Rc::ptr_eq(then, &globals) && Rc::ptr_eq(before, &known))
     }
 }
 
@@ -899,150 +857,6 @@ impl Analysis for Annotated {
     }
 }
 
-/// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. Where `Summaries` was not required, each
-/// call is to an unknown callee. Either way a call does no more than its
-/// attributes state, as alias reads them.
-pub struct CallEffects;
-
-impl Analysis for CallEffects {
-    type Result = Result<IndexMap<InstId, Effect>, String>;
-    const NAME: &'static str = "call-effects";
-    const SKIPS: bool = true;
-    const SOUND: bool = true;
-    /// Its references name the pointers of the call's arguments: past a
-    /// substitution they would name a value the edit erased.
-    const NAMES_VALUES: bool = true;
-    /// What it says of a call is what the call and its arguments' meanings
-    /// give, which edits that keep every value's meaning leave (no call is
-    /// made or moved). The calls still there are the calls it has an entry
-    /// for; an erased one is not asked.
-    fn covers(
-        old: &Self::Result,
-        fresh: &Self::Result,
-        _context: &Context,
-        function: &Function,
-    ) -> bool {
-        match (old, fresh) {
-            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
-                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
-            }),
-            (old, fresh) => old == fresh,
-        }
-    }
-    fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
-    }
-    /// Each effect with the values it names followed through the substitution:
-    /// the same bytes by the value that replaced one found equal.
-    fn remapped(
-        old: &Self::Result,
-        substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-        _changes: &[llrm_mir::module::Change],
-        _context: &Context,
-        function: &Function,
-    ) -> Option<Self::Result> {
-        let old = old.as_ref().ok()?;
-        // A reference holds its pointer's decomposition (root, base, scale),
-        // read down the chain of instructions below it. Renaming a value to one
-        // that decomposes otherwise (a load forwarded to the GEP it loaded)
-        // gives a reference that knows less than a fresh one: derived again.
-        if renamed_into_a_chain(function, substituted, old) {
-            return None;
-        }
-        Some(Ok(alias::effects_renamed(old, substituted)?))
-    }
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let values = analyses.get::<PointerValues>(context, layout, function);
-        let outer = analyses.outer();
-        let mut unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_exposed(&exposed);
-        if let Ok(values) = &*values {
-            unit = unit.with_point_values(values);
-        }
-        call_effects(&unit, outer)
-    }
-}
-
-/// Whether a value replaced by another is read the same by a decomposition:
-/// both stop it (a load, a call, an allocation, a phi, a parameter, a
-/// constant), or both are one instruction (opcode, operands and flags: an
-/// inbounds gep goes on through its index where a plain one does not).
-pub(crate) fn decomposes_alike(
-    function: &Function,
-    was: ValueId,
-    now: ValueId,
-) -> bool {
-    use llrm_mir::module::ValueDef;
-    let ends = |value: ValueId| match function.value(value).def {
-        ValueDef::Instruction(inst) => matches!(
-            function.instruction(inst).opcode,
-            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
-        ),
-        _ => true,
-    };
-    match (function.value(was).def, function.value(now).def) {
-        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
-            let (a, b) = (function.instruction(a), function.instruction(b));
-            (ends(was) && ends(now))
-                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
-        }
-        _ => ends(was) && ends(now),
-    }
-}
-
-/// Whether a value some reference of `effects` names is replaced by one that a
-/// fresh decomposition reads differently: the reference would name the new
-/// value as its root, where a decomposition goes on through the definition of a
-/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
-/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
-/// the case; a value replaced by an equal instruction (the same opcode and
-/// operands) decomposes alike.
-fn renamed_into_a_chain(
-    function: &Function,
-    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-    effects: &IndexMap<InstId, alias::Effect>,
-) -> bool {
-    use llrm_mir::module::Operand;
-    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
-    let differs = |one: &crate::memory::MemRef| {
-        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
-            matches!(
-                named,
-                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
-            )
-        })
-    };
-    // The lists calls share are looked at once.
-    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
-    effects.values().any(|effect| {
-        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
-        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
-    })
-}
-
-/// What each call of `unit` reads and writes, its callee as `Summaries`
-/// says where `outer` holds it, and otherwise an unknown one, as LLVM's
-/// function passes read an outer result only if cached.
-pub fn call_effects(
-    unit: &Unit,
-    outer: &Outer,
-) -> Result<IndexMap<InstId, Effect>, String> {
-    let summaries = outer.cached::<Summaries>();
-    let none = IndexMap::default();
-    let known = match summaries.as_deref() {
-        Some(found) => found.as_ref().map_err(String::clone)?,
-        None => &none,
-    };
-    alias::calls_annotated(&Procedure::of(*unit), known)
-}
-
 /// Every value known without solving memory: `consts::known` of no calls.
 pub struct Registers;
 
@@ -1477,7 +1291,22 @@ impl PartialEq for MssaGraph {
         &self,
         other: &Self,
     ) -> bool {
-        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        let (mut held, mut fresh) = (crate::mssa::shadow::said(&self.mssa), crate::mssa::shadow::said(&other.mssa));
+        // A use the walker moved up stands for the same load as the nearest
+        // def of a graph made afresh.
+        for inst in crate::mssa::shadow::optimized_uses(&self.mssa) {
+            if let (Some(kept), Some(now)) = (held.instructions.get_mut(&inst), fresh.instructions.get_mut(&inst))
+                && !kept.0
+                && !now.0
+            {
+                kept.1 = crate::mssa::shadow::Name::Live;
+                now.1 = crate::mssa::shadow::Name::Live;
+            }
+        }
+        held == fresh
     }
 }
 

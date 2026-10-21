@@ -135,7 +135,7 @@
 //!
 //! # Needs
 //! [`crate::inline`], [`crate::ipacp`], [`crate::profit`], and
-//! `llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+//! `llrm_analysis`' `Summaries`, `GlobalsAA`,
 //! `interprocedural` and `parameter_ranges`.
 //!
 //! # See also
@@ -147,7 +147,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::aa::ModRefInfo;
 use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
@@ -356,7 +356,6 @@ pub fn managers(
             // As the first run's: a body sent back through reads what no code
             // outside reaches.
             one.require::<GlobalsAA>();
-            one.require::<Callbacks>();
             one
         })
         .collect()

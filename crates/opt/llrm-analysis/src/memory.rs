@@ -1123,12 +1123,6 @@ pub struct Unit<'a> {
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
-    /// What calling back into the module does, the module's `Callbacks`;
-    /// without it each `calls_annotated` adds up every entry's summary.
-    pub callbacks: Option<&'a Option<crate::alias::Summary>>,
-    /// Where `callbacks` is read from when it is asked for and was not given: a
-    /// body that never asks is not one that read it (`llrm_mir::passes::read`).
-    pub callbacks_from: Option<&'a llrm_mir::passes::Outer>,
     /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
     /// a level without them (`Outer::loop_intervals`) they are empty on
     /// purpose.
@@ -1207,8 +1201,6 @@ impl<'a> Unit<'a> {
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: None,
-            callbacks_from: None,
             loop_intervals: true,
             congruent: None,
             proved: None,
@@ -1220,23 +1212,6 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
-    }
-
-    /// What calling back into the module does: the held `callbacks`, or the
-    /// module's where the unit was made over its facts.
-    pub fn callbacks(&self) -> Option<&'a Option<crate::alias::Summary>> {
-        self.callbacks.or_else(|| {
-            self.callbacks_from
-                .and_then(|outer| outer.cached_ref::<crate::manager::Callbacks>())
-                .and_then(|one| one.as_ref().ok())
-        })
-    }
-
-    pub fn with_callbacks(
-        self,
-        callbacks: &'a Option<crate::alias::Summary>,
-    ) -> Self {
-        Self { callbacks: Some(callbacks), ..self }
     }
 
     pub fn with_point_values(
@@ -1887,9 +1862,11 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
-/// The accesses worked out for a version of a function, and which version.
+/// The accesses worked out for a version of a function, and which version:
+/// of its text, the spaces and the globals the unit lists (a unit with none
+/// finds no root a global variable, `object`).
 struct Held {
-    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces, usize),
     seen: std::rc::Rc<
         std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, (Option<std::rc::Rc<MemRef>>, Option<u32>)>>,
     >,
@@ -2064,7 +2041,7 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let key = (unit.function.mark(), unit.spaces());
+        let key = (unit.function.mark(), unit.spaces(), unit.globals.len());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
             held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))

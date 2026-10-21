@@ -534,12 +534,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     old_analysis("summaries updated", "counted(\"summaries updated\")", "none", "with summaries: funcattrs-port"),
     old_analysis("callee-effects", "CalleeEffects", "none", "none: DEVIATE or delete candidate (passes.rs)"),
     old_analysis(
-        "callbacks",
-        "Callbacks",
-        "none",
-        "none: DEVIATE or delete candidate (effects of calling back into the module)",
-    ),
-    old_analysis(
         "call-graph",
         "CallGraphAnalysis",
         "CallGraphAnalysis",
@@ -611,7 +605,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("points-to", "Pointers", "BasicAA", "basicaa-port (aa.rs): alias::pointers goes"),
     old_analysis("annotated", "Annotated", "MemoryLocation", "basicaa-port: references.rs MemoryLocation callers"),
-    old_analysis("call-effects", "CallEffects", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
     old_analysis("writes", "Writes", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
     old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),

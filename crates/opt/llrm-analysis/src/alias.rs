@@ -999,42 +999,6 @@ pub(crate) fn borrowed(
         || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
 
-/// What a callee nobody summarized may read and write at `at`, as far as
-/// its attributes allow: through each actual, the objects it points to;
-/// elsewhere, what a nonlocal reaches, what escaped before the call, and
-/// of the tracked globals what GlobalsAA says it names and what
-/// `callbacks` into the module do, all of them where that is unknown.
-///
-/// Less what a call back into the module adds (`_calling_back`'s), which is the
-/// same set for every call that may call back: whether each of the two is
-/// wanted comes back with them, and the sets are put together once for all the
-/// calls with the same others (`calls_annotated`).
-fn _unknown_visible(
-    procedure: &Procedure,
-    facts: &PointsTo,
-    at: InstId,
-    actual: &[Provenance],
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, Back), String> {
-    let unit = &procedure.unit;
-    let allowed = _allowed(unit, at);
-    let (mut reads, mut writes) = _through_arguments(&allowed, actual);
-    let (other_reads, other_writes, back) = _unknown_base(unit, facts, at)?;
-    if allowed.other.reads {
-        reads.extend(other_reads);
-    }
-    if allowed.other.writes {
-        writes.extend(other_writes);
-    }
-    Ok((reads, writes, Back { reads: back && allowed.other.reads, writes: back && allowed.other.writes }))
-}
-
-/// Which of a call's reads and writes a call back into the module adds to.
-#[derive(Clone, Copy, Default)]
-struct Back {
-    reads: bool,
-    writes: bool,
-}
-
 /// What a callee nobody summarized may read and write through each of `actual`,
 /// as `allowed` says.
 fn _through_arguments(
@@ -1094,60 +1058,6 @@ fn _unknown_base(
     writes.extend(_globals(unit, written));
     // An indirect callee may be an entry itself.
     Ok((reads, writes, callee.is_none() || globalsaa::calls_back(unit, at)))
-}
-
-/// What a call back into the module adds to what a call reads and writes: the
-/// callbacks' effects, and of the tracked globals all that the callbacks do not
-/// state, or where none are known.
-fn _calling_back(
-    unit: &Unit,
-    callbacks: Option<&Summary>,
-    reading: bool,
-    writing: bool,
-    reads: &mut SliceSet,
-    writes: &mut SliceSet,
-) {
-    let Some(callbacks) = callbacks else {
-        if reading {
-            reads.extend(_tracked(unit));
-        }
-        if writing {
-            writes.extend(_tracked(unit));
-        }
-        return;
-    };
-    if reading {
-        reads.absorb(&callbacks.reads);
-        if callbacks.unknown_read {
-            reads.extend(_tracked(unit));
-        }
-    }
-    if writing {
-        writes.absorb(&callbacks.writes);
-        if callbacks.unknown_write {
-            writes.extend(_tracked(unit));
-        }
-    }
-}
-
-/// What calling back into the module may do: the effects of the unit's
-/// GlobalsAA entries, in no caller's object space; none where `known`
-/// lacks one.
-fn _callbacks(
-    unit: &Unit,
-    known: &IndexMap<String, Summary>,
-) -> Option<Summary> {
-    callbacks_over(unit.globals_aa?, known)
-}
-
-/// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
-/// the answer depends on, so the module holds it once for every body that asks
-/// (`manager::Callbacks`).
-pub fn callbacks_over(
-    globals: &globalsaa::Globals,
-    known: &IndexMap<String, Summary>,
-) -> Option<Summary> {
-    CalledBack::of(globals, known)?.summary()
 }
 
 thread_local! {
@@ -1508,6 +1418,60 @@ fn _summary<'s>(
     name: &str,
 ) -> Option<&'s Summary> {
     (!procedure.replaceable.contains(name)).then(|| known.get(name)).flatten()
+}
+
+/// What a call back into the module adds to what a call reads and writes: the
+/// callbacks' effects, and of the tracked globals all that the callbacks do not
+/// state, or where none are known.
+fn _calling_back(
+    unit: &Unit,
+    callbacks: Option<&Summary>,
+    reading: bool,
+    writing: bool,
+    reads: &mut SliceSet,
+    writes: &mut SliceSet,
+) {
+    let Some(callbacks) = callbacks else {
+        if reading {
+            reads.extend(_tracked(unit));
+        }
+        if writing {
+            writes.extend(_tracked(unit));
+        }
+        return;
+    };
+    if reading {
+        reads.absorb(&callbacks.reads);
+        if callbacks.unknown_read {
+            reads.extend(_tracked(unit));
+        }
+    }
+    if writing {
+        writes.absorb(&callbacks.writes);
+        if callbacks.unknown_write {
+            writes.extend(_tracked(unit));
+        }
+    }
+}
+
+/// What calling back into the module may do: the effects of the unit's
+/// GlobalsAA entries, in no caller's object space; none where `known`
+/// lacks one.
+fn _callbacks(
+    unit: &Unit,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
+    callbacks_over(unit.globals_aa?, known)
+}
+
+/// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
+/// the answer depends on, so the module holds it once for every body that asks
+/// (`manager::Callbacks`).
+pub fn callbacks_over(
+    globals: &globalsaa::Globals,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
+    CalledBack::of(globals, known)?.summary()
 }
 
 /// Transitive per-procedure mod/ref and capture summaries to a fixed point.
@@ -2303,186 +2267,6 @@ impl Effect {
     }
 }
 
-/// `effects` with each value `to` gives another operand named by it, the
-/// effects of the same calls on the same bytes after a value is replaced by
-/// one found equal. The lists the calls share stay shared. None where a
-/// reference cannot carry its names over (`MemRef::renamed`).
-pub fn effects_renamed(
-    effects: &IndexMap<InstId, Effect>,
-    to: &dyn Fn(ValueId) -> Option<Operand>,
-) -> Option<IndexMap<InstId, Effect>> {
-    let mut lists: HashMap<*const [MemRef], Rc<[MemRef]>> = HashMap::default();
-    let mut list = |old: &Rc<[MemRef]>| -> Option<Rc<[MemRef]>> {
-        if let Some(done) = lists.get(&Rc::as_ptr(old)) {
-            return Some(Rc::clone(done));
-        }
-        let made: Rc<[MemRef]> = old.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?.into();
-        lists.insert(Rc::as_ptr(old), Rc::clone(&made));
-        Some(made)
-    };
-    effects
-        .iter()
-        .map(|(inst, effect)| {
-            Some((
-                *inst,
-                Effect {
-                    loads: list(&effect.loads)?,
-                    stores: list(&effect.stores)?,
-                    fills: effect.fills.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?,
-                },
-            ))
-        })
-        .collect()
-}
-
-/// Instantiate callee effects through actual pointer provenance: each
-/// call's effect, as old `calls_annotated` wrote it into the call.
-pub fn calls_annotated(
-    procedure: &Procedure,
-    known: &IndexMap<String, Summary>,
-) -> Result<IndexMap<InstId, Effect>, String> {
-    // Capture is part of escape flow. Unknown callees may retain every
-    // pointer actual; known callees retain only the parameters their fixed
-    // point summary says they capture.
-    let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(procedure, known, target));
-    let captures =
-        procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
-    let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
-    let computed;
-    let callbacks = match procedure.unit.callbacks() {
-        Some(held) => {
-            if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
-                assert!(
-                    *held == _callbacks(&procedure.unit, known),
-                    "the held callbacks are not what adding the entries up gives"
-                );
-            }
-            held.as_ref()
-        }
-        None => {
-            computed = _callbacks(&procedure.unit, known);
-            computed.as_ref()
-        }
-    };
-
-    let reference = |one: &Slice| {
-        MemRef::reach(
-            u32::try_from(one.width).expect("a slice width is a memory width"),
-            Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
-        )
-    };
-
-    let mut out = IndexMap::default();
-    // Calls reaching the same slices share one list of references. A set's
-    // shared run is part of its key by where it is: the same run is the
-    // same slices.
-    let mut made: HashMap<(BTreeSet<Slice>, usize), Rc<[MemRef]>> = HashMap::default();
-    // What a call back into the module adds, found once for the calls that ask:
-    // the run the callbacks' summary holds.
-    let back: std::cell::OnceCell<(SliceSet, SliceSet)> = std::cell::OnceCell::new();
-    let added = || {
-        back.get_or_init(|| {
-            let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
-            _calling_back(&procedure.unit, callbacks, true, true, &mut reads, &mut writes);
-            (reads, writes)
-        })
-    };
-    for at in procedure.sites.iter().copied() {
-        let actual = _actuals(procedure, &facts, at);
-        let mut calling_back = Back::default();
-        let mut effect = match callee(&at) {
-            Some(callee) => {
-                // A body does no more than its call states.
-                let allowed = _allowed(&procedure.unit, at);
-                let mut effect = callee.instantiated(&actual);
-                // A byval parameter is written as the callee's copy: what the
-                // callee writes through it is not the caller's object.
-                if (0..actual.len()).any(|index| _by_value(&procedure.unit, at, index)) {
-                    let copies = actual
-                        .iter()
-                        .enumerate()
-                        .map(|(index, one)| {
-                            if _by_value(&procedure.unit, at, index) {
-                                Provenance {
-                                    slices: crate::memory::Sorted::new(),
-                                    restrict: crate::memory::Sorted::new(),
-                                }
-                            } else {
-                                one.clone()
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    effect.writes = callee.instantiated(&copies).writes;
-                }
-                if !(allowed.arguments.reads || allowed.other.reads) {
-                    (effect.reads, effect.unknown_read) = (SliceSet::new(), false);
-                }
-                if !(allowed.arguments.writes || allowed.other.writes) {
-                    (effect.writes, effect.unknown_write) = (SliceSet::new(), false);
-                }
-                effect
-            }
-            None => {
-                let (reads, writes, back) = _unknown_visible(procedure, &facts, at, &actual)?;
-                calling_back = back;
-                Summary { reads: reads.into(), writes: writes.into(), ..Summary::default() }
-            }
-        };
-        if effect.unknown_read {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
-            effect.reads.extend(NONLOCAL.slices.to_set());
-            if !effect.globals_listed {
-                effect.reads.extend(_tracked(&procedure.unit));
-            }
-        }
-        // What an unplaced write may reach: each of its types' stores, not an
-        // untyped one.
-        let mut typed = Vec::new();
-        if effect.unknown_write {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            let mut reached = if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible };
-            reached.extend(NONLOCAL.slices.to_set());
-            match &effect.unknown_write_types {
-                // A pointer no fact follows reaches only what escaped, never a
-                // tracked global.
-                Some(types) if !types.is_empty() => {
-                    for (name, lineage) in types {
-                        typed.extend(reached.iter().map(|one| MemRef {
-                            typed: Some(name.clone()),
-                            lineage: lineage.clone(),
-                            ..reference(one)
-                        }));
-                    }
-                }
-                _ => {
-                    effect.writes.extend(reached);
-                    if !effect.globals_listed {
-                        effect.writes.extend(_tracked(&procedure.unit));
-                    }
-                }
-            }
-        }
-        let fills = _fills(&procedure.unit, &facts, at);
-        if calling_back.reads {
-            effect.reads.absorb(&added().0);
-        }
-        if calling_back.writes {
-            effect.writes.absorb(&added().1);
-        }
-        let mut shared = |slices: SliceSet, typed: Vec<MemRef>| -> Rc<[MemRef]> {
-            if !typed.is_empty() {
-                return slices.iter().map(reference).chain(typed).collect();
-            }
-            let run = slices.base().map_or(0, |run| Rc::as_ptr(run) as usize);
-            Rc::clone(made.entry((slices.own().clone(), run)).or_insert_with(|| slices.iter().map(reference).collect()))
-        };
-        let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
-        out.insert(at, Effect { loads, stores, fills });
-    }
-    Ok(out)
-}
-
 /// What each call of `unit` reads and writes as its attributes and the unit's
 /// `GlobalsModRef` say, with no points-to solve (`getModRefInfo(Call, Loc)`
 /// as the pin's BasicAA and GlobalsAA read it): through each pointer argument
@@ -2595,44 +2379,6 @@ fn _by_value(
             .and_then(|one| one.function())
             .and_then(|one| one.parameter_attrs.get(argument))
             .is_some_and(|attrs| named(attrs))
-}
-
-/// The bytes the call `at` writes through an argument before it reads
-/// any: `initializes` at the site or on the callee's parameter.
-fn _fills(
-    unit: &Unit,
-    facts: &PointsTo,
-    at: InstId,
-) -> Vec<MemRef> {
-    let op = unit.function.instruction(at);
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
-    let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
-        .and_then(|one| unit.globals.get(one.0 as usize))
-        .and_then(|one| one.function());
-    let mut out = Vec::new();
-    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-        let parameter = declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
-        if _by_value(unit, at, argument) {
-            continue;
-        }
-        let declared = llrm_mir::memory::initializes(parameter);
-        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument]).iter().chain(declared) {
-            let Ok(width) = u32::try_from(high - low) else { continue };
-            let mut one = MemRef::at(unit, operand, width);
-            one.disp += low;
-            let provenance = facts.reference(unit, &one);
-            out.push(MemRef { provenance, ..one });
-        }
-    }
-    out
-}
-
-/// The parameter a slice lies in.
-fn _parameter(one: &Slice) -> Option<usize> {
-    match (one.object.kind, one.object.key) {
-        (MemoryKind::Parameter, Key::Int(index)) => usize::try_from(index).ok(),
-        _ => None,
-    }
 }
 
 /// The bytes `slice` may cover, or `None` for all of them.

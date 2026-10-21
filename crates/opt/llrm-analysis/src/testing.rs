@@ -93,3 +93,11 @@ pub fn with_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> 
     let shape = Box::leak(Box::new(crate::cfg::Shape::of(unit.function)));
     unit.with_registers(known).with_shape(shape)
 }
+
+/// `unit` carrying where its pointer values point and which frames are
+/// exposed, as the manager's `Writes` and `ThroughMemory` read them.
+pub fn with_points(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
+    let values = Box::leak(Box::new(crate::alias::point_values(&unit).expect("points-to")));
+    let exposed = Box::leak(Box::new(crate::memory::exposed_frames(&unit)));
+    unit.with_point_values(values).with_exposed(exposed)
+}

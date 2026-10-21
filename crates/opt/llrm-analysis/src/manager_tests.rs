@@ -12,10 +12,10 @@ use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{
-    Annotated, CallEffects, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads,
+    Annotated, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads,
     ThroughMemory,
 };
-use crate::alias::{self, Procedure};
+use crate::alias::{self};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls};
 use crate::memory::Unit;
@@ -178,8 +178,6 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
         let layout = layout(&module);
         let mut outer = Outer::of(&module, None);
         outer.require::<Summaries>(&module);
-        let summaries = outer.cached::<Summaries>().unwrap();
-        let summaries = Result::as_ref(&*summaries).unwrap_or_else(|error| panic!("{name}: {error}"));
         let outer = Rc::new(outer);
         for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
@@ -202,12 +200,13 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
                 ranges::dominated_edges(&unit),
                 "{at}"
             );
-            let effects = alias::calls_annotated(&Procedure::of(unit), summaries);
-            assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
-            let calls: Calls =
-                effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
+            let pointed = crate::testing::with_points(unit);
+            let calls: Calls = alias::calls_by_attributes(&pointed)
+                .iter()
+                .map(|(at, effect)| (at, effect.stores.clone()))
+                .collect::<IndexMap<_, _>>();
             let through = analyses.get::<ThroughMemory>(&module.context, &layout, function);
-            assert_eq!(*through, Ok(consts::known_walked(&unit, &calls)), "{at}");
+            assert_eq!(*through, Ok(consts::known_walked(&pointed, &calls)), "{at}");
         }
     }
 }
@@ -639,8 +638,7 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     let changes = f.changes_since(before).expect("on the log").to_vec();
     assert!(!changes.is_empty());
     let unaffected: [fn(&[llrm_mir::module::Change], &llrm_mir::context::Context, &llrm_mir::module::Function) -> bool;
-        4] =
-        [Pointers::unaffected, CallEffects::unaffected, super::Writes::unaffected, super::ExposedFrames::unaffected];
+        3] = [Pointers::unaffected, super::Writes::unaffected, super::ExposedFrames::unaffected];
     for unaffected in unaffected {
         assert!(
             unaffected(&changes, &module.context, function(&module, "f")),
@@ -650,7 +648,7 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     let (f, _) = (function(&module, "f"), y);
     let gep = f.walk().map(|(_, one)| one).find(|one| f.instruction(*one).result == Some(q)).expect("the gep");
     assert!(
-        !CallEffects::unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f),
+        !super::Writes::unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f),
         "an edit to an address left the pointer analyses as they were"
     );
 }
@@ -670,53 +668,6 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
 /// What the memo kept was found under the globals' facts of the run before:
 /// when those are other facts the entry is dropped and found again under the
 /// unit of this run, and the answer is a fresh computation under its own unit.
-
-/// What each call does is nothing a dead load's erasure can change: the load
-/// has no user left and is no call. A pointer load was a part of `CallEffects`'
-/// declaration like any, so DCE worked the effects of every call out again to
-/// the same answer (4209 of 7009 runs over QCport at -O1 came to what they
-/// were).
-#[test]
-fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
-    let mut module = parsed(&format!(
-        "{DOS}declare void @g(ptr)\n@p = global ptr null\n\ndefine void @f(ptr %a) {{\nb:\n  %dead = load ptr, ptr @p\n  call void @g(ptr %a)\n  ret void\n}}\n"
-    ));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let (context, f) = module.function_mut("f").expect("@f");
-    let mut analyses = Analyses::new(outer);
-    llrm_mir::passes::trace_recomputes(true);
-    analyses.get::<CallEffects>(context, &layout, f);
-    let entry = f.entry().expect("an entry");
-    let load = f.block(entry).first().expect("a block with an instruction");
-    f.erase(load).expect("an unused load");
-    analyses.invalidate(f, &PreservedAnalyses::none());
-    analyses.get::<CallEffects>(context, &layout, f);
-    let counts = llrm_mir::passes::recomputes();
-    llrm_mir::passes::trace_recomputes(false);
-    let of_effects: Vec<_> =
-        counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
-    assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
-}
-
-/// `Pointers` and `CallEffects` each solved where every pointer value points,
-/// then asked what escapes (the call arguments and captures enter only there):
-/// 34,762 value solves over QCport at -O1, 11.0% of the compile, for 6,209 body
-/// states. The two ask one analysis for the solve.
-#[test]
-fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
-    let mut module = parsed(&format!(
-        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  call void @g(ptr %p)\n  ret void\n}}\n"
-    ));
-    let layout = layout(&module);
-    let outer = Rc::new(Outer::of(&module, None));
-    let (context, f) = module.function_mut("f").expect("@f");
-    let mut analyses = Analyses::new(outer);
-    let before = crate::alias::value_solves();
-    analyses.get::<Pointers>(context, &layout, f);
-    analyses.get::<CallEffects>(context, &layout, f);
-    assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
-}
 
 /// A `ThroughMemory` kept past an edit as sound knows no more than it did:
 /// `%n` replaced by the 7 it was found equal to leaves the loaded `%v` unknown
@@ -803,13 +754,13 @@ fn test_a_result_derived_from_the_body_as_it_stands_is_dropped_at_an_invalidatio
     let (context, f) = module.function_mut("f").expect("@f");
     let mut analyses = Analyses::new(outer);
     llrm_mir::passes::trace_recomputes(true);
-    analyses.get::<CallEffects>(context, &layout, f);
+    analyses.get::<super::Writes>(context, &layout, f);
     analyses.invalidate(f, &PreservedAnalyses::none());
-    analyses.get::<CallEffects>(context, &layout, f);
+    analyses.get::<super::Writes>(context, &layout, f);
     let counts = llrm_mir::passes::recomputes();
     llrm_mir::passes::trace_recomputes(false);
     let of_effects: Vec<_> =
-        counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
+        counts.iter().filter(|(name, ..)| *name == "writes").map(|&(_, _, how, n)| (how, n)).collect();
     assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
@@ -855,54 +806,6 @@ fn summaries_solve_no_pointer_values_of_a_body() {
     let before = crate::alias::value_solves();
     analyses.get::<Summaries>(&module);
     assert_eq!(crate::alias::value_solves() - before, 0, "Summaries solved a body's pointer values");
-}
-
-/// What calling back into the module does was added up from every entry's
-/// summary for each body that asked (and again for each entry whose summary
-/// changed): entries times bodies, 126 and 89 Ginstr of the 385 compiling 4,096
-/// small functions at -O2 (call-effects and summaries callbacks, slope 2.0
-/// each). Made once, and one entry's change folded in alone.
-#[test]
-fn test_callbacks_are_added_up_once_for_every_body_that_asks() {
-    const BODIES: usize = 24;
-    let mut text = String::from("declare void @ext()\n\n");
-    for at in 0..BODIES {
-        text.push_str(&format!("define void @f{at}() {{\nb0:\n  call void @ext()\n  ret void\n}}\n\n"));
-    }
-    let module = parsed(&text);
-    let layout = layout(&module);
-    let mut outer = Outer::of(&module, None);
-    outer.require::<GlobalsAA>(&module);
-    outer.require::<Summaries>(&module);
-    outer.require::<super::Callbacks>(&module);
-    let outer = Rc::new(outer);
-    let before = alias::callback_entries();
-    for at in 0..BODIES {
-        let (_, _, function) =
-            module.functions().find(|(_, global, _)| global.name.as_deref() == Some(&format!("f{at}"))).unwrap();
-        Analyses::new(Rc::clone(&outer)).get::<CallEffects>(&module.context, &layout, function);
-    }
-    let added = alias::callback_entries() - before;
-    assert!(added <= 6 * BODIES, "{added} entries instantiated for {BODIES} bodies");
-}
-
-/// The summaries fixed point added the callbacks up from every entry again
-/// whenever an entry's summary changed: entries times changes. An entry that
-/// changed is folded in alone.
-#[test]
-fn test_summaries_fold_one_changed_entry_into_the_callbacks_not_all_of_them() {
-    const BODIES: usize = 24;
-    let mut text = String::from("declare void @ext()\n\n");
-    for at in 0..BODIES {
-        text.push_str(&format!("define void @f{at}() {{\nb0:\n  call void @ext()\n  ret void\n}}\n\n"));
-    }
-    let module = parsed(&text);
-    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
-    analyses.get::<GlobalsAA>(&module);
-    let before = alias::callback_entries();
-    analyses.get::<Summaries>(&module);
-    let added = alias::callback_entries() - before;
-    assert!(added <= 4 * BODIES, "{added} entries instantiated for {BODIES} bodies");
 }
 
 /// A module pass spliced a loop into a caller and did not say so (`changed`),
@@ -1118,25 +1021,6 @@ fn a_table_load_update_drops_the_load_whose_index_went() {
     assert_eq!(seen.take(), vec![(1, 1), (0, 0)]);
 }
 
-/// A memory view over the module's facts read what calling back into the module
-/// does when it was made, so every pass that asked for one was run again each
-/// time the callbacks' summary moved: d_faces -O3 ran 19 passes twice more to
-/// find nothing. It is read where it is asked for.
-#[test]
-fn a_memory_view_reads_the_callbacks_where_they_are_asked_for() {
-    use llrm_mir::passes::read;
-    let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
-    let mut outer = Outer::of(&module, None);
-    outer.require::<super::Callbacks>(&module);
-    let function = module.global(module.named("f").expect("f")).function().expect("a function");
-    let layout = layout(&module);
-    read::swap(0);
-    let unit = Unit::within(&module.context, &layout, function, &outer);
-    assert_eq!(read::swap(0) & read::CALLBACKS, 0, "making the view reads no callbacks");
-    unit.callbacks();
-    assert_eq!(read::swap(0) & read::CALLBACKS, read::CALLBACKS, "asking for them does");
-}
-
 /// Each pass that edited threw away what was known through memory, though
 /// finding a value again (`replace_value`) and erasing what it replaced keep
 /// every other value's meaning: `d_faces` -O1 derived it 58 times where 29 of
@@ -1289,7 +1173,6 @@ fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
             Pointers::unaffected
                 as fn(&[llrm_mir::module::Change], &llrm_mir::context::Context, &llrm_mir::module::Function) -> bool,
         ),
-        ("call-effects", CallEffects::unaffected),
         ("writes", super::Writes::unaffected),
     ] {
         assert!(
@@ -1317,22 +1200,6 @@ fn the_audit_of_points_to_refuses_facts_that_forgot_a_join_with_an_unknown_arm()
         Pointers::audit(&Ok(facts), &module.context, &layout, f, &mut analyses)
     }));
     assert!(refused.is_err(), "facts that lost the slot behind the join were accepted by the audit");
-}
-
-/// A gep replaced by another of the same operands that differs in `inbounds`
-/// does not decompose alike (an inbounds one goes on through its index), and
-/// the effects named it as a leaf where a fresh decomposition reads base and
-/// index (qcport triggers -O1 with LLRM_CHECK_REPLAY, #2158). Equal geps still
-/// do.
-#[test]
-fn a_gep_that_differs_in_inbounds_is_not_read_alike_and_an_equal_one_is() {
-    let module = parsed(
-        "define void @f(ptr %q, i16 %i) {\nentry:\n  %plain = getelementptr i8, ptr %q, i16 %i\n  %bounded = getelementptr inbounds i8, ptr %q, i16 %i\n  %again = getelementptr i8, ptr %q, i16 %i\n  ret void\n}\n",
-    );
-    let f = function(&module, "f");
-    let (plain, bounded, again) = (value(f, "plain"), value(f, "bounded"), value(f, "again"));
-    assert!(!super::decomposes_alike(f, plain, bounded), "an inbounds gep was read like a plain one");
-    assert!(super::decomposes_alike(f, plain, again), "two equal geps were read apart");
 }
 
 /// The graph of a body is made once per body state and shared: the asks of

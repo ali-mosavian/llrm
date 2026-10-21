@@ -11,7 +11,7 @@ use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
 use crate::consts::{Calls, Known, known_walked};
-use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory, call_effects};
+use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory};
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -24,7 +24,7 @@ fn kept(
     kept_by(globals, call, true)
 }
 
-/// `kept`, or without `Summaries` what `manager::call_effects` leaves.
+/// `kept`, or without `Summaries` what `calls_by_attributes` leaves.
 fn kept_by(
     globals: &str,
     call: &str,
@@ -60,6 +60,7 @@ b0:
     let module = &program.modules[0];
     let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     if summarized {
         modules.require::<Summaries>();
     }
@@ -68,7 +69,7 @@ b0:
     if !summarized {
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
         let calls: Calls =
-            call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+            crate::alias::calls_by_attributes(&crate::testing::with_points(unit)).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
         return known_walked(&unit, &calls).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
@@ -323,6 +324,7 @@ fn kept_in(
     let module = &program.modules[1];
     let mut modules = ModuleAnalyses::new(analyses.proxy(&program, 1));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     modules.require::<Summaries>();
     let f = function(module, "f");
     let known = Analyses::new(modules.outer(module)).get::<ThroughMemory>(&module.context, &program.layout, f);

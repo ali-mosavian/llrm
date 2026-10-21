@@ -5,7 +5,7 @@
 use llrm_mir::passes::Outer;
 
 use crate::consts::{Calls, Known, known_walked};
-use crate::manager::call_effects;
+use crate::alias::calls_by_attributes;
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -33,9 +33,10 @@ b0:
     let layout = layout(&module);
     let outer = Outer::of(&module, None);
     let f = function(&module, "f");
-    let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
+    let unit =
+        crate::testing::with_points(crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer)));
     let calls: Calls =
-        call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+        calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
     known_walked(&unit, &calls).get(&value(f, "r")).cloned()
 }
 
@@ -105,7 +106,7 @@ b0:
     let outer = Outer::of(&module, None);
     let f = function(&module, "f");
     let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-    let effects: Vec<_> = call_effects(&unit, &outer).unwrap().into_values().collect();
+    let effects: Vec<_> = calls_by_attributes(&crate::testing::with_points(unit)).values().cloned().collect();
     assert_eq!(effects.len(), 2);
     assert!(!effects[0].stores.is_empty());
     assert!(std::rc::Rc::ptr_eq(&effects[0].stores, &effects[1].stores), "each call listed its own references");
