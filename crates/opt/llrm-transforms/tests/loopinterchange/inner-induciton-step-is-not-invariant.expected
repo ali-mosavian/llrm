@@ -1,0 +1,45 @@
+== -loop-interchange-profitabilities=ignore
+@step_of_k_is_i_0
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v9, %B3 ], [ 1, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v6, %B2 ], [ 0, %B1 ]
+  %v2 = phi i64 [ %v7, %B2 ], [ 0, %B1 ]
+  %v3 = getelementptr [8 x i8], ptr %A, i64 %v1, i64 %v0
+  %v4 = load i8, ptr %v3
+  %v5 = add i8 %v4, 1
+  store i8 %v5, ptr %v3
+  %v6 = add i64 %v1, 1
+  %v7 = add i64 %v2, %v0
+  %v8 = icmp slt i64 %v2, 16
+  br i1 %v8, label %B2, label %B3
+B3:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp slt i64 %v9, 8
+  br i1 %v10, label %B1, label %B4
+B4:
+  ret void
+@step_ok_k_is_i_1
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v7, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v4, %B2 ], [ 0, %B1 ]
+  %v2 = phi i64 [ %v5, %B2 ], [ 0, %B1 ]
+  %v3 = getelementptr inbounds [40 x i64], ptr %A, i64 %v0, i64 %v1
+  store i64 %v2, ptr %v3
+  %v4 = add i64 %v1, 1
+  %v5 = add i64 %v2, %v0
+  %v6 = icmp eq i64 %v1, 30
+  br i1 %v6, label %B3, label %B2
+B3:
+  %v7 = add i64 %v0, 1
+  %v8 = icmp eq i64 %v7, 6
+  br i1 %v8, label %B4, label %B1
+B4:
+  ret void

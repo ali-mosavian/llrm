@@ -1,0 +1,39 @@
+== -loop-interchange-profitabilities=ignore
+@f
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v13, %B9 ], [ 0, %B1 ]
+  %v1 = phi i8 [ %v12, %B9 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v2 = phi i64 [ %v10, %B8 ], [ 0, %B3 ]
+  %v3 = phi i8 [ %v1, %B3 ], [ %v7, %B8 ]
+  br label %B5
+B5:
+  br label %B6
+B6:
+  %v4 = phi i64 [ %v5, %B6 ], [ 0, %B5 ]
+  %v5 = add i64 %v4, 1
+  %v6 = icmp eq i64 %v5, 10
+  br i1 %v6, label %B7, label %B6
+B7:
+  %v7 = or i8 %v3, 42
+  %v8 = add i64 %v0, 1
+  %v9 = icmp eq i64 %v8, 20
+  br label %B8
+B8:
+  %v10 = add i64 %v2, 1
+  %v11 = icmp eq i64 %v10, 30
+  br i1 %v11, label %B9, label %B4
+B9:
+  %v12 = phi i8 [ %v7, %B8 ]
+  %v13 = add i64 %v0, 1
+  %v14 = icmp eq i64 %v13, 20
+  br i1 %v14, label %B10, label %B2
+B10:
+  ret void
