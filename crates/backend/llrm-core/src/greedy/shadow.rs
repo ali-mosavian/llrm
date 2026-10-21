@@ -384,7 +384,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         // A literal or address is rematerializable per definition, as
         // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
         // the register's facts say its cell holds (D-I).
-        let load = what.op == Operation::Move && matches!(what.sources[0], Loc::Mem(_));
+        let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
         if load && !self.tables.remat.borrow().contains(&parent) {
             return None;
         }

@@ -3028,7 +3028,7 @@ fn _stable_loads_from(
                             (what.dests.as_slice(), what.sources.as_slice())
                         {
                             if dest.value == *value
-                                && source.addr.is_some()
+                                && (_fixed_data(source).is_some() || _incoming_frame(source))
                                 && one.uses.is_empty()
                                 && one.defines == [*value]
                                 && one.clobbers.is_empty()

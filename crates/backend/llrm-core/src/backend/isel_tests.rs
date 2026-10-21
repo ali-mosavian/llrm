@@ -6466,6 +6466,45 @@ define double @f(double %x, double %y) addrspace(1) {
     assert!(loads.iter().all(|value| again.contains(value)), "{loads:?} against {again:?}");
 }
 
+/// A float made by `fild` from a frame cell was made again after a call by
+/// another `fild` of that cell, which `b`'s conversion had overwritten:
+/// `long_double_layout.c` printed 11 for `(long)(single * 2) + last` (want 24)
+/// once x87 loads of global cells counted as values the spiller makes again.
+/// Only a load of a global or an argument's cell is; the one of a local cell
+/// is stored and loaded back from its spill cell.
+#[test]
+fn test_a_float_converted_from_a_local_cell_is_not_made_again_from_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "@g = global x86_fp80 zeroinitializer
+@k = global i32 0
+declare void @h(i32) addrspace(1)
+define i32 @f(i16 %n) addrspace(1) {
+  %two = sitofp i16 2 to x86_fp80
+  %a = load x86_fp80, ptr @g
+  %m = fmul x86_fp80 %a, %two
+  %i = fptosi x86_fp80 %m to i32
+  call addrspace(1) void @h(i32 %i)
+  %c = sitofp i16 %n to x86_fp80
+  %d = fmul x86_fp80 %a, %c
+  %j = fptosi x86_fp80 %d to i32
+  call addrspace(1) void @h(i32 %j)
+  %e = fmul x86_fp80 %a, %two
+  %l = fptosi x86_fp80 %e to i32
+  ret i32 %l
+}
+";
+    let asm = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "486", text);
+    let from = asm.find("f proc").or_else(|| asm.find("F proc")).expect("the procedure");
+    let got: Vec<String> = asm[from..]
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.ends_with("endp"))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(!got[call..].iter().any(|line| line.starts_with("fild ")), "{got:#?}");
+}
+
 /// `while (p < big + 20000)` over a huge array stopped at the 64 KB boundary:
 /// the offset half of the end compare (`big + 14464`, the bytes past it) was
 /// gone from the loop, so `sbb` borrowed from whatever flags came before and
