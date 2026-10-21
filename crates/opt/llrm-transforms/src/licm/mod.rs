@@ -257,8 +257,7 @@ pub fn decide(
     let aa = AliasQuery::new(&memory, &accesses);
     let innermost = innermost_loops(&shape);
     let state = State::default();
-    let exposed: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> =
-        llrm_analysis::memory::exposed_frames(&memory).into_iter().collect();
+    let exposed = promote::Exposed::default();
     for one in shape.loops.iter() {
         let ctx = LoopCtx {
             function: unit.function,
@@ -348,14 +347,8 @@ pub fn run(
     let outer = std::rc::Rc::clone(analyses.outer());
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let innermost = innermost_loops(&shape);
-    // Exposure of an alloca does not change as instructions move between
-    // blocks or accesses leave the loop: found once.
-    let exposed: std::rc::Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>> = {
-        let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
-            .with_registers(&registers)
-            .with_shape(&shape);
-        std::rc::Rc::new(llrm_analysis::memory::exposed_frames(&memory).into_iter().collect())
-    };
+    // Found on the first ask, once.
+    let exposed = promote::Exposed::default();
     // `LLRM_CHECK_LICM_GRAPH`: the graph the updater kept says what a graph
     // made afresh of the body says. (Phis left non-minimal in cycles of
     // irreducible control flow, as LLVM's updater leaves them, are not
@@ -646,7 +639,7 @@ fn promotion_round(
     mssa: &Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-    exposed: &llrm_mir::dense::IdSet<llrm_mir::module::ValueId>,
+    exposed: &promote::Exposed,
 ) -> (usize, Vec<promote::Promotion>) {
     use llrm_analysis::cfg::Around;
     let Some(preheader) = ctx.loop_.preheader(unit.function).map(cfg::block) else { return (0, Vec::new()) };

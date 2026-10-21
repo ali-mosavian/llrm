@@ -304,9 +304,9 @@ fn is_safe_to_execute_unconditionally(
 }
 
 /// [`isSafeToSpeculativelyExecuteWithOpcode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575).
-/// DEVIATE LM1: a load is safe where its bytes are dereferenceable or the target
-/// does not trap on it at its alignment (`Machine::load_may_trap`), in place
-/// of `isDereferenceableAndAlignedPointer` (the same rule as `hoist`'s
+/// DEVIATE LM1: a load is safe where its bytes are dereferenceable or the
+/// target does not trap on it at its alignment (`Machine::load_may_trap`), in
+/// place of `isDereferenceableAndAlignedPointer` (the same rule as `hoist`'s
 /// `_may_fault`).
 pub fn is_safe_to_speculatively_execute(
     unit: &passes::Unit,
@@ -402,7 +402,7 @@ fn speculatable(
             llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
                 || (!pin_loads
                     && !outer.target().load_may_trap(
-                    bytes,
+                        bytes,
                         llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
                     ))
         }
