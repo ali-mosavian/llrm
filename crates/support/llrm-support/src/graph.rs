@@ -205,7 +205,19 @@ impl<'a> IntoIterator for &'a Predecessors {
     }
 }
 
+thread_local! {
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many predecessor graphs this thread has built, for a test that a query
+/// about one block (LLVM's `predecessors(BB)`, a walk of the block's users)
+/// builds none.
+pub fn predecessor_graphs_built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 pub fn predecessors<N: Node>(blocks: &[N]) -> Predecessors {
+    BUILT.with(|built| built.set(built.get() + 1));
     let mut ats: Vec<i64> = blocks.iter().map(Node::at).collect();
     ats.sort_unstable();
     ats.dedup();
