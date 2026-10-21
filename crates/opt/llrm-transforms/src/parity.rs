@@ -261,6 +261,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry(
+        "loop-interchange@1631",
+        Late,
+        "loop-interchange",
+        Translated,
+        "loopinterchange.rs, loopinterchange_transform.rs; deviations D1-D6 of its header (LoopInfo made again after a swap, no LoopCacheAnalysis so the cache rule decides nothing, no remarks); output equal to opt's on 108 runs of the pin's LoopInterchange tests (tools/loopinterchange_oracle.py)",
+    ),
     // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
     // vector width (no vector registers on llrm's targets).
     partial(

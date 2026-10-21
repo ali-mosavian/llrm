@@ -1,0 +1,22 @@
+== 
+@bar
+B0:
+  %v0 = add i32 %n, 1
+  br label %B1
+B1:
+  %v1 = phi i32 [ %m, %B0 ], [ %v0, %B5 ]
+  br label %B2
+B2:
+  %v2 = phi i32 [ %n, %B1 ], [ %v3, %B4 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v3 = add i32 %v2, 1
+  %v4 = icmp eq i32 %v3, 1
+  br i1 %v4, label %B5, label %B2
+B5:
+  %v5 = icmp eq i32 %v0, 1
+  br i1 %v5, label %B6, label %B1
+B6:
+  ret void

@@ -1,0 +1,373 @@
+== 
+@test
+B0:
+  %v0 = alloca [2500 x double]
+  %v1 = load i32, ptr %4
+  %v2 = tail call i32 @llvm.smax.i32(i32 %v1, i32 0)
+  %v3 = zext nneg i32 %v2 to i64
+  %v4 = load i32, ptr %9
+  %v5 = icmp eq i32 %v4, 1
+  br i1 %v5, label %B1, label %B15
+B1:
+  %v6 = load i32, ptr %6
+  %v7 = load i32, ptr %5
+  %v8 = tail call i32 @llvm.smax.i32(i32 %v7, i32 0)
+  %v9 = zext nneg i32 %v8 to i64
+  %v10 = shl nuw nsw i64 %v9, 3
+  %v11 = mul i64 %v10, %v9
+  %v12 = tail call i64 @llvm.smax.i64(i64 %v11, i64 1)
+  %v13 = tail call ptr @malloc(i64 %v12)
+  %v14 = icmp slt i32 %v7, 1
+  br i1 %v14, label %B2, label %B3
+B2:
+  %v15 = phi ptr [ %v13, %B1 ], [ %v13, %B14 ], [ %v161, %B32 ], [ %v161, %B39 ]
+  tail call void @free(ptr %v15)
+  ret void
+B3:
+  %v16 = mul nuw nsw i64 %v9, %v9
+  %v17 = shl i64 %v16, 3
+  call void @llvm.memset.p0.i64(ptr align 8 %v13, i8 0, i64 %v17, i1 false)
+  br label %B4
+B4:
+  %v18 = phi i64 [ %v44, %B8 ], [ 1, %B3 ]
+  %v19 = add nsw i64 %v18, -1
+  %v20 = mul nuw nsw i64 %v19, 8000
+  %v21 = getelementptr i8, ptr %0, i64 %v20
+  %v22 = getelementptr double, ptr @GlobK, i64 %v19
+  br label %B5
+B5:
+  %v23 = phi i64 [ %v42, %B7 ], [ 1, %B4 ]
+  %v24 = add nsw i64 %v23, -1
+  %v25 = mul nuw nsw i64 %v24, %v9
+  %v26 = getelementptr double, ptr %v13, i64 %v25
+  %v27 = mul nuw nsw i64 %v24, 8000
+  %v28 = getelementptr i8, ptr %v22, i64 %v27
+  %v29 = load double, ptr %v28
+  br label %B6
+B6:
+  %v30 = phi i64 [ %v40, %B6 ], [ %v9, %B5 ]
+  %v31 = phi i64 [ %v39, %B6 ], [ 1, %B5 ]
+  %v32 = add nsw i64 %v31, -1
+  %v33 = getelementptr double, ptr %v26, i64 %v32
+  %v34 = load double, ptr %v33
+  %v35 = getelementptr double, ptr %v21, i64 %v32
+  %v36 = load double, ptr %v35
+  %v37 = fmul fast double %v29, %v36
+  %v38 = fadd fast double %v37, %v34
+  store double %v38, ptr %v33
+  %v39 = add nuw nsw i64 %v31, 1
+  %v40 = add nsw i64 %v30, -1
+  %v41 = icmp eq i64 %v40, 0
+  br i1 %v41, label %B7, label %B6
+B7:
+  %v42 = add nuw nsw i64 %v23, 1
+  %v43 = icmp eq i64 %v23, %v9
+  br i1 %v43, label %B8, label %B5
+B8:
+  %v44 = add nuw nsw i64 %v18, 1
+  %v45 = icmp eq i64 %v18, %v9
+  br i1 %v45, label %B9, label %B4
+B9:
+  br label %B10
+B10:
+  %v46 = sext i32 %v6 to i64
+  %v47 = getelementptr double, ptr %3, i64 %v46
+  br label %B11
+B11:
+  %v48 = phi i64 [ %v66, %B13 ], [ 1, %B10 ]
+  %v49 = add nsw i64 %v48, -1
+  %v50 = add nsw i64 %v49, %v46
+  %v51 = mul nsw i64 %v50, %v3
+  %v52 = getelementptr double, ptr %v47, i64 %v51
+  %v53 = mul nuw nsw i64 %v49, %v9
+  %v54 = getelementptr double, ptr %v13, i64 %v53
+  br label %B12
+B12:
+  %v55 = phi i64 [ %v64, %B12 ], [ %v9, %B11 ]
+  %v56 = phi i64 [ %v63, %B12 ], [ 1, %B11 ]
+  %v57 = add nsw i64 %v56, -1
+  %v58 = getelementptr double, ptr %v52, i64 %v57
+  %v59 = getelementptr double, ptr %v54, i64 %v57
+  %v60 = load double, ptr %v59
+  %v61 = load double, ptr %v58
+  %v62 = fsub fast double %v61, %v60
+  store double %v62, ptr %v58
+  %v63 = add nuw nsw i64 %v56, 1
+  %v64 = add nsw i64 %v55, -1
+  %v65 = icmp eq i64 %v64, 0
+  br i1 %v65, label %B13, label %B12
+B13:
+  %v66 = add nuw nsw i64 %v48, 1
+  %v67 = icmp eq i64 %v48, %v9
+  br i1 %v67, label %B14, label %B11
+B14:
+  br label %B2
+B15:
+  %v68 = load i32, ptr %7
+  %v69 = sext i32 %v68 to i64
+  %v70 = icmp sgt i32 %v68, 0
+  br i1 %v70, label %B16, label %B32
+B16:
+  %v71 = load i32, ptr %8
+  %v72 = sext i32 %v71 to i64
+  %v73 = icmp sgt i32 %v71, 0
+  br i1 %v73, label %B17, label %B32
+B17:
+  %v74 = load i32, ptr %5
+  %v75 = tail call i32 @llvm.smax.i32(i32 %v74, i32 0)
+  %v76 = zext nneg i32 %v75 to i64
+  %v77 = load i32, ptr %6
+  %v78 = sext i32 %v77 to i64
+  %v79 = getelementptr double, ptr %1, i64 %v78
+  %v80 = icmp slt i32 %v74, 1
+  %v81 = shl nuw nsw i64 %v76, 3
+  %v82 = add nuw nsw i64 %v76, 2
+  %v83 = icmp sgt i32 %v74, 0
+  %v84 = sext i1 %v83 to i64
+  %v85 = add nsw i64 %v82, %v84
+  br label %B18
+B18:
+  %v86 = phi i64 [ %v150, %B30 ], [ 1, %B17 ]
+  %v87 = mul nuw nsw i64 %v86, 2916
+  %v88 = add nsw i64 %v87, -2971
+  %v89 = add nsw i64 %v86, -1
+  %v90 = mul nsw i64 %v89, %v72
+  br label %B19
+B19:
+  %v91 = phi i64 [ %v148, %B29 ], [ 1, %B18 ]
+  %v92 = mul nuw nsw i64 %v91, 2916
+  %v93 = add nsw i64 %v92, -2971
+  br label %B20
+B20:
+  %v94 = phi i64 [ %v143, %B26 ], [ 1, %B19 ]
+  %v95 = add nsw i64 %v88, %v94
+  %v96 = add nsw i64 %v94, -1
+  %v97 = mul nsw i64 %v96, %v72
+  %v98 = getelementptr double, ptr @GlobL, i64 %v97
+  br label %B21
+B21:
+  %v99 = phi i64 [ %v141, %B25 ], [ 1, %B20 ]
+  %v100 = add nsw i64 %v93, %v99
+  %v101 = getelementptr double, ptr %v98, i64 %v99
+  br label %B22
+B22:
+  %v102 = phi i64 [ %v139, %B24 ], [ 1, %B21 ]
+  %v103 = mul nuw nsw i64 %v102, 54
+  %v104 = add nsw i64 %v95, %v103
+  %v105 = getelementptr double, ptr @GlobC, i64 %v104
+  %v106 = load double, ptr %v105
+  %v107 = getelementptr double, ptr @GlobG, i64 %v104
+  %v108 = load double, ptr %v107
+  %v109 = getelementptr double, ptr @GlobE, i64 %v104
+  %v110 = load double, ptr %v109
+  %v111 = getelementptr double, ptr @GlobI, i64 %v104
+  %v112 = load double, ptr %v111
+  %v113 = add nsw i64 %v102, -1
+  %v114 = mul nsw i64 %v113, %v72
+  br label %B23
+B23:
+  %v115 = phi i64 [ %v137, %B23 ], [ 1, %B22 ]
+  %v116 = mul nuw nsw i64 %v115, 54
+  %v117 = add nsw i64 %v100, %v116
+  %v118 = getelementptr double, ptr @GlobD, i64 %v117
+  %v119 = load double, ptr %v118
+  %v120 = fmul fast double %v119, %v106
+  %v121 = getelementptr double, ptr @GlobH, i64 %v117
+  %v122 = load double, ptr %v121
+  %v123 = fmul fast double %v122, %v108
+  %v124 = fadd fast double %v123, %v120
+  %v125 = getelementptr double, ptr @GlobF, i64 %v117
+  %v126 = load double, ptr %v125
+  %v127 = fmul fast double %v126, %v110
+  %v128 = fadd fast double %v124, %v127
+  %v129 = getelementptr double, ptr @GlobJ, i64 %v117
+  %v130 = load double, ptr %v129
+  %v131 = fmul fast double %v130, %v112
+  %v132 = fadd fast double %v128, %v131
+  %v133 = add nsw i64 %v115, %v114
+  %v134 = mul nsw i64 %v133, 8000
+  %v135 = getelementptr i8, ptr %v101, i64 %v134
+  %v136 = getelementptr i8, ptr %v135, i64 -8008
+  store double %v132, ptr %v136
+  %v137 = add nuw nsw i64 %v115, 1
+  %v138 = icmp eq i64 %v115, %v72
+  br i1 %v138, label %B24, label %B23
+B24:
+  %v139 = add nuw nsw i64 %v102, 1
+  %v140 = icmp eq i64 %v102, %v69
+  br i1 %v140, label %B25, label %B22
+B25:
+  %v141 = add nuw nsw i64 %v99, 1
+  %v142 = icmp eq i64 %v99, %v72
+  br i1 %v142, label %B26, label %B21
+B26:
+  %v143 = add nuw nsw i64 %v94, 1
+  %v144 = icmp eq i64 %v94, %v69
+  br i1 %v144, label %B27, label %B20
+B27:
+  br i1 %v80, label %B28, label %B40
+B28:
+  %v145 = getelementptr double, ptr %v0, i64 %v91
+  %v146 = getelementptr double, ptr %v145, i64 %v90
+  %v147 = getelementptr i8, ptr %v146, i64 -8
+  store double fp(0000000000000000), ptr %v147
+  br label %B29
+B29:
+  %v148 = add nuw nsw i64 %v91, 1
+  %v149 = icmp eq i64 %v91, %v72
+  br i1 %v149, label %B30, label %B19
+B30:
+  %v150 = add nuw nsw i64 %v86, 1
+  %v151 = icmp eq i64 %v86, %v69
+  br i1 %v151, label %B31, label %B18
+B31:
+  br label %B32
+B32:
+  %v152 = load i32, ptr %6
+  %v153 = load i32, ptr %5
+  %v154 = tail call i32 @llvm.smax.i32(i32 %v153, i32 0)
+  %v155 = zext nneg i32 %v154 to i64
+  %v156 = sext i32 %v152 to i64
+  %v157 = getelementptr double, ptr %2, i64 %v156
+  %v158 = shl nuw nsw i64 %v155, 3
+  %v159 = icmp slt i32 %v153, 1
+  %v160 = select i1 %v159, i64 1, i64 %v158
+  %v161 = tail call ptr @malloc(i64 %v160)
+  br i1 %v159, label %B2, label %B33
+B33:
+  call void @llvm.memset.p0.i64(ptr align 8 %v161, i8 0, i64 %v158, i1 false)
+  br label %B34
+B34:
+  %v162 = phi i64 [ %v180, %B36 ], [ 1, %B33 ]
+  %v163 = add nsw i64 %v162, -1
+  %v164 = mul nuw nsw i64 %v163, 8000
+  %v165 = getelementptr i8, ptr %0, i64 %v164
+  %v166 = getelementptr double, ptr %v0, i64 %v163
+  %v167 = load double, ptr %v166
+  br label %B35
+B35:
+  %v168 = phi i64 [ %v155, %B34 ], [ %v178, %B35 ]
+  %v169 = phi i64 [ %v177, %B35 ], [ 1, %B34 ]
+  %v170 = add nsw i64 %v169, -1
+  %v171 = getelementptr double, ptr %v161, i64 %v170
+  %v172 = load double, ptr %v171
+  %v173 = getelementptr double, ptr %v165, i64 %v170
+  %v174 = load double, ptr %v173
+  %v175 = fmul fast double %v167, %v174
+  %v176 = fadd fast double %v175, %v172
+  store double %v176, ptr %v171
+  %v177 = add nuw nsw i64 %v169, 1
+  %v178 = add nsw i64 %v168, -1
+  %v179 = icmp eq i64 %v178, 0
+  br i1 %v179, label %B36, label %B35
+B36:
+  %v180 = add nuw nsw i64 %v162, 1
+  %v181 = icmp eq i64 %v162, %v155
+  br i1 %v181, label %B37, label %B34
+B37:
+  br label %B38
+B38:
+  %v182 = phi i64 [ %v155, %B37 ], [ %v191, %B38 ]
+  %v183 = phi i64 [ %v190, %B38 ], [ 1, %B37 ]
+  %v184 = add nsw i64 %v183, -1
+  %v185 = getelementptr double, ptr %v157, i64 %v184
+  %v186 = getelementptr double, ptr %v161, i64 %v184
+  %v187 = load double, ptr %v186
+  %v188 = load double, ptr %v185
+  %v189 = fsub fast double %v188, %v187
+  store double %v189, ptr %v185
+  %v190 = add nuw nsw i64 %v183, 1
+  %v191 = add nsw i64 %v182, -1
+  %v192 = icmp eq i64 %v191, 0
+  br i1 %v192, label %B39, label %B38
+B39:
+  br label %B2
+B40:
+  call void @llvm.memset.p0.i64(ptr nonnull align 16 @GlobM, i8 0, i64 %v81, i1 false)
+  br label %B41
+B41:
+  %v193 = phi i64 [ %v211, %B43 ], [ 1, %B40 ]
+  %v194 = add nsw i64 %v193, -1
+  %v195 = mul nuw nsw i64 %v194, 8000
+  %v196 = getelementptr i8, ptr @GlobL, i64 %v195
+  %v197 = getelementptr double, ptr %v79, i64 %v194
+  %v198 = load double, ptr %v197
+  br label %B42
+B42:
+  %v199 = phi i64 [ %v209, %B42 ], [ %v76, %B41 ]
+  %v200 = phi i64 [ %v208, %B42 ], [ 1, %B41 ]
+  %v201 = add nsw i64 %v200, -1
+  %v202 = getelementptr double, ptr @GlobM, i64 %v201
+  %v203 = load double, ptr %v202
+  %v204 = getelementptr double, ptr %v196, i64 %v201
+  %v205 = load double, ptr %v204
+  %v206 = fmul fast double %v198, %v205
+  %v207 = fadd fast double %v206, %v203
+  store double %v207, ptr %v202
+  %v208 = add nuw nsw i64 %v200, 1
+  %v209 = add nsw i64 %v199, -1
+  %v210 = icmp eq i64 %v209, 0
+  br i1 %v210, label %B43, label %B42
+B43:
+  %v211 = add nuw nsw i64 %v193, 1
+  %v212 = icmp eq i64 %v211, %v85
+  br i1 %v212, label %B44, label %B41
+B44:
+  br label %B45
+B45:
+  %v213 = phi i64 [ %v224, %B45 ], [ %v76, %B44 ]
+  %v214 = phi double [ %v222, %B45 ], [ fp(0000000000000000), %B44 ]
+  %v215 = phi i64 [ %v223, %B45 ], [ 1, %B44 ]
+  %v216 = add nsw i64 %v215, -1
+  %v217 = getelementptr double, ptr %v79, i64 %v216
+  %v218 = load double, ptr %v217
+  %v219 = getelementptr double, ptr @GlobM, i64 %v216
+  %v220 = load double, ptr %v219
+  %v221 = fmul fast double %v220, %v218
+  %v222 = fadd fast double %v221, %v214
+  %v223 = add nuw nsw i64 %v215, 1
+  %v224 = add nsw i64 %v213, -1
+  %v225 = icmp eq i64 %v224, 0
+  br i1 %v225, label %B46, label %B45
+B46:
+  %v226 = phi double [ %v222, %B45 ]
+  %v227 = add nsw i64 %v91, %v90
+  %v228 = getelementptr double, ptr %v0, i64 %v227
+  %v229 = getelementptr i8, ptr %v228, i64 -8
+  store double %v226, ptr %v229
+  %v230 = getelementptr double, ptr @GlobK, i64 %v227
+  %v231 = getelementptr i8, ptr %v230, i64 -8
+  br label %B47
+B47:
+  %v232 = phi i64 [ %v254, %B49 ], [ 1, %B46 ]
+  %v233 = add nsw i64 %v232, -1
+  %v234 = mul nuw nsw i64 %v233, 8000
+  %v235 = getelementptr i8, ptr @GlobL, i64 %v234
+  br label %B48
+B48:
+  %v236 = phi i64 [ %v247, %B48 ], [ %v76, %B47 ]
+  %v237 = phi double [ %v245, %B48 ], [ fp(0000000000000000), %B47 ]
+  %v238 = phi i64 [ %v246, %B48 ], [ 1, %B47 ]
+  %v239 = add nsw i64 %v238, -1
+  %v240 = getelementptr double, ptr %v235, i64 %v239
+  %v241 = load double, ptr %v240
+  %v242 = getelementptr double, ptr %v79, i64 %v239
+  %v243 = load double, ptr %v242
+  %v244 = fmul fast double %v243, %v241
+  %v245 = fadd fast double %v244, %v237
+  %v246 = add nuw nsw i64 %v238, 1
+  %v247 = add nsw i64 %v236, -1
+  %v248 = icmp eq i64 %v247, 0
+  br i1 %v248, label %B49, label %B48
+B49:
+  %v249 = phi double [ %v245, %B48 ]
+  %v250 = getelementptr double, ptr @GlobM, i64 %v233
+  %v251 = load double, ptr %v250
+  %v252 = fadd fast double %v251, %v249
+  %v253 = getelementptr i8, ptr %v231, i64 %v234
+  store double %v252, ptr %v253
+  %v254 = add nuw nsw i64 %v232, 1
+  %v255 = icmp eq i64 %v254, %v85
+  br i1 %v255, label %B50, label %B47
+B50:
+  br label %B29

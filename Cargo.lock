@@ -618,6 +618,7 @@ dependencies = [
  "llrm-x86-m32",
  "num-bigint",
  "num-traits",
+ "regex",
 ]
 
 [[package]]

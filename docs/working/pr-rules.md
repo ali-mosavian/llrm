@@ -14,7 +14,7 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 - A deletion names its path in a `Deletes:` or `Reverts:` line.
 - `perf(...)` PRs, and `refactor(...)` PRs that change non-test pass code, carry a `Rows:` line: the rows pair (base and new binaries, md5), rows above base, run diff clean. An objsweep with 0 objects changed is a valid result for a pass whose output must not change.
 - Every fix has a regression test seen failing first, in the same commit.
-- A PR that waits for evidence or for the user stays DRAFT. A ready PR lands through the runner at once.
+- A PR that waits for evidence or for the user stays DRAFT. A ready PR lands through the runner at once. A hold is an entry in tools/landing/waits.txt, not a draft toggle: land.sh marks a draft ready again, so a PR the runner already picked lands anyway (#3352 did).
 
 ## Landing
 - The owner lands through `tools/landing/land.sh` when its session may; never `gh pr merge` by hand; never land another session's PR.

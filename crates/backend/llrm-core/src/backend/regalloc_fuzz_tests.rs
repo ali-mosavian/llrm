@@ -89,6 +89,18 @@ impl Builder {
         self.next
     }
 
+    /// A copy of `value` for one role of an address: isel copies a value into
+    /// a fresh one for each, so no value is a base and an index.
+    fn role_copy(
+        &mut self,
+        value: u32,
+        out: &mut Vec<Insn>,
+    ) -> u32 {
+        let copy = self.fresh();
+        out.push(self.mov(copy, held(value), &[value]));
+        copy
+    }
+
     fn insn(
         &mut self,
         op: Operation,
@@ -147,19 +159,32 @@ impl Builder {
             2 | 3 => {
                 out.push(self.insn(Operation::Binary, "add", vec![held(d)], vec![held(d), held(s)], &[d], &[d, s]))
             }
-            // A base and an index.
+            // A base and an index, each a copy made for its role, as isel
+            // makes them: a value used as a base and as an index in one body
+            // would be joined into a class neither role has.
             4 => {
+                let (base, index) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: s, width: 2 }),
-                    index: Some(Held { value: t, width: 2 }),
+                    base: Some(Held { value: base, width: 2 }),
+                    index: Some(Held { value: index, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
                 };
-                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[s, t]));
+                out.push(self.insn(
+                    Operation::Move,
+                    "mov",
+                    vec![held(d)],
+                    vec![Loc::Mem(cell)],
+                    &[d],
+                    &[base, index],
+                ));
             }
             5 => {
-                let cell =
-                    Mem { base: Some(Held { value: s, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 2)), 2) };
-                out.push(self.insn(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(d)], &[], &[s, d]));
+                let base = self.role_copy(s, out);
+                let cell = Mem {
+                    base: Some(Held { value: base, width: 2 }),
+                    ..Mem::new(Some(Addr::new(Space::Literal, 2)), 2)
+                };
+                out.push(self.insn(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(d)], &[], &[base, d]));
             }
             // dx:ax product, the high half redefined.
             6 if d != s && s != t && d != t => out.push(self.insn(
@@ -199,12 +224,20 @@ impl Builder {
             }
             // A far access: a selector and a base.
             10 if s != t => {
+                let (base, selector) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: s, width: 2 }),
-                    selector: Some(Held { value: t, width: 2 }),
+                    base: Some(Held { value: base, width: 2 }),
+                    selector: Some(Held { value: selector, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
                 };
-                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[s, t]));
+                out.push(self.insn(
+                    Operation::Move,
+                    "mov",
+                    vec![held(d)],
+                    vec![Loc::Mem(cell)],
+                    &[d],
+                    &[base, selector],
+                ));
             }
             // A far pointer loaded whole, then read through: the segment half
             // is a selector and nothing else.
