@@ -15,7 +15,9 @@ double f9(const double *a)
 /// The spill of each piece of a split x87 value stored the piece into a home
 /// of its own: ten stores to the frame where LLVM's greedy allocation and
 /// spill hoisting store seven (`InlineSpiller::hoistSpillInsideBB`,
-/// `eliminateRedundantSpills`).
+/// `eliminateRedundantSpills`). Staged: 7 is the pin's number with the machine
+/// scheduler off (5 with it); main's floatassign stores 3 (X87-GAP-4), the
+/// bound this test moves to when that row lands.
 #[test]
 fn test_nine_live_doubles_spill_no_more_than_the_pin_through_the_frame() {
     let scratch = tempfile::tempdir().unwrap();
