@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
@@ -55,6 +56,22 @@ def check(
             else:
                 out.append(f"WRONG {label}: want {run_tests.lines(want)[:2]}, got {run_tests.lines(output)[:2]}")
     return out
+
+
+STRINGS = "strcmp_smoke"
+
+
+def strings(
+    run: Callable[[], tuple[int, str]],
+) -> list[str]:
+    """The string-relation program tests/run/qb/strcmp_smoke.bas (`' flags: -O1 | -O2 | -O3 | -Os`, the qb45 runtime, m16) through tests/run: one
+    line per level in its verdict. A compiler that cannot compile a comparison (`@llrm.qb.B$SCMP's flags read other than by a comparison`:
+    str_slices on the tip) or prints another answer is red."""
+    code, text = run()
+    failed = [one.strip() for one in text.splitlines() if one.startswith("FAIL")]
+    if code == 0 and not failed and ", 0 fail" in text:
+        return [f"ok {STRINGS} m16 {level}" for level in ("-O1", "-O2", "-O3", "-Os")]
+    return [f"WRONG {STRINGS} m16: {one[:240]}" for one in failed] or [f"WRONG {STRINGS} m16: exit {code}: {text.strip()[-240:]}"]
 
 
 def demo_lines(results: dict) -> list[str]:
@@ -104,6 +121,16 @@ def demos(work: Path) -> list[str]:
     return demo_lines(played({path.stem.upper(): path for path in found.values()}, work / "demos"))
 
 
+def string_run(work: Path) -> tuple[int, str]:
+    done = subprocess.run(
+        [sys.executable, str(dosbatch.ROOT / "tools" / "dosbatch" / "run_tests.py"), STRINGS, "--work", str(work / "strings")],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LLRM_BIN": str(dosbatch.BIN)},
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("programs", nargs="*", default=list(DEFAULT))
@@ -131,6 +158,7 @@ def main(argv: list[str]) -> int:
             return ran.status, ran.output.decode("latin1")
 
         lines = check(tuple(args.programs), run)
+        lines += strings(lambda: string_run(work))
         if not args.no_demos:
             lines += demos(work)
     print("\n".join(lines))
