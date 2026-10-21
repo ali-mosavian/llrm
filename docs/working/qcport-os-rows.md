@@ -25,9 +25,11 @@ Base = parity without the change, then with it (`llrm-c -m16 -Os -march=i386`, s
 
 | row | module | main B | base B | with change B | owner, date |
 |---|---|---|---|---|---|
-| QO-1 | host/demo | 5404 | 5609 | 5742 (+133) | w-1, 2026-10-28 |
-| QO-6 | render/d_alias | 11537 | 12393 | 12399 (+6) | w-1, 2026-10-28 |
+| QO-1 | host/demo | 5404 | 5609 | 5742 (+133) | splitkit (base gap to main), evidence w-1 |
+| QO-6 | render/d_alias | 11537 | 12393 | 12399 (+6) | splitkit (base gap to main), evidence w-1 |
 
 Both are above main already on parity (cause not examined); the change adds to it.
 
 QO-1 is one function, `_demo_snapshot_apply@3` (+45 lines): the pointer argument is kept in `di` on base and reloaded from its cell before each use with the change. `LLRM_GREEDY_TRACE`: values 220 and spilled 25 -> 26, but reloads 14 -> 47, stores 9 -> 21, new ranges 129 -> 171. The allocator decides differently, so the cause is splitkit's allocation row, not the phi lowering. Traced with a temporary `tryEvict`/spill print on both builds: the first events are the same (`v2`, `v98`, `v86`, `v242` evict in turn), then one range (4 segments, weight 0.15935233; `v238` on base, `v361` with the change) takes `ebx` from `v105` on base and `edi` from `v86` with the change; the rest of the evictions and the whole-range spills of the split pieces differ from there. The extra phi-copy ranges change which register is the cheapest to evict. Exit: the module at or below base, by the eviction choice and not by the phi lowering.
+
+Status: both rows are blocked by the base gap, not by the change: host/demo main 5404 vs parity 5609 (+205) and render/d_alias main 11537 vs parity 12393 (+856) exist before it. Once splitkit's allocation rows close that gap, the +133 and +6 land under main. The pin comparison found `canReassign` untranslated (separate PR, -62 B in all, host/demo -3, d_alias 0) and no deviation in the eviction cost, tie-break, hints or weights; the first divergence is the interference pattern of one range, `ebx` on base and `edi` with the change.
