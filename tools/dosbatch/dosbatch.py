@@ -213,8 +213,9 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
     _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
     if image is not None:
-        # jwlink's ELF writer breaks on paragraph-aligned data (tools/dosbatch/omfalign.py): the image takes dword-aligned copies.
-        every = omfalign.at_most_a_dword([*first, obj, *objects_after, *last, *final], made / "image-objects")
+        # jwlink's ELF writer breaks on paragraph-aligned data (tools/dosbatch/omfalign.py): the image takes dword-aligned copies, in a directory of
+        # its own: rows build at once in one work directory, and copies shared by name were written under each other's linker (E2146 invalid object file).
+        every = omfalign.dword_laid_out([*first, obj, *objects_after, *last, *final], image.with_suffix(".objects"))
         cut = lambda count: [every.pop(0) for _ in range(count)]  # noqa: E731
         copies = (cut(len(first)), cut(1)[0], cut(len(objects_after)), cut(len(last)), cut(len(final)))
         _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(copies[0]), "file", str(copies[1]), *files(copies[2]), *files(copies[3]), *after, *files(copies[4])])

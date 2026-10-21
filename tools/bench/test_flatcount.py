@@ -83,7 +83,7 @@ def test_a_flat_row_gets_clocks_only_where_the_emulator_ran_the_kernel_dosbox_co
 
     import bench
 
-    ran = lambda instructions, clocks=7: types.SimpleNamespace(error="", region=types.SimpleNamespace(instructions=instructions, clocks=clocks))  # noqa: E731
+    ran = lambda instructions, clocks=7: types.SimpleNamespace(error="", rep_iterations=0, region=types.SimpleNamespace(instructions=instructions, clocks=clocks))  # noqa: E731
     key = ("fib", "bq32", "O2")
     monkeypatch.setattr(flatcount, "run", lambda *a: ran(100))
     assert bench.flat_clocks(key, tmp_path / "x.elf", "BenchFib", 100, tmp_path) == {"clocks": 7}
@@ -122,3 +122,17 @@ def test_an_emulator_fault_names_the_instruction_that_faulted_not_a_segment_sele
     elf = image(tmp_path, b"\xa1\x00\x00\x00\x0b\xc3")  # mov eax,[0xb000000]; ret: above the emulated memory
     ran = flatcount.run(elf, "BENCHK", tmp_path)
     assert ran.error and f"eip {KERNEL:#x}" in ran.error, ran.error
+
+
+def test_dosbox_counts_a_long_rep_in_slices_and_the_emulators_count_is_judged_with_that_allowance(tmp_path):
+    """matmul, ring, sieve, bintree and huge on head have a `rep stosd` over a page in the kernel: DOSBox counted 131 to 20,104 more instructions
+    than the emulator (one more for every 4 iterations), the count read as another run's, and the rows had no clocks."""
+    # xor eax,eax; mov edi,0x08800000; mov ecx,1000; rep stosd; ret
+    elf = image(tmp_path, b"\x31\xc0\xbf\x00\x00\x80\x08\xb9\xe8\x03\x00\x00\xf3\xab\xc3")
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert not ran.error, ran.error
+    assert (ran.region.instructions, ran.rep_iterations) == (5, 999)
+    dosbox = ran.region.instructions + 999 // 4
+    assert flatcount.agrees(ran.region.instructions, dosbox, ran.rep_iterations)
+    assert not flatcount.agrees(ran.region.instructions, dosbox), "the count alone is 249 off"
+    assert not flatcount.agrees(ran.region.instructions, dosbox + 500, ran.rep_iterations)
