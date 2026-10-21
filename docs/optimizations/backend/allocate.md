@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:e4f4cf59e34f02a3ed942748be3f307f5eda2b849e7881be597add2d1f4f9041 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:041ba2d0da74b0f52aae6917f2960efb5b26fc4174aa996d7d6cfa949b63cfff -->
 
 # allocate
 
@@ -55,10 +55,10 @@ what its copies and folds would save; a value that must not be spilled
 `RegAlloc::transform` first changes the body so that the greedy loop can
 treat every value alike, in this order:
 
-1. `constrain::distinct_roles` and `distinct_classes` copy a value that
-   needs two incompatible register sets at once (a word that is both base
-   and index of one address, or both a byte and an index) into one value per
-   role.
+1. `constrain::distinct_classes` copies a value that needs two incompatible
+   register sets at once (both a byte and an index) into one value per role;
+   isel already gives a word that is both base and index of one address two
+   values.
 2. `explicit_selectors` reaches a far cell through ES where its selector is
    also read as a number.
 3. A pin outside the value's class is dropped where an instruction delivers

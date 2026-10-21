@@ -87,3 +87,14 @@ def test_the_step_table_lists_the_small_rows_as_one_line_so_it_sums_to_the_instr
     assert "other (25 rows under 0.5%)" in text
     listed = sum(float(m_[1]) for m_ in re.finditer(r"^(?:regalloc big|other \(25 rows under 0.5%\)) +\d+ +(\d+)", text, re.M))
     assert abs(listed - 1000.0) <= 20.0
+
+
+def test_the_accounting_block_adds_up_to_the_instrumented_total():
+    """Two instruments flipped a conclusion: 2.4 M 'outside the thread' (plain total vs instrumented rows) against 43 M. The block names every part and its identities hold."""
+    result = {"total_M": 1256.0, "instrumented_M": 1281.0, "rows_sum_M": 1238.0, "debug_total_M": 1259.0, "outside_every_step_M": 21.0, "startup_M": 4.1}
+    lines = dict(m.accounting(result))
+    thread = lines["timed thread total"]
+    assert abs(lines["rows sum (own M of every step)"] + lines["outside every step, inside the thread"] + lines["unexplained in the thread (thread - rows - outside)"] - thread) < 1e-9
+    assert abs(thread + lines["outside the timed thread (instrumented - thread)"] - lines["instrumented perf total (LLRM_DEBUG=time on)"]) < 1e-9
+    assert abs(lines["  of which start-up and exit (empty-file compile)"] + lines["  of which the rest (main-thread work, instrument)"] - lines["outside the timed thread (instrumented - thread)"]) < 1e-9
+    assert abs(lines["instrument overhead (instrumented - plain)"] - 25.0) < 1e-9
