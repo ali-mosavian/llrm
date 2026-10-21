@@ -167,6 +167,31 @@ pub struct ScevSession {
     loops: LoopInfo,
     assumptions: AssumptionCache,
     scev: ScalarEvolution,
+    /// The point in the function's history `scev` is right at.
+    synced: llrm_mir::module::Mark,
+}
+
+thread_local! {
+    /// The expressions of the functions last worked on, with the point in each
+    /// function's history they were right at: the next session on a function
+    /// takes them and drops what the edits since touched.
+    static KEPT: RefCell<Vec<(llrm_mir::module::Mark, ScalarEvolution)>> = const { RefCell::new(Vec::new()) };
+}
+
+const KEPT_FUNCTIONS: usize = 4;
+
+impl Drop for ScevSession {
+    fn drop(&mut self) {
+        let scev = std::mem::replace(&mut self.scev, ScalarEvolution::new());
+        KEPT.with(|kept| {
+            let mut kept = kept.borrow_mut();
+            kept.retain(|(mark, _)| mark.lineage() != self.synced.lineage());
+            kept.push((self.synced, scev));
+            if kept.len() > KEPT_FUNCTIONS {
+                kept.remove(0);
+            }
+        });
+    }
 }
 
 impl ScevSession {
@@ -189,7 +214,24 @@ impl ScevSession {
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::of(context, globals, metadata, function);
-        Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
+        let mut session = Self { tree, loops, assumptions, scev: ScalarEvolution::new(), synced: function.mark() };
+        // The expressions a session before this one left, less what the edits
+        // since touched.
+        let found = KEPT.with(|kept| {
+            let mut kept = kept.borrow_mut();
+            let at = kept.iter().position(|(mark, _)| mark.same_history(session.synced) && mark.lineage() == session.synced.lineage())?;
+            Some(kept.remove(at))
+        });
+        if let Some((mark, scev)) = found {
+            session.scev = scev;
+            session.forget_since(context, &DataLayout::default(), globals, metadata, function, mark);
+            if llrm_support::debug::verifying()
+                && let Err(why) = session.verify(context, &DataLayout::default(), globals, metadata, function)
+            {
+                panic!("a kept ScalarEvolution is stale: {why}");
+            }
+        }
+        session
     }
 
     /// The expressions dropped: after the function changed in ways that leave
@@ -218,6 +260,7 @@ impl ScevSession {
             }
             _ => self.forget_expressions(),
         }
+        self.synced = function.mark();
     }
 
     /// `ScalarEvolution::verify` over the function as it is now: the first
