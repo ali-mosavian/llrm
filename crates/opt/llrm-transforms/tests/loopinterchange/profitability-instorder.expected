@@ -1,0 +1,114 @@
+== -loop-interchange-profitabilities=instorder
+@profitable
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v9, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v7, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v2 = mul i64 %v0, 100
+  %v3 = add i64 %v1, %v2
+  %v4 = getelementptr inbounds i8, ptr %A, i64 %v3
+  store i8 0, ptr %v4
+  %v5 = add i64 %v0, 1
+  %v6 = icmp eq i64 %v5, 10
+  br label %B6
+B6:
+  %v7 = add i64 %v1, 1
+  %v8 = icmp eq i64 %v7, 10
+  br i1 %v8, label %B7, label %B4
+B7:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 10
+  br i1 %v10, label %B8, label %B2
+B8:
+  ret void
+@profitable_neg_step
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v10, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v8, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v2 = sub i64 9, %v0
+  %v3 = mul i64 %v2, 100
+  %v4 = add i64 %v1, %v3
+  %v5 = getelementptr inbounds i8, ptr %A, i64 %v4
+  store i8 0, ptr %v5
+  %v6 = add i64 %v0, 1
+  %v7 = icmp eq i64 %v6, 10
+  br label %B6
+B6:
+  %v8 = add i64 %v1, 1
+  %v9 = icmp eq i64 %v8, 10
+  br i1 %v9, label %B7, label %B4
+B7:
+  %v10 = add i64 %v0, 1
+  %v11 = icmp eq i64 %v10, 10
+  br i1 %v11, label %B8, label %B2
+B8:
+  ret void
+@unprofitable0
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v6, %B3 ], [ 0, %B0 ]
+  %v1 = mul i64 %v0, 100
+  br label %B2
+B2:
+  %v2 = phi i64 [ %v4, %B2 ], [ 0, %B1 ]
+  %v3 = getelementptr inbounds [1 x i8], ptr %A, i64 %v2, i64 %v1
+  store i8 0, ptr %v3
+  %v4 = add i64 %v2, 1
+  %v5 = icmp eq i64 %v4, 10
+  br i1 %v5, label %B3, label %B2
+B3:
+  %v6 = add i64 %v0, 1
+  %v7 = icmp eq i64 %v6, 10
+  br i1 %v7, label %B4, label %B1
+B4:
+  ret void
+@unprofitable1
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v16, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v14, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [100 x i8], ptr %A, i64 %v0, i64 %v1
+  %v3 = getelementptr inbounds [100 x i8], ptr %B, i64 %v0, i64 %v1
+  %v4 = getelementptr inbounds [100 x i8], ptr %C, i64 %v1, i64 %v0
+  %v5 = getelementptr inbounds [99 x i8], ptr %C, i64 %v1, i64 %v0
+  %v6 = getelementptr inbounds [98 x i8], ptr %C, i64 %v1, i64 %v0
+  %v7 = load i8, ptr %v3
+  %v8 = load i8, ptr %v4
+  %v9 = load i8, ptr %v5
+  %v10 = load i8, ptr %v6
+  %v11 = add i8 %v7, %v8
+  %v12 = add i8 %v11, %v9
+  %v13 = add i8 %v12, %v10
+  store i8 %v13, ptr %v2
+  %v14 = add i64 %v1, 1
+  %v15 = icmp eq i64 %v14, 42
+  br i1 %v15, label %B3, label %B2
+B3:
+  %v16 = add i64 %v0, 1
+  %v17 = icmp eq i64 %v16, 42
+  br i1 %v17, label %B4, label %B1
+B4:
+  ret void

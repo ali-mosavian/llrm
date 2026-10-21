@@ -22,4 +22,12 @@ echo "3012 h3012 paritysha1" > $d/refused.state; echo "3013 h3013 oldparity" >> 
 again=$(REFUSED_STATE=$d/refused.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
 echo "$again" | grep -qw 3012 && { echo "FAIL: a PR refused at this head and this feat/parity was queued again (the runner spun on it every second)"; exit 1; }
 echo "$again" | grep -qw 3013 || { echo "FAIL: a PR refused against an older feat/parity was not queued again"; exit 1; }
+# a PR refused at an older head whose owner has just pushed (new head first seen now) lands alone for the grace; after it the normal order resumes
+echo "3020 hOLD paritysha1" > $d/refused2.state
+run() { NOW=$1 SEEN_STATE=$d/seen.state REFUSED_STATE=$d/refused2.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err2 | tr '\n' ' '; }
+alone=$(run 1000)
+[ "$alone" = "3020 " ] || { echo "FAIL: a freshly pushed PR did not land alone: got '$alone'"; exit 1; }
+grep -q "^HOLD: landing 3020" $d/err2 || { echo "FAIL: the hold is not logged with the PR number"; exit 1; }
+later=$(run 1700)
+echo "$later" | grep -qw 3020 && echo "$later" | grep -qw 3021 || { echo "FAIL: after the grace the queue did not resume its normal order: got '$later'"; exit 1; }
 [ "$out" = "$want" ] && echo PASS || { echo "FAIL"; echo " got: $out"; echo "want: $want"; exit 1; }

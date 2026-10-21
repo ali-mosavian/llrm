@@ -1,0 +1,37 @@
+== -loop-interchange-profitabilities=ignore
+@no_partially_perfect_subnest
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v13, %B7 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v5, %B3 ], [ 0, %B1 ]
+  %v2 = mul nuw nsw i64 %v0, 16
+  %v3 = add nuw nsw i64 %v2, %v1
+  %v4 = getelementptr i8, ptr %A, i64 %v3
+  store i8 1, ptr %v4
+  br label %B3
+B3:
+  %v5 = add nuw nsw i64 %v1, 1
+  %v6 = icmp eq i64 %v5, 16
+  br i1 %v6, label %B4, label %B2
+B4:
+  br label %B5
+B5:
+  %v7 = phi i64 [ %v11, %B6 ], [ 0, %B4 ]
+  %v8 = mul nuw nsw i64 %v0, 16
+  %v9 = add nuw nsw i64 %v8, %v7
+  %v10 = getelementptr i8, ptr %B, i64 %v9
+  store i8 2, ptr %v10
+  br label %B6
+B6:
+  %v11 = add nuw nsw i64 %v7, 1
+  %v12 = icmp eq i64 %v11, 16
+  br i1 %v12, label %B7, label %B5
+B7:
+  %v13 = add nuw nsw i64 %v0, 1
+  %v14 = icmp eq i64 %v13, 16
+  br i1 %v14, label %B8, label %B1
+B8:
+  ret void

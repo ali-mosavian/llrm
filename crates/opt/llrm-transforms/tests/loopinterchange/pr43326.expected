@@ -1,0 +1,76 @@
+== -loop-interchange-profitabilities=ignore
+@pr43326
+B0:
+  %v0 = load i32, ptr @a
+  %v1 = icmp eq i32 %v0, 0
+  br i1 %v1, label %B1, label %B2
+B1:
+  ret void
+B2:
+  %v2 = load i32, ptr @d
+  %v3 = load i32, ptr @a
+  br label %B3
+B3:
+  %v4 = phi i32 [ %v28, %B16 ], [ %v3, %B2 ]
+  %v5 = phi i32 [ %v2, %B2 ], [ %v25, %B16 ]
+  br label %B4
+B4:
+  br label %B5
+B5:
+  %v6 = phi i8 [ %v23, %B14 ], [ 0, %B4 ]
+  %v7 = phi i32 [ %v21, %B14 ], [ %v5, %B4 ]
+  br label %B6
+B6:
+  br label %B7
+B7:
+  %v8 = phi i32 [ %v19, %B13 ], [ 0, %B6 ]
+  %v9 = phi i32 [ %v14, %B13 ], [ %v7, %B6 ]
+  br label %B8
+B8:
+  %v10 = sext i8 %v6 to i64
+  br label %B9
+B9:
+  %v11 = sext i32 %v8 to i64
+  %v12 = getelementptr inbounds [1 x [1 x i32]], ptr @e, i64 0, i64 %v11, i64 %v10
+  %v13 = load i32, ptr %v12
+  %v14 = xor i32 %v9, %v13
+  br label %B10
+B10:
+  %v15 = add nsw i32 %v8, 1
+  %v16 = icmp slt i32 %v15, 42
+  br label %B11
+B11:
+  br label %B12
+B12:
+  %v17 = add i8 %v6, -1
+  %v18 = icmp sgt i8 %v17, -10
+  br label %B13
+B13:
+  %v19 = add nsw i32 %v8, 1
+  %v20 = icmp slt i32 %v19, 42
+  br i1 %v20, label %B7, label %B14
+B14:
+  %v21 = phi i32 [ %v14, %B13 ]
+  %v22 = phi i32 [ %v19, %B13 ]
+  %v23 = add i8 %v6, -1
+  %v24 = icmp sgt i8 %v23, -10
+  br i1 %v24, label %B5, label %B15
+B15:
+  %v25 = phi i32 [ %v21, %B14 ]
+  %v26 = phi i8 [ %v23, %B14 ]
+  %v27 = phi i32 [ %v22, %B14 ]
+  br label %B16
+B16:
+  %v28 = add nsw i32 %v4, 1
+  %v29 = icmp slt i32 %v28, 42
+  br i1 %v29, label %B3, label %B17
+B17:
+  %v30 = phi i32 [ %v28, %B16 ]
+  %v31 = phi i32 [ %v27, %B16 ]
+  %v32 = phi i32 [ %v25, %B16 ]
+  %v33 = phi i8 [ %v26, %B16 ]
+  store i8 %v33, ptr @b
+  store i32 %v32, ptr @d
+  store i32 %v31, ptr @c
+  store i32 %v30, ptr @a
+  br label %B1

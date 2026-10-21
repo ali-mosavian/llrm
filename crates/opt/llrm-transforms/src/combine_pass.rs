@@ -90,7 +90,15 @@ impl FunctionPass for Combine {
         llrm_support::debug::counted("combine skipped", false);
         let outer = std::rc::Rc::clone(analyses.outer());
         let changed =
-            combine::combine(unit.context, &outer.globals, &outer.metadata, unit.layout, unit.function, unit.declared);
+            combine::combine(
+            unit.context,
+            &outer.globals,
+            outer.callees(),
+            &outer.metadata,
+            unit.layout,
+            unit.function,
+            unit.declared,
+        );
         last.instcombine.set(true);
         if changed {
             PreservedAnalyses::none().preserve_cfg().preserve::<LastRunTracking>()

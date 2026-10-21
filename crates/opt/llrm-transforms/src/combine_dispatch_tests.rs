@@ -17,7 +17,7 @@ fn combined(
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared);
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
     printed(&module)
 }
 
