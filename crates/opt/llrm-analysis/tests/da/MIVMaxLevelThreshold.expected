@@ -1,0 +1,8 @@
+== --miv-max-level 2 --tbaa
+@foo
+  input [* * *]!
+  none!
+  anti [* * *|<]!
+  input [* * *]!
+  none!
+  output [* * *]!

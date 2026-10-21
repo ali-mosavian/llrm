@@ -64,11 +64,19 @@
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
 //! - D11: at -Os a callee that stays is inlined only if the target's bound
-//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target) holds
-//!   the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth. The
-//!   pin's threshold cannot say it: its verdict is `cost < max(1, threshold)`
-//!   and the walk stops at cost 0, so a threshold of 0 inlines a callee whose
-//!   walk ends there. No shape of callee is tested.
+//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target)
+//!   holds the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth.
+//!   The pin's threshold cannot say it: its verdict is `cost < max(1,
+//!   threshold)` and the walk stops at cost 0, so a threshold of 0 inlines a
+//!   callee whose walk ends there. No shape of callee is tested.
+//! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
+//!   address of a stack slot the caller stored a constant to and whose callee
+//!   loads through that parameter, is inlined if the caller, simplified again
+//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
+//!   callers of at most 300 instructions; the sites of a private callee that
+//!   dies with its last call are tried together, its body credited). The pin's
+//!   cost does not follow a load through a pointer argument, so it never sees
+//!   the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -88,13 +96,13 @@
 //!   5946/1450 | 5932/5113; gcc's 8 and 450 cost 3-10x main's bytes. Owner:
 //!   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
 //!   tail-call elimination at the pin's slot; open rows hanoi, bintree,
-//!   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
-//!   A recursive callee inlined into another function is also peeled
-//!   (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
-//!   of it to itself per call, to the power of the copies deep, are below
-//!   1 - 1/8 (squared per copy where the body has more than one call to
-//!   itself), a copy adds at most 15 `gcc_insns` and the
-//!   copies of a call at most 450; a tree is never peeled; not at -Os.
+//!   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md). A
+//!   recursive callee inlined into another function is also peeled
+//!   (ipa-inline.cc:1033): its own calls inlined in the copy while the calls of
+//!   it to itself per call, to the power of the copies deep, are below 1 - 1/8
+//!   (squared per copy where the body has more than one call to itself), a copy
+//!   adds at most 15 `gcc_insns` and the copies of a call at most 450; a tree
+//!   is never peeled; not at -Os.
 //!
 //! # See also
 //! [`crate::inline`], the decision this is to replace; the plan is
@@ -250,16 +258,21 @@ pub enum InlineCost {
         cost: i64,
         threshold: i64,
         static_bonus: i64,
+        /// Refused by the target's -Os bound alone (D11): the pin's threshold
+        /// would have allowed it.
+        blocked: bool,
     },
 }
 
 impl InlineCost {
-    /// `explicit operator bool`: inlining pays.
+    /// `explicit operator bool` (InlineCost.h:138): `Cost < Threshold`. The
+    /// `std::max(1, Threshold)` is `finalizeAnalysis`'s, which decides whether
+    /// the walk succeeded, not whether the verdict pays.
     pub fn is_ok(&self) -> bool {
         match self {
             Self::Always(_) => true,
             Self::Never(_) => false,
-            Self::Cost { cost, threshold, .. } => cost < &(*threshold).max(1),
+            Self::Cost { cost, threshold, .. } => cost < threshold,
         }
     }
 }
@@ -443,6 +456,7 @@ struct Analyzer<'a> {
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
+    blocked_by_bound: bool,
     sroa_arg_costs: IdMap<ValueId, i64>,
 }
 
@@ -482,6 +496,7 @@ impl<'a> Analyzer<'a> {
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
+            blocked_by_bound: false,
             sroa_arg_costs: IdMap::new(),
         }
     }
@@ -1899,12 +1914,14 @@ impl<'a> Analyzer<'a> {
         }
         // D11: the analysis above stops at LLVM's threshold; the verdict is
         // held to the target's.
+        let pin = self.threshold.max(1);
         if self.site.caller_size == CallerSize::OptSize
             && !self.site.sole_call_to_local
             && let Some(bound) = self.site.tti.and_then(|tti| tti.opt_size_inline_threshold())
         {
             self.threshold = self.threshold.min(bound);
         }
+        self.blocked_by_bound = self.cost < pin && self.cost >= self.threshold.max(1);
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
@@ -1929,6 +1946,7 @@ pub fn inline_cost(
             cost: analyzer.cost,
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
+            blocked: analyzer.blocked_by_bound,
         };
     }
     match verdict {
@@ -2448,7 +2466,41 @@ pub fn sites(
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
+    decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
+) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
+    sites_with_trials(
+        module,
+        layout,
+        caller_id,
+        counts,
+        addressed,
+        recursive,
+        params,
+        size,
+        always_only,
+        tti,
+        decided,
+        None,
+    )
+}
+
+/// `sites`, and the sites the target's -Os bound alone refused whose call
+/// passes a constant or a stack slot (SZ2): `trials`
+/// takes their copies, for the walk to try inlined against not.
+#[allow(clippy::too_many_arguments)]
+pub fn sites_with_trials(
+    module: &Module,
+    layout: &DataLayout,
+    caller_id: GlobalId,
+    counts: &crate::inline::Counter,
+    addressed: &BTreeSet<GlobalId>,
+    recursive: &BTreeSet<GlobalId>,
+    params: InlineParams,
+    size: CallerSize,
+    always_only: bool,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
     mut decided: Option<&mut Vec<(InstId, GlobalId, InlineCost)>>,
+    mut trials: Option<&mut llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate>>,
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
@@ -2459,32 +2511,116 @@ pub fn sites(
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
+        let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
+        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+            continue;
+        }
+        let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
+        // A callee that calls itself may have those calls peeled in the
+        // copy (D10): the frequencies of its calls say how deep.
+        let own: Vec<InstId> = callee
+            .walk()
+            .map(|(_, one)| one)
+            .filter(|&one| llrm_mir::memory::callee(&module.context, callee, one) == Some(decision.callee))
+            .collect();
+        let candidate = crate::inline::Candidate {
+            body: std::rc::Rc::new((**callee).clone()),
+            frame: crate::inline::grown(&module.context, layout, callee),
+            moved: false,
+            callee: Some(decision.callee),
+            self_sites: own.len(),
+            self_calls: (!own.is_empty()).then(|| {
+                let frequencies = call_frequencies(module, layout, callee);
+                own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
+            }),
+        };
         if decision.inline {
-            let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
-            // A callee that calls itself may have those calls peeled in the
-            // copy (D10): the frequencies of its calls say how deep.
-            let own: Vec<InstId> = callee
-                .walk()
-                .map(|(_, one)| one)
-                .filter(|&one| llrm_mir::memory::callee(&module.context, callee, one) == Some(decision.callee))
-                .collect();
-            out.insert(
-                inst,
-                crate::inline::Candidate {
-                    body: std::rc::Rc::new((**callee).clone()),
-                    frame: crate::inline::grown(&module.context, layout, callee),
-                    moved: false,
-                    callee: Some(decision.callee),
-                    self_sites: own.len(),
-                    self_calls: (!own.is_empty()).then(|| {
-                        let frequencies = call_frequencies(module, layout, callee);
-                        own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
-                    }),
-                },
-            );
+            out.insert(inst, candidate);
+        } else if let Some(trials) = trials.as_deref_mut() {
+            trials.insert(inst, candidate);
         }
     }
     out
+}
+
+/// The stack slot or the parameter a pointer is made from, through casts and
+/// offsets.
+enum Root {
+    Slot(InstId),
+    Parameter(llrm_mir::module::ValueId),
+}
+
+fn root_of(
+    function: &llrm_mir::module::Function,
+    operand: llrm_mir::module::Operand,
+) -> Option<Root> {
+    let llrm_mir::module::Operand::Value(mut at) = operand else { return None };
+    loop {
+        match function.value(at).def {
+            llrm_mir::module::ValueDef::Argument(_) => return Some(Root::Parameter(at)),
+            llrm_mir::module::ValueDef::Instruction(def) => {
+                let instruction = function.instruction(def);
+                match instruction.opcode {
+                    Opcode::Alloca { .. } => return Some(Root::Slot(def)),
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(_) => match instruction.operands[0] {
+                        llrm_mir::module::Operand::Value(next) => at = next,
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
+        }
+    }
+}
+
+/// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
+/// call passes the address of a stack slot the caller wrote a constant to, and
+/// the callee reads through that parameter, which the cost model does not
+/// follow (a constant argument it folds itself).
+fn worth_a_trial(
+    module: &Module,
+    caller: &llrm_mir::module::Function,
+    call: InstId,
+    callee_id: GlobalId,
+) -> bool {
+    let GlobalKind::Function(callee) = &module.global(callee_id).kind else { return false };
+    let operands = &caller.instruction(call).operands;
+    let arguments = &operands[..operands.len().saturating_sub(1)];
+    let written = |slot: InstId| {
+        caller
+            .walk()
+            .any(
+                |(_, inst)| {
+                    let store = caller.instruction(inst);
+                    matches!(store.opcode, Opcode::Store { .. })
+                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
+                        && matches!(
+                            root_of(caller, store.operands[1]),
+                            Some(Root::Slot(one)) if one == slot
+                        )
+                },
+            )
+    };
+    let read_through: Vec<llrm_mir::module::ValueId> = callee
+        .walk()
+        .filter_map(|(_, inst)| {
+            let load = callee.instruction(inst);
+            match (&load.opcode, root_of(callee, *load.operands.first()?)) {
+                (Opcode::Load { .. }, Some(Root::Parameter(parameter))) => Some(parameter),
+                _ => None,
+            }
+        })
+        .collect();
+    arguments
+        .iter()
+        .zip(callee.parameters())
+        .any(
+            |(argument, parameter)| read_through.contains(parameter)
+                && matches!(
+                    root_of(caller, *argument),
+                    Some(Root::Slot(slot)) if written(slot)
+                ),
+        )
 }
 
 /// What `decide` reads of the module besides the site.

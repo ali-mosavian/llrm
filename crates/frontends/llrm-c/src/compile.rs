@@ -2845,6 +2845,40 @@ mod tests {
         assert!(asm.contains("mov eax, 200012"), "{asm}");
     }
 
+    /// A static function with a stride parameter, called with two strides,
+    /// takes its word parameters in AX and DX and indexes with them in the 67h
+    /// form: the entry marker defines them with no destination, and promote
+    /// refused the function (x_dct `-m16 -Os -march=i386`: "value#1 has no
+    /// word destination to promote").
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_m16_a_word_parameter_in_a_register_is_widened_for_the_67h_form() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, out) = (directory.path().join("d.c"), directory.path().join("d.asm"));
+        std::fs::write(
+            &source,
+            "static int blk[8][8]; \n\
+             static void dct8(int *d, int stride) \n\
+             { \n\
+                 int t0 = d[0] + d[7 * stride], t7 = d[0] - d[7 * stride], t1 = d[stride] + d[6 * stride], t6 = d[stride] - d[6 * stride]; \n\
+                 int t2 = d[2 * stride] + d[5 * stride], t5 = d[2 * stride] - d[5 * stride], t3 = d[3 * stride] + d[4 * stride], t4 = d[3 * stride] - d[4 * stride]; \n\
+                 int a = t0 + t3, b = t0 - t3, c = t1 + t2, e = t1 - t2; \n\
+                 d[0] = a + c; d[4 * stride] = a - c; \n\
+                 d[2 * stride] = (b * 5 + e * 2) >> 2; d[6 * stride] = (b * 2 - e * 5) >> 2; \n\
+                 d[stride] = (t7 * 7 + t6 * 5 + t5 * 3 + t4) >> 3; d[3 * stride] = (t7 * 5 - t6 - t5 * 7 - t4 * 3) >> 3; \n\
+                 d[5 * stride] = (t7 * 3 - t6 * 7 + t5 + t4 * 5) >> 3; d[7 * stride] = (t7 - t6 * 3 + t5 * 5 - t4 * 7) >> 3; \n\
+             } \n\
+             long f(int n) { int i; for (i = 0; i < n; ++i) dct8(&blk[i & 7][0], 1); dct8(&blk[0][n], 8); return blk[1][1]; }\n",
+        )
+        .unwrap();
+        let argv = ["-m16", "-Os", "-march=i386", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()]
+            .map(str::to_owned);
+        assert_eq!(super::main(&argv), 0);
+        let asm = std::fs::read_to_string(out).unwrap();
+        assert!(asm.lines().any(|line| line.trim().starts_with("movzx e")), "{asm}");
+    }
+
     /// A byte stored to the absolute address 0xB8000 (text video memory) was
     /// `mov byte ptr [32768], 65`: the direct address was masked to 16 bits on
     /// every target (GORILLA/bload_bsave.bas printed the wrong cell at -O2).

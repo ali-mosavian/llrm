@@ -1,0 +1,16 @@
+== 
+@test1
+  none!
+  output [|<]!
+  none!
+@test2
+  output [S 0]!
+  none!
+  none!
+  output [*]!
+  output [*|<]!
+  output [* *]!
+@test3
+  output [* S]!
+  output [*|<]!
+  none!

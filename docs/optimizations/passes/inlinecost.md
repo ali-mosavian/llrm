@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:81546c14f56eab20f2551e3692b9977ee27ad06ebfbbee6338b85970883837d6 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:f9868bb80a0e13e12ad9063e173bb24deb5505bfe99d15212b4bb52ced9ed799 -->
 
 # inlinecost
 
@@ -68,6 +68,12 @@ each site's cost and threshold beside the existing decision; with
 - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
   `minsize` (:2117).
+- D11: at -Os a callee that stays is inlined only if the target's bound
+  (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target) holds
+  the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth. The
+  pin's threshold cannot say it: its verdict is `cost < max(1, threshold)`
+  and the walk stops at cost 0, so a threshold of 0 inlines a callee whose
+  walk ends there. No shape of callee is tested.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -88,6 +94,12 @@ each site's cost and threshold beside the existing decision; with
   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
   tail-call elimination at the pin's slot; open rows hanoi, bintree,
   quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
+  A recursive callee inlined into another function is also peeled
+  (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
+  of it to itself per call, to the power of the copies deep, are below
+  1 - 1/8 (squared per copy where the body has more than one call to
+  itself), a copy adds at most 15 `gcc_insns` and the
+  copies of a call at most 450; a tree is never peeled; not at -Os.
 
 ## See also
 [`crate::inline`](inline.md), the decision this is to replace; the plan is

@@ -200,6 +200,164 @@ impl<V: Copy> IntervalMap<V> {
         self.find(x)
     }
 
+    /// `LiveIntervalUnion::unify`'s loop
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervalUnion.cpp#L28>):
+    /// the `[start, stop)` of `run`, ascending and disjoint, held by `value`,
+    /// each joined to an adjacent entry of the same value as `IntervalMap::
+    /// insert` does. One search finds the place of the first; each next entry
+    /// is looked for from the one before (`SegPos.advanceTo`), a few steps and
+    /// then a search.
+    pub fn insert_run(
+        &mut self,
+        run: impl IntoIterator<Item = (SlotIndex, SlotIndex)>,
+        value: V,
+    ) where
+        V: PartialEq,
+    {
+        let mut run = run.into_iter();
+        let Some((mut start, mut stop)) = run.next() else { return };
+        let mut cursor = self.place_of(self.lower_bound(&start));
+        loop {
+            // The first entry from the cursor on that starts at or after
+            // `start`.
+            let mut steps = 0;
+            while let Some(entry) = self.entry_at(cursor) {
+                if entry.start >= start {
+                    break;
+                }
+                steps += 1;
+                if steps > 4 {
+                    cursor = self.place_of(self.lower_bound(&start));
+                    break;
+                }
+                cursor = self.step(cursor);
+            }
+            // Join the entry before it, then the entry at it.
+            if let Some(before) = self.back(cursor) {
+                let left = *self.entry_at(Some(before)).expect("an entry");
+                if left.stop == start && left.value == value {
+                    start = left.start;
+                    self.remove_at(before);
+                    cursor = self.fix_after_removal(before);
+                }
+            }
+            if let Some(right) = self.entry_at(cursor).copied()
+                && right.start == stop
+                && right.value == value
+            {
+                stop = right.stop;
+                self.remove_at(cursor.expect("an entry"));
+                cursor = self.fix_after_removal(cursor.expect("an entry"));
+            }
+            cursor = Some(self.insert_before(cursor, Entry { start, stop, value }));
+            cursor = self.step(cursor);
+            let Some((next_start, next_stop)) = run.next() else { return };
+            (start, stop) = (next_start, next_stop);
+        }
+    }
+
+    /// `lower_bound`'s answer as a place: past the end of a leaf is the start
+    /// of the next, and past the last entry is `None`.
+    fn place_of(
+        &self,
+        (leaf, at): (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let len = self.leaves.get(leaf)?.len();
+        if at < len {
+            return Some((leaf, at));
+        }
+        (leaf + 1 < self.leaves.len()).then_some((leaf + 1, 0))
+    }
+
+    /// The entry at a raw place, None past the end.
+    fn entry_at(
+        &self,
+        place: Option<(usize, usize)>,
+    ) -> Option<&Entry<V>> {
+        let (leaf, at) = place?;
+        self.leaves.get(leaf)?.get(at)
+    }
+
+    /// The place after `place`; the end is `None`.
+    fn step(
+        &self,
+        place: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        let (leaf, at) = place?;
+        if at + 1 < self.leaves[leaf].len() {
+            return Some((leaf, at + 1));
+        }
+        (leaf + 1 < self.leaves.len()).then_some((leaf + 1, 0))
+    }
+
+    /// The place before `place`; before the first is `None`. From the end,
+    /// the last entry.
+    fn back(
+        &self,
+        place: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        match place {
+            Some((leaf, at)) if at > 0 => Some((leaf, at - 1)),
+            Some((leaf, _)) => {
+                let leaf = leaf.checked_sub(1)?;
+                Some((leaf, self.leaves[leaf].len() - 1))
+            }
+            None => {
+                let leaf = self.leaves.len().checked_sub(1)?;
+                Some((leaf, self.leaves[leaf].len() - 1))
+            }
+        }
+    }
+
+    fn remove_at(
+        &mut self,
+        (leaf, at): (usize, usize),
+    ) {
+        self.leaves[leaf].remove(at);
+        if self.leaves[leaf].is_empty() {
+            self.leaves.remove(leaf);
+        }
+    }
+
+    /// The place of the entry that followed the one removed at `removed`.
+    fn fix_after_removal(
+        &self,
+        removed: (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let (leaf, at) = removed;
+        if leaf < self.leaves.len() && at < self.leaves[leaf].len() {
+            return Some((leaf, at));
+        }
+        let next = if leaf < self.leaves.len() { leaf + 1 } else { leaf };
+        (next < self.leaves.len()).then_some((next, 0))
+    }
+
+    /// Puts `entry` before the entry at `place` (at the end for `None`), splits
+    /// a leaf that is too full, and returns where the entry is.
+    fn insert_before(
+        &mut self,
+        place: Option<(usize, usize)>,
+        entry: Entry<V>,
+    ) -> (usize, usize) {
+        if self.leaves.is_empty() {
+            self.leaves.push(vec![entry]);
+            return (0, 0);
+        }
+        let (leaf, at) = place.unwrap_or_else(|| {
+            let last = self.leaves.len() - 1;
+            (last, self.leaves[last].len())
+        });
+        self.leaves[leaf].insert(at, entry);
+        if self.leaves[leaf].len() > LEAF {
+            let tail = self.leaves[leaf].split_off(LEAF / 2);
+            self.leaves.insert(leaf + 1, tail);
+            if at >= LEAF / 2 {
+                return (leaf + 1, at - LEAF / 2);
+            }
+        }
+        (leaf, at)
+    }
+
     /// Adds an entry; its start is not in the map.
     pub fn insert(
         &mut self,

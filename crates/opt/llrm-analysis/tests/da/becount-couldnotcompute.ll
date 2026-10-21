@@ -1,0 +1,18 @@
+; RUN: opt < %s -disable-output "-passes=print<da>" -aa-pipeline=basic-aa 2>&1 | FileCheck %s
+
+; Test for function isKnownLessThan that calculates a back-edge taken count,
+; which can return a CouldNotCompute SCEV.
+
+define void @test(i64 %conv, ptr %a) {
+;
+entry:
+  %sub = add i64 %conv, 1
+  br label %loop
+
+loop:
+  %i = phi i64 [ %add26, %loop ], [ 0, %entry ]
+  %arrayidx12 = getelementptr i32, ptr %a, i64 %i
+  %ld = load i32, ptr %arrayidx12, align 4
+  %add26 = add nsw i64 %sub, %i
+  br label %loop
+}

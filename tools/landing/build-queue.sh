@@ -5,7 +5,11 @@
 R=${R:-ali-mosavian/llrm}; HERE=$(cd "$(dirname "$0")" && pwd)
 PRIORITY=${PRIORITY:-$HERE/priority.txt}; WAITS=${WAITS:-$HERE/waits.txt}
 nums() { sed 's/#.*//' "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$'; }
-ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-")"') || exit 1
+ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body,headRefOid -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-") \(.headRefOid // "-")"') || exit 1
+# a PR the last landing refused is not tried again until its head or feat/parity moves (refused.state, written by land.sh): the runner re-queued it every second
+STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
+parity=$(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha 2>/dev/null)
+ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STATE" 2>/dev/null || echo "$n $m $o $h"; done)
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch
 echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity (push rejected? git pull --no-rebase, then push; never force)\n", $1, $3}' >&2
 # Owner: <session> in the PR body names who to tell; a PR without it is refused (REQUIRE_OWNER= switches the rule off)

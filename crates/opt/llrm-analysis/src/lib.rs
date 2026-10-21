@@ -90,6 +90,7 @@
 
 pub mod aa;
 pub mod access;
+pub mod accessanalysis;
 pub mod aggregate;
 pub mod alias;
 pub mod aliassets;
@@ -113,6 +114,7 @@ pub mod consts;
 mod corpus_tests;
 pub mod demanded;
 pub mod demandedbits;
+pub mod depanalysis;
 pub mod dependence;
 pub mod difference;
 pub mod effects;
@@ -128,20 +130,20 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
+pub mod ivdescriptors;
 pub mod initializes;
 pub mod interprocedural;
+#[cfg(test)]
+mod laa_testing;
 pub mod liveness;
 pub mod loads;
 pub mod loadstorepromoter;
 pub mod loopaccess;
-pub mod memdepchecker;
-pub mod accessanalysis;
 pub mod loopaccessinfo;
-#[cfg(test)]
-mod laa_testing;
 pub mod loopunrollanalyzer;
 pub mod manager;
 pub mod memdep;
+pub mod memdepchecker;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;

@@ -1,0 +1,10 @@
+== --tbaa
+@exact_siv_large_btc
+  none!
+  output [-1]!
+  none!
+== --test exact-siv --tbaa
+@exact_siv_large_btc
+  output [*]!
+  output [*|<]!
+  output [*]!
