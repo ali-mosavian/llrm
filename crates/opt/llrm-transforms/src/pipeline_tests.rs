@@ -2498,6 +2498,47 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
     assert!(printed.contains("@\"_report@3\"(i32 1)"), "selftest returned 0, not 1:\n{printed}");
 }
 
+/// A local recursive callee bigger than its call is tried at its two sites at
+/// -Os (D11, D12): the call with constants folds to a constant, the other is
+/// kept only if the caller is smaller. `recgcd` grew 99 to 129 bytes when the
+/// size rule refused the sites without trying them.
+#[test]
+fn at_os_a_refused_site_is_tried_and_kept_if_the_caller_shrinks() {
+    let text =
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+define internal i16 @gcd(i16 %a, i16 %b) {
+b0:
+  %z = icmp eq i16 %b, 0
+  br i1 %z, label %done, label %rec
+rec:
+  %r = srem i16 %a, %b
+  %t = call i16 @gcd(i16 %b, i16 %r)
+  ret i16 %t
+done:
+  ret i16 %a
+}
+
+define i16 @main(i16 %n) addrspace(1) {
+b0:
+  %x = call i16 @gcd(i16 %n, i16 5)
+  %y = call i16 @gcd(i16 90, i16 360)
+  %r = add i16 %x, %y
+  ret i16 %r
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let printed = llrm_mir::print::module(&module);
+    assert!(!printed.contains("@gcd"), "the callee or a call to it stayed:\n{printed}");
+}
+
 /// The pin builds `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`: the slot
 /// copied a loop for each way of an invariant branch at -O3 only, where
 /// the old `unswitch` pass ran after the fixed point and judged candidates on

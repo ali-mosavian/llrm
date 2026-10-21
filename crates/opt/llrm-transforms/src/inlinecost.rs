@@ -71,14 +71,15 @@
 //!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
-//! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//! - D12 (SZ2): a call the -Os size rule (D11) alone refuses, whose callee has
+//!   at most 60 instructions or reads through a parameter the call passes the
+//!   address of a stack slot the caller stored a constant to, is inlined if the
+//!   caller, simplified again with the call inlined, is smaller by the target's
+//!   size cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+//!   private callee that dies with its last call are tried together, its body
+//!   credited). The pin's cost does not follow a load through a pointer
+//!   argument, nor a recursion that folds, so it never sees the loop or the
+//!   arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2615,6 +2616,10 @@ fn root_of(
     }
 }
 
+/// The callee of at most this many instructions is tried at every site the -Os
+/// size rule (D11) refuses (SZ2).
+const TRIAL_CALLEE: usize = 60;
+
 /// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
 /// call passes the address of a stack slot the caller wrote a constant to, and
 /// the callee reads through that parameter, which the cost model does not
@@ -2626,6 +2631,9 @@ fn worth_a_trial(
     callee_id: GlobalId,
 ) -> bool {
     let GlobalKind::Function(callee) = &module.global(callee_id).kind else { return false };
+    if callee.walk().count() <= TRIAL_CALLEE {
+        return true;
+    }
     let operands = &caller.instruction(call).operands;
     let arguments = &operands[..operands.len().saturating_sub(1)];
     let written = |slot: InstId| {
