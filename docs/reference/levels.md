@@ -40,6 +40,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir merge` | x | on | on | on | on | x |
 | `mir unswitch` | x | x | x | on | on | x |
 | `mir interchange`: swap the loops of a perfect nest (`loop-interchange@1631`) | x | on | on | on | on | on |
+| `mir unroll-and-jam`: unroll an outer loop and fuse the copies of its inner loop (`loop-unroll-and-jam@1474`) | x | x | x | on | on | x |
 | *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
 | `mir interprocedural` | x | on | on | on | on | on |
 | `inline`, `ipa-inline`: threshold | x | 0, only the last call | 225 | 250 | 250 | 0, only the last call |
@@ -145,6 +146,7 @@ Sources read:
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 ([679](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L679)) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 ([685](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L685)) | -O3 and -Omax |
 | `interchange` / `loop-interchange` | `-floop-interchange` | -O3 ([677](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L677)); the pass runs after distribution ([`passes.def:288`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/passes.def#L288)) | every level but -O0: `PTO.LoopInterchange` is `enable-loopinterchange`, true ([PassBuilderPipelines.cpp#L219](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L219)), in the loop pass manager after `loop-rotate` and `loop-deletion` ([L1631](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1631)) | every level but -O0, in the `Late` stage, as LLVM's: `LoopInterchange.cpp` translated ([`loopinterchange.rs`](../optimizations/passes/loopinterchange.md)); `-fno-loop-interchange` turns it off. The `cache` profitability rule is absent (no `LoopCacheAnalysis`), so `-cache-line-size` has no use |
+| `unroll_and_jam` / `loop-unroll-and-jam` | none: gcc has no unroll-and-jam | none | -O3 and -Omax; the pin's default pipelines have it off (`enable-unroll-and-jam`, PassBuilderPipelines.cpp#L222), llrm turns it on where the particle row gains |
 | `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 ([676](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L676)) | -O3: `ipacp` copies a function for the constants a hot call passes |
 | (`program_parameters`) | `-fipa-cp` | -O2 ([629](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L629)) | every level above -O0: a constant every call passes is the parameter's value |
 | `ipa_ranges` / `ipa-vrp` | `-fipa-vrp` | -O2 ([633](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L633)) | -O2 and up; off at -O1 (compile -1.0% on bench + QCport, code +0.00% geomean) |

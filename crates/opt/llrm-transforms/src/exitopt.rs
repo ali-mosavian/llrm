@@ -104,11 +104,7 @@ pub fn optimized_in(
         // form.
         let simple = {
             let cx = run.env.cx(&*run.context, &*run.function);
-            cx.loops
-                .get_loop_for(header)
-                .is_some_and(
-                    |found| found.is_loop_simplify_form(cx.function),
-                )
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
         };
         if simple {
             changed |= run.optimize_loop_exits(header);

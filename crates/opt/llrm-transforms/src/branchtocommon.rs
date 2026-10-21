@@ -128,11 +128,15 @@ pub(crate) fn incompatible_successors(
         .copied()
         .filter(|successor| reached.contains(successor))
         .filter(|&successor| {
-            crate::edges::phis(function, successor).into_iter().any(|phi| {
-                let arms = llrm_analysis::occurrence::arms(function, phi);
-                let from = |at: BlockId| arms.iter().find(|&&(_, one)| one == at).map(|&(value, _)| value);
-                from(first) != from(second)
-            })
+            crate::edges::phis(function, successor)
+                .into_iter()
+                .any(
+                    |phi| {
+                        let arms = llrm_analysis::occurrence::arms(function, phi);
+                        let from = |at: BlockId| arms.iter().find(|&&(_, one)| one == at).map(|&(value, _)| value);
+                        from(first) != from(second)
+                    },
+                )
         })
         .collect()
 }
@@ -222,7 +226,13 @@ pub fn folded(
         if inst == cond || inst == branch {
             continue;
         }
-        if !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(context, spec.layout, function, spec.outer, inst) {
+        if !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(
+            context,
+            spec.layout,
+            function,
+            spec.outer,
+            inst,
+        ) {
             return false;
         }
         let instruction = function.instruction(inst);
