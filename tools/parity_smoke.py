@@ -124,13 +124,16 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
     return child.returncode, out
 
 
-def workspace_check(root: Path = ROOT) -> str:
-    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
-    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
-    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True)
+def workspace_check(root: Path = ROOT, target: Path | None = None) -> str:
+    """"" when the whole workspace, tests and benches included, compiles under `-D warnings` (the fast tier's `build` step); else the first errors. Built before the clock
+    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every
+    build). Under `-D warnings` because the land-time check once lacked it: #3390 landed an unused `mut` that failed the fast tier for everyone. Its own target directory:
+    other RUSTFLAGS would rebuild the shared one."""
+    target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True, env={**os.environ, "RUSTFLAGS": "-D warnings", "CARGO_TARGET_DIR": str(target)})
     if done.returncode == 0:
         return ""
-    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    errors = [line for line in done.stderr.splitlines() if "error" in line or "warning" in line]
     return " / ".join(errors[:3])[:300] or "cargo check failed"
 
 
