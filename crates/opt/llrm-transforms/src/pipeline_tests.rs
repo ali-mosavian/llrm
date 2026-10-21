@@ -790,13 +790,27 @@ entry:
     assert!(printed.contains("load i16, ptr @g"), "the load after the call was forwarded from before it:\n{printed}");
 }
 
+/// gcc's `pass_ch` stage ran after the interprocedural step under LLVM's order
+/// too, 8 passes the pin has no counterpart for: d_faces compile +52 M
+/// instructions at -O1, +41 M at -O2, +72 M at -O3.
+#[test]
+fn test_the_llvm_order_has_no_gcc_header_copy_stage() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
+    assert!(pipeline::header_copied(&on).is_empty(), "premise: LLVM's order copies headers in LoopRotate");
+    assert!(!pipeline::header_copied(&off).is_empty(), "premise: gcc's order has the stage");
+}
+
 /// What the pipeline runs after the summaries are made and holds them past
 /// (`manager.freeze`) adds no memory operation. Six of those passes
 /// (loop-simplify, LCSSA, fold, algebraic, indvars, dead) did not say so, and
 /// each edit of theirs made the module's summaries and globals' facts again.
 #[test]
 fn the_passes_after_the_summaries_add_no_memory_operation() {
-    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: false, ..pipeline::Options::basic() },
+        ..Applied::default()
+    };
     let passes = pipeline::header_copied(&applied);
     assert!(passes.len() >= 7, "premise: the pass list this test names");
     let adding: Vec<_> = passes.iter().filter(|pass| pass.adds_memory_operations()).map(|pass| pass.name()).collect();
@@ -1388,7 +1402,14 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["loop-interchange@1631", "loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        [
+            "loop-load-elim@1400",
+            "simplifycfg@1438",
+            "float2int@1594",
+            "instsimplify@1662",
+            "simplifycfg@1682",
+            "simplifycfg@2376"
+        ]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
     assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
@@ -2161,16 +2182,24 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
-        ["loop-interchange@1631", "loop-load-elim@1400", "simplifycfg@1438", "float2int@1594", "instsimplify@1662", "simplifycfg@1682", "simplifycfg@2376"]
+        [
+            "loop-load-elim@1400",
+            "simplifycfg@1438",
+            "float2int@1594",
+            "instsimplify@1662",
+            "simplifycfg@1682",
+            "simplifycfg@2376"
+        ]
     );
 }
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
 /// `sink` (a register-pressure forecast) after the fixed point, where LLVM has
 /// no such pass; `sink` is gone and the translated LICM runs in its three
-/// slots and once after the header copy (`rotate` is not a slot yet).
+/// slots and not after gcc's header copy, which LLVM's order does not run
+/// (`rotate` is not a slot yet).
 #[test]
-fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_copy() {
+fn test_the_llvm_order_runs_licm_in_its_three_slots_and_not_after_a_header_copy() {
     let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
     llrm_mir::counts::per_pass();
     let ran = |licm: bool| {
@@ -2194,7 +2223,7 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
         let after = llrm_mir::counts::lines();
         runs(&after, "licm") - runs(&before, "licm")
     };
-    assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
+    assert_eq!(ran(true), 3, "licm@724, licm@730 and licm@823; none after a header copy");
 }
 
 /// The write-through `Promote` ran after the translated SROA and mem2reg at

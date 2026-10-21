@@ -1070,7 +1070,7 @@ pub fn recorded(
     // The loops it guards are re-simplified for the passes that follow. Not at
     // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
     // entered at its body, which the last `Rotate` does.
-    let guarded = applied.options.copy_headers && !applied.options.prefers_size();
+    let guarded = copies_headers_after_ipa(applied);
     for pass in header_copied(applied) {
         manager.add_boxed(pass);
     }
@@ -1137,6 +1137,15 @@ pub fn recorded(
     done
 }
 
+/// Whether gcc's `pass_ch` stage (`header_copied`) runs after the
+/// interprocedural step. Not under LLVM's order: its LoopRotate copies the
+/// headers in its own slots (`duplicate_headers`), and the pin has no second
+/// pass over the loops there (d_faces: 52 M instructions at -O1, 41 M at -O2,
+/// 72 M at -O3).
+fn copies_headers_after_ipa(applied: &Applied) -> bool {
+    applied.options.copy_headers && !applied.options.prefers_size() && !applied.options.llvm_order
+}
+
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
 /// the loops simplified again, what the copy leaves in the latch cleaned as
 /// gcc's DOM, forwprop and DCE do, and what a loop entered at its body runs
@@ -1147,7 +1156,7 @@ pub fn recorded(
 /// is entered at its body.
 pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
-    if !(applied.options.copy_headers && !applied.options.prefers_size()) {
+    if !copies_headers_after_ipa(applied) {
         return passes;
     }
     passes.push(Box::new(rotate::Rotate { proven: false, copy: true }));
