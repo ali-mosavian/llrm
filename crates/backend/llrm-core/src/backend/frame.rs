@@ -168,6 +168,11 @@ pub struct Frame {
     /// Whether the spiller gives each spilled value a slot of its own, to be
     /// shared once the allocation is chosen (`spiller::slots_colored`).
     pub defer_colours: bool,
+    /// `LiveStacks`: each spilled home's segments `[start, end)` in the
+    /// allocator's slot numbering, merged from the spilled registers' ranges
+    /// as `InlineSpiller` writes them. Empty where the spills were not written
+    /// inline (`spiller::slots_colored` then works the homes' liveness out).
+    pub stacks: IndexMap<i64, Vec<(i64, i64)>>,
     /// The most a slot is aligned to, in bytes: the target's stack slot, so a
     /// dword or a quad is not left across a doubleword boundary, which a 486
     /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
@@ -186,6 +191,7 @@ impl Frame {
             hole: 0,
             extents: Vec::new(),
             defer_colours: false,
+            stacks: IndexMap::default(),
             align: WORD,
         }
     }
@@ -361,6 +367,7 @@ impl Frame {
     ) {
         self.slots = saved.0.clone();
         self.capacities = saved.1.clone();
+        self.stacks.clear();
     }
 
     pub fn cell(

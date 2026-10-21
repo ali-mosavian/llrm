@@ -799,6 +799,9 @@ pub fn decide_with_split(
         }
     }
     greedy.allocate_phys_regs();
+    if inline {
+        greedy.stacked_spills();
+    }
     let mut signature = 0u64;
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
