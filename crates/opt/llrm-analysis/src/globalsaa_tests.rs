@@ -563,3 +563,111 @@ fn globals_aa_asks_no_pointer_solve() {
     assert_eq!(crate::alias::value_solves() - values, 0, "a body was solved for what it points to");
     assert_eq!(crate::alias::escape_solves() - escapes, 0, "a body was solved for what escapes");
 }
+
+/// `GlobalsAA` of the one-module program `text`.
+fn globals_of(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A loop summing `@a` that reads it by index, then the same loop after loop
+/// strength reduction: through a pointer phi that steps by 2. `after` adds
+/// `uses` to the second, in the loop (`ret` is its return value, `decl` what
+/// it declares).
+fn indexed_and_stepped(
+    decl: &str,
+    uses: &str,
+    ret: (&str, &str),
+) -> (crate::globalsaa::Globals, crate::globalsaa::Globals) {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@s = internal global [4 x i8] zeroinitializer
+{decl}
+"
+    );
+    let before = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %p = getelementptr inbounds [2 x i8], ptr @a, i16 %i
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  %i.next = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i.next, 64
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {zero}
+}}
+",
+        ty = ret.0,
+        zero = if ret.0 == "ptr" { "null" } else { "0" },
+    );
+    let after = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ @a, %b0 ], [ %p.next, %b1 ]
+  %i = phi i16 [ -256, %b0 ], [ %i.next, %b1 ]
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  {uses}
+  %i.next = add nsw i16 %i, 4
+  %p.next = getelementptr i8, ptr %p, i16 2
+  %c = icmp ne i16 %i.next, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {value}
+}}
+",
+        ty = ret.0,
+        value = ret.1,
+    );
+    (globals_of(&before), globals_of(&after))
+}
+
+/// jpeg-shaped loops after `lsr` read a global through `phi ptr [ @a, ... ]`.
+/// The pin's use scan calls that an escape (no `phi` case in
+/// `AnalyzeUsesOfPointer`), so a held result that tracks `@a` was refused by
+/// `LLRM_CHECK_STALE` as one that "no longer covers the module" with nothing
+/// added but a pointer induction variable (lsr-stale-repro.bas, -m16 -O1).
+#[test]
+fn a_global_read_through_a_stepped_pointer_phi_is_still_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("i16", "0"));
+    let a = GlobalId(0);
+    assert!(before.tracked(a), "reached by name before");
+    assert!(!after.tracked(a), "the pin's scan calls the phi an escape");
+    assert!(before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_passed_to_a_call_is_not_covered() {
+    let (before, after) = indexed_and_stepped("declare void @ext(ptr)", "call void @ext(ptr %p)", ("i16", "0"));
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_stored_as_a_value_is_not_covered() {
+    let (before, after) = indexed_and_stepped(
+        "@keep = internal global [4 x i8] zeroinitializer",
+        "store ptr %p, ptr @keep",
+        ("i16", "0"),
+    );
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_that_is_returned_is_not_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("ptr", "%p"));
+    assert!(!before.covers(&after));
+}
