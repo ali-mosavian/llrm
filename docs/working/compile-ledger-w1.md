@@ -16,6 +16,8 @@ One cause: MemorySSA. `Accesses::run` is built 33 times (EarlyCSE 22, DSE 3, Mem
 | GVN | 40.7 | 49.2 | at or below the pin: no lever |
 | SROA | 9.4 | 10.0 | at the pin: no lever (w-5 has SCCP) |
 
+Update 2026-10-21: EarlyCSE already updates and keeps MemorySSA; 11 of its 22 runs are `earlycse@1180` (EarlyFPM), which the pin runs without MemorySSA (`EarlyCSEPass()`, PassBuilderPipelines.cpp#L1180) and ours built it for. Translated (`EarlyCse { memory_ssa }`, EarlyCSE.cpp#L1074): measured d_faces -O2 1274.7 M -> 1262.3 M (-12.4 M, -0.97%, `tools/abmeasure.py`, dist). Split with w-7 (funcattrs-port): they own levers (1) and (3), I own (2).
+
 Levers, in order: (1) 11-02: one `calls_annotated` solve per function version, shared by MemorySSA's build and the call-effects analysis (`memoryssa.rs:475` solves again beside `manager.rs:1020`; to be confirmed in the first step), target -20 M or more of the 41.8; (2) 11-04: EarlyCSE, DSE and MemCpyOpt preserve MemorySSA to the next pass as the pin's do (builds 33 to about 15), target -15 M; (3) 11-06: `escapes` (17.5 M, 88 solves) and `_unknown_base` (10.3 M, 553 calls) memoized per value for the life of the analysis (the pin's capture cache in the AAQI), target -10 M. EarlyCSE's `Function::fork` (4.4 M with its drops) goes if (2) leaves the copy unused.
 
 ## (a) regalloc glue (ours 31.5 M for these three; the ledger bucket is 184.6 vs 67.2: RA 127.4 is splitkit's, Coalescer 25.8 shared)
@@ -26,6 +28,8 @@ Levers, in order: (1) 11-02: one `calls_annotated` solve per function version, s
 | TwoAddress | 8.6 | small (not listed) | `live_rows` 2.3, `_interference_among` 1.4, `_reused` 1.0, `_next_value` 0.9 (6 whole-body scans) |
 | ParallelCopy | 7.9 | none | `liveness::dead_at_exit` 6.5 in one call |
 
-Levers: PhiElimination (1) #3441 removes `eliminated_priced` for the phis it kept (blocked on the base gap QO-1/QO-6; -25 M measured on the dist pair); (2) 11-02: `_widths` and `ssaspill::floating` once per body, shared by both stages (-2.5 M); (3) 11-04: one `live_rows` per body shared by PhiElimination, TwoAddress and ParallelCopy (-3 M). ParallelCopy: 11-02 `dead_at_exit` replaced by `LiveAt::live_in` row queries as `phielimination::edges_to_split` did in #3367 (-6 M, same output). TwoAddress: 11-06 `_next_value` kept as a counter on the body instead of a scan per call (-0.9 M).
+Correction: ParallelCopy's `dead_at_exit` is the first from-scratch solve of physical-lane liveness after allocation (later phases update it incrementally), so replacing it saves nothing; the cost is the per-instruction effect decode, `peephole::_register_effects_worked` 14.1 M (table decode 7.5 M, its cache `EffectsHeld` 5.8 M for a 47% hit rate: the cache barely pays).
+
+Levers: PhiElimination (1) #3441 removes `eliminated_priced` for the phis it kept (blocked on the base gap QO-1/QO-6; -25 M measured on the dist pair); (2) 11-02: `_widths` and `ssaspill::floating` once per body, shared by both stages (-2.5 M); (3) 11-04: one `live_rows` per body shared by PhiElimination, TwoAddress and ParallelCopy (-3 M). Lane-liveness effect decode: 11-06 a cheaper key or no cache for `_register_effects_worked` (target -4 M, objects identical). TwoAddress: 11-06 `_next_value` kept as a counter on the body instead of a scan per call (-0.9 M).
 
 Not claimed: Coalescer 25.8 (shared with splitkit), RA 127.4 (splitkit).
