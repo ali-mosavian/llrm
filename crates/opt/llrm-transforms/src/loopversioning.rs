@@ -200,13 +200,15 @@ impl<'a> LoopVersioning<'a> {
         let orig_term = rw.function.terminator(runtime_check_bb).expect("a terminated check block");
         let void = rw.function.instruction(orig_term).ty;
         let non_versioned_ph = self.vmap.blocks[&ph];
-        let branch = rw.function.create_instruction(
-            Opcode::Br,
-            void,
-            vec![runtime_check, Operand::Block(non_versioned_ph), Operand::Block(ph)],
-            Flags::default(),
-            None,
-        );
+        let branch = rw
+            .function
+            .create_instruction(
+                Opcode::Br,
+                void,
+                vec![runtime_check, Operand::Block(non_versioned_ph), Operand::Block(ph)],
+                Flags::default(),
+                None,
+            );
         rw.function.insert(branch, Position::Before(orig_term)).expect("a placed terminator");
         rw.function.set_operands(orig_term, Vec::new());
         rw.function.erase(orig_term).expect("the old jump");
@@ -243,13 +245,9 @@ impl<'a> LoopVersioning<'a> {
             if !found {
                 let ty = rw.function.instruction(inst).ty;
                 let name = rw.function.value(def).name.clone().unwrap_or_default();
-                let phi = rw.function.create_instruction(
-                    Opcode::Phi,
-                    ty,
-                    Vec::new(),
-                    Flags::default(),
-                    Some(&format!("{name}.lver")),
-                );
+                let phi = rw
+                    .function
+                    .create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some(&format!("{name}.lver")));
                 let first = rw.function.iter_block(phi_block).next().expect("a terminated block");
                 rw.function.insert(phi, Position::Before(first)).expect("a placed block");
                 let pn = Operand::Value(rw.function.instruction(phi).result.expect("a phi's value"));
@@ -507,22 +505,26 @@ pub fn is_recursively_lcssa_form(
     tree: &DomTree,
     lp: Loop,
 ) -> bool {
-    lp.get_blocks().iter().all(|&block| {
-        let inner = loops.get_loop_for(block).expect("a loop's block is in a loop");
-        function.iter_block(block).all(|inst| {
-            let Some(result) = function.instruction(inst).result else { return true };
-            function.users(result).into_iter().all(|used| {
-                let user = function.instruction(used.user);
-                let mut user_block = function.parent(used.user).expect("a placed user");
-                if user.opcode == Opcode::Phi
-                    && let Operand::Block(from) = user.operands[used.index as usize + 1]
-                {
-                    user_block = from;
-                }
-                user_block == block || inner.contains(user_block) || !tree.is_reachable_from_entry(user_block)
-            })
-        })
-    })
+    lp.get_blocks()
+        .iter()
+        .all(
+            |&block| {
+                let inner = loops.get_loop_for(block).expect("a loop's block is in a loop");
+                function.iter_block(block).all(|inst| {
+                    let Some(result) = function.instruction(inst).result else { return true };
+                    function.users(result).into_iter().all(|used| {
+                        let user = function.instruction(used.user);
+                        let mut user_block = function.parent(used.user).expect("a placed user");
+                        if user.opcode == Opcode::Phi
+                            && let Operand::Block(from) = user.operands[used.index as usize + 1]
+                        {
+                            user_block = from;
+                        }
+                        user_block == block || inner.contains(user_block) || !tree.is_reachable_from_entry(user_block)
+                    })
+                })
+            },
+        )
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L66
@@ -591,8 +593,10 @@ fn split_block_predecessors_lcssa(
         let at = incoming.iter().position(|&(_, from)| from == new).expect("an arm from the new block");
         let value = incoming[at].0;
         // Where the values differ the split already made the phi.
-        let gathered = matches!(value, Operand::Value(v) if matches!(function.value(v).def, ValueDef::Instruction(inst)
-            if function.instruction(inst).opcode == Opcode::Phi && function.parent(inst) == Some(new)));
+        let gathered = matches!(
+            value,
+            Operand::Value(v) if matches!(function.value(v).def, ValueDef::Instruction(inst) if function.instruction(inst).opcode == Opcode::Phi && function.parent(inst) == Some(new))
+        );
         if gathered {
             continue;
         }

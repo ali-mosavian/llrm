@@ -279,15 +279,39 @@ pub(crate) fn is_alloca_in(
     }
 }
 
+/// The allocas of the function whose address is exposed, found on the first
+/// ask: only a loop that may throw asks (`isNotVisibleOnUnwindInLoop`), and
+/// finding them scans the function. An alloca's exposure does not change as
+/// instructions move between blocks or accesses leave a loop.
+#[derive(Default)]
+pub struct Exposed {
+    found: std::cell::OnceCell<IdSet<ValueId>>,
+}
+
+impl Exposed {
+    fn get(
+        &self,
+        unit: &passes::Unit,
+        outer: &Outer,
+    ) -> &IdSet<ValueId> {
+        self.found.get_or_init(|| {
+            let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, outer);
+            llrm_analysis::memory::exposed_frames(&memory).into_iter().collect()
+        })
+    }
+}
+
 /// Whether the address of the alloca `object` is exposed anywhere in the
 /// function. DEVIATE: `PointerMayBeCapturedBefore` asks only before the loop
 /// header; this asks of the whole function, which captures more.
 fn is_captured(
-    exposed: &IdSet<ValueId>,
+    unit: &passes::Unit,
+    outer: &Outer,
+    exposed: &Exposed,
     object: Operand,
 ) -> bool {
     match object {
-        Operand::Value(value) => exposed.contains(&value),
+        Operand::Value(value) => exposed.get(unit, outer).contains(&value),
         _ => true,
     }
 }
@@ -296,10 +320,11 @@ fn is_captured(
 /// unwind occurs inside the loop (an alloca whose address is not captured).
 fn is_not_visible_on_unwind_in_loop(
     unit: &passes::Unit,
-    exposed: &IdSet<ValueId>,
+    outer: &Outer,
+    exposed: &Exposed,
     object: Operand,
 ) -> bool {
-    is_alloca(unit, object) && !is_captured(exposed, object)
+    is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)
 }
 
 /// `isWritableObject`: an alloca or a variable that is not constant.
@@ -343,7 +368,7 @@ pub fn promote_loop_accesses_to_scalars(
     outer: &Outer,
     ctx: &LoopCtx,
     safety: &LoopSafety,
-    exposed: &IdSet<ValueId>,
+    exposed: &Exposed,
     exit_blocks: &[BlockId],
     pointers: &[Operand],
     has_reads_outside_set: bool,
@@ -385,7 +410,7 @@ pub fn promote_loop_accesses_to_scalars(
         // Therefore, we have to prove that the store is dead along the unwind
         // edge.
         let object = underlying_object(unit, first_pointer);
-        if !is_not_visible_on_unwind_in_loop(unit, exposed, object) {
+        if !is_not_visible_on_unwind_in_loop(unit, outer, exposed, object) {
             store_safety = StoreSafety::Unsafe;
         }
     }

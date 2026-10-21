@@ -159,7 +159,10 @@ pub fn get_underlying_objects(
                     let block = q.function.parent(inst).expect("a block");
                     let incoming = || instruction.operands.chunks(2).map(|pair| pair[0]);
                     match loops {
-                        Some(loops) if loops.is_loop_header(block) && !is_same_underlying_object_in_loop(q, instruction, block, loops) => {
+                        Some(loops)
+                            if loops.is_loop_header(block)
+                                && !is_same_underlying_object_in_loop(q, instruction, block, loops) =>
+                        {
                             objects.push(p);
                         }
                         _ => worklist.extend(incoming()),

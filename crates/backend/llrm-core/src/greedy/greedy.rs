@@ -363,6 +363,10 @@ pub trait Spiller {
     fn failed(&self) -> bool {
         false
     }
+
+    /// The ranges of the homes the spills went to (`LiveStacks`), left where
+    /// the allocator's caller reads them, once the allocation is done.
+    fn stacked(&mut self) {}
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -435,6 +439,11 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// `LiveStacks` left for the caller (the spiller's homes' ranges).
+    pub fn stacked_spills(&mut self) {
+        self.spiller.stacked();
     }
 
     /// Whether the spiller failed to write a spill.

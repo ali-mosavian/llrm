@@ -49,10 +49,15 @@ fn canonical(text: &str) -> String {
     // Names by first appearance.
     let mut names: Vec<String> = Vec::new();
     let mut rename = |name: &str| -> String {
-        let at = names.iter().position(|one| one == name).unwrap_or_else(|| {
-            names.push(name.to_owned());
-            names.len() - 1
-        });
+        let at = names
+            .iter()
+            .position(|one| one == name)
+            .unwrap_or_else(
+                || {
+                    names.push(name.to_owned());
+                    names.len() - 1
+                },
+            );
         format!("%v{at}")
     };
     let mut out = String::new();
@@ -77,7 +82,8 @@ fn canonical(text: &str) -> String {
 
 /// The name that starts `text`.
 fn token(text: &str) -> &str {
-    let end = text.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '-'))).unwrap_or(text.len());
+    let end =
+        text.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '-'))).unwrap_or(text.len());
     &text[..end]
 }
 
