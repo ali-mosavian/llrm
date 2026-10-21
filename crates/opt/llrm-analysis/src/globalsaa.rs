@@ -338,15 +338,17 @@ pub struct Bodies {
 }
 
 /// The variables of `module` no outside code reaches by name: not exported by
-/// the program and defined in it.
+/// the program, defined in it and not let escape by another module. The
+/// runtime module's `!llrm.named` globals (b$seg) are such: it names them and
+/// never hands their address out.
 pub fn unexported(
     module: &Module,
     analyses: &mut ModuleAnalyses,
 ) -> BTreeSet<GlobalId> {
     let program = Rc::clone(analyses.program());
-    let defined = match program.cached::<ProgramGlobals>() {
-        Some(all) => Result::as_ref(&*all).map(|all| all[program.module].defined.clone()).unwrap_or_default(),
-        None => BTreeSet::new(),
+    let elsewhere = match program.cached::<ProgramGlobals>() {
+        Some(all) => Result::as_ref(&*all).map(|all| all[program.module].clone()).unwrap_or_default(),
+        None => Elsewhere::default(),
     };
     module
         .globals
@@ -355,7 +357,8 @@ pub fn unexported(
         .filter(|(at, global)| {
             matches!(global.kind, GlobalKind::Variable(_))
                 && !program.exports.exported(global)
-                && (defines(global) || defined.contains(&GlobalId(*at as u32)))
+                && (defines(global) || elsewhere.defined.contains(&GlobalId(*at as u32)))
+                && !elsewhere.escaped.contains(&GlobalId(*at as u32))
         })
         .map(|(at, _)| GlobalId(at as u32))
         .collect()

@@ -202,3 +202,43 @@ b0:
     assert_eq!(aa.get_mod_ref_info(call, Some(&load("a")), &mut aaqi), ModRefInfo::NoModRef, "@g");
     assert_eq!(aa.get_mod_ref_info(call, Some(&load("b")), &mut aaqi), ModRefInfo::Mod, "@h");
 }
+
+/// DEVIATE G8 takes the globals the program does not export as local. QB's
+/// `VARPTR`, `VARSEG` and `@` still make one reachable by a far pointer: the
+/// address passed to a call, turned into an integer or stored is taken, so
+/// such a global is not tracked and a call may write it.
+#[test]
+fn an_unexported_global_whose_address_a_program_takes_is_still_not_tracked() {
+    for taken in ["call void @use(ptr @g)", "%i = ptrtoint ptr @g to i16", "store ptr @g, ptr @slot"] {
+        let module = parsed(&format!(
+            "@g = global i16 0
+@slot = internal global ptr null
+
+declare void @use(ptr)
+declare void @callee() nocallback
+
+define void @f() {{
+b0:
+  {taken}
+  call void @callee()
+  ret void
+}}
+"
+        ));
+        let (g, callee) = (module.named("g").unwrap(), module.named("callee").unwrap());
+        let result = compute_with(&module, BTreeSet::from([g]));
+        assert!(!result.is_non_address_taken(g), "{taken}");
+        assert_eq!(
+            result.get_mod_ref_info_for_global(&module.globals, Some(callee), g, || ModRefInfo::NoModRef),
+            ModRefInfo::ModRef,
+            "{taken}"
+        );
+    }
+    let quiet = parsed(
+        "@g = global i16 0\n\ndeclare void @callee() nocallback\n\ndefine void @f() {\nb0:\n  call void @callee()\n  ret void\n}\n",
+    );
+    let (g, callee) = (quiet.named("g").unwrap(), quiet.named("callee").unwrap());
+    let result = compute_with(&quiet, BTreeSet::from([g]));
+    let info = result.get_mod_ref_info_for_global(&quiet.globals, Some(callee), g, || ModRefInfo::NoModRef);
+    assert!(!info.is_mod_set(), "premise: without a taken address the unexported global is tracked");
+}
