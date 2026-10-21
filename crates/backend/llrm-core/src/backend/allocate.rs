@@ -4150,7 +4150,7 @@ impl RegAlloc {
         let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
-        body = constrained_body;
+        body = constrain::hoisted(&constrained_body, &fixed);
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
