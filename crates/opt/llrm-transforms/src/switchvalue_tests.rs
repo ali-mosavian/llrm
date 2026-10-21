@@ -317,8 +317,8 @@ cd:
     );
 }
 
-/// Cases 1 and 2 of `b0` go to `b1`, which is only a `switch` on `%x`: `b0` stayed a switch
-/// that sends them to `b1` for a second switch.
+/// Cases 1 and 2 of `b0` go to `b1`, which is only a `switch` on `%x`: `b0`
+/// stayed a switch that sends them to `b1` for a second switch.
 #[test]
 fn test_a_block_of_a_switch_folds_into_the_cases_that_reach_it() {
     check(
@@ -396,7 +396,8 @@ ce:
     );
 }
 
-/// The default of `b0` is `b1`, a lone `switch` on `%x` of other cases: they stayed two switches.
+/// The default of `b0` is `b1`, a lone `switch` on `%x` of other cases: they
+/// stayed two switches.
 #[test]
 fn test_a_switch_that_is_the_default_of_another_is_merged_into_it() {
     check(
@@ -478,8 +479,9 @@ ce:
     );
 }
 
-/// `b0` and `b1` both go to `end`, whose phi takes 10 from one and 20 from the other: the
-/// fold needs a block on `b1`'s edge, `end.fold.split`, or the phi would lose a value.
+/// `b0` and `b1` both go to `end`, whose phi takes 10 from one and 20 from the
+/// other: the fold needs a block on `b1`'s edge, `end.fold.split`, or the phi
+/// would lose a value.
 #[test]
 fn test_a_shared_successor_with_different_phi_inputs_is_split_first() {
     check(
@@ -558,7 +560,8 @@ end:
     );
 }
 
-/// `b0` branches on `%x == 1` to `b1`, a lone `switch` on `%x`: a branch and a switch stayed.
+/// `b0` branches on `%x == 1` to `b1`, a lone `switch` on `%x`: a branch and a
+/// switch stayed.
 #[test]
 fn test_a_switch_that_is_the_false_edge_of_a_compare_is_merged_into_it() {
     check(
@@ -629,8 +632,8 @@ ce:
     );
 }
 
-/// `b1` is its own default: the merged switch sends the rest to a block `infloop` that
-/// loops, as `b1` did.
+/// `b1` is its own default: the merged switch sends the rest to a block
+/// `infloop` that loops, as `b1` did.
 #[test]
 fn test_a_switch_whose_default_is_itself_gets_a_block_that_loops() {
     check(
@@ -697,8 +700,8 @@ infloop:
     );
 }
 
-/// `b2` is only a `switch` on `%x` and is reached from `entry` and `q`: each of them
-/// stayed a switch to `b2`.
+/// `b2` is only a `switch` on `%x` and is reached from `entry` and `q`: each of
+/// them stayed a switch to `b2`.
 #[test]
 fn test_a_lone_switch_is_folded_into_each_of_its_predecessors() {
     check(
@@ -796,8 +799,9 @@ cf:
     );
 }
 
-/// `b0` compares a pointer with `null` and `b1` switches on its `ptrtoint`: they stayed a
-/// branch and a switch; the merged switch takes a fresh `ptrtoint`, `%magicptr`.
+/// `b0` compares a pointer with `null` and `b1` switches on its `ptrtoint`:
+/// they stayed a branch and a switch; the merged switch takes a fresh
+/// `ptrtoint`, `%magicptr`.
 #[test]
 fn test_a_pointer_null_compare_and_a_switch_on_its_address_fold_through_magicptr() {
     check(
@@ -873,8 +877,8 @@ ce:
     );
 }
 
-/// `%key` is 3 for `%x == 5` and `%x` else: the switch stayed on `%key`. On `%x` it needs a
-/// case 5 to `%cb`, where 3 goes.
+/// `%key` is 3 for `%x == 5` and `%x` else: the switch stayed on `%key`. On
+/// `%x` it needs a case 5 to `%cb`, where 3 goes.
 #[test]
 fn test_a_select_of_the_value_adds_a_case_that_goes_where_its_constant_did() {
     check(
@@ -935,8 +939,8 @@ cd:
     );
 }
 
-/// `%key` is `%x` for `%x != 7` and 3 else: the switch stayed on `%key`. Case 7 now goes to
-/// `%cb` like 3, and `%cc` is gone.
+/// `%key` is `%x` for `%x != 7` and 3 else: the switch stayed on `%key`. Case 7
+/// now goes to `%cb` like 3, and `%cc` is gone.
 #[test]
 fn test_an_inverted_select_of_the_value_retargets_its_case() {
     check(
@@ -992,7 +996,8 @@ cd:
     );
 }
 
-/// `%key` is 3 or 7 by `%neg`: the switch on it stayed, with an edge to the default left over.
+/// `%key` is 3 or 7 by `%neg`: the switch on it stayed, with an edge to the
+/// default left over.
 #[test]
 fn test_a_select_of_two_constants_is_a_branch_on_its_condition() {
     check(
@@ -1047,7 +1052,8 @@ cc:
     );
 }
 
-/// `%key` is 3 or 5, and 5 is no case: the branch goes to `%cb` and the default.
+/// `%key` is 3 or 5, and 5 is no case: the branch goes to `%cb` and the
+/// default.
 #[test]
 fn test_a_select_of_a_case_and_a_value_none_has_goes_to_the_default() {
     check(
@@ -1101,8 +1107,8 @@ cd:
     );
 }
 
-/// Case 7 moves to `%end`, which already has an edge from `b0` through case 3: its phi
-/// needs a second input from `b0`, and loses the one it had from `%cc`.
+/// Case 7 moves to `%end`, which already has an edge from `b0` through case 3:
+/// its phi needs a second input from `b0`, and loses the one it had from `%cc`.
 #[test]
 fn test_a_retargeted_case_gives_the_new_destination_a_phi_input_per_edge() {
     check(

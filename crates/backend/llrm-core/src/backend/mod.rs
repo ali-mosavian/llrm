@@ -125,6 +125,7 @@
 //! [`crate::flow`] (the phase list and its gate) and
 //! The phase map: [`crate::backend`].
 
+pub mod absolute;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
@@ -134,7 +135,6 @@ pub mod arrival;
 pub mod asm;
 pub mod assemble;
 pub mod bitcounts;
-pub mod absolute;
 pub mod bytes;
 pub mod calleefacts;
 pub mod callregs;
