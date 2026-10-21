@@ -271,6 +271,11 @@ pub struct UnrollingPreferences {
     pub force: bool,
     pub upper_bound: bool,
     pub max_iterations_count_to_analyze: u32,
+    /// `UnrollAndJam`: unroll and jam the loop nest (the pin's default: no).
+    pub unroll_and_jam: bool,
+    /// `UnrollAndJamInnerLoopThreshold`: the size the jammed inner loop may
+    /// have (the pin's default: 60).
+    pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
 /// The target a cost is for.
@@ -956,6 +961,8 @@ mod access_tests {
             force: false,
             upper_bound: false,
             max_iterations_count_to_analyze: 0,
+            unroll_and_jam: false,
+            unroll_and_jam_inner_loop_threshold: 0,
         };
         Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
         assert_eq!(up.max_count, 7);
