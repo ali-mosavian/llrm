@@ -293,8 +293,35 @@ impl Run<'_> {
             let hoisted = self.hoisted_insert_point(ip, &[lhs, rhs]);
             self.x.insert_point = Some(hoisted);
         }
-        let ty = self.ty_of_operand(lhs);
-        let made = self.emit(Opcode::Binary(op), ty, vec![lhs, rhs], ir_flags);
+        // Post-inc rewrites made outside their loop keep the instructions
+        // they asked for; the rest go through `InstSimplifyFolder`.
+        let rewrite = self.x.lsr_mode && !self.x.post_inc_loops.is_empty() && {
+            let block = self.function.parent(self.x.insert_point.expect("an insert point")).expect("placed");
+            self.x
+                .post_inc_loops
+                .iter()
+                .all(|&header| !self.env.loops.get_loop_for(header).is_some_and(|l| l.contains(block)))
+        };
+        let folded = (!rewrite)
+            .then(|| {
+                llrm_mir::simplify::simplify_binop_operands(
+                    self.context,
+                    self.env.layout,
+                    self.function,
+                    op,
+                    IrFlags::default(),
+                    lhs,
+                    rhs,
+                )
+            })
+            .flatten();
+        let made = match folded {
+            Some(folded) => folded,
+            None => {
+                let ty = self.ty_of_operand(lhs);
+                self.emit(Opcode::Binary(op), ty, vec![lhs, rhs], ir_flags)
+            }
+        };
         self.x.insert_point = Some(saved);
         made
     }
