@@ -29,7 +29,10 @@ The frontend passes each of a handled function's variables to `FRAME`
 (`llrm.qb.frame`) in its entry, so every pass sees it captured and keeps its
 loads and stores: the handler reads the variables whenever a call raises, as
 an SEH funclet reads its parent's frame (`llvm.localescape`). A statement's
-own argument boxes (`$arg`) are not passed. Without it GVN forwarded the
+own argument boxes (`$arg`) are not passed, nor is a variable
+nothing writes (it holds the zero it was made with) or one dead at every
+statement RESUME continues at, a handler's first block, and the statement after
+each that may raise (`resumable_groups`): qb/bounds.bas -261 B at -Os. Without it GVN forwarded the
 variables into 2,638 phis in GORILLA's MAKECITYSCAPE and the demotion below
 stored them all back: 189,936 bytes at m32 -Os where main's is 47,769.
 D-EH1 (DEVIATE): MIR has no variadic intrinsic, so one call per variable
