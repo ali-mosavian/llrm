@@ -98,3 +98,14 @@ def test_the_accounting_block_adds_up_to_the_instrumented_total():
     assert abs(thread + lines["outside the timed thread (instrumented - thread)"] - lines["instrumented perf total (LLRM_DEBUG=time on)"]) < 1e-9
     assert abs(lines["  of which start-up and exit (empty-file compile)"] + lines["  of which the rest (main-thread work, instrument)"] - lines["outside the timed thread (instrumented - thread)"]) < 1e-9
     assert abs(lines["instrument overhead (instrumented - plain)"] - 25.0) < 1e-9
+
+
+def test_both_outputs_are_the_same_kind_for_all_three_compilers_and_the_listing_is_emit():
+    """-S for llrm and an object for clang would charge llrm 15.6 M of listing text clang never writes; and 'masm text' was filed under isel."""
+    from pathlib import Path
+
+    llrm_asm, foreign_asm = m.output_args("asm", Path("/t"))
+    llrm_obj, foreign_obj = m.output_args("obj", Path("/t"))
+    assert llrm_asm == foreign_asm == ["-S", "-o", "/dev/null"]
+    assert llrm_obj == ["-o", "/t/o.obj"] and foreign_obj == ["-c", "-o", "/t/o.o"]
+    assert m.owner_of("masm text")[0] == "emit"
