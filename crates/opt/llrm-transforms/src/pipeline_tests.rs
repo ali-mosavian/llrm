@@ -2259,10 +2259,12 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
 /// `sink` (a register-pressure forecast) after the fixed point, where LLVM has
-/// no such pass; `sink` is gone and the translated LICM runs in its three
-/// slots and once after the header copy (`rotate` is not a slot yet).
+/// no such pass; `sink` is gone and the translated LICM runs in the pin's four
+/// slots (the fourth, `licm@1508`, after the unroll: x_gcd's `umax(n/20, 2)`
+/// was computed inside the outer loop without it) and once after the header
+/// copy (`rotate` is not a slot yet).
 #[test]
-fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_copy() {
+fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_once_after_the_header_copy() {
     let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
     llrm_mir::counts::per_pass();
     let ran = |licm: bool| {
@@ -2286,7 +2288,11 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
         let after = llrm_mir::counts::lines();
         runs(&after, "licm") - runs(&before, "licm")
     };
-    assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
+    assert_eq!(
+        ran(true),
+        5,
+        "licm@724, licm@730, licm@823, licm@1508 (the pin has four) and the one after the header copy"
+    );
 }
 
 /// The write-through `Promote` ran after the translated SROA and mem2reg at

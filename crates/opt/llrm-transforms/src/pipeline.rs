@@ -753,6 +753,12 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
+            // LICMPass again (l.1508,
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
+            // `AllowSpeculation=true`), in a loop pass manager of its own after
+            // the unroll and the combine that follow it: "helps to clean up
+            // some loop-invariant code created by the loop unroll pass".
+            licm("licm@1508", true),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
