@@ -79,14 +79,17 @@ pub struct Tables {
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
 // with an invariant-load flag set from those facts.
 //
-// DEVIATE D-RFP4: an x87 load (`fld`) of a cell nothing writes while the value
-// lives is made again where it is read, whatever the cell's address. The fact:
-// X86InstrInfo takes a load only when it is invariant (an incoming stack
-// argument is; a pointer's cell is not), but the floatassign route re-read any
-// such cell (`_homes`, GCC's REG_EQUIV memory) and the RFP route stored and
-// reloaded it: QCport d_alias -Os 520 fld, 461 fstp, 161 fxch against 462,
-// 394, 144 with it. Exit: the pin's invariant flag set from llrm's facts, for
-// every class at once (D-I).
+// DEVIATE D-RFP4 (w-4, 2026-10-30): an x87 load (`fld`) of a global or of an
+// incoming argument's cell, which nothing writes while the value lives, is made
+// again where it is read. The fact: X86InstrInfo takes a load only when it is
+// invariant (an immutable stack argument is; the integer loads of D-I are the
+// same proof, `_stable_loads_from`), but the x87 loads were never offered to
+// it, so the RFP route stored and reloaded them: QCport d_alias -Os 520 fld,
+// 461 fstp, 161 fxch against 462, 392, 144 with it. A local cell is left out
+// (the cell `fild` reads is written again between two loads). Exit: retire
+// when the pin's foldMemoryOperand/rematerialisation for x87 reaches the same
+// bytes, or with D-I.
+
 /// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
 /// register written by a plain move or address, nothing pinned or destroyed.
 pub fn remat_shape(one: &Insn) -> bool {
