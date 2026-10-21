@@ -32,6 +32,19 @@
 //! prefixed `lea` itself or the pin gains a real-mode model; reviewed
 //! 2026-11-30.
 //!
+//! Known row of LU1: QCport `d_faces.c` -Os, `_clip_w` (six near float arrays
+//! on one index, an x87 loop) is 6262 B against main's 6208. The model rates
+//! the scaled solution at 10 instructions (9 registers, 2 recurrences) and the
+//! pointer recurrences at 13 (9 registers, 9 recurrences), so it keeps the
+//! scaled index, whose bases then reload from the frame; particle's `ADVANCE`
+//! (six far arrays) wins by 3 more instructions at the same charge. Neither a
+//! segment register class (the bases are near), an address-register budget
+//! (both forms need the same) nor sparing each use's cheapest formula in the
+//! narrowing (tried: the pointer form was kept and still lost) separates the
+//! two; only a tuned charge (7 to 8) does, which is not derived. Owner
+//! laa-runtime-checks-loadelim; exit: a fill cost for near pointer bases past
+//! the four addressing registers; reviewed 2026-11-30.
+//!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 //! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
