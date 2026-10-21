@@ -150,6 +150,8 @@ impl FunctionInfo {
 pub struct GlobalsModRef {
     non_address_taken: BTreeSet<GlobalId>,
     unknown_functions_with_local_linkage: bool,
+    /// The variables no outside code reaches, taken as local (DEVIATE G8).
+    unexported: BTreeSet<GlobalId>,
     functions: BTreeMap<GlobalId, FunctionInfo>,
 }
 
@@ -416,8 +418,19 @@ fn declaration_info(function: &Function) -> Option<FunctionInfo> {
 }
 
 pub fn compute(module: &Module) -> GlobalsModRef {
+    compute_with(module, BTreeSet::new())
+}
+
+/// `compute`, the variables `unexported` taken as local too. DEVIATE G8: the
+/// pin's `hasLocalLinkage` ([GlobalsModRef.cpp#L276](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/GlobalsModRef.cpp#L276))
+/// sees what LTO's internalization has made internal; here the program says
+/// which globals no outside code reaches (`Exports`, the runtime's `!llrm.named`).
+pub fn compute_with(
+    module: &Module,
+    unexported: BTreeSet<GlobalId>,
+) -> GlobalsModRef {
     let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: true };
-    let mut result = GlobalsModRef::default();
+    let mut result = GlobalsModRef { unexported, ..GlobalsModRef::default() };
     let mut tracked_functions: BTreeSet<GlobalId> = BTreeSet::new();
     let mut infos: BTreeMap<GlobalId, FunctionInfo> = BTreeMap::new();
     // AnalyzeGlobals
@@ -433,7 +446,7 @@ pub fn compute(module: &Module) -> GlobalsModRef {
     }
     for (at, global) in module.globals.iter().enumerate() {
         let (id, GlobalKind::Variable(variable)) = (GlobalId(at as u32), &global.kind) else { continue };
-        if !local(global.linkage) {
+        if !local(global.linkage) && !result.unexported.contains(&id) {
             continue;
         }
         let (mut readers, mut writers) = (BTreeSet::new(), BTreeSet::new());
@@ -628,7 +641,7 @@ impl GlobalsModRef {
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
         let global_value: &GlobalValue = &globals[global.0 as usize];
-        if !local(global_value.linkage) || self.unknown_functions_with_local_linkage {
+        if !(local(global_value.linkage) || self.unexported.contains(&global)) || self.unknown_functions_with_local_linkage {
             return ModRefInfo::ModRef;
         }
         let Some(callee) = callee else { return ModRefInfo::ModRef };

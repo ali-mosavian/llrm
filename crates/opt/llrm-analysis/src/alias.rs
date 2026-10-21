@@ -982,7 +982,7 @@ pub(crate) fn borrowed(
     at: InstId,
     index: usize,
 ) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = &unit.function.instruction(at).opcode else { return false };
     // What these return is the operand's bytes, followed as a value: the call
     // keeps nothing (`captures(ret: provenance)` in LLVM).
     if matches!(
@@ -991,6 +991,17 @@ pub(crate) fn borrowed(
     ) {
         return true;
     }
+    no_capture_argument(unit, at, index)
+}
+
+/// Whether the call `at` is stated to keep no copy of its argument `index`,
+/// at the site or on the callee's parameter (`nocapture`).
+pub(crate) fn no_capture_argument(
+    unit: &Unit,
+    at: InstId,
+    index: usize,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))
@@ -2284,7 +2295,10 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
         )
     };
     // What a call reaches elsewhere depends on its callee alone.
-    let reaches = |callee: Option<GlobalId>| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+    let reaches = |callee: Option<GlobalId>, nocallback: bool| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+        // A callee that cannot call back writes of the tracked globals only
+        // what the runtime module promises of it (`!llrm.writes`).
+        let promised = if nocallback { unit.globals_aa.map(|aa| aa.unsummarized(callee)) } else { None };
         let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
         for object in [ObjectRef::UNKNOWN, ObjectRef::NONLOCAL] {
             reads.insert(Slice::whole(object));
@@ -2297,10 +2311,16 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             let touched = unit.globals_mr.map_or(crate::aa::ModRefInfo::ModRef, |all| {
                 all.get_mod_ref_info_for_global(unit.globals, callee, global, || crate::aa::ModRefInfo::NoModRef)
             });
-            if touched.is_ref_set() {
+            // Only a named global is promised anything: the runtime holds its
+            // address by name alone. Any other is reached through arguments too.
+            let (reads_it, writes_it) = match &promised {
+                Some((named, written)) if named.contains(&global) => (true, written.contains(&global)),
+                _ => (true, true),
+            };
+            if touched.is_ref_set() && reads_it {
                 reads.insert(Slice::whole(object));
             }
-            if touched.is_mod_set() {
+            if touched.is_mod_set() && writes_it {
                 writes.insert(Slice::whole(object));
             }
         }
@@ -2309,6 +2329,16 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
     let mut elsewhere: llrm_mir::dense::IdMap<u32, (Rc<[MemRef]>, Rc<[MemRef]>)> = llrm_mir::dense::IdMap::default();
     let mut elsewhere_unknown = None;
     let mut out = llrm_mir::dense::IdMap::default();
+    // Calls reaching the same references share the one list.
+    let mut shared: std::collections::HashMap<Vec<MemRef>, Rc<[MemRef]>> = std::collections::HashMap::new();
+    let mut share = |list: Vec<MemRef>| -> Rc<[MemRef]> {
+        if let Some(one) = shared.get(&list) {
+            return Rc::clone(one);
+        }
+        let one: Rc<[MemRef]> = list.as_slice().into();
+        shared.insert(list, Rc::clone(&one));
+        one
+    };
     for (_, at) in unit.function.walk() {
         let op = unit.function.instruction(at);
         let (Opcode::Call(_) | Opcode::Invoke(_)) = op.opcode else { continue };
@@ -2337,14 +2367,16 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             }
         }
         let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
+        let nocallback = !crate::globalsaa::calls_back(unit, at);
         let (other_loads, other_stores) = match callee {
             Some(id) => {
-                if !elsewhere.contains_key(&id.0) {
-                    elsewhere.insert(id.0, reaches(callee));
+                let key = id.0 * 2 + u32::from(nocallback);
+                if !elsewhere.contains_key(&key) {
+                    elsewhere.insert(key, reaches(callee, nocallback));
                 }
-                elsewhere.get(&id.0).expect("inserted above")
+                elsewhere.get(&key).expect("inserted above")
             }
-            None => elsewhere_unknown.get_or_insert_with(|| reaches(None)),
+            None => elsewhere_unknown.get_or_insert_with(|| reaches(None, false)),
         };
         if allowed.other.reads {
             loads.extend(other_loads.iter().cloned());
@@ -2352,7 +2384,7 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
         if allowed.other.writes {
             stores.extend(other_stores.iter().cloned());
         }
-        out.insert(at, Effect { loads: loads.into(), stores: stores.into(), fills: Vec::new() });
+        out.insert(at, Effect { loads: share(loads), stores: share(stores), fills: Vec::new() });
     }
     out
 }

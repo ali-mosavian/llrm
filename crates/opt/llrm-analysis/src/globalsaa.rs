@@ -337,6 +337,30 @@ pub struct Bodies {
     per: IndexMap<GlobalId, (Mark, Rc<Contribution>)>,
 }
 
+/// The variables of `module` no outside code reaches by name: not exported by
+/// the program and defined in it.
+pub fn unexported(
+    module: &Module,
+    analyses: &mut ModuleAnalyses,
+) -> BTreeSet<GlobalId> {
+    let program = Rc::clone(analyses.program());
+    let defined = match program.cached::<ProgramGlobals>() {
+        Some(all) => Result::as_ref(&*all).map(|all| all[program.module].defined.clone()).unwrap_or_default(),
+        None => BTreeSet::new(),
+    };
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(at, global)| {
+            matches!(global.kind, GlobalKind::Variable(_))
+                && !program.exports.exported(global)
+                && (defines(global) || defined.contains(&GlobalId(*at as u32)))
+        })
+        .map(|(at, _)| GlobalId(at as u32))
+        .collect()
+}
+
 /// `module`'s, each body's shape from its manager in `analyses` and the
 /// other modules as the cached `ProgramGlobals` finds them.
 pub fn analysis(

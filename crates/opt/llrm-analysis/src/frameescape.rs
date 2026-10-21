@@ -8,7 +8,8 @@
 //!
 //! - a load's pointer and a store's pointer (not the stored value) are
 //!   accesses;
-//! - a lifetime marker (`marker` says which instructions) names an object
+//! - a lifetime marker, or a use `marker` says keeps no copy (`nocapture`),
+//!   names an object
 //!   without handing out its address;
 //! - any other use, including storing the pointer, passing it to a call,
 //!   returning it, `ptrtoint`, or comparing it, exposes it.
@@ -306,7 +307,7 @@ pub fn scans() -> usize {
 /// value through moves is exposed too.
 pub fn exposed_allocas(
     function: &Function,
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> BTreeSet<ValueId> {
     WHOLE.with(|runs| runs.set(runs.get() + 1));
     let mut exposing = vec![false; function.value_count()];
@@ -326,7 +327,7 @@ pub fn exposed_allocas(
                 if let Some(result) = instruction.result {
                     feeds[result.0 as usize].push(*value);
                 }
-            } else if !(accessed(function, inst) == Some(index) || marker(inst)) {
+            } else if !(accessed(function, inst) == Some(index) || marker(inst, index)) {
                 exposing[value.0 as usize] = true;
             }
         }
@@ -378,7 +379,7 @@ pub fn exposed_renewed(
     function: &Function,
     previous: impl IntoIterator<Item = ValueId>,
     touched: &[ValueId],
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> Vec<ValueId> {
     use llrm_mir::module::ValueDef;
     let mut affected = llrm_mir::dense::IdSet::<ValueId>::new();
@@ -420,7 +421,7 @@ pub fn exposed_renewed(
 pub fn exposes(
     function: &Function,
     alloca: ValueId,
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> bool {
     SCANS.with(|scans| scans.set(scans.get() + 1));
     let mut seen = BTreeSet::from([alloca]);
@@ -431,7 +432,7 @@ pub fn exposes(
             let moves = instruction.opcode == Opcode::Phi
                 || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
             if !moves {
-                if accessed(function, one.user) == Some(one.index as usize) || marker(one.user) {
+                if accessed(function, one.user) == Some(one.index as usize) || marker(one.user, one.index as usize) {
                     continue;
                 }
                 return true;
@@ -714,10 +715,10 @@ out:
         assert_eq!(exposed(text), names(&["slot"]));
         let module = parsed(text);
         let f = function(&module, "f");
-        let by_pass = exposed_allocas(f, |_| false);
+        let by_pass = exposed_allocas(f, |_, _| false);
         assert_eq!(by_pass, BTreeSet::from([value(f, "slot")]));
-        assert!(exposes(f, value(f, "slot"), |_| false));
-        assert!(!exposes(f, value(f, "other"), |_| false));
+        assert!(exposes(f, value(f, "slot"), |_, _| false));
+        assert!(!exposes(f, value(f, "other"), |_, _| false));
     }
 
     #[test]
@@ -872,8 +873,8 @@ b0:
         );
         let f = function(&module, "f");
         let x = value(f, "x");
-        let marker = |inst: InstId| matches!(&f.instruction(inst).opcode, Opcode::Call(_));
-        assert!(exposes(f, x, |_| false));
+        let marker = |inst: InstId, _: usize| matches!(&f.instruction(inst).opcode, Opcode::Call(_));
+        assert!(exposes(f, x, |_, _| false));
         assert!(!exposes(f, x, marker));
     }
 }
