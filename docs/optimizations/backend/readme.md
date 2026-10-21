@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 112 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 113 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -34,6 +34,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 112 documented
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
 | effects | The registers and flags an instruction reads and writes, from its `x86.instr` row. | `peephole.rs` (`_effects_by_table`), which adds the instruction's | [effects](effects.md) |
 | ehprepare | Make a QB personality's landing pad one the runtime can enter, before instruction selection. | In `driver::optimized` (`mir ehprepare`), once per module after the MIR | [ehprepare](ehprepare.md) |
+| emptyblocks | A block of nothing but a jump merged into its successor, so a phi's copy lands in the predecessor that fed it. | Once per program in `driver::optimized`, after `legalize` and before | [emptyblocks](emptyblocks.md) |
 | exactaddress | Fold the chain computing an exact address into its 32-bit form. | Inside the peephole phase, after the pattern rewrites, before | [exactaddress](exactaddress.md) |
 | executed | A finished body's executed work per call, estimated without a profile. | Not a pass: `assemble.rs` calls it on each finished body to choose | [executed](executed.md) |
 | expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and | [expansion](expansion.md) |

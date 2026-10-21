@@ -442,6 +442,7 @@ pub fn optimized(
             )
     })?;
     timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    timed("mir empty blocks", || program.modules.iter_mut().try_for_each(crate::backend::emptyblocks::eliminated))?;
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
