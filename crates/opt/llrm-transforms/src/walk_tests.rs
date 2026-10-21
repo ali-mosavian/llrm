@@ -847,3 +847,49 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     let top = sized_top(7, 5, false);
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
+
+/// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
+/// differ from a fresh listing` of 26 programs: what `post_order` stated of a
+/// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
+/// held `Declarations` was not looked at again, so the next body's callers
+/// priced the callee by the attributes it had before.
+#[test]
+fn a_callee_the_walk_states_attributes_of_is_held_with_them_for_the_next_body() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal void @w(ptr %p) {
+b0:
+  store i16 1, ptr %p
+  ret void
+}
+
+define void @c(ptr %p) {
+b0:
+  call void @w(ptr %p)
+  ret void
+}
+",
+    );
+    let stale = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = std::rc::Rc::clone(&stale);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        move |program: &mut llrm_mir::program::Program| {
+            let seen = std::rc::Rc::clone(&seen);
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { limit: 0, ..Default::default() },
+                simplify: Box::new(move |module, analyses, _, _| {
+                    let held = analyses.get::<llrm_mir::passes::Declarations>(module);
+                    if *held != module.declarations() {
+                        seen.set(true);
+                    }
+                }),
+            };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    assert!(!stale.get(), "the held declarations differ from a fresh listing");
+}
