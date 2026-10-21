@@ -66,9 +66,11 @@ fn edges_to_split(
     body: &LirBody,
     at_of: &IndexMap<i64, &Block>,
 ) -> Vec<(i64, i64)> {
-    let (entering, _) = crate::backend::allocate::live(body);
+    // Asked one value and block at a time: the rows answer it, without a set
+    // for every block's entry and exit (`LiveIntervals::liveAt`).
+    let rows = crate::backend::allocate::live_rows(body);
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
-    let live_in = |value: u32, at: i64| entering.get(&at).is_some_and(|set| set.contains(&value));
+    let live_in = |value: u32, at: i64| crate::backend::allocate::LiveAt::live_in(&rows, at, value);
     let mut split: Vec<(i64, i64)> = Vec::new();
     for block in &body.blocks {
         if block.phis.is_empty() {
@@ -292,6 +294,25 @@ mod tests {
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
         block.insns.iter().filter_map(|one| copy_of(one)).collect()
+    }
+
+    /// `SplitPHIEdges` asks whether one value is live into one block, and was
+    /// answered by the sets of every block's entry and exit (two per body,
+    /// 14 M of d_faces -O2's 19.6 M in `allocate::live` over the pass's three
+    /// calls); the rows answer it with no set made.
+    #[test]
+    fn test_lowering_builds_no_block_sets() {
+        use crate::backend::allocate::SETS_BUILT;
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
+        let was = body(vec![
+            block(0, vec![def(1), jump(1)], &[1], vec![]),
+            block(1, vec![def(12), read(10), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        SETS_BUILT.with(|one| one.set(0));
+        lowered(&was).expect("lowers");
+        let built = SETS_BUILT.with(|one| one.get());
+        assert_eq!(built, 0, "{built} block sets built to lower one body");
     }
 
     /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own
