@@ -625,14 +625,13 @@ pub fn _unreachable(
             pending.extend(successors[&at].iter().copied());
         }
     }
-    let predecessors = loops::predecessors(&blocks);
     let mut changed = false;
     for &at in &reached {
+        // Terminators name blocks; the phis edited below do not change who
+        // the predecessors are.
+        let predecessors = function.predecessors(block(at));
         let live = |from: &Operand| {
-            matches!(
-                from,
-                Operand::Block(one) if reached.contains(&id(*one)) && predecessors.get(&at).is_some_and(|from| from.contains(&id(*one)))
-            )
+            matches!(from, Operand::Block(one) if reached.contains(&id(*one)) && predecessors.contains(one))
         };
         for phi in function.iter_block(block(at)).collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {
