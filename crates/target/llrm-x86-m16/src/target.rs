@@ -138,10 +138,11 @@ impl Machine for Dos {
                 Some((scale, cheapest.min()?))
             })
             .collect();
-        // A scaled index is the prefixed form: its cost, in instructions, once
-        // for each register scaled.
+        // A scaled index is an instruction that forms the scaled register (the
+        // `lea`) and the cost of the prefixed form it is used in, once for each
+        // register scaled.
         let scaled_index_insns =
-            scale_costs.iter().filter(|(scale, _)| *scale > 1).map(|(_, cost)| *cost).min().unwrap_or(0);
+            scale_costs.iter().filter(|(scale, _)| *scale > 1).map(|(_, cost)| 1 + *cost).min().unwrap_or(0);
         let real = llrm_x86::tti::RealMode {
             scale_costs,
             registers: self.registers as u32,
@@ -346,7 +347,11 @@ mod tests {
         for scale in [2, 4, 8] {
             assert!(tti.is_legal_addressing_mode(false, 0, true, scale), "scale {scale} is the prefixed form");
         }
-        assert_eq!(tti.scaled_index_insns(), 2, "the prefix and the stall, once for each scaled register");
+        assert_eq!(tti.scaled_index_insns(), 3, "the lea, the prefix and the stall, once for each scaled register");
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 0), costs, ..Dos::default() };
+        let scaled = dos.tti().expect("m16 states its cost model").scaled_index_insns();
+        assert_eq!(scaled, 2, "the lea and the prefix: no address stall");
         assert!(!tti.is_legal_addressing_mode(false, 1 << 16, true, 1), "a displacement is 16 bits");
         assert_eq!(tti.number_of_gpr_registers(), 6);
     }

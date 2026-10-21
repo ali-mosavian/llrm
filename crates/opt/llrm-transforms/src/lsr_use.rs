@@ -20,13 +20,14 @@
 //!
 //! # Limits
 //! DEVIATE LU1: `Cost::rate_formula` adds the target's `scaled_index_insns`
-//! to `Insns` once for each scaled register (an `Address` formula with scale
-//! above 1), beyond the pin. The pin has no real-mode model: its x86 prices a
-//! scaled address as part of the address form, and `ScaleCost` is the last key
-//! of the comparison, so a scaled index always beat a pointer induction
-//! variable (m16 listed `lea bx,[ecx+ecx]` for one array) or lost to six of
-//! them (particle's six far arrays, which the narrowing then left only the
-//! pointer forms of). 0 elsewhere, so the pin's rule. Owner
+//! (m16: the `lea` that forms the scaled register, and the prefixed form's
+//! own cost) to `Insns` once for each scaled register (an `Address` formula
+//! with scale above 1), beyond the pin. The pin has no real-mode model: its x86
+//! prices a scaled address as part of the address form, and `ScaleCost` is the
+//! last key of the comparison, so a scaled index always beat a pointer
+//! induction variable (m16 listed `lea bx,[ecx+ecx]` for one array) or lost to
+//! six of them (particle's six far arrays, which the narrowing then left only
+//! the pointer forms of). 0 elsewhere, so the pin's rule. Owner
 //! laa-runtime-checks-loadelim; exit: when the target description prices the
 //! prefixed `lea` itself or the pin gains a real-mode model; reviewed
 //! 2026-11-30.
