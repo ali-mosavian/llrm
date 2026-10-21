@@ -93,9 +93,8 @@ fn each_level_selects_gcc_s_passes() {
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
-    // -O1 has gcc's `-finline-functions-called-once` and no
-    // `-finline-small-functions`.
-    assert_eq!(row("-O1"), (scalar, true, false, false, false, true, false, false, false, true));
+    // -O1 inlines as the pin's does (225, #3249).
+    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
@@ -115,7 +114,7 @@ fn each_level_selects_gcc_s_passes() {
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
-        (0, 225, 250)
+        (225, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
