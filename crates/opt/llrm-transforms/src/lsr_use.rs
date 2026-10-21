@@ -45,6 +45,13 @@
 //! laa-runtime-checks-loadelim; exit: a fill cost for near pointer bases past
 //! the four addressing registers; reviewed 2026-11-30.
 //!
+//! Its -O2 cost is measured, not counted statically (static counts said
+//! smaller): QCport's 61-frame BENCH run in the dosrun emulator, every object
+//! main's but `d_faces.obj` (~/scratch/dfdyn: build.py, run.py). Executed
+//! instructions: main 485,835,518; parity +2,383,382 (+0.49%); head +2,816,018
+//! (+0.58%), so this charge adds +432,636 (+0.09%). The parity loss is row
+//! DFACES-DYN-1, not LU1's.
+//!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 //! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
