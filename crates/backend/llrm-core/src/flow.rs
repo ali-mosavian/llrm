@@ -112,6 +112,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // On SSA, first: a phi cycle that carries one value is that value (the
+        // pin: OptimizePHIs, ahead of MachineCSE).
+        Box::new(crate::backend::optimizephis::OptimizePhis),
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
