@@ -45,3 +45,13 @@ def test_a_demo_that_differs_or_could_not_be_played_is_not_a_right_answer():
     )
     assert [one.split(":")[0].split(" (")[0] for one in lines] == ["ok GORILLA m16", "WRONG GORILLA m32", "ok NIBBLES m16", "NIBBLES m32", "X"]
     assert not any(one.startswith("ok") for one in lines if "m32" in one or one.startswith("X"))
+
+
+def test_a_string_compare_that_does_not_compile_or_answers_wrong_is_red():
+    """str_slices on the tip: `@llrm.qb.B$SCMP's flags read other than by a comparison`, a compile failure at every level that the program smoke
+    never reached."""
+    green = answer_smoke.strings(lambda: (0, "4 programs: 4 pass, 0 known, 0 fail\n"))
+    assert green == [f"ok strcmp_smoke m16 {level}" for level in ("-O1", "-O2", "-O3", "-Os")]
+    red = answer_smoke.strings(lambda: (1, "FAIL  qb/strcmp_smoke.bas: compile: llrm-qb: @__main: @llrm.qb.B$SCMP's flags read other than by a comparison\n1 programs: 0 pass, 0 known, 1 fail\n"))
+    assert len(red) == 1 and red[0].startswith("WRONG") and "B$SCMP" in red[0]
+    assert answer_smoke.strings(lambda: (2, "")) [0].startswith("WRONG")

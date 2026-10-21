@@ -3523,7 +3523,11 @@ impl Compiler {
                         };
                         let place = self.def_segment_base_place();
                         let near = integer_type(self.options.near(), true);
-                        self.emit("store", Vec::new(), vec![Operand::Place(place), Operand::Constant(near, Number::Integer(base))]);
+                        self.emit(
+                            "store",
+                            Vec::new(),
+                            vec![Operand::Place(place), Operand::Constant(near, Number::Integer(base))],
+                        );
                     } else if let Some(value) = value {
                         let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
