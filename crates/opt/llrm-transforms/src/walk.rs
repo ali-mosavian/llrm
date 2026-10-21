@@ -385,6 +385,7 @@ impl ProgramPass for Walk {
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
                 if !members.is_empty() {
+                    let mut stated = false;
                     for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
@@ -392,6 +393,11 @@ impl ProgramPass for Walk {
                         &members,
                     ) {
                         modules[at].changed(id);
+                        stated = true;
+                    }
+                    // What it stated reaches the next body's callees.
+                    if stated {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }
