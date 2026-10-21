@@ -43,6 +43,22 @@ fn compiled_checking(
     String::from_utf8_lossy(&done.stderr).into_owned()
 }
 
+/// llrm-qb's stderr on `PROGRAM` compiled to assembly text (`-S`).
+fn listed(channels: &str) -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = directory.path().join("t.bas");
+    std::fs::write(&source, PROGRAM).expect("writes the source");
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")))
+        .args([source.to_str().unwrap(), "--dialect", "qb45", "--runtime", "qb45", "-O2", "-S", "-o", directory.path().join("t.asm").to_str().unwrap()])
+        .env_remove("LLRM_VERIFY")
+        .env("LLRM_DEBUG", channels)
+        .env("LLRM_TIME_TOP", "1000")
+        .output()
+        .expect("runs llrm-qb");
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    String::from_utf8_lossy(&done.stderr).into_owned()
+}
+
 /// The number before `ms` in the `[time] <line> ...` line's field called
 /// `field`.
 fn field(
@@ -167,4 +183,12 @@ fn test_the_frontends_program_is_verified_under_the_check_mode_or_fverify_ir_onl
             assert!(checked.contains(step), "no `{step}` with {flag:?} {verify:?}:\n{checked}");
         }
     }
+}
+
+/// With `-S` the listing writer ran outside every timed step: 21 M of a 1259 M
+/// d_faces -O2 compile, and the accounting block read it as unexplained.
+#[test]
+fn test_the_assembly_listing_is_a_timed_step() {
+    let report = listed("time");
+    assert!(report.lines().any(|one| one.starts_with("[time]") && one.ends_with(" masm text")), "no `masm text` step in:\n{report}");
 }

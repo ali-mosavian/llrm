@@ -28,6 +28,15 @@ pub trait CoalescerEnv {
         b: u32,
     ) -> bool;
 
+    /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
+    /// `dst`, which may now take only the registers both could.
+    fn narrow(
+        &self,
+        _dst: u32,
+        _src: u32,
+    ) {
+    }
+
     /// A build for size: a copy of a constant is made again only where that
     /// leaves no second copy of the constant (DEVIATE C10).
     fn tuned_for_size(&self) -> bool {
