@@ -98,3 +98,38 @@ def test_the_accounting_block_adds_up_to_the_instrumented_total():
     assert abs(thread + lines["outside the timed thread (instrumented - thread)"] - lines["instrumented perf total (LLRM_DEBUG=time on)"]) < 1e-9
     assert abs(lines["  of which start-up and exit (empty-file compile)"] + lines["  of which the rest (main-thread work, instrument)"] - lines["outside the timed thread (instrumented - thread)"]) < 1e-9
     assert abs(lines["instrument overhead (instrumented - plain)"] - 25.0) < 1e-9
+
+
+def test_both_outputs_are_the_same_kind_for_all_three_compilers_and_the_listing_is_emit():
+    """-S for llrm and an object for clang would charge llrm 15.6 M of listing text clang never writes; and 'masm text' was filed under isel."""
+    from pathlib import Path
+
+    llrm_asm, foreign_asm = m.output_args("asm", Path("/t"))
+    llrm_obj, foreign_obj = m.output_args("obj", Path("/t"))
+    assert llrm_asm == foreign_asm == ["-S", "-o", "/dev/null"]
+    assert llrm_obj == ["-o", "/t/o.obj"] and foreign_obj == ["-c", "-o", "/t/o.o"]
+    assert m.owner_of("masm text")[0] == "emit"
+
+
+def test_the_tolerance_compares_the_rows_to_the_timed_thread_not_to_the_process():
+    """The rows were 97.8% of the instrumented total and the map warned, though they were 99.6% of the thread they time (22 M is the process around it)."""
+    result = {
+        "header": {"commit": "c", "llrm": "l", "gcc": "g", "clang": "k"},
+        "total_M": 1000.0, "instrumented_M": 1030.0, "rows_sum_M": 1000.0, "debug_total_M": 1004.0, "outside_every_step_M": 4.0, "startup_M": 10.0, "scale": 1.0,
+        "gcc_total_M": 100.0, "clang_total_M": 80.0, "rows": [], "categories": {},
+    }
+    text = m.show(result)
+    assert "WARNING" not in text and "of the timed thread" in text and "instrumented total" in text
+    result["rows_sum_M"] = 900.0
+    assert "WARNING" in m.show(result)
+
+
+def test_the_report_states_the_host_load_it_ran_under():
+    result = {
+        "header": {"commit": "c", "llrm": "l", "gcc": "g", "clang": "k"},
+        "total_M": 1000.0, "instrumented_M": 1030.0, "rows_sum_M": 1000.0, "debug_total_M": 1004.0, "outside_every_step_M": 4.0, "scale": 1.0,
+        "gcc_total_M": 100.0, "clang_total_M": 80.0, "rows": [], "categories": {}, "load_average": [75.1, 70.2, 60.0],
+    }
+    assert "load average at the run (1/5/15 min): 75.1 / 70.2 / 60.0" in m.show(result)
+    del result["load_average"]
+    assert "load average: not recorded" in m.show(result)
