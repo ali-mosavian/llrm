@@ -531,10 +531,18 @@ impl SelfInline {
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
-                // The list runs GVN before jump threading: the copies' paths
-                // are joined only after it, and each copy repeats the calls of
-                // the ones that dominate it (fib -O2 at depth 3: 154398 clocks
-                // once, 14802 twice; the pin's copies are of one level).
+                // DEVIATE (recursion, D10 third part, docs/architecture/
+                // recursion-rows.md): the pin runs its function pipeline once
+                // (`NoRerun`, PassBuilderPipelines.cpp:1047) and has no
+                // self-copies; gcc's FRE and PRE run again after the inliner.
+                // The list runs GVN before jump threading and the copies' paths
+                // join in the threading, so once, each copy repeats the calls
+                // of the ones that dominate it (fib -O2: 154398 clocks once,
+                // 14802 twice). Owner: w-6. Exit: this run goes when the
+                // cleanup can run in
+                // the pin's inline-then-cleanup order, or when that order gives
+                // fib and x_fib at or below main (227171) without it; review
+                // 2026-11-30, else a permanent numbered DEVIATE.
                 if copies > 0 {
                     (self.simplify)(module, &mut modules[at], id, "self-inline-again.");
                 }
