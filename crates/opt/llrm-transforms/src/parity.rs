@@ -363,6 +363,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
+    // CodeGenPrepare: only eliminateMostlyEmptyBlocks is translated (backend/emptyblocks.rs, DEVIATE B1); the rest is Missing.
+    entry("codegenprepare", Backend, "codegenprepare", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
     entry("shrink-wrap", Backend, "shrink-wrap", Missing, ""),
 ];
