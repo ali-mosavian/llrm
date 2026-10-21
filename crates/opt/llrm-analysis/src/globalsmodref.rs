@@ -555,6 +555,14 @@ pub fn compute(module: &Module) -> GlobalsModRef {
             infos.insert(id, info.clone());
         }
     }
+    // A declaration is a node of the call graph with the info its attributes
+    // give (the `isDeclaration()` arm of `AnalyzeCallGraph`), where it may not
+    // call back into the module.
+    for (id, _, function) in module.functions().filter(|(_, _, function)| function.is_declaration()) {
+        if let Some(info) = declaration_info(function) {
+            infos.insert(id, info);
+        }
+    }
     result.functions = infos;
     result
 }

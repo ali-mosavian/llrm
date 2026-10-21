@@ -66,7 +66,12 @@ b0:
     assert_eq!(quiet.function_info(f).map(|one| one.mod_ref()), Some(ModRefInfo::Ref));
     let (module, writes) = found(&text("declare void @out() nocallback"));
     assert_eq!(writes.function_info(module.named("f").unwrap()).map(|one| one.mod_ref()), Some(ModRefInfo::ModRef));
+    // The declaration is itself a node with the info its attributes give, which
+    // is what a call's query reads (`getFunctionInfo(Callee)`).
+    let (module, again) = found(&text("declare void @out() nocallback"));
+    assert_eq!(again.function_info(module.named("out").unwrap()).map(|one| one.mod_ref()), Some(ModRefInfo::ModRef));
     let (module, calls_back) = found(&text("declare void @out()"));
+    assert!(calls_back.function_info(module.named("out").unwrap()).is_none());
     assert!(calls_back.function_info(module.named("f").unwrap()).is_none());
     assert_eq!(calls_back.get_memory_effects(module.named("f").unwrap()), MemoryEffects::unknown());
 }
