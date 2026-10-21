@@ -279,13 +279,12 @@ pub fn stranded(
     header: i64,
 ) -> IdSet<i64> {
     let blocks = cfg::graph(function);
-    let predecessors = crate::graph::loops::predecessors(&blocks);
     let mut returning = IdSet::new();
     let mut pending =
         blocks.iter().map(|block| block.at).filter(|&at| _returns(function, at)).chain([header]).collect::<Vec<_>>();
     while let Some(at) = pending.pop() {
         if returning.insert(at) {
-            pending.extend(predecessors.get(&at).into_iter().flatten().copied());
+            pending.extend(function.predecessors(cfg::block(at)).into_iter().map(cfg::id));
         }
     }
     blocks.iter().map(|block| block.at).filter(|at| !returning.contains(at)).collect()

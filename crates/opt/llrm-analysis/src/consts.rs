@@ -1167,7 +1167,6 @@ fn exit_loads(
     let graph = memoryssa::built(unit, accesses).with_known(_intervals(registers));
     let blocks = cfg::graph(function);
     let successors = blocks.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
-    let predecessors = crate::graph::loops::predecessors(&blocks);
     let mut queries = memory_queries(*unit, registers);
     let shape = unit.shape();
     for exit in exits {
@@ -1176,7 +1175,7 @@ fn exit_loads(
         };
         let leaving = successors[&exit.header].iter().copied().filter(|at| !body.contains(at)).collect::<Vec<_>>();
         let [after] = leaving[..] else { continue };
-        if !predecessors.are(&after, &[exit.header]) {
+        if function.predecessors(cfg::block(after))[..] != [cfg::block(exit.header)] {
             continue;
         }
         let mut cells = Cells::default();
