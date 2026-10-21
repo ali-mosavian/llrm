@@ -1,0 +1,9 @@
+' flags: -O1 | -O2 | -Os
+' dialect: qb45 pds71
+DEFINT A-Z
+DIM SHARED x AS INTEGER
+DEF SEG = VARSEG(x)
+POKE VARPTR(x), 5
+POKE VARPTR(x) + 1, 2
+DEF SEG
+PRINT x
