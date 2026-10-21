@@ -1087,7 +1087,7 @@ impl<'a, 'b> Checker<'a, 'b> {
                 }
                 // Defined in the outer latch: only if it has one
                 // predecessor, so it runs if and only if the inner loop does.
-                if function.predecessors(outer_latch).len() != 1 {
+                if function.sole_predecessor(outer_latch).is_none() {
                     return false;
                 }
             }
