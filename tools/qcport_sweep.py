@@ -73,12 +73,16 @@ def qb_flat_programs(root: Path = ROOT) -> list[Path]:
     return [source for source in sorted((root / "tests/run/qb").glob("*.bas")) if not named.search(source.read_text(encoding="latin1"))]
 
 
+# The machines the front ends compile for. The 64-bit targets have no Nib runtime and OMF has no 64-bit records: their failures are not findings.
+FRONT_END_MODES = (16, 32)
+
+
 def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
-    """(tool, source, machine, level): bench/bintree in Nib and BASIC at every target and all levels, and tests/run/qb at the widest at -O1 and -O2."""
-    modes = sorted(tomllib.loads(path.read_text())["mode"] for path in (root / "crates/target").glob("*/src/machines/datalayout.toml"))
-    machines, widest = [f"-m{mode}" for mode in modes], f"-m{modes[-1]}"
+    """(tool, source, machine, level): bench/bintree in Nib and BASIC and tests/run/qb at every front-end machine (`FRONT_END_MODES`), bintree at all levels, tests/run/qb at -O1 and -O2."""
+    found = {tomllib.loads(path.read_text())["mode"] for path in (root / "crates/target").glob("*/src/machines/datalayout.toml")}
+    machines = [f"-m{mode}" for mode in sorted(found & set(FRONT_END_MODES))]
     benches = [(tool, root / f"bench/bintree/bintree.{ext}", machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in machines for level in LEVELS]
-    return benches + [("llrm-qb", source, widest, level) for source in qb_flat_programs(root) for level in ("-O1", "-O2")]
+    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines for level in ("-O1", "-O2")]
 
 
 def sweep_extra(bins: Path, jobs: int = 8) -> list[tuple[str, str, str]]:

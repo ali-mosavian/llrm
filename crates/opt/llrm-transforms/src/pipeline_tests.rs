@@ -2410,7 +2410,9 @@ fn a_slot_names_the_member_that_left_a_phi_short() {
 
 /// `ret` took `frame` in, and `selftest` was then given the body `ret` had
 /// before, with its calls to `frame`, which had no body left: the load of
-/// `b.draw` was folded past them and `selftest` returned 0, not 1.
+/// `b.draw` was folded past them and `selftest` returned 0, not 1. Run at
+/// -O2: at -Os `frame` stays a call, for its body is bigger than the call
+/// (D11).
 #[test]
 fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
     let mut module = llrm_analysis::testing::parsed(
@@ -2485,7 +2487,7 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
 !9 = !{!8, !8, i64 0}
 "#,
     );
-    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    let applied = Applied { options: pipeline::Options::default(), ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("_main".to_owned());
         pipeline::applied(program, &applied)

@@ -72,7 +72,7 @@ def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
     assert q.first_bad(commits, lambda c: None if c in unbuildable else int(c[1:]) >= 10) == "c13"
 
 
-def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(tmp_path):
+def test_the_sweep_compiles_the_basic_corpus_at_m16_and_m32_and_never_a_64_bit_machine(tmp_path):
     """ownf_local_pds71 and ownf_local_vbdos failed at -m32 with `@TOP: ptrtoint` (140 compiles in a full-corpus run) while tests/run, BASIC on m16 only, reported 0 fail."""
     corpus = tmp_path / "tests/run/qb"
     corpus.mkdir(parents=True)
@@ -82,5 +82,15 @@ def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(t
     (corpus / "flat.bas").write_text("PRINT 1\n")
     (corpus / "huge.bas").write_text("' targets: x86-m16\nPRINT 2\n")
     jobs = q.extra_jobs(tmp_path)
-    assert [(s.name, m, l) for t, s, m, l in jobs if s.parent == corpus] == [("flat.bas", "-m32", "-O1"), ("flat.bas", "-m32", "-O2")]
+    assert sorted((s.name, m, l) for t, s, m, l in jobs if s.parent == corpus) == [("flat.bas", m, l) for m in ("-m16", "-m32") for l in ("-O1", "-O2")]
     assert {t for t, *_ in jobs} == {"llrm-nib", "llrm-qb"}
+
+
+def test_a_64_bit_machine_is_never_swept(tmp_path):
+    """The 64-bit targets have no Nib runtime and OMF has no 64-bit records: 238 of a sweep's failed compiles were `-m64`, none a finding."""
+    for crate, mode in (("a", 16), ("b", 32), ("c", 64), ("d", 64)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    (tmp_path / "tests/run/qb/flat.bas").write_text("PRINT 1\n")
+    assert {m for _, _, m, _ in q.extra_jobs(tmp_path)} == {"-m16", "-m32"}
