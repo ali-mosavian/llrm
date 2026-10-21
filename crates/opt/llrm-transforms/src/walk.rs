@@ -538,7 +538,11 @@ impl SelfInline {
                 // The list runs GVN before jump threading and the copies' paths
                 // join in the threading, so once, each copy repeats the calls
                 // of the ones that dominate it (fib -O2: 154398 clocks once,
-                // 14802 twice). Owner: w-6. Exit: none, the pin has no copies.
+                // 14802 twice). Owner: w-6. Exit: this run goes when the
+                // cleanup can run in
+                // the pin's inline-then-cleanup order, or when that order gives
+                // fib and x_fib at or below main (227171) without it; review
+                // 2026-11-30, else a permanent numbered DEVIATE.
                 if copies > 0 {
                     (self.simplify)(module, &mut modules[at], id, "self-inline-again.");
                 }
