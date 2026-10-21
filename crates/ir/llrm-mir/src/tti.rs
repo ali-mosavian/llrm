@@ -293,12 +293,20 @@ pub trait Tti {
         true
     }
 
-    /// The most an `optsize` caller's inline may add over the call it removes,
-    /// in inline-cost units, where the target prices it apart from LLVM's
-    /// `OptSizeThreshold` (SZ1); none: the pin's 50. X86: 0, a callee that
-    /// stays is not copied into a caller that is built for size.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        None
+    /// Whether an `optsize` caller's inline of a callee that stays must not
+    /// grow the code: the callee's `CodeSize` over the instructions the
+    /// inline cost did not fold, against the call and the pushes of its
+    /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        false
+    }
+
+    /// How many percent of its `CodeSize` units a call and the pushes of its
+    /// arguments take in code, where they are bigger than the average
+    /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
+    /// 3 for an ALU instruction); 100: as counted.
+    fn call_code_size_percent(&self) -> i64 {
+        100
     }
 
     /// The cost of an integer-to-float cast whose operand is a load, where the
