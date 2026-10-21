@@ -1,0 +1,10 @@
+== --test default --tbaa
+@gcd_miv_no_nsw
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+== --test gcd-miv --tbaa
+@gcd_miv_no_nsw
+  output [* *]!
+  output [* *|<]!
+  output [* *]!

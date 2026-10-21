@@ -161,15 +161,19 @@ def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
 PERF_TITLE = re.compile(r"^\s*perf(\(|:)", re.I)
 REFACTOR_TITLE = re.compile(r"^\s*refactor(\(|:)", re.I)
 PASS_CODE = re.compile(r"^crates/(opt/[^/]+|backend/llrm-core)/src/(?!.*(?:_tests\.rs|/tests/)).*\.rs$")
+FEAT_TITLE = re.compile(r"^\s*feat(\(|:)", re.I)
+PIPELINE_WIRING = "crates/opt/llrm-transforms/src/pipeline.rs"
 ROWS_LINE = re.compile(r"^\s*Rows:\s*\S+", re.I | re.M)
 
 
 def perf_needs_rows(title: str, description: str, files: list[str] | tuple[str, ...] = ()) -> list[str]:
     """A `perf` PR, or a `refactor` PR that changes pass code (non-test .rs under crates/opt or the backend), lands only with a `Rows:` line naming its rows pair
-    (base and new binaries, and that the run diff is clean): #3251 landed without one and broke alias/farstruct.nib. `fix` and `feat` keep the build check only."""
+    (base and new binaries, and that the run diff is clean): #3251 landed without one and broke alias/farstruct.nib. A `feat` PR that wires a pass into pipeline.rs needs one too
+    (#3344 turned LoopInterchange on at every level). Other `fix` and `feat` PRs keep the build check only."""
     pass_code = any(PASS_CODE.match(f) for f in files)
-    if (PERF_TITLE.search(title or "") or (REFACTOR_TITLE.search(title or "") and pass_code)) and not ROWS_LINE.search(description or ""):
-        return ["a perf PR, or a refactor PR that changes pass code, needs a `Rows:` line in the description naming its rows pair and run diff (bench's pair: base and new binaries, "
+    wires_a_pass = bool(FEAT_TITLE.search(title or "")) and PIPELINE_WIRING in files
+    if (PERF_TITLE.search(title or "") or wires_a_pass or (REFACTOR_TITLE.search(title or "") and pass_code)) and not ROWS_LINE.search(description or ""):
+        return ["a perf PR, a feat PR that wires a pass into pipeline.rs, or a refactor PR that changes pass code, needs a `Rows:` line in the description naming its rows pair and run diff (bench's pair: base and new binaries, "
                 "rows above base, NEW FAIL lines); mark the PR draft until the pair exists"]
     return []
 

@@ -1,0 +1,10 @@
+== --tbaa
+@weak_crossing_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  output [*]!
+== --test weak-crossing-siv --tbaa
+@weak_crossing_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  output [*]!

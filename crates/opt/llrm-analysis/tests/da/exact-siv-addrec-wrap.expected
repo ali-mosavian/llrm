@@ -1,0 +1,10 @@
+== --tbaa
+@exact_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  none!
+== --test exact-siv --tbaa
+@exact_siv_no_nsw
+  output [*]!
+  output [*|<]!
+  none!

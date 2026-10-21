@@ -1,0 +1,54 @@
+== 
+@dstzero
+  output [S]!
+  output [=>|<]!
+  none!
+@weakzerosrc0
+  output [S]!
+  flow [=>|<]!
+  confused!
+  none!
+  confused!
+  none!
+@weakzerosrc1
+  output [S]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@weakzerosrc2
+  output [S]!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@weakzerosrc3
+  output [S]!
+  flow [<=|<]!
+  confused!
+  none!
+  confused!
+  none!
+@weakzerosrc4
+  output [S]!
+  flow [*|<]!
+  confused!
+  none!
+  confused!
+  none!
+@weakzerosrc5
+  output [S]!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@weakzerosrc6
+  output [S]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!

@@ -1,0 +1,16 @@
+== --tbaa
+@t1
+  none!
+  anti [1 -2]!
+  none!
+@t2
+  none!
+  confused!
+  anti [1 -2]!
+  confused!
+  confused!
+  none!
+@t3
+  none!
+  anti [1 -2 0 -3 2]!
+  none!

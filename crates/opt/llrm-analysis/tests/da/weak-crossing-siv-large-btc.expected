@@ -1,0 +1,10 @@
+== --tbaa
+@weak_crossing_siv_large_btc
+  none!
+  output [*|<]!
+  none!
+== --test weak-crossing-siv --tbaa
+@weak_crossing_siv_large_btc
+  output [*]!
+  output [*|<]!
+  output [*]!

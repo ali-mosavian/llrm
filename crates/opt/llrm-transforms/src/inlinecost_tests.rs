@@ -172,6 +172,45 @@ b0:
     assert_eq!(priced(&text, 0, false, CallerSize::OptSize).1, 75);
 }
 
+/// An external callee that stays after the inline is not copied into an
+/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
+/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
+#[test]
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
+    let text = format!(
+        "{GLOBAL}define i32 @callee(i32 %x) {{
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = add i32 %b, %a
+  %d = mul i32 %c, %x
+  %e = add i32 %d, %b
+  %f = mul i32 %e, %a
+  %g = add i32 %f, %c
+  %h = mul i32 %g, %d
+  %i = add i32 %h, %a
+  %j = mul i32 %i, %x
+  %k = add i32 %j, %c
+  %l = mul i32 %k, %b
+  %m = add i32 %l, %e
+  store i32 %m, ptr @g
+  ret i32 %m
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+    );
+    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
+    let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
+    assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
+    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).
@@ -259,12 +298,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0 };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -430,4 +469,15 @@ b0:
     };
     let verdict = inline_cost(&site, InlineParams::from_level(2));
     assert!(matches!(verdict, InlineCost::Never(_)), "{verdict:?}");
+}
+
+/// stft_single.bas -Os: a call in front of `unreachable` is held to threshold
+/// 0, and the walk stopped at cost 0; `cost < max(1, threshold)` is
+/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138),
+/// so the 350-instruction benchmark body was copied into `__main` and kept.
+#[test]
+fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }

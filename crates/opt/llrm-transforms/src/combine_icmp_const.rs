@@ -90,7 +90,10 @@ fn is_negative(
 }
 
 fn is_signed(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 fn is_equality(pred: IntPredicate) -> bool {
@@ -208,11 +211,15 @@ fn fold_icmp_and_constant(
     // ((zext i1 X) & Y) == 1 -->  ((trunc Y) & X)
     // ((zext i1 X) & Y) != 1 --> !((trunc Y) & X)
     if one_use_and && (value == 0 || value == 1) {
-        let found = [(x, y), (y, x)].into_iter().find_map(|(first, other)| {
-            let q = query(c, Some(inst));
-            let (_, _, bit) = pattern::cast(&q, first, CastOp::ZExt)?;
-            (has_one_use(c, first) && q.scalar_bits(bit) == 1).then_some((bit, other))
-        });
+        let found = [(x, y), (y, x)]
+            .into_iter()
+            .find_map(
+                |(first, other)| {
+                    let q = query(c, Some(inst));
+                    let (_, _, bit) = pattern::cast(&q, first, CastOp::ZExt)?;
+                    (has_one_use(c, first) && q.scalar_bits(bit) == 1).then_some((bit, other))
+                },
+            );
         if let Some((bit, other)) = found {
             let i1 = c.context.types.int(1);
             let trunc_y = c.create_cast(inst, CastOp::Trunc, other, i1, Flags::default());
@@ -226,12 +233,16 @@ fn fold_icmp_and_constant(
     // (icmp eq/ne (and (shl -1, X), Y), 0)
     //    -> (icmp eq/ne (lshr Y, X), 0)
     if value == 0 && one_use_and {
-        let found = [(x, y), (y, x)].into_iter().find_map(|(first, other)| {
-            let q = query(c, Some(inst));
-            let (_, _, ones, amount) = pattern::binary(&q, first, BinaryOp::Shl)?;
-            let all_ones = q.int_constant(ones).is_some_and(|(bits, w)| bits == mask(w));
-            (has_one_use(c, first) && all_ones).then_some((amount, other))
-        });
+        let found = [(x, y), (y, x)]
+            .into_iter()
+            .find_map(
+                |(first, other)| {
+                    let q = query(c, Some(inst));
+                    let (_, _, ones, amount) = pattern::binary(&q, first, BinaryOp::Shl)?;
+                    let all_ones = q.int_constant(ones).is_some_and(|(bits, w)| bits == mask(w));
+                    (has_one_use(c, first) && all_ones).then_some((amount, other))
+                },
+            );
         if let Some((amount, other)) = found {
             let lshr = c.create_binop(inst, BinaryOp::LShr, other, amount, Flags::default());
             let zero = c.int(c.type_of(lshr), 0);
