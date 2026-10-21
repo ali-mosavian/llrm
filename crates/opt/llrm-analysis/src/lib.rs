@@ -78,7 +78,7 @@
 //! with `depends`, if the change log cannot have altered it; or it is updated
 //! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
-//! entries (`GlobalsAA`, `Summaries`, `Callbacks`) are dropped unless every run
+//! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated
 //! results equal a fresh solve. Free-standing analyses (not manager entries)
 //! are recomputed per call; a `Unit` (see [`memory`]) carries the cached ones

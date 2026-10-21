@@ -71,10 +71,10 @@
 //! does what the module's entry points do (`callbacks`). `summaries_updating`
 //! redoes only the bodies that changed and their readers.
 //!
-//! Call effects (`calls_annotated`). Each call gets an `Effect`: the `MemRef`s
-//! it loads and stores, instantiated through the actuals, and the bytes it
-//! fills (`initialized`: bytes written before any is read). It is a side table,
-//! because the rich MIR's call carries no memory operands.
+//! Call effects (`calls_by_attributes`). Each call gets an `Effect`: the
+//! `MemRef`s it loads and stores, instantiated through the actuals, and the
+//! bytes it fills (`initialized`: bytes written before any is read). It is a
+//! side table, because the rich MIR's call carries no memory operands.
 //!
 //! Access annotation (`annotated`). Each load and store gets its provenance;
 //! where a range bounds its index the slice narrows to the bytes the index can
@@ -114,12 +114,12 @@
 //!
 //! # Provides
 //! `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,
-//! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_annotated`,
+//! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_by_attributes`,
 //! `annotated`, `congruences`, `initialized`, `read_arguments`,
 //! `nonnull_by_definition`. Manager entries in [`crate::manager`]: `Pointers`,
-//! `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
+//! `PointValues`, `Annotated`, `Summaries`. Consumers:
 //! [`crate::memory`] (a `Unit`'s lazily built `annotated` and `points_to`),
-//! [`crate::memoryssa`] (`calls_annotated`), [`crate::avail`]
+//! [`crate::memoryssa`] (`calls_by_attributes`), [`crate::avail`]
 //! (`EscapedBefore`), [`crate::induction`]
 //! (`congruences`), [`crate::globalsaa`], [`crate::interprocedural`], and
 //! `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
@@ -1476,8 +1476,7 @@ fn _callbacks(
 }
 
 /// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
-/// the answer depends on, so the module holds it once for every body that asks
-/// (`manager::Callbacks`).
+/// the answer depends on.
 pub fn callbacks_over(
     globals: &globalsaa::Globals,
     known: &IndexMap<String, Summary>,
