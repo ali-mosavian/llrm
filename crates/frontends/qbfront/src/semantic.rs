@@ -3502,6 +3502,17 @@ impl Compiler {
                 },
                 Statement::DefSeg { value, .. } => {
                     if self.options.one_space() {
+                        // A segment has no meaning where the address is one
+                        // number: PEEK and POKE would read and write the
+                        // wrong bytes without a word (far3: the string
+                        // unchanged, n = 0), so it is refused.
+                        if value.is_some() {
+                            return self.fail(
+                                "DEF SEG with a non-default segment is not supported at one address space (-m32): VARSEG is 0 \
+                                 and PEEK, POKE, BLOAD and BSAVE take the whole address, so an absolute address (video memory) \
+                                 is held in a variable, as vram& = &HB8000 (docs/frontends/qb/memory-model.md)",
+                            );
+                        }
                         self.warn_def_seg_ignored();
                     } else if let Some(value) = value {
                         let value = self.unsigned_word(value)?;
