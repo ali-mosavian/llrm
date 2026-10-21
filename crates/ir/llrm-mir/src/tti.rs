@@ -559,6 +559,15 @@ pub trait Tti {
         8
     }
 
+    /// Instructions a scaled index (`base + scale * index`, scale above 1)
+    /// costs beyond the address itself, once for each scaled register: the
+    /// backend forms it once and every use of the register shares it. 0
+    /// where the scale is part of the address form, as at the pin (DEVIATE
+    /// LU1, `lsr_use.rs`).
+    fn scaled_index_insns(&self) -> u32 {
+        0
+    }
+
     /// `getCastInstrCost`.
     fn cast_cost(
         &self,

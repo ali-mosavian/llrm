@@ -128,19 +128,25 @@ impl Machine for Dos {
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        // The primary forms are the addresses LSR may form; the prefixed one
-        // is the backend's fallback.
-        let primary: Vec<&AddressForm> = self.address_forms.iter().filter(|form| !form.secondary).collect();
         let scales: std::collections::BTreeSet<i64> =
-            primary.iter().flat_map(|form| form.scales.iter().copied()).collect();
-        let scale_costs = scales
+            self.address_forms.iter().flat_map(|form| form.scales.iter().copied()).collect();
+        let scale_costs: Vec<(i64, i64)> = scales
             .into_iter()
             .filter_map(|scale| {
-                let cheapest = primary.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost);
+                let cheapest =
+                    self.address_forms.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost);
                 Some((scale, cheapest.min()?))
             })
             .collect();
-        let real = llrm_x86::tti::RealMode { scale_costs, registers: self.registers as u32 };
+        // A scaled index is the prefixed form: its cost, in instructions, once
+        // for each register scaled.
+        let scaled_index_insns =
+            scale_costs.iter().filter(|(scale, _)| *scale > 1).map(|(_, cost)| *cost).min().unwrap_or(0);
+        let real = llrm_x86::tti::RealMode {
+            scale_costs,
+            registers: self.registers as u32,
+            scaled_index_insns: scaled_index_insns as u32,
+        };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
             .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
@@ -336,9 +342,11 @@ mod tests {
         let tti = dos.tti().expect("m16 states its cost model");
         let cost = |scale| tti.scaling_factor_cost(false, 0, true, scale).value;
         assert_eq!((cost(0), cost(1)), (0, 0), "plain and bx+si are free");
+        assert_eq!((cost(2), cost(4), cost(8)), (2, 2, 2), "the prefix (1) and the stall (1)");
         for scale in [2, 4, 8] {
-            assert!(!tti.is_legal_addressing_mode(false, 0, true, scale), "scale {scale} needs the prefixed form");
+            assert!(tti.is_legal_addressing_mode(false, 0, true, scale), "scale {scale} is the prefixed form");
         }
+        assert_eq!(tti.scaled_index_insns(), 2, "the prefix and the stall, once for each scaled register");
         assert!(!tti.is_legal_addressing_mode(false, 1 << 16, true, 1), "a displacement is 16 bits");
         assert_eq!(tti.number_of_gpr_registers(), 6);
     }

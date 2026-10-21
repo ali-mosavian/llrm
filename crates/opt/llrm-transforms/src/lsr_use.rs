@@ -19,6 +19,18 @@
 //! [`crate::lsr_pass`] is the pass that runs them).
 //!
 //! # Limits
+//! DEVIATE LU1: `Cost::rate_formula` adds the target's `scaled_index_insns`
+//! to `Insns` once for each scaled register (an `Address` formula with scale
+//! above 1), beyond the pin. The pin has no real-mode model: its x86 prices a
+//! scaled address as part of the address form, and `ScaleCost` is the last key
+//! of the comparison, so a scaled index always beat a pointer induction
+//! variable (m16 listed `lea bx,[ecx+ecx]` for one array) or lost to six of
+//! them (particle's six far arrays, which the narrowing then left only the
+//! pointer forms of). 0 elsewhere, so the pin's rule. Owner
+//! laa-runtime-checks-loadelim; exit: when the target description prices the
+//! prefixed `lea` itself or the pin gains a real-mode model; reviewed
+//! 2026-11-30.
+//!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 //! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
@@ -432,9 +444,12 @@ pub struct Rating<'a, 'b> {
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
 /// Measures and compares candidate formulae.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Cost {
     pub c: LsrCost,
+    /// The registers rated scaled so far, with their scale: the target's
+    /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
+    scaled: Vec<(Scev, i64)>,
 }
 
 impl Cost {
@@ -513,6 +528,17 @@ impl Cost {
 
         // Scaling amounts that are not free.
         self.c.scale_cost += scaling_factor_cost(r.tti, r.se, lu, f, r.l).value as u32;
+        // DEVIATE LU1: a scaled index is an instruction the backend forms once
+        // and every use of the register shares.
+        let scaled_insns = r.tti.scaled_index_insns();
+        if scaled_insns > 0 && lu.kind == Kind::Address && f.scale > 1 {
+            if let Some(reg) = f.scaled_reg {
+                if !self.scaled.contains(&(reg, f.scale)) {
+                    self.scaled.push((reg, f.scale));
+                    self.c.insns += scaled_insns;
+                }
+            }
+        }
 
         // The non-zero immediates.
         for fixup in &lu.fixups {
