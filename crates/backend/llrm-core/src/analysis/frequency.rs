@@ -1146,6 +1146,13 @@ mod tests {
         let mut body = made(after);
         body.frequencies = Some(table);
         assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
+        // The exemption is the cycle's: a block outside it that runs ten times
+        // as often as the only block that reaches it is still said.
+        let mut stale = body.frequencies.as_ref().expect("a table").0.clone();
+        *stale.get_mut(&0x28).expect("a block outside the cycle") *= 10.0;
+        body.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(stale)));
+        let said = Frequency::violations(&body);
+        assert!(said.iter().any(|one| one.contains("block 0x28 runs")), "{said:?}");
     }
 
     #[test]
