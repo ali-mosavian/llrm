@@ -114,3 +114,39 @@ fn two_sign_tests_ored_are_one_sign_test_of_the_or() {
     assert!(out.contains("or i16 %a, %b") && out.contains("icmp slt i16 %"), "{out}");
     assert!(!out.contains(" and "), "{out}");
 }
+
+/// x_cordic -O3 (+200 clocks): `z = i * 300 - 30000; if (z >= 0)` stayed an
+/// `add nsw` and a compare with -1 once InstCombine ran after IndVarSimplify
+/// had given the add its `nsw`; LSR then rebased the test on a 51472 offset.
+/// The pin's `foldICmpAddConstant` makes it one compare of the multiply.
+#[test]
+fn a_compare_of_a_no_signed_wrap_add_is_a_compare_of_its_operand() {
+    check("i32 %x", "  %a = add nsw i32 %x, -30000\n  %r = icmp sgt i32 %a, -1\n", &["icmp sgt i32 %x, 29999"]);
+}
+
+#[test]
+fn a_compare_of_a_no_unsigned_wrap_add_is_a_compare_of_its_operand() {
+    check("i16 %x", "  %a = add nuw i16 %x, 5\n  %r = icmp ult i16 %a, 100\n", &["icmp ult i16 %x, 95"]);
+}
+
+#[test]
+fn an_unsigned_range_test_of_an_add_is_one_compare_of_a_shifted_operand() {
+    check(
+        "i16 %x",
+        "  %a = add i16 %x, -10\n  %r = icmp ugt i16 %a, 20\n",
+        &["add i16 %x, -31", "icmp ult i16", ", -21"],
+    );
+}
+
+#[test]
+fn a_compare_with_the_offset_that_makes_it_the_opposite_sign_loses_the_add() {
+    check("i16 %x", "  %a = add i16 %x, 7\n  %r = icmp slt i16 %a, 7\n", &["icmp ugt i16 %x, 32760"]);
+    check("i16 %x", "  %a = add i16 %x, 8\n  %r = icmp sgt i16 %a, 7\n", &["icmp ult i16 %x, 32760"]);
+    check("i16 %x", "  %a = add i16 %x, 5\n  %r = icmp ugt i16 %a, 32772\n", &["icmp slt i16 %x, -5"]);
+}
+
+/// Nothing in the fold applies: the add stays.
+#[test]
+fn a_compare_an_offset_cannot_absorb_keeps_its_add() {
+    check("i16 %x", "  %a = add i16 %x, 16\n  %r = icmp ult i16 %a, 32\n", &["add i16 %x, 16", "icmp ult i16 %a, 32"]);
+}
