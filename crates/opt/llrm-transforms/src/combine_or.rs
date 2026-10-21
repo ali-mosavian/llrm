@@ -16,7 +16,7 @@
 //! (`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
 //! `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 //! (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-//! `matchBSwapOrBitReverse`, `matchOrConcat`, `foldBinOpShiftWithShift`,
+//! `matchBSwapOrBitReverse`, `matchOrConcat`,
 //! `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
 //! mask fold, `matchSelectFromAndOr` and everything after it.
 //!
@@ -42,6 +42,7 @@ use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 
@@ -50,6 +51,7 @@ const FOLDS: &[Fold] = &[
     into_select_or_phi,
     select_binop_select,
     match_funnel_shift,
+    shift_with_shift,
     xor_constant,
     disjoint_mul,
     not_or_decrement,
@@ -72,6 +74,16 @@ fn select_binop_select(
     _: Operand,
 ) -> Option<Visit> {
     Some(c.fold_bin_op_select_bin_op(inst)).filter(|found| !matches!(found, Visit::None))
+}
+
+/// `foldBinOpShiftWithShift`.
+fn shift_with_shift(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    fold_binop_shift_with_shift(c, inst)
 }
 
 /// The integer constant `v` is.

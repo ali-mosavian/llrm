@@ -129,6 +129,7 @@ pub mod combine_select_op_op;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
+pub mod combine_shift_binop;
 pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
