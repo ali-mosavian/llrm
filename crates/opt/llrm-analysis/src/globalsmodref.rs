@@ -422,9 +422,11 @@ pub fn compute(module: &Module) -> GlobalsModRef {
 }
 
 /// `compute`, the variables `unexported` taken as local too. DEVIATE G8: the
-/// pin's `hasLocalLinkage` ([GlobalsModRef.cpp#L276](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/GlobalsModRef.cpp#L276))
+/// pin's `hasLocalLinkage`
+/// ([GlobalsModRef.cpp#L276](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/GlobalsModRef.cpp#L276))
 /// sees what LTO's internalization has made internal; here the program says
-/// which globals no outside code reaches (`Exports`, the runtime's `!llrm.named`).
+/// which globals no outside code reaches (`Exports`, the runtime's
+/// `!llrm.named`).
 pub fn compute_with(
     module: &Module,
     unexported: BTreeSet<GlobalId>,
@@ -641,7 +643,9 @@ impl GlobalsModRef {
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
         let global_value: &GlobalValue = &globals[global.0 as usize];
-        if !(local(global_value.linkage) || self.unexported.contains(&global)) || self.unknown_functions_with_local_linkage {
+        if !(local(global_value.linkage) || self.unexported.contains(&global))
+            || self.unknown_functions_with_local_linkage
+        {
             return ModRefInfo::ModRef;
         }
         let Some(callee) = callee else { return ModRefInfo::ModRef };

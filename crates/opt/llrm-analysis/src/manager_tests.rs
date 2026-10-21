@@ -12,8 +12,7 @@ use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{
-    Annotated, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads,
-    ThroughMemory,
+    Annotated, DominatedEdges, GlobalsAA, MemorySsa, Pointers, Registers, Summaries, TableLoads, ThroughMemory,
 };
 use crate::alias::{self};
 use crate::cfg::Shape;

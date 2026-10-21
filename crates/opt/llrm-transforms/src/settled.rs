@@ -358,10 +358,8 @@ pub fn slice(
         format!("{value:?}").hash(&mut hasher);
         hasher.finish()
     };
-    let slice = Slice {
-        own: own.finish(),
-        parts: [one_of(callees), one_of(known), hashed(&globals), 0, one_of(declared)],
-    };
+    let slice =
+        Slice { own: own.finish(), parts: [one_of(callees), one_of(known), hashed(&globals), 0, one_of(declared)] };
     FACTS.with(|held| held.replace(cache));
     read::swap(saved);
     slice

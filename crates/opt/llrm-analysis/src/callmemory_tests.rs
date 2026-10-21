@@ -4,8 +4,8 @@
 
 use llrm_mir::passes::Outer;
 
-use crate::consts::{Calls, Known, known_walked};
 use crate::alias::calls_by_attributes;
+use crate::consts::{Calls, Known, known_walked};
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -35,8 +35,7 @@ b0:
     let f = function(&module, "f");
     let unit =
         crate::testing::with_points(crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer)));
-    let calls: Calls =
-        calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
+    let calls: Calls = calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
     known_walked(&unit, &calls).get(&value(f, "r")).cloned()
 }
 

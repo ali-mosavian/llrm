@@ -68,8 +68,10 @@ b0:
     let f = function(module, "f");
     if !summarized {
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-        let calls: Calls =
-            crate::alias::calls_by_attributes(&crate::testing::with_points(unit)).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
+        let calls: Calls = crate::alias::calls_by_attributes(&crate::testing::with_points(unit))
+            .iter()
+            .map(|(at, effect)| (at, effect.stores.clone()))
+            .collect();
         return known_walked(&unit, &calls).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);

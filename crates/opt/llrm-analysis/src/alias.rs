@@ -2312,7 +2312,8 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
                 all.get_mod_ref_info_for_global(unit.globals, callee, global, || crate::aa::ModRefInfo::NoModRef)
             });
             // Only a named global is promised anything: the runtime holds its
-            // address by name alone. Any other is reached through arguments too.
+            // address by name alone. Any other is reached through arguments
+            // too.
             let (reads_it, writes_it) = match &promised {
                 Some((named, written)) if named.contains(&global) => (true, written.contains(&global)),
                 _ => (true, true),
