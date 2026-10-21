@@ -92,7 +92,6 @@ Other rewrites `RegAlloc::transform` makes first, in this order:
 
 | Step | Does |
 |---|---|
-| [`distinct_roles`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/constrain.rs#L316) | a value that is both base and index of one 16-bit cell reads a copy as the index |
 | [`distinct_classes`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/constrain.rs#L386) | a value whose reads need classes that share no register (a byte read and a frame-array index) keeps the reads that fit most others; each other read gets a copy |
 | [`explicit_selectors`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/allocate.rs#L1034) | a far cell whose selector is also read as a number, or pinned to a general register, is reached through `es` |
 | [`narrowed`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/allocate.rs#L956) | a call's result nothing reads becomes a `clobbers` entry, so no copy out of its register is made |
