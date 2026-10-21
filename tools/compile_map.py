@@ -214,12 +214,16 @@ def build_map(args) -> dict:
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}
     timed = run(base, env=timed_env)
     instrumented = instructions(base, timed_env)
+    with tempfile.TemporaryDirectory() as empty_dir:  # what a compile of nothing costs: loader, runtime start, exit
+        empty = Path(empty_dir) / "empty.c"
+        empty.write_text("int f(void){return 1;}\n")
+        startup = instructions([*base[:-1], str(empty)], env) / 1e6 if base[-1] == str(source) else None
     rows, step_total = parse_steps(timed.stderr)
     own_sum = sum(r[1] for r in rows)
     result = {
         "header": {"commit": commit(), "llrm": " ".join(base), "gcc": f"gcc {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}",
                    "clang": f"clang {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}"},
-        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None,
+        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None, "startup_M": startup,
         "outside_every_step_M": step_total[2] if step_total else None,
         "rows": [], "categories": {},
     }
@@ -275,6 +279,21 @@ def build_map(args) -> dict:
     return result
 
 
+def accounting(result: dict) -> list[tuple[str, float]]:
+    """The lines of the accounting block, (label, M) in order, and the identities they satisfy:
+    instrumented = timed thread + outside the thread; timed thread = rows + outside every step + unexplained. Every figure of a report is quoted with this block."""
+    plain, inst = result["total_M"], result["instrumented_M"]
+    thread = result["debug_total_M"] if result.get("debug_total_M") is not None else result["rows_sum_M"] + (result["outside_every_step_M"] or 0.0)
+    rows, outside = result["rows_sum_M"], result["outside_every_step_M"] or 0.0
+    process = inst - thread
+    startup = min(result.get("startup_M") or 0.0, process)
+    return [("plain perf total (instructions:u, process)", plain), ("instrumented perf total (LLRM_DEBUG=time on)", inst),
+            ("instrument overhead (instrumented - plain)", inst - plain), ("timed thread total", thread), ("rows sum (own M of every step)", rows),
+            ("outside every step, inside the thread", outside), ("unexplained in the thread (thread - rows - outside)", thread - rows - outside),
+            ("outside the timed thread (instrumented - thread)", process), ("  of which start-up and exit (empty-file compile)", startup),
+            ("  of which the rest (main-thread work, instrument)", process - startup)]
+
+
 def show(result: dict, old: dict | None = None) -> str:
     out = []
     head = result["header"]
@@ -282,9 +301,8 @@ def show(result: dict, old: dict | None = None) -> str:
     total = result["total_M"]
     inst = result["instrumented_M"]
     gap = inst - result["rows_sum_M"]
-    out.append(f"perf total {total:,.0f} M plain, {inst:,.0f} M with LLRM_DEBUG=time on (the instrument costs {inst - total:,.0f} M, {100 * (inst - total) / total:.1f}%); "
-               f"the rows sum to {result['rows_sum_M']:,.0f} M of the instrumented run, {gap:,.0f} M ({100 * gap / inst:.1f}%) short: outside every step "
-               f"(llrm's own count {result['outside_every_step_M']:,.0f} M) and process start-up. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
+    out += ["Accounting (M instructions; quote it with any figure of this map):"] + [f"  {label:56}{value:>9,.1f}" for label, value in accounting(result)]
+    out.append(f"The rows sum to {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
     if abs(gap) > 0.02 * inst:
         out.append("WARNING: the rows are not within 2% of the instrumented total; read nothing off this map until that is explained.")
     out.append(f"gcc {result['gcc_total_M']:,.0f} M, clang {result['clang_total_M']:,.0f} M (perf total, one file). llrm/gcc {total / result['gcc_total_M']:.1f}x, llrm/clang {total / result['clang_total_M']:.1f}x.")
