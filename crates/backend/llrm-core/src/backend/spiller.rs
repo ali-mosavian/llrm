@@ -606,7 +606,7 @@ pub fn materialized(
             if let Some(folded) = _source(&one, &stored, frame)? {
                 one = folded;
             }
-            let direct = match _in_place(&one, &stored, frame)? {
+            let direct = match _in_place(&one, &stored, frame, &|value| value)? {
                 Some(direct) => Some(direct),
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
@@ -1695,10 +1695,12 @@ pub fn slots_colored(
 fn _cell_move(
     one: &Insn,
     load: bool,
+    floats: bool,
 ) -> Option<(u32, (i64, u32))> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Move
-        || what.name.as_deref() != Some("mov")
+    // An x87 value read from or written to its cell is the same move.
+    let float = floats && what.op == if load { Operation::FloatLoad } else { Operation::FloatStore };
+    if !float && (what.op != Operation::Move || what.name.as_deref() != Some("mov"))
         || one.group.is_some()
         || !one.requires.is_empty()
         || !one.delivers.is_empty()
@@ -1715,7 +1717,7 @@ fn _cell_move(
     if cell.index.is_some() || cell.index_through != RegId::None {
         return None;
     }
-    (held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
+    (float || held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
 }
 
 /// The cells a value is reloaded from and stored back to in the next
@@ -1734,7 +1736,8 @@ fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
     let mut found = Vec::new();
     for block in &body.blocks {
         for pair in block.insns.windows(2) {
-            if let (Some((value, from)), Some((stored, to))) = (_cell_move(&pair[0], true), _cell_move(&pair[1], false))
+            if let (Some((value, from)), Some((stored, to))) =
+                (_cell_move(&pair[0], true, false), _cell_move(&pair[1], false, false))
             {
                 if value == stored && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
                     found.push((from, to));
@@ -1745,9 +1748,16 @@ fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
     found
 }
 
-/// `body` without the copies of a slot to itself that sharing slots made: a
-/// reload of a cell into a value that only the store back into that cell reads
-/// (a move between two spilled values that now share one slot).
+/// `StackSlotColoring::RemoveDeadStores`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/StackSlotColoring.cpp#L482>):
+/// `body` without the store that follows a load of the same value from the
+/// same cell (a move between two spilled values that sharing slots put in one
+/// cell, or a reload a hoisted spill stores back). The load goes too when the
+/// store is the last read of its value.
+///
+/// DEVIATE D-SSC1: the store may follow copies of the loaded value. LLVM runs
+/// this after the rewriter, which has dropped the copies whose two ends got one
+/// register; the body here still has them. Exit: run after the rewrite.
 fn _identities_dropped(body: &LirBody) -> LirBody {
     let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
     let mut candidates = 0usize;
@@ -1763,26 +1773,35 @@ fn _identities_dropped(body: &LirBody) -> LirBody {
     if candidates == 0 {
         return body.clone();
     }
-    let cell_move = _cell_move;
+    let cell_move = |one: &Insn, load: bool| _cell_move(one, load, true);
     let mut changed = false;
     let mut blocks = Vec::with_capacity(body.blocks.len());
     for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
-        let mut at = 0;
-        while at < block.insns.len() {
-            if let (Some((value, cell)), Some(next)) = (cell_move(&block.insns[at], true), block.insns.get(at + 1)) {
-                if cell_move(next, false) == Some((value, cell))
-                    && defined.get(&value) == Some(&1)
-                    && used.get(&value) == Some(&1)
-                {
-                    changed = true;
-                    at += 2;
-                    continue;
+        let mut gone = vec![false; block.insns.len()];
+        for at in 0..block.insns.len() {
+            let Some((value, cell)) = cell_move(&block.insns[at], true) else { continue };
+            // The value and the copies of it before the store.
+            let mut same = vec![value];
+            let mut next = at + 1;
+            while let Some(one) = block.insns.get(next) {
+                match crate::backend::coalesce::_copy(one) {
+                    Some((to, from)) if same.contains(&from) && one.group.is_none() => same.push(to),
+                    _ => break,
                 }
+                next += 1;
             }
-            insns.push(Arc::clone(&block.insns[at]));
-            at += 1;
+            let Some(store) = block.insns.get(next) else { continue };
+            if !same.iter().any(|alias| cell_move(store, false) == Some((*alias, cell))) {
+                continue;
+            }
+            changed = true;
+            gone[next] = true;
+            if next == at + 1 && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
+                gone[at] = true;
+            }
         }
+        let insns: Vec<Arc<Insn>> =
+            block.insns.iter().zip(&gone).filter(|(_, gone)| !**gone).map(|(one, _)| Arc::clone(one)).collect();
         blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
@@ -4935,6 +4954,7 @@ pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
+    home: &dyn Fn(u32) -> u32,
 ) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {
         return Ok(None);
@@ -4951,8 +4971,8 @@ pub(crate) fn _in_place(
         return Ok(None);
     }
     if !into.is_empty() && !outof.is_empty() {
-        let dest = frame.cell(into[0], _width(one, into[0]))?;
-        let source = frame.cell(outof[0], _width(one, outof[0]))?;
+        let dest = frame.cell(home(into[0]), _width(one, into[0]))?;
+        let source = frame.cell(home(outof[0]), _width(one, outof[0]))?;
         return Ok(Some(_with(one, |made| {
             made.what =
                 Some(Semantics { dests: vec![Loc::Mem(dest)], sources: vec![Loc::Mem(source)], ..what.clone() });
@@ -4961,7 +4981,7 @@ pub(crate) fn _in_place(
         })));
     }
     let value = if into.is_empty() { outof[0] } else { into[0] };
-    let cell = frame.cell(value, _width(one, value))?;
+    let cell = frame.cell(home(value), _width(one, value))?;
     if !into.is_empty() {
         return Ok(Some(_with(one, |made| {
             made.what = Some(Semantics { dests: vec![Loc::Mem(cell)], ..what.clone() });
