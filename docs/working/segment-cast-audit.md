@@ -34,3 +34,21 @@ QB programs: three BASIC probes (`VARSEG(a)` then POKE onto `b`; far6 with `VARP
 | Row | What | Owner | Exit | Review |
 |---|---|---|---|---|
 | FORGED-SEL-1 | deedlines -Os +201 B (0.6%) above main and above base: a forged selector (DEF SEG = VARSEG, POKE) leaves no global tracked, so loads and stores of the program's globals are kept in memory | funcattrs-port | prove non-aliasing where the selector provably is not DS | 2026-11-30 |
+
+## The remaining sites and passes (2026-10-21)
+
+| Site | What it does with a cast | Verdict |
+|---|---|---|
+| `switchlookup.rs` `valid_lookup_table_constant` | accepts a constant pointer cast as a table value | safe: the pointer is copied as data, nothing is said of what it points into |
+| `globals.rs` `target()` | names the global behind a constant address (data initializers, isel constants) | unsafe in principle for a far pointer initialized from a selector; unreachable: selector values come from `VARSEG` and `DEF SEG`, computed at run time, never in a data initializer or a constant far pointer (isel `global()` lowers a constant selector cast to selector:0) |
+| `sroa.rs` | a cast of an alloca aborts the slice build | safe |
+| `mem2reg.rs` | a cast of an alloca is allowed only where only lifetime markers use it | safe |
+| `memcpyopt.rs` `strip_pointer_casts` (7 identity comparisons) | strips casts, selector casts included, to compare a call argument with the copy's source or destination | unsafe in principle; unreachable: it needs a copy or call argument that is the selector-made far pointer of the slot, and selector values only reach `PEEK` and `POKE` (single volatile bytes) |
+| `memcpyopt.rs` use scan at L1272 | follows the uses of the source through casts | safe (follows uses) |
+| `deadstore.rs` | follows the uses of an alloca through casts to see it leave the function | safe (over-approximates) |
+| `tailcallelim.rs` | alloca-derived values through casts | safe (follows uses) |
+| `splitcopy.rs` | derived pointers whose `underlying` offset is known | safe: `underlying` stops at a selector cast over an object, so the offset is unknown and the copy is not split |
+| `combine_loadstore.rs` | users of an alloca through casts, stores only | safe (follows uses; any other user ends it) |
+| `spill.rs` (L567, L591, L710, L750, L1115) | whether a value is a frame address, and the cost of rebuilding it | cost heuristics, no identity claim: safe |
+
+No program was found that reaches an unsafe site; the three BASIC probes and the MIR tests are above. If a pass starts to compare pointers by their stripped root, the rule is `valuetracking::object_below`.
