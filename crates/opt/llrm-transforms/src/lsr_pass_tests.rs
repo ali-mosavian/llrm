@@ -355,7 +355,12 @@ b6:
 /// pointer by 2 as before the flip.
 #[test]
 fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
-    let real = RealMode { scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)], registers: 6, scaled_index_insns: 2 };
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+    };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
     let before = module.clone();
@@ -549,7 +554,12 @@ b3:
 ",
         params.join(", ")
     );
-    let real = RealMode { scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)], registers: 6, scaled_index_insns: 2 };
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+    };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
@@ -559,4 +569,62 @@ b3:
     let after = printed(&module);
     assert!(!after.contains(" = phi ptr"), "no pointer recurrence: {after}");
     assert_eq!(after.matches(" = phi i16").count(), 1, "the one counter: {after}");
+}
+
+/// bench/huge (`-O2 --huge-arrays`): a row's elements read at `row + 2 * c`.
+/// The pin hands `isLegalAddressingMode` the access's address space; ours did
+/// not, so a huge pointer plus a counter looked like a free `[base + index]`
+/// and the inner loop kept a counter, no huge recurrence for `window` to
+/// split: the selector:offset carry was recomputed on every element, 1549119
+/// executed instructions against 1052305.
+#[test]
+fn a_huge_array_row_is_walked_by_a_huge_pointer_in_real_mode() {
+    let text = format!(
+        "{DOS}define i32 @f(ptr addrspace(3) %h) {{
+b1:
+  br label %b2
+b2:
+  %r = phi i16 [ 0, %b1 ], [ %r2, %b4 ]
+  %t = phi i32 [ 0, %b1 ], [ %t2, %b4 ]
+  %rz = zext nneg i16 %r to i32
+  %rb = mul nuw nsw i32 %rz, 201
+  br label %b3
+b3:
+  %c = phi i16 [ 0, %b2 ], [ %c2, %b3 ]
+  %s = phi i32 [ %t, %b2 ], [ %s2, %b3 ]
+  %cz = zext nneg i16 %c to i32
+  %e = add nuw nsw i32 %rb, %cz
+  %o = shl nuw nsw i32 %e, 1
+  %p = getelementptr i8, ptr addrspace(3) %h, i32 %o
+  %v = load i16, ptr addrspace(3) %p
+  %vz = sext i16 %v to i32
+  %s2 = add i32 %s, %vz
+  %c2 = add nuw nsw i16 %c, 1
+  %ce = icmp ne i16 %c2, 201
+  br i1 %ce, label %b3, label %b4
+b4:
+  %t2 = phi i32 [ %s2, %b3 ]
+  %r2 = add nuw nsw i16 %r, 1
+  %re = icmp ne i16 %r2, 200
+  br i1 %re, label %b2, label %b5
+b5:
+  ret i32 %t2
+}}
+"
+    );
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: Some(3),
+    };
+    let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    let inner = after.split("b3:").nth(1).and_then(|rest| rest.split("\nb4:").next()).expect("b3");
+    assert!(inner.contains(" = phi ptr addrspace(3)"), "the inner loop walks a huge pointer: {after}");
 }

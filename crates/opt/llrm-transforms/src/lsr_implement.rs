@@ -761,6 +761,7 @@ impl Implement<'_, '_> {
             && crate::lsr_collect::is_always_foldable(
                 self.tti,
                 Kind::Address,
+                crate::lsr_collect::get_access_type(&cx, user, operand).addr_space,
                 false,
                 crate::lsr_formula::Immediate(c.sext_value() as i64),
                 false,

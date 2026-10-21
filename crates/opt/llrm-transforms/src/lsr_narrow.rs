@@ -145,6 +145,7 @@ impl Collection<'_, '_> {
                         lu.min_offset,
                         lu.max_offset,
                         lu.kind,
+                        lu.access_ty.addr_space,
                         lu.formulae[i].base_gv.is_some(),
                         lu.formulae[i].base_offset,
                         lu.formulae[i].has_base_reg,
@@ -268,6 +269,7 @@ impl Collection<'_, '_> {
                                 min,
                                 max,
                                 other.kind,
+                                other.access_ty.addr_space,
                                 f.base_gv.is_some(),
                                 f.base_offset,
                                 f.has_base_reg,
@@ -308,6 +310,7 @@ impl Collection<'_, '_> {
         se: &mut ScalarEvolution,
         best: Scev,
         reg: Scev,
+        addr_space: u32,
     ) -> bool {
         if se.type_of(best) != se.type_of(reg) {
             return false;
@@ -319,8 +322,8 @@ impl Collection<'_, '_> {
         }
         let Some(diff) = se.compute_constant_difference(self.cx, best, reg) else { return false };
         let diff = diff.sext_value() as i64;
-        self.tti.is_legal_addressing_mode(false, diff, true, 0)
-            && !self.tti.is_legal_addressing_mode(false, diff.wrapping_neg(), true, 0)
+        self.tti.is_legal_addressing_mode_in(addr_space, false, diff, true, 0)
+            && !self.tti.is_legal_addressing_mode_in(addr_space, false, diff.wrapping_neg(), true, 0)
     }
 
     /// `NarrowSearchSpaceByPickingWinnerRegs`: with the rest tried, pick the
@@ -351,7 +354,7 @@ impl Collection<'_, '_> {
                 if count == best_count
                     && let Some(lu_idx) = self.reg_uses.used_by_indices(reg).first()
                     && self.uses[lu_idx].kind == Kind::Address
-                    && self.is_simpler_base_scev_for_target(se, current, reg)
+                    && self.is_simpler_base_scev_for_target(se, current, reg, self.uses[lu_idx].access_ty.addr_space)
                 {
                     (current, best_count) = (reg, count);
                 }

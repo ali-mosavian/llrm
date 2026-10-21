@@ -163,7 +163,7 @@ fn fewer_instructions_win_before_fewer_registers() {
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
     let fold =
-        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, gv, Immediate(offset), base, scale);
+        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, 0, gv, Immediate(offset), base, scale);
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
     assert!(fold(Kind::Basic, false, 0, true, 0) && !fold(Kind::Basic, false, 0, true, 1));
@@ -184,6 +184,7 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
             Immediate(min),
             Immediate(max),
             Kind::Address,
+            0,
             false,
             Immediate(base),
             true,
@@ -297,7 +298,8 @@ fn a_fixup_is_outside_the_loop_where_its_user_is() {
 #[test]
 fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
     with_loop(|cx, se, a, b, header, ar| {
-        let real = RealMode { scale_costs: vec![(1, 0), (2, 2)], registers: 6, scaled_index_insns: 2 };
+        let real =
+            RealMode { scale_costs: vec![(1, 0), (2, 2)], registers: 6, scaled_index_insns: 2, huge_space: None };
         let real = X86::of_cpu("i486").unwrap().in_real_mode(real);
         let flat = X86::of_cpu("i486").unwrap();
         let lu = use_of(Kind::Address, &[0]);
