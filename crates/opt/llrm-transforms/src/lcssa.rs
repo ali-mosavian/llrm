@@ -177,6 +177,44 @@ pub(crate) fn definitions(
     defined
 }
 
+/// A read of a loop's value from outside it: the block of the reader, and for
+/// a phi the block its input comes from.
+pub(crate) struct Read {
+    pub home: i64,
+    pub from: Option<i64>,
+}
+
+/// The values defined in `body` that a reader outside it reads, each with its
+/// block and the reads. Found from the uses of what the loop defines (LLVM's
+/// formLCSSA), not by reading every instruction outside for each loop.
+pub(crate) fn outside_reads(
+    function: &Function,
+    body: &llrm_mir::forest::Body,
+) -> BTreeMap<ValueId, (i64, Vec<Read>)> {
+    let mut found: BTreeMap<ValueId, (i64, Vec<Read>)> = BTreeMap::new();
+    for &at in body {
+        let block = cfg::block(at);
+        for inst in function.iter_block(block) {
+            let Some(value) = function.instruction(inst).result else { continue };
+            for one in function.users(value) {
+                let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
+                if body.contains(&home) {
+                    continue;
+                }
+                let user = function.instruction(one.user);
+                let from = if user.opcode == Opcode::Phi {
+                    let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
+                    Some(cfg::id(from))
+                } else {
+                    None
+                };
+                found.entry(value).or_insert_with(|| (cfg::id(block), Vec::new())).1.push(Read { home, from });
+            }
+        }
+    }
+    found
+}
+
 /// A new, unplaced phi of `value`'s type and name, without inputs yet.
 pub(crate) fn exit_phi(
     function: &mut Function,
@@ -252,27 +290,14 @@ pub fn _closed_loop(
     // Found from the uses of what the loop defines (LLVM's formLCSSA), keeping
     // only the values something outside reads, not every value the loop makes.
     let mut escaping: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
-    for &at in &loop_.body {
-        let block = cfg::block(at);
-        for inst in function.iter_block(block) {
-            let Some(value) = function.instruction(inst).result else { continue };
-            for one in function.users(value) {
-                let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
-                if loop_.body.contains(&home) {
-                    continue;
-                }
-                let user = function.instruction(one.user);
-                let site = if user.opcode == Opcode::Phi {
-                    let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
-                    if home == exit_at {
-                        continue;
-                    }
-                    cfg::id(from)
-                } else {
-                    home
-                };
-                escaping.entry(value).or_insert_with(|| (cfg::id(block), BTreeSet::new())).1.insert(site);
-            }
+    for (value, (home, reads)) in outside_reads(function, &loop_.body) {
+        for read in reads {
+            let site = match read.from {
+                Some(_) if read.home == exit_at => continue,
+                Some(from) => from,
+                None => read.home,
+            };
+            escaping.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
         }
     }
     if escaping.is_empty() {
