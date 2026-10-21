@@ -219,7 +219,7 @@ fn renamed(
 }
 
 /// `into := mov from` between registers, nothing else about it.
-fn plain_copy(one: &Arc<Insn>) -> Option<(u32, u32)> {
+pub(crate) fn plain_copy(one: &Arc<Insn>) -> Option<(u32, u32)> {
     let what = one.what.as_ref()?;
     let ([Loc::Held(into)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
     (what.op == Operation::Move
