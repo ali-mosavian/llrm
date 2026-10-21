@@ -759,6 +759,13 @@ pub fn hoisted(
             .filter(|copy| {
                 let Some((into, from)) = crate::backend::optimizephis::plain_copy(copy) else { return false };
                 let Some(&register) = fixed.get(&into) else { return false };
+                // A general register held for a loop is one fewer for
+                // everything else in it (x_radix m32 -Os: +68 B
+                // of spills); a segment register is not one
+                // they compete for.
+                if !regs.is_segment(register) {
+                    return false;
+                }
                 let root = regs.root(register);
                 if defined.contains(&from) || inside.iter().filter(|one| one.defines.contains(&into)).count() != 1 {
                     return false;
@@ -1401,17 +1408,18 @@ mod tests {
         assert_eq!(at_block(&done, 10), vec![3]);
     }
 
-    /// The same for a shift count: `shl x, cl` with the count made before the
-    /// loop.
+    /// A general register is left alone: held for the loop it costs the rest of
+    /// the loop a register (x_radix m32 -Os grew 68 B of spills when a shift
+    /// count was kept in CX).
     #[test]
-    fn test_an_invariant_shift_count_is_put_in_cx_before_the_loop() {
+    fn test_a_copy_into_a_general_register_stays_in_the_loop() {
         let body = flow(vec![
             block_to(0, vec![defined(1, 0)], &[10]),
             block_to(10, vec![copied(2, 1, 10), reads_in(2, RegId::CX, 3, 12)], &[10, 20]),
             block_to(20, vec![], &[]),
         ]);
         let done = hoisted(&body, &pinned(&[(2, RegId::CX)]));
-        assert_eq!(at_block(&done, 0), vec![1, 2]);
+        assert_eq!(at_block(&done, 10), vec![2, 3]);
     }
 
     #[test]
