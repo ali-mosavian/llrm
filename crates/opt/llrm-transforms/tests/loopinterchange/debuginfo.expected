@@ -1,0 +1,32 @@
+== 
+@interchange_01
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v9, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v7, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v2 = getelementptr inbounds [100 x [100 x i64]], ptr @A, i64 0, i64 %v0, i64 %v1
+  %v3 = load i64, ptr %v2
+  %v4 = add nsw i64 %v3, %k
+  store i64 %v4, ptr %v2
+  %v5 = add nuw nsw i64 %v0, 1
+  %v6 = icmp eq i64 %v0, 99
+  br label %B6
+B6:
+  %v7 = add nuw nsw i64 %v1, 1
+  %v8 = icmp eq i64 %v1, 99
+  br i1 %v8, label %B7, label %B4
+B7:
+  %v9 = add nuw nsw i64 %v0, 1
+  %v10 = icmp eq i64 %v0, 99
+  br i1 %v10, label %B8, label %B2
+B8:
+  ret void

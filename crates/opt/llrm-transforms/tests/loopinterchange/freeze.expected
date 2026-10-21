@@ -1,0 +1,393 @@
+== -loop-interchange-profitabilities=ignore
+@outer_preheader_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = freeze i1 poison
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v14, %B7 ], [ 0, %B1 ]
+  %v2 = phi double [ %v13, %B7 ], [ fp(0000000000000000), %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v3 = phi i64 [ %v11, %B6 ], [ 0, %B3 ]
+  %v4 = phi double [ %v2, %B3 ], [ %v8, %B6 ]
+  br label %B5
+B5:
+  %v5 = getelementptr inbounds [4 x double], ptr %A, i64 %v1, i64 %v3
+  %v6 = load double, ptr %v5
+  %v7 = select i1 %v0, double %v6, double fp(0000000000000000)
+  %v8 = fadd reassoc double %v4, %v7
+  %v9 = add i64 %v1, 1
+  %v10 = icmp eq i64 %v9, 4
+  br label %B6
+B6:
+  %v11 = add i64 %v3, 1
+  %v12 = icmp eq i64 %v11, 4
+  br i1 %v12, label %B7, label %B4
+B7:
+  %v13 = phi double [ %v8, %B6 ]
+  %v14 = add i64 %v1, 1
+  %v15 = icmp eq i64 %v14, 4
+  br i1 %v15, label %B8, label %B2
+B8:
+  %v16 = phi double [ %v13, %B7 ]
+  store double %v16, ptr %R
+  ret void
+@inner_body_freeze
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v14, %B7 ], [ 0, %B1 ]
+  %v1 = phi double [ %v13, %B7 ], [ fp(0000000000000000), %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v2 = phi i64 [ %v11, %B6 ], [ 0, %B3 ]
+  %v3 = phi double [ %v1, %B3 ], [ %v8, %B6 ]
+  br label %B5
+B5:
+  %v4 = freeze i1 poison
+  %v5 = getelementptr inbounds [4 x double], ptr %A, i64 %v0, i64 %v2
+  %v6 = load double, ptr %v5
+  %v7 = select i1 %v4, double %v6, double fp(0000000000000000)
+  %v8 = fadd reassoc double %v3, %v7
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 4
+  br label %B6
+B6:
+  %v11 = add i64 %v2, 1
+  %v12 = icmp eq i64 %v11, 4
+  br i1 %v12, label %B7, label %B4
+B7:
+  %v13 = phi double [ %v8, %B6 ]
+  %v14 = add i64 %v0, 1
+  %v15 = icmp eq i64 %v14, 4
+  br i1 %v15, label %B8, label %B2
+B8:
+  %v16 = phi double [ %v13, %B7 ]
+  store double %v16, ptr %R
+  ret void
+@header_preheader_control
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v11, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v9, %B6 ], [ 0, %B3 ]
+  %v2 = xor i1 %choice, true
+  %v3 = xor i1 %choice, false
+  %v4 = and i1 %v2, %v3
+  br label %B5
+B5:
+  %v5 = select i1 %v4, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v6 = getelementptr inbounds [4 x double], ptr %A, i64 %v0, i64 %v1
+  store double %v5, ptr %v6
+  %v7 = add i64 %v0, 1
+  %v8 = icmp eq i64 %v7, 4
+  br label %B6
+B6:
+  %v9 = add i64 %v1, 1
+  %v10 = icmp eq i64 %v9, 4
+  br i1 %v10, label %B7, label %B4
+B7:
+  %v11 = add i64 %v0, 1
+  %v12 = icmp eq i64 %v11, 4
+  br i1 %v12, label %B8, label %B2
+B8:
+  ret void
+@outer_header_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v9, %B4 ], [ 0, %B0 ]
+  %v1 = freeze i1 poison
+  br label %B2
+B2:
+  %v2 = xor i1 %choice, false
+  %v3 = and i1 %v1, %v2
+  br label %B3
+B3:
+  %v4 = phi i64 [ %v7, %B3 ], [ 0, %B2 ]
+  %v5 = select i1 %v3, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v6 = getelementptr inbounds [4 x double], ptr %A, i64 %v4, i64 %v0
+  store double %v5, ptr %v6
+  %v7 = add i64 %v4, 1
+  %v8 = icmp eq i64 %v7, 4
+  br i1 %v8, label %B4, label %B3
+B4:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 4
+  br i1 %v10, label %B5, label %B1
+B5:
+  ret void
+@inner_preheader_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v9, %B4 ], [ 0, %B0 ]
+  %v1 = xor i1 %choice, true
+  br label %B2
+B2:
+  %v2 = freeze i1 poison
+  %v3 = and i1 %v1, %v2
+  br label %B3
+B3:
+  %v4 = phi i64 [ %v7, %B3 ], [ 0, %B2 ]
+  %v5 = select i1 %v3, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v6 = getelementptr inbounds [4 x double], ptr %A, i64 %v4, i64 %v0
+  store double %v5, ptr %v6
+  %v7 = add i64 %v4, 1
+  %v8 = icmp eq i64 %v7, 4
+  br i1 %v8, label %B4, label %B3
+B4:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 4
+  br i1 %v10, label %B5, label %B1
+B5:
+  ret void
+@exit_latch_control
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v11, %B8 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v6, %B7 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v2 = getelementptr inbounds [4 x double], ptr %A, i64 %v0, i64 %v1
+  store double fp(3FF0000000000000), ptr %v2
+  %v3 = add i64 %v0, 1
+  %v4 = icmp eq i64 %v3, 4
+  br label %B6
+B6:
+  %v5 = xor i1 %choice, true
+  br label %B7
+B7:
+  %v6 = add i64 %v1, 1
+  %v7 = xor i1 %choice, false
+  %v8 = icmp eq i64 %v6, 4
+  br i1 %v8, label %B8, label %B4
+B8:
+  %v9 = phi i1 [ %v5, %B7 ]
+  %v10 = phi i1 [ %v7, %B7 ]
+  %v11 = add i64 %v0, 1
+  %v12 = icmp eq i64 %v11, 4
+  br i1 %v12, label %B9, label %B2
+B9:
+  %v13 = phi i1 [ %v9, %B8 ]
+  %v14 = phi i1 [ %v10, %B8 ]
+  %v15 = and i1 %v13, %v14
+  %v16 = select i1 %v15, double fp(3FF0000000000000), double fp(0000000000000000)
+  store double %v16, ptr %R
+  ret void
+@inner_exit_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v7, %B4 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v3, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [4 x double], ptr %A, i64 %v1, i64 %v0
+  store double fp(3FF0000000000000), ptr %v2
+  %v3 = add i64 %v1, 1
+  %v4 = icmp eq i64 %v3, 4
+  br i1 %v4, label %B3, label %B2
+B3:
+  %v5 = freeze i1 poison
+  br label %B4
+B4:
+  %v6 = phi i1 [ %v5, %B3 ]
+  %v7 = add i64 %v0, 1
+  %v8 = xor i1 %choice, false
+  %v9 = icmp eq i64 %v7, 4
+  br i1 %v9, label %B5, label %B1
+B5:
+  %v10 = phi i1 [ %v6, %B4 ]
+  %v11 = phi i1 [ %v8, %B4 ]
+  %v12 = and i1 %v10, %v11
+  %v13 = select i1 %v12, double fp(3FF0000000000000), double fp(0000000000000000)
+  store double %v13, ptr %R
+  ret void
+@outer_latch_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v7, %B4 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v3, %B2 ], [ 0, %B1 ]
+  %v2 = getelementptr inbounds [4 x double], ptr %A, i64 %v1, i64 %v0
+  store double fp(3FF0000000000000), ptr %v2
+  %v3 = add i64 %v1, 1
+  %v4 = icmp eq i64 %v3, 4
+  br i1 %v4, label %B3, label %B2
+B3:
+  %v5 = xor i1 %choice, true
+  br label %B4
+B4:
+  %v6 = phi i1 [ %v5, %B3 ]
+  %v7 = add i64 %v0, 1
+  %v8 = freeze i1 poison
+  %v9 = icmp eq i64 %v7, 4
+  br i1 %v9, label %B5, label %B1
+B5:
+  %v10 = phi i1 [ %v6, %B4 ]
+  %v11 = phi i1 [ %v8, %B4 ]
+  %v12 = and i1 %v10, %v11
+  %v13 = select i1 %v12, double fp(3FF0000000000000), double fp(0000000000000000)
+  store double %v13, ptr %R
+  ret void
+@inner_latch_clone_control
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v30, %B7 ], [ 0, %B1 ]
+  %v1 = phi i64 [ %v25, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v2 = phi i64 [ %v19, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v3 = xor i1 %condition.arg, true
+  %v4 = xor i1 %step.arg, true
+  %v5 = zext i1 %v3 to i64
+  %v6 = mul i64 %v5, 0
+  %v7 = add i64 4, %v6
+  %v8 = zext i1 %v4 to i64
+  %v9 = mul i64 %v8, 0
+  %v10 = add i64 1, %v9
+  %v11 = add i64 %v1, %v10
+  %v12 = sitofp i64 %v1 to double
+  %v13 = and i1 %v3, %v4
+  %v14 = select i1 %v13, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v15 = fadd double %v14, %v12
+  %v16 = getelementptr inbounds [4 x double], ptr %A, i64 %v0, i64 %v2
+  store double %v15, ptr %v16
+  %v17 = add i64 %v0, 1
+  %v18 = icmp eq i64 %v17, %v7
+  br label %B6
+B6:
+  %v19 = add i64 %v2, 1
+  %v20 = icmp eq i64 %v19, 4
+  br i1 %v20, label %B7, label %B4
+B7:
+  %v21 = xor i1 %step.arg, true
+  %v22 = zext i1 %v21 to i64
+  %v23 = mul i64 %v22, 0
+  %v24 = add i64 1, %v23
+  %v25 = add i64 %v1, %v24
+  %v26 = xor i1 %condition.arg, true
+  %v27 = zext i1 %v26 to i64
+  %v28 = mul i64 %v27, 0
+  %v29 = add i64 4, %v28
+  %v30 = add i64 %v0, 1
+  %v31 = icmp eq i64 %v30, %v29
+  br i1 %v31, label %B8, label %B2
+B8:
+  %v32 = phi i1 [ %v26, %B7 ]
+  %v33 = phi i1 [ %v21, %B7 ]
+  %v34 = and i1 %v32, %v33
+  %v35 = select i1 %v34, double fp(4000000000000000), double fp(4008000000000000)
+  store double %v35, ptr %R
+  ret void
+@inner_latch_condition_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v21, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v17, %B2 ], [ 0, %B1 ]
+  %v2 = phi i64 [ %v11, %B2 ], [ 0, %B1 ]
+  %v3 = freeze i1 poison
+  %v4 = xor i1 %step.arg, true
+  %v5 = zext i1 %v3 to i64
+  %v6 = mul i64 %v5, 0
+  %v7 = add i64 4, %v6
+  %v8 = zext i1 %v4 to i64
+  %v9 = mul i64 %v8, 0
+  %v10 = add i64 1, %v9
+  %v11 = add i64 %v2, %v10
+  %v12 = sitofp i64 %v2 to double
+  %v13 = and i1 %v3, %v4
+  %v14 = select i1 %v13, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v15 = fadd double %v14, %v12
+  %v16 = getelementptr inbounds [4 x double], ptr %A, i64 %v1, i64 %v0
+  store double %v15, ptr %v16
+  %v17 = add i64 %v1, 1
+  %v18 = icmp eq i64 %v17, %v7
+  br i1 %v18, label %B3, label %B2
+B3:
+  %v19 = phi i1 [ %v3, %B2 ]
+  %v20 = phi i1 [ %v4, %B2 ]
+  %v21 = add i64 %v0, 1
+  %v22 = icmp eq i64 %v21, 4
+  br i1 %v22, label %B4, label %B1
+B4:
+  %v23 = phi i1 [ %v19, %B3 ]
+  %v24 = phi i1 [ %v20, %B3 ]
+  %v25 = and i1 %v23, %v24
+  %v26 = select i1 %v25, double fp(4000000000000000), double fp(4008000000000000)
+  store double %v26, ptr %R
+  ret void
+@inner_latch_induction_freeze
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v21, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v17, %B2 ], [ 0, %B1 ]
+  %v2 = phi i64 [ %v11, %B2 ], [ 0, %B1 ]
+  %v3 = xor i1 %condition.arg, true
+  %v4 = freeze i1 poison
+  %v5 = zext i1 %v3 to i64
+  %v6 = mul i64 %v5, 0
+  %v7 = add i64 4, %v6
+  %v8 = zext i1 %v4 to i64
+  %v9 = mul i64 %v8, 0
+  %v10 = add i64 1, %v9
+  %v11 = add i64 %v2, %v10
+  %v12 = sitofp i64 %v2 to double
+  %v13 = and i1 %v3, %v4
+  %v14 = select i1 %v13, double fp(3FF0000000000000), double fp(0000000000000000)
+  %v15 = fadd double %v14, %v12
+  %v16 = getelementptr inbounds [4 x double], ptr %A, i64 %v1, i64 %v0
+  store double %v15, ptr %v16
+  %v17 = add i64 %v1, 1
+  %v18 = icmp eq i64 %v17, %v7
+  br i1 %v18, label %B3, label %B2
+B3:
+  %v19 = phi i1 [ %v3, %B2 ]
+  %v20 = phi i1 [ %v4, %B2 ]
+  %v21 = add i64 %v0, 1
+  %v22 = icmp eq i64 %v21, 4
+  br i1 %v22, label %B4, label %B1
+B4:
+  %v23 = phi i1 [ %v19, %B3 ]
+  %v24 = phi i1 [ %v20, %B3 ]
+  %v25 = and i1 %v23, %v24
+  %v26 = select i1 %v25, double fp(4000000000000000), double fp(4008000000000000)
+  store double %v26, ptr %R
+  ret void

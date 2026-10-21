@@ -7,7 +7,7 @@ use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::Operand;
 use llrm_mir::valuetracking::AssumptionCache;
 
-use super::{is_induction_phi, is_reduction_phi};
+use super::{is_fp_induction_phi, is_induction_phi, is_reduction_phi};
 use crate::scev::{Cx, ScalarEvolution};
 
 /// One line per header phi of the only loop of `@f`: `name: Kind` of its
@@ -45,6 +45,9 @@ fn describe(
         match reduction {
             Some(found) => out.push(format!("{name}: {:?}", found.kind)),
             None => out.push(format!("{name}: none")),
+        }
+        if let Some(found) = is_fp_induction_phi(&cx, inst, the_loop) {
+            out.push(format!("{name}: fp-induction {:?}", found.kind));
         }
         if let Some(found) = is_induction_phi(&cx, &mut se, inst, the_loop) {
             let start = matches!(found.start_value, Operand::Value(_) | Operand::Constant(_));
@@ -213,7 +216,16 @@ exit:
 #[test]
 fn a_float_phi_stepping_by_an_invariant_is_an_fp_induction() {
     let ir = reduction_loop("float", "0.0", "  %s = fadd float %acc, %x", "%s");
-    assert!(describe(&ir, false).contains(&"acc: induction Fp".to_string()));
+    assert!(describe(&ir, false).contains(&"acc: fp-induction Fp".to_string()));
+}
+
+/// `isInductionPHI(Phi, L, SE, D)` stops at `!SE->isSCEVable(PhiTy)`: a float
+/// phi is no induction there. It was one, so LoopInterchange took a float
+/// accumulator for an inner-loop induction.
+#[test]
+fn the_scalar_evolution_overload_takes_no_float_phi() {
+    let ir = reduction_loop("float", "0.0", "  %s = fadd float %acc, %x", "%s");
+    assert!(!describe(&ir, false).contains(&"acc: induction Fp".to_string()));
 }
 
 #[test]

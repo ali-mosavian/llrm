@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b49fc9fb50d5170d912da80e9cc15317b456d8d7dd4adaa087c263a3eb29be57 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:c648e1e7949d7e6f1eb12cc231f5ce29ec338dc19bb9ea3f084696c2d903c8ad -->
 
 # pipeline
 
@@ -32,7 +32,7 @@ flowchart TB
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
-    swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+    swap["<b>interchange (rounds only)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
@@ -111,7 +111,7 @@ LLVM counterpart of each limit, is
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
+| `unswitch`, `interchange` | the passes of that name (`unswitch` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices

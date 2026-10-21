@@ -1,0 +1,53 @@
+== 
+@reduction_seed_in_guarded_preheader
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v6, %B2 ], [ 0, %B0 ]
+  %v1 = phi i64 [ %v5, %B2 ], [ 0, %B0 ]
+  %v2 = getelementptr inbounds nuw [8 x i8], ptr %guard, i64 %v0
+  %v3 = load i64, ptr %v2
+  %v4 = icmp eq i64 %v3, 0
+  br i1 %v4, label %B2, label %B4
+B2:
+  %v5 = phi i64 [ %v1, %B1 ], [ %v26, %B11 ]
+  %v6 = add nuw nsw i64 %v0, 1
+  %v7 = icmp eq i64 %v6, 100
+  br i1 %v7, label %B3, label %B1
+B3:
+  %v8 = phi i64 [ %v5, %B2 ]
+  ret i64 %v8
+B4:
+  %v9 = mul nuw nsw i64 %v0, 7
+  br label %B5
+B5:
+  %v10 = phi i64 [ %v23, %B10 ], [ 0, %B4 ]
+  %v11 = phi i64 [ %v22, %B10 ], [ %v9, %B4 ]
+  br label %B6
+B6:
+  br label %B7
+B7:
+  %v12 = phi i64 [ %v20, %B9 ], [ 0, %B6 ]
+  %v13 = phi i64 [ %v11, %B6 ], [ %v17, %B9 ]
+  %v14 = getelementptr inbounds nuw [8 x i8], ptr %Arr, i64 %v12
+  br label %B8
+B8:
+  %v15 = getelementptr inbounds nuw [800 x i8], ptr %v14, i64 %v10
+  %v16 = load i64, ptr %v15
+  %v17 = add i64 %v16, %v13
+  %v18 = add nuw nsw i64 %v10, 1
+  %v19 = icmp eq i64 %v18, 100
+  br label %B9
+B9:
+  %v20 = add nuw nsw i64 %v12, 1
+  %v21 = icmp eq i64 %v20, 100
+  br i1 %v21, label %B10, label %B7
+B10:
+  %v22 = phi i64 [ %v17, %B9 ]
+  %v23 = add nuw nsw i64 %v10, 1
+  %v24 = icmp eq i64 %v23, 100
+  br i1 %v24, label %B11, label %B5
+B11:
+  %v25 = phi i64 [ %v22, %B10 ]
+  %v26 = add nsw i64 %v25, %v1
+  br label %B2
