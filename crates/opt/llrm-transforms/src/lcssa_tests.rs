@@ -305,3 +305,10 @@ fn test_the_exit_phis_go_when_the_loop_passes_are_done() {
     assert!(!after.contains("lcssa"), "{after}");
     assert!(after.contains("%answer = add i16 %carried, 7"), "{after}");
 }
+
+#[test]
+fn test_only_the_values_read_outside_get_exit_phis() {
+    let closed = closed_once(LOOP_WITH_EXIT_USE);
+    assert_eq!(closed.matches(".lcssa = phi").count(), 1, "{closed}");
+    assert!(closed.contains("%carried.lcssa = phi i16 [ %carried, %b1 ]"), "{closed}");
+}
