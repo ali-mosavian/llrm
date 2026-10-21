@@ -119,3 +119,55 @@ fn a_gep_in_a_non_integral_address_space_is_not_an_inttoptr() {
     assert!(!out.contains("addrspace(4) inttoptr"), "{out}");
     assert!(out.contains("inttoptr (i64 50"), "{out}");
 }
+
+/// far3.bas (a PEEK/POKE loop on `SADD(a$)` after `DEF SEG = VARSEG(a$)`)
+/// printed the string unchanged and n = 0 at -O1: the pair near -> selector ->
+/// far was folded to near -> far, which keeps the offset of the global (the
+/// selector drops it, the far pointer back has segment:0), so every address was
+/// off by the global's own. A pair through a space the datalayout marks
+/// non-integral (`ni:2`, the target's selector space) stays two casts.
+#[test]
+fn a_pair_of_casts_through_a_non_integral_space_is_not_one_cast() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@g = global i16 0
+
+define ptr addrspace(1) @f() {{
+b0:
+  %far = addrspacecast ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to ptr addrspace(1)
+  ret ptr addrspace(1) %far
+}}
+"
+        )
+    };
+    let folded = dump(&text("e-p:16:16-p1:32:16:16:16-p2:16:16")).expect("parses");
+    let kept = dump(&text("e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2")).expect("parses");
+    assert_ne!(folded, kept, "the selector space composed as an integral one");
+}
+
+/// A far pointer is non-integral by its width (bits beyond its index), and
+/// the gate of the pair fold named that: a pair through a far middle, near ->
+/// far -> huge, stopped folding (25 objects of the sweep moved with it). Only
+/// a space `ni:` names, the selector alone, is no point on the way.
+#[test]
+fn a_pair_through_a_far_middle_still_folds_when_the_selector_space_is_ni() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@g = global i16 0
+
+define ptr addrspace(3) @f() {{
+b0:
+  %huge = addrspacecast ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to ptr addrspace(3)
+  ret ptr addrspace(3) %huge
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32";
+    let marked = dump(&text(&format!("{base}-ni:2"))).expect("parses");
+    assert!(!marked.contains("addrspace(1)"), "the far middle stayed: {marked}");
+}
