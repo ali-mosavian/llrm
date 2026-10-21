@@ -312,9 +312,25 @@ impl ProgramPass for Walk {
                         for (callee, mut calls) in by_callee {
                             calls.sort();
                             let global = module.global(callee);
+                            // The callee goes if nothing but this caller and
+                            // its own
+                            // calls (a recursive callee) refer to it: the
+                            // references
+                            // were counted before the caller's splices.
+                            let here = was.iter().find(|(one, _)| *one == callee).map_or(0, |(_, count)| *count);
+                            let own = global
+                                .function()
+                                .map_or(
+                                    0,
+                                    |body| body.walk()
+                                        .filter(|&(_, inst)| {
+                                            llrm_mir::memory::callee(&module.context, body, inst) == Some(callee)
+                                        })
+                                        .count(),
+                                );
                             let goes = crate::inlinecost::local_linkage(global.linkage)
                                 && !addressed.contains(&callee)
-                                && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                && live.references().get(&callee).copied().map(|all| all - here) == Some(own as i64);
                             if goes {
                                 units.push((calls, body_size(module, &program.layout, tti, callee)));
                             } else {
@@ -346,6 +362,21 @@ impl ProgramPass for Walk {
                             modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                             (self.simplify)(module, &mut modules[at], id, "walk.trial.");
                             let tried = body_size(module, &program.layout, tti, id);
+                            // The callee goes only if no call to it is left in
+                            // the
+                            // caller: a recursive body inlined once still calls
+                            // it, unless tail-call
+                            // elimination made it a loop.
+                            let target = trials[&calls[0]].callee.expect("a callee");
+                            let credit = if credit > 0
+                                && calls_of(&module.context, module.global(id).function().expect("a procedure"))
+                                    .iter()
+                                    .any(|(one, count)| *one == target && *count > 0)
+                            {
+                                0
+                            } else {
+                                credit
+                            };
                             if remarks {
                                 eprintln!(
                                     "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",
