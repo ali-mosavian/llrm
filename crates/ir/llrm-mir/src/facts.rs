@@ -49,7 +49,10 @@ pub fn result_read_only_by_comparison(
     function: &Function,
     value: ValueId,
 ) -> bool {
-    matches!(function.value(value).def, ValueDef::Instruction(call) if returns_flags(context, globals, function, call))
+    matches!(
+        function.value(value).def,
+        ValueDef::Instruction(call) if returns_flags(context, globals, function, call)
+    )
 }
 
 /// Whether `inst` is a comparison of a flags result: a use the fold of
@@ -62,7 +65,10 @@ pub fn compares_flags_result(
 ) -> bool {
     matches!(function.instruction(inst).opcode, Opcode::ICmp(_))
         && function.instruction(inst).operands.iter().any(|operand| {
-            matches!(operand, Operand::Value(value) if result_read_only_by_comparison(context, globals, function, *value))
+            matches!(
+                operand,
+                Operand::Value(value) if result_read_only_by_comparison(context, globals, function, *value)
+            )
         })
 }
 

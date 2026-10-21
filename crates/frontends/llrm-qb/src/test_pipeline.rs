@@ -147,7 +147,10 @@ fn a_string_comparison_stays_a_comparison_of_the_flags_when_optimized() {
     std::fs::write(&basic, "PRINT \"\" < \"a\"\r\n").unwrap();
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
     let optimized = crate::test_hir::optimized_mir(&program);
-    assert!(optimized.contains("@llrm.qb.B$SCMP(ptr, ptr) addrspace(1) threeway nocallback nounwind flagsresult"), "{optimized}");
+    assert!(
+        optimized.contains("@llrm.qb.B$SCMP(ptr, ptr) addrspace(1) threeway nocallback nounwind flagsresult"),
+        "{optimized}"
+    );
     assert!(optimized.contains("icmp slt") && !optimized.contains("ashr"), "{optimized}");
 }
 

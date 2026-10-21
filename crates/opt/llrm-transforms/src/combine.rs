@@ -431,8 +431,10 @@ pub fn visit(
     let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
     if compares_flags(inst)
         || c.function.instruction(inst).operands.iter().any(|operand| {
-            matches!(operand, Operand::Value(value)
-                if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one)))
+            matches!(
+                operand,
+                Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
+            )
         })
     {
         return Visit::None;
