@@ -360,7 +360,17 @@ pub fn run(
         let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
             .with_registers(&registers)
             .with_shape(&shape);
-        let (mut fresh, fresh_accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+        // The accesses the manager would make of the body now, as the kept
+        // graph's were: a call's footprint from its callee's summary.
+        let mut clean = Analyses::new(std::rc::Rc::clone(&outer));
+        let fresh_accesses =
+            llrm_analysis::memoryssa::Accesses::managed(unit.context, unit.layout, unit.function, &mut clean)
+                .unwrap_or_else(|error| panic!("LLRM_CHECK_LICM_GRAPH after {what}: {error}"));
+        let mut fresh = llrm_analysis::mssa::Mssa::build(
+            unit.function,
+            &shape.dominance,
+            &llrm_analysis::mssa::shadow::effect_of(&fresh_accesses, unit.function),
+        );
         // What the walker answers is what is compared: the kept graph's uses
         // read what the walker found, a fresh graph's what is nearest.
         let mut kept = built.mssa.clone();
@@ -372,7 +382,9 @@ pub fn run(
         let right = llrm_analysis::mssa::shadow::walked(&mut fresh, &aa, unit.function);
         let differ: Vec<String> = left
             .iter()
-            .filter(|(inst, name)| right.get(inst) != Some(*name))
+            .filter(|(inst, name)| {
+                right.get(inst).is_none_or(|now| !llrm_analysis::mssa::shadow::answer_is_safe(&fresh, name, now))
+            })
             .map(|(inst, name)| format!("{inst:?}: kept {name:?}, fresh {:?}", right.get(&inst)))
             .collect();
         if !differ.is_empty() {
