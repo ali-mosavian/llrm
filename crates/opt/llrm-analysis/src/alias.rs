@@ -982,7 +982,7 @@ pub(crate) fn borrowed(
     at: InstId,
     index: usize,
 ) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = &unit.function.instruction(at).opcode else { return false };
     // What these return is the operand's bytes, followed as a value: the call
     // keeps nothing (`captures(ret: provenance)` in LLVM).
     if matches!(
@@ -991,6 +991,17 @@ pub(crate) fn borrowed(
     ) {
         return true;
     }
+    no_capture_argument(unit, at, index)
+}
+
+/// Whether the call `at` is stated to keep no copy of its argument `index`,
+/// at the site or on the callee's parameter (`nocapture`).
+pub(crate) fn no_capture_argument(
+    unit: &Unit,
+    at: InstId,
+    index: usize,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))

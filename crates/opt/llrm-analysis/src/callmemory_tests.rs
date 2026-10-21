@@ -125,3 +125,30 @@ fn calls_sharing_a_list_resolve_it_once() {
     };
     assert_eq!(calls(8), calls(1), "each call resolved its list again");
 }
+
+/// A call argument the callee keeps no copy of (`nocapture`) did not leave
+/// its alloca exposed, as the pin's capture tracking: every pointer passed to
+/// a call exposed its alloca, so a loop around such a call could not promote
+/// the slot (jpeg_single.bas -Os, +51 B of loads and stores kept in the loop).
+#[test]
+fn a_nocapture_argument_does_not_expose_the_alloca() {
+    let exposed = |attrs: &str| {
+        let module = parsed(&format!(
+            "{DOS}declare void @use(ptr {attrs})
+
+define void @f() {{
+b0:
+  %a = alloca i16
+  call void @use(ptr %a)
+  ret void
+}}
+"
+        ));
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        crate::memory::exposed_frames(&unit).contains(&value(f, "a"))
+    };
+    assert!(exposed(""), "premise: a plain argument exposes the alloca");
+    assert!(!exposed("nocapture"));
+}
