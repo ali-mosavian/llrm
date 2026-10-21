@@ -109,3 +109,56 @@ fn an_add_over_a_logical_shift_with_a_lost_mask_stays() {
         &[],
     );
 }
+
+/// A runtime routine that returns flags (`B$SCMP`, `runtime.toml`) may be read
+/// only by compares: isel refuses it otherwise. The folds of this file, with
+/// the other three visits that call it, leave every user of such a call a
+/// compare for each predicate, constant and consumer of the compare below.
+#[test]
+fn test_the_fold_gives_a_flags_result_call_no_user_but_compares() {
+    use llrm_mir::opcode::Opcode as Op;
+    let consumers: [&str; 8] = [
+        "  %r = sext i1 %c to i16\n  ret i16 %r\n",
+        "  %r = zext i1 %c to i16\n  ret i16 %r\n",
+        "  %r = select i1 %c, i16 -1, i16 0\n  ret i16 %r\n",
+        "  %r = select i1 %c, i16 5, i16 7\n  ret i16 %r\n",
+        "  %n = xor i1 %c, true\n  %r = zext i1 %n to i16\n  ret i16 %r\n",
+        "  %d = icmp sgt i16 %s, 3\n  %e = and i1 %c, %d\n  %r = zext i1 %e to i16\n  ret i16 %r\n",
+        "  %d = icmp slt i16 %s, -3\n  %e = or i1 %c, %d\n  %r = zext i1 %e to i16\n  ret i16 %r\n",
+        "  %d = icmp ne i16 %s, 0\n  %e = and i1 %c, %d\n  %r = sext i1 %e to i16\n  ret i16 %r\n",
+    ];
+    for predicate in ["slt", "sle", "sgt", "sge", "eq", "ne", "ult", "ule", "ugt", "uge"] {
+        for constant in ["-1", "0", "1"] {
+            for tail in consumers {
+                let text = format!(
+                    "declare i16 @llrm.qb.B$SCMP(ptr, ptr)
+define i16 @f(ptr %a, ptr %b) {{
+b0:
+  %s = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp {predicate} i16 %s, {constant}
+{tail}}}
+"
+                );
+                let mut module = parsed(&text);
+                let globals = module.globals.clone();
+                let metadata = module.metadata.clone();
+                let (context, function) = module.function_mut("f").expect("@f");
+                combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+                let call = function
+                    .walk()
+                    .map(|(_, one)| one)
+                    .find(|&one| matches!(function.instruction(one).opcode, Op::Call(_)))
+                    .expect("the call");
+                let value = function.instruction(call).result.expect("a value");
+                assert!(
+                    function
+                        .users(value)
+                        .iter()
+                        .all(|one| matches!(function.instruction(one.user).opcode, Op::ICmp(_))),
+                    "{predicate} {constant}: a user of the flags that is no compare\n{}",
+                    printed(&module)
+                );
+            }
+        }
+    }
+}
