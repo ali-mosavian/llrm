@@ -28,3 +28,9 @@ Each probe is a MIR test on a selector made of a global (`@pa` -> segment -> far
 | `switchlookup.rs`, `globals.rs` `target()` | not probed | unsafe in principle (a table or a data initializer behind a selector cast) | row to follow |
 
 QB programs: three BASIC probes (`VARSEG(a)` then POKE onto `b`; far6 with `VARPTR(z)` taken; `VARSEG(arr(i))` with a run-time index) print right at -O0..-Os on the head with all fixes. The fixes still change 24 m16 QB bench objects (bintree, jpeg_fixed, jpeg_single, queens; bas and bq16, O2/Os/O3), so the BASIC runtime reaches these sites; they are 14 to 75 B smaller at -Os, and bintree, jpeg_fixed, jpeg_single and queens pass.
+
+## Rows above main
+
+| Row | What | Owner | Exit | Review |
+|---|---|---|---|---|
+| FORGED-SEL-1 | deedlines -Os +201 B (0.6%) above main and above base: a forged selector (DEF SEG = VARSEG, POKE) leaves no global tracked, so loads and stores of the program's globals are kept in memory | funcattrs-port | prove non-aliasing where the selector provably is not DS | 2026-11-30 |
