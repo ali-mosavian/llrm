@@ -744,3 +744,95 @@ fn a_loops_simplify_form_is_worked_out_once_in_a_run() {
     assert_eq!(simplify_form_scans(4), 4);
     assert_eq!(simplify_form_scans(16), 16);
 }
+
+/// Two loops, each with the same counter twice, one after the other.
+fn two_loops_of_two_counters() -> String {
+    "define i16 @f(i16 %n) {
+b0:
+  %a = alloca [64 x i16]
+  %b = alloca [64 x i16]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
+  %j = phi i16 [ 0, %b0 ], [ %j.next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %c0
+
+b2:
+  %io = mul i16 %i, 2
+  %ia = getelementptr i8, ptr %a, i16 %io
+  store i16 %i, ptr %ia
+  %jo = mul i16 %j, 2
+  %jb = getelementptr i8, ptr %b, i16 %jo
+  store i16 %j, ptr %jb
+  %i.next = add i16 %i, 1
+  %j.next = add i16 %j, 1
+  br label %b1
+
+c0:
+  br label %c1
+
+c1:
+  %k = phi i16 [ 0, %c0 ], [ %k.next, %c2 ]
+  %l = phi i16 [ 0, %c0 ], [ %l.next, %c2 ]
+  %cgo = icmp slt i16 %k, %n
+  br i1 %cgo, label %c2, label %c3
+
+c2:
+  %ko = mul i16 %k, 2
+  %ka = getelementptr i8, ptr %a, i16 %ko
+  store i16 %k, ptr %ka
+  %lo = mul i16 %l, 2
+  %lb = getelementptr i8, ptr %b, i16 %lo
+  store i16 %l, ptr %lb
+  %k.next = add i16 %k, 1
+  %l.next = add i16 %l, 1
+  br label %c1
+
+c3:
+  %x = load i16, ptr %a
+  %y = load i16, ptr %b
+  %z = add i16 %x, %y
+  ret i16 %z
+}
+"
+    .to_owned()
+}
+
+/// Phis in the header of each of the two loops, in program order.
+fn both_header_phis(module: &mut Module) -> Vec<usize> {
+    let function = f(module);
+    let mut all = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+    all.sort_by_key(|one| one.header);
+    all.iter()
+        .map(|one| {
+            function
+                .iter_block(cfg::block(one.header))
+                .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .count()
+        })
+        .collect()
+}
+
+/// The loop pass manager hands the loops a full unroll made to the passes after
+/// it: `IndVarsOnCreated` runs on those loops and no others, and on none when
+/// the unroll made none (the whole-function slot it replaces would run on
+/// both).
+#[test]
+fn indvars_on_the_created_loops_runs_on_those_loops_alone() {
+    let mut module = parsed(&two_loops_of_two_counters());
+    let second = {
+        let function = f(&mut module);
+        let mut all = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+        all.sort_by_key(|one| one.header);
+        cfg::block(all[1].header)
+    };
+    let created = Rc::new(std::cell::RefCell::new(Vec::new()));
+    managed(&mut module, super::IndVarsOnCreated { created: Rc::clone(&created) });
+    assert_eq!(both_header_phis(&mut module), vec![2, 2], "nothing made: nothing runs");
+    *created.borrow_mut() = vec![second];
+    managed(&mut module, super::IndVarsOnCreated { created: Rc::clone(&created) });
+    assert_eq!(both_header_phis(&mut module), vec![2, 1], "{}", printed(&module));
+    assert!(created.borrow().is_empty(), "the run took the list");
+}

@@ -137,6 +137,41 @@ fn settled(
     changed
 }
 
+/// `IndVarSimplifyPass` on the loops the last `LoopFullUnroll` made, where the
+/// loop pass manager's worklist hands them to the passes after it (LPM2 in
+/// `buildFunctionSimplificationPipeline`, `LPMUpdater::addSiblingLoops`).
+/// Nothing runs when it made none.
+pub struct IndVarsOnCreated {
+    pub created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>>,
+}
+
+impl FunctionPass for IndVarsOnCreated {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &'static str {
+        "indvars"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("indvars")
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let headers = std::mem::take(&mut *self.created.borrow_mut());
+        if headers.is_empty() {
+            return PreservedAnalyses::all();
+        }
+        let _scope = crate::loopfilter::only(&headers);
+        IndVars { lftr: lftr_default() }.run(unit, analyses)
+    }
+}
+
 impl FunctionPass for IndVars {
     fn adds_memory_operations(&self) -> bool {
         false
