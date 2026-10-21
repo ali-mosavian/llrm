@@ -25,3 +25,13 @@ Measured on parity `7f75d65222` and main `origin/main` (clean builds, one target
 Main fails to compile 11 of the 65 modules ("value#1 has no word destination to promote"). Over the 54 it builds: main 172,605 B, parity 178,157, with the change 178,108. All 65: parity 223,891, with the change 223,829 (-62 B).
 
 Three modules are bigger (+2, +4, +4): game/weapons, ui/menu, ui/screen; ui/menu and ui/screen are already above main on parity. The change moves host/demo and render/d_alias by -3 and 0 B: it does not close the base gap to main.
+
+## Rows above parity (oversight's sweep of d3f08d2438: 6062 compiles, 143 objects change by -25..+5 B; QCport -Os 329,187 -> 329,098 B)
+
+| row | module | change | owner, date |
+|---|---|---|---|
+| LR-1 | render/dl | +3 B (0.06%, over the 0.05% bar) | w-1 (greedy), 2026-10-31 |
+| LR-2 | ui/screen | +3 B | w-1 (greedy), 2026-10-31 |
+| LR-3 | game/weapons | +2 B | w-1 (greedy), 2026-10-31 |
+
+Not held conditions (oversight). Exit: the allocation order of the evicted local range, the same family as QO-1 (`qcport-os-rows.md`).
