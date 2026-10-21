@@ -119,7 +119,7 @@ pub struct Run<'a> {
 
 /// `TransformationMode`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Mode {
+pub(crate) enum Mode {
     Unspecified,
     Disable,
     SuppressedByUser,
@@ -127,18 +127,18 @@ enum Mode {
 }
 
 impl Mode {
-    fn forced(self) -> bool {
+    pub(crate) fn forced(self) -> bool {
         self == Mode::ForcedByUser
     }
 }
 
 /// The options of a loop's `llvm.loop` ID: `(name, operands after it)`.
-struct LoopOptions(Vec<(String, Vec<MetadataOperand>)>);
+pub(crate) struct LoopOptions(Vec<(String, Vec<MetadataOperand>)>);
 
 impl LoopOptions {
     /// The loop ID of `lp` (a node whose first operand is itself), as
     /// `Loop::getLoopID`.
-    fn of(
+    pub(crate) fn of(
         run: &Run,
         lp: Loop,
     ) -> Self {
@@ -169,15 +169,24 @@ impl LoopOptions {
         Self(options)
     }
 
-    fn find(
+    pub(crate) fn find(
         &self,
         name: &str,
     ) -> Option<&Vec<MetadataOperand>> {
         self.0.iter().find(|(one, _)| one == name).map(|(_, rest)| rest)
     }
 
+    /// `hasAnyUnrollPragma(L, Prefix)`: an option whose name starts with
+    /// `prefix`.
+    pub(crate) fn has_any(
+        &self,
+        prefix: &str,
+    ) -> bool {
+        self.0.iter().any(|(name, _)| name.starts_with(prefix))
+    }
+
     /// `getBooleanLoopAttribute`.
-    fn boolean(
+    pub(crate) fn boolean(
         &self,
         run: &Run,
         name: &str,
@@ -189,7 +198,7 @@ impl LoopOptions {
     }
 
     /// `getOptionalIntLoopAttribute`.
-    fn int(
+    pub(crate) fn int(
         &self,
         run: &Run,
         name: &str,
@@ -223,7 +232,7 @@ impl LoopOptions {
     }
 
     /// `hasUnrollAndJamTransformation`.
-    fn unroll_and_jam(
+    pub(crate) fn unroll_and_jam(
         &self,
         run: &Run,
     ) -> Mode {
@@ -243,7 +252,7 @@ impl LoopOptions {
     }
 }
 
-fn int_of(
+pub(crate) fn int_of(
     run: &Run,
     operand: &MetadataOperand,
 ) -> Option<u64> {
@@ -256,12 +265,12 @@ fn int_of(
 }
 
 /// `UnrollPragmaInfo`.
-struct UnrollPragmaInfo {
-    pragma_full_unroll: bool,
-    pragma_count: u32,
-    pragma_enable_unroll: bool,
-    pragma_runtime_unroll_disable: bool,
-    explicit_unroll: bool,
+pub(crate) struct UnrollPragmaInfo {
+    pub(crate) pragma_full_unroll: bool,
+    pub(crate) pragma_count: u32,
+    pub(crate) pragma_enable_unroll: bool,
+    pub(crate) pragma_runtime_unroll_disable: bool,
+    pub(crate) explicit_unroll: bool,
 }
 
 impl UnrollPragmaInfo {
@@ -284,20 +293,20 @@ impl UnrollPragmaInfo {
 }
 
 /// `UnrollCostEstimator`.
-struct UnrollCostEstimator {
-    num_inline_candidates: u32,
-    not_duplicatable: bool,
-    loop_size: Cost,
+pub(crate) struct UnrollCostEstimator {
+    pub(crate) num_inline_candidates: u32,
+    pub(crate) not_duplicatable: bool,
+    pub(crate) loop_size: Cost,
 }
 
 impl UnrollCostEstimator {
     /// `getRolledLoopSize`.
-    fn rolled_loop_size(&self) -> u32 {
+    pub(crate) fn rolled_loop_size(&self) -> u32 {
         self.loop_size.value as u32
     }
 
     /// `getUnrolledLoopSize`.
-    fn unrolled_loop_size(
+    pub(crate) fn unrolled_loop_size(
         &self,
         up: &UnrollingPreferences,
         count: u32,
@@ -308,7 +317,7 @@ impl UnrollCostEstimator {
     }
 
     /// `canUnroll`.
-    fn can_unroll(&self) -> bool {
+    pub(crate) fn can_unroll(&self) -> bool {
         // Convergence tokens are not in MIR (C1): none is `ExtendedLoop`.
         self.loop_size.valid && !self.not_duplicatable
     }
@@ -321,14 +330,14 @@ struct EstimatedUnrollCost {
 }
 
 /// The analyses of one state of the function, made again after a change.
-struct Analyzed {
-    tree: DomTree,
-    loops: LoopInfo,
-    assumptions: AssumptionCache,
+pub(crate) struct Analyzed {
+    pub(crate) tree: DomTree,
+    pub(crate) loops: LoopInfo,
+    pub(crate) assumptions: AssumptionCache,
 }
 
 impl Analyzed {
-    fn of(run: &Run) -> Self {
+    pub(crate) fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
         let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
@@ -339,7 +348,24 @@ impl Analyzed {
 /// `gatherUnrollingPreferences` for the full unroll pass (`UserThreshold`,
 /// `AllowPartial`, `Runtime` and `UpperBound` provided: none, false, false,
 /// false).
-fn gather_unrolling_preferences(
+pub(crate) fn gather_unrolling_preferences(
+    run: &Run,
+    has_calls: bool,
+) -> UnrollingPreferences {
+    let mut up = gather_unrolling_preferences_of_target(run, has_calls);
+    // Apply the values provided by the full unroll pass.
+    up.partial = false;
+    up.runtime = false;
+    up.upper_bound = false;
+    if UNROLL_MAX_UPPER_BOUND == 0 {
+        up.upper_bound = false;
+    }
+    up
+}
+
+/// `gatherUnrollingPreferences` up to the values a caller provides: the
+/// defaults, the target's, the size attributes'.
+pub(crate) fn gather_unrolling_preferences_of_target(
     run: &Run,
     has_calls: bool,
 ) -> UnrollingPreferences {
@@ -362,6 +388,8 @@ fn gather_unrolling_preferences(
         force: false,
         upper_bound: false,
         max_iterations_count_to_analyze: UNROLL_MAX_ITERATIONS_COUNT_TO_ANALYZE,
+        unroll_and_jam: false,
+        unroll_and_jam_inner_loop_threshold: 60,
     };
     // Override with any target specific settings.
     run.tti.get_unrolling_preferences(has_calls, &mut up);
@@ -370,13 +398,6 @@ fn gather_unrolling_preferences(
         up.threshold = up.opt_size_threshold;
         up.partial_threshold = up.partial_opt_size_threshold;
         up.max_percent_threshold_boost = 100;
-    }
-    // Apply the values provided by the full unroll pass.
-    up.partial = false;
-    up.runtime = false;
-    up.upper_bound = false;
-    if UNROLL_MAX_UPPER_BOUND == 0 {
-        up.upper_bound = false;
     }
     up
 }
@@ -711,7 +732,7 @@ fn call_target(
 }
 
 /// `mayHaveSideEffects`.
-fn has_side_effects(
+pub(crate) fn has_side_effects(
     run: &Run,
     inst: InstId,
 ) -> bool {
@@ -954,7 +975,7 @@ fn should_partial_unroll(
 
 /// `computeUnrollCount`.
 #[allow(clippy::too_many_arguments)]
-fn compute_unroll_count(
+pub(crate) fn compute_unroll_count(
     run: &mut Run,
     analyzed: &Analyzed,
     lp: Loop,
@@ -1178,30 +1199,7 @@ fn try_to_unroll_loop(
     }
 
     let opt_for_size = run.options.opt_size;
-    let has_calls = lp
-        .get_blocks()
-        .iter()
-        .any(
-            |&block| run.function
-                .iter_block(block)
-                .any(
-                    |inst| match call_target(run, inst) {
-                        Some(Some(callee)) if (callee.0 as usize) < run.globals.len() => {
-                            let value = &run.globals[callee.0 as usize];
-                            !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
-                                && run.tti.is_lowered_to_call(
-                                    value.name.as_deref(),
-                                    matches!(
-                                        value.linkage,
-                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                    ),
-                                )
-                        }
-                        Some(_) => true,
-                        None => false,
-                    },
-                ),
-        );
+    let has_calls = loop_has_calls(run, lp);
     let mut up = gather_unrolling_preferences(run, has_calls);
 
     // Exit early if unrolling is disabled. For size, the loop size is the
@@ -1211,46 +1209,8 @@ fn try_to_unroll_loop(
         return Unrolled::Unmodified;
     }
 
-    let assumes: Vec<InstId> = analyzed
-        .assumptions
-        .assumes
-        .iter()
-        .copied()
-        .filter(|&assume| run.function.parent(assume).is_some_and(|block| lp.contains(block)))
-        .collect();
-    let eph = {
-        let function = &*run.function;
-        let effects_free = |inst: InstId| llrm_mir::memory::only_value(run.context, run.callees, function, inst);
-        collect_ephemeral_values(function, &effects_free, &assumes, &|block| lp.contains(block))
-    };
-
-    // `UnrollCostEstimator`.
-    let mut metrics = CodeMetrics::default();
-    {
-        let one_live_use = |callee: GlobalId| has_one_live_use(run, callee);
-        let query = Query {
-            tti: run.tti,
-            context: run.context,
-            layout: run.layout,
-            globals: run.globals,
-            this: run.this,
-            has_one_live_use: &one_live_use,
-        };
-        for &block in lp.get_blocks() {
-            metrics.analyze_basic_block(&query, run.function, block, &eph, run.options.prepare_for_lto);
-        }
-    }
-    let mut loop_size = metrics.num_insts;
-    // Do not allow an estimate of size zero: the code using this size may
-    // assume that each loop has at least three instructions.
-    if loop_size.valid && loop_size.value < i64::from(up.be_insns) + 1 {
-        loop_size = Cost::of(i64::from(up.be_insns) + 1);
-    }
-    let uce = UnrollCostEstimator {
-        num_inline_candidates: metrics.num_inline_candidates,
-        not_duplicatable: metrics.not_duplicatable,
-        loop_size,
-    };
+    let eph = ephemeral_values(run, analyzed, lp);
+    let uce = cost_estimator(run, lp, &eph, up.be_insns);
     if !uce.can_unroll() {
         if llrm_support::debug::enabled("unroll") {
             for &block in lp.get_blocks() {
@@ -1405,6 +1365,89 @@ fn try_to_unroll_loop(
     }
 }
 
+/// Whether the loop calls something the target lowers to a call.
+pub(crate) fn loop_has_calls(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    lp.get_blocks()
+        .iter()
+        .any(
+            |&block| run.function
+                .iter_block(block)
+                .any(
+                    |inst| match call_target(run, inst) {
+                        Some(Some(callee)) if (callee.0 as usize) < run.globals.len() => {
+                            let value = &run.globals[callee.0 as usize];
+                            !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                                && run.tti.is_lowered_to_call(
+                                    value.name.as_deref(),
+                                    matches!(
+                                        value.linkage,
+                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                    ),
+                                )
+                        }
+                        Some(_) => true,
+                        None => false,
+                    },
+                ),
+        )
+}
+
+/// `CodeMetrics::collectEphemeralValues(L, &AC, EphValues)`.
+pub(crate) fn ephemeral_values(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+) -> IdSet<InstId> {
+    let assumes: Vec<InstId> = analyzed
+        .assumptions
+        .assumes
+        .iter()
+        .copied()
+        .filter(|&assume| run.function.parent(assume).is_some_and(|block| lp.contains(block)))
+        .collect();
+    let function = &*run.function;
+    let effects_free = |inst: InstId| llrm_mir::memory::only_value(run.context, run.callees, function, inst);
+    collect_ephemeral_values(function, &effects_free, &assumes, &|block| lp.contains(block))
+}
+
+/// `UnrollCostEstimator(L, TTI, EphValues, BEInsns)`.
+pub(crate) fn cost_estimator(
+    run: &Run,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    be_insns: u32,
+) -> UnrollCostEstimator {
+    let mut metrics = CodeMetrics::default();
+    {
+        let one_live_use = |callee: GlobalId| has_one_live_use(run, callee);
+        let query = Query {
+            tti: run.tti,
+            context: run.context,
+            layout: run.layout,
+            globals: run.globals,
+            this: run.this,
+            has_one_live_use: &one_live_use,
+        };
+        for &block in lp.get_blocks() {
+            metrics.analyze_basic_block(&query, run.function, block, eph, run.options.prepare_for_lto);
+        }
+    }
+    let mut loop_size = metrics.num_insts;
+    // Do not allow an estimate of size zero: the code using this size may
+    // assume that each loop has at least three instructions.
+    if loop_size.valid && loop_size.value < i64::from(be_insns) + 1 {
+        loop_size = Cost::of(i64::from(be_insns) + 1);
+    }
+    UnrollCostEstimator {
+        num_inline_candidates: metrics.num_inline_candidates,
+        not_duplicatable: metrics.not_duplicatable,
+        loop_size,
+    }
+}
+
 /// The loop `lp` as the cloner reads it.
 fn peelable(
     function: &Function,
@@ -1436,7 +1479,7 @@ fn is_dead(
 /// simplifies is replaced where LCSSA form allows, `(x + c1) + c2` becomes
 /// `x + (c1 + c2)`, and what is dead is deleted. `info` is None where no loop
 /// holds the blocks, which makes every replacement keep LCSSA form.
-fn simplify_loop_after_unroll(
+pub(crate) fn simplify_loop_after_unroll(
     run: &mut Run,
     info: Option<&LoopInfo>,
     blocks: &[BlockId],
@@ -1524,7 +1567,7 @@ fn simplify_loop_after_unroll(
 
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
 /// remain (`body`) and those made since the function had `capacity` blocks.
-fn unrolled_blocks(
+pub(crate) fn unrolled_blocks(
     run: &Run,
     capacity: usize,
     body: &[BlockId],

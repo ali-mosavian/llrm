@@ -188,8 +188,9 @@ pub fn simplified_loop_ivs(
         e.function.iter_block(header).take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi).collect();
     let mut changed = false;
     for phi in phis {
-        let mut info = WideIvInfo { narrow_iv: phi, widest_native_type: None, is_signed: false };
-        changed |= simplify_users_of_iv(&mut e, header, phi, &mut info);
+        // `simplifyLoopIVs` passes no visitor: a cast of the IV is looked
+        // through.
+        changed |= simplify_users_of_iv(&mut e, header, phi, None);
     }
     changed
 }
@@ -279,7 +280,7 @@ fn simplify_and_extend(
         while let Some(curr_iv) = loop_phis.pop() {
             // Information about sign/zero extensions of CurrIV.
             let mut info = WideIvInfo { narrow_iv: curr_iv, widest_native_type: None, is_signed: false };
-            changed |= simplify_users_of_iv(e, header, curr_iv, &mut info);
+            changed |= simplify_users_of_iv(e, header, curr_iv, Some(&mut info));
             if info.widest_native_type.is_some() {
                 wide_ivs.push(info);
             }
@@ -303,7 +304,7 @@ fn simplify_users_of_iv(
     e: &mut Edit,
     header: BlockId,
     curr_iv: InstId,
-    info: &mut WideIvInfo,
+    mut info: Option<&mut WideIvInfo>,
 ) -> bool {
     let Some(result) = e.function.instruction(curr_iv).result else { return false };
     {
@@ -365,7 +366,9 @@ fn simplify_users_of_iv(
             push_iv_users_of(e, header, iv_operand, &mut simplified, &mut simple_iv_users);
         }
 
-        if let Opcode::Cast(_) = e.function.instruction(use_inst).opcode {
+        if let Opcode::Cast(_) = e.function.instruction(use_inst).opcode
+            && let Some(info) = info.as_deref_mut()
+        {
             visit_iv_cast(e, use_inst, info);
             continue;
         }
