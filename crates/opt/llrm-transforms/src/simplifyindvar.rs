@@ -12,10 +12,9 @@
 //! replaced by it; `decide` and `dead` then do the rest.
 //!
 //! Not translated, each its own step: `foldIVUser`,
-//! `replaceIVUserWithLoopInvariant`, `makeIVComparisonInvariant` (needs the
-//! expander), the `samesign` canonicalisation, `eliminateSDiv`,
-//! `simplifyIVRemainder`, `strengthenBinaryOp`, `eliminateTrunc` and the
-//! float-induction replacement.
+//! `replaceIVUserWithLoopInvariant`, the `samesign` canonicalisation,
+//! `eliminateSDiv`, `simplifyIVRemainder`, `strengthenBinaryOp`,
+//! `eliminateTrunc` and the float-induction replacement.
 //!
 //! ```text
 //!  loop (n <= 100):  %i = phi [0, ...], [%i.next, ...]
@@ -201,9 +200,8 @@ pub fn simplified_loop_ivs(
 /// `dead`'s.
 ///
 /// Not translated of `SimplifyIndvar::simplifyUsers` (DEVIATE 17):
-/// `replaceIVUserWithLoopInvariant`, `replaceFloatIVWithIntegerIV`,
-/// `makeIVComparisonInvariant`, and the overflow and saturating intrinsic
-/// eliminations (MIR lacks them, D9).
+/// `replaceIVUserWithLoopInvariant`, `replaceFloatIVWithIntegerIV`, and the
+/// overflow and saturating intrinsic eliminations (MIR lacks them, D9).
 pub fn simplified_and_extended(
     context: &mut Context,
     layout: &DataLayout,
@@ -215,7 +213,8 @@ pub fn simplified_and_extended(
     simplified_and_extended_in(&mut session, context, layout, function, declared, outer)
 }
 
-/// [`simplified_and_extended`] over `session`, whose expressions are valid for `function`.
+/// [`simplified_and_extended`] over `session`, whose expressions are valid for
+/// `function`.
 pub fn simplified_and_extended_in(
     session: &mut ScevSession,
     context: &mut Context,
@@ -245,11 +244,7 @@ pub fn simplified_and_extended_in(
         // form.
         let simple = {
             let cx = e.env.cx(&*e.context, &*e.function);
-            cx.loops
-                .get_loop_for(header)
-                .is_some_and(
-                    |found| found.is_loop_simplify_form(cx.function),
-                )
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
         };
         if simple {
             changed |= simplify_and_extend(&mut e, header, has_guards);
@@ -440,7 +435,7 @@ fn eliminate_iv_user(
 /// decides, or gives it the `samesign` flag.
 fn eliminate_iv_comparison_edit(
     e: &mut Edit,
-    _header: BlockId,
+    header: BlockId,
     icmp: InstId,
     iv_operand: InstId,
     changed: &mut bool,
@@ -500,6 +495,10 @@ fn eliminate_iv_comparison_edit(
         *changed = true;
         return;
     }
+    if make_iv_comparison_invariant(e, header, icmp, iv_operand) {
+        *changed = true;
+        return;
+    }
     // Set the samesign flag on the compare if legal, and canonicalize to the
     // unsigned variant (for signed compares) hoping that it will open the doors
     // for other optimizations.
@@ -517,6 +516,63 @@ fn eliminate_iv_comparison_edit(
         e.function.set_flags(icmp, flags);
         *changed = true;
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L204
+/// `makeIVComparisonInvariant`: a comparison of an IV that is the same on every
+/// iteration but the first (or the last) is rewritten to compare loop-invariant
+/// values, computed in the preheader. Whether it was.
+fn make_iv_comparison_invariant(
+    e: &mut Edit,
+    header: BlockId,
+    icmp: InstId,
+    iv_operand: InstId,
+) -> bool {
+    use llrm_analysis::scev::expand_cost::MachineCosts;
+    let (invariant, preheader_term) = {
+        let cx = e.env.cx(&*e.context, &*e.function);
+        let Some(l) = cx.loops.get_loop_for(header) else { return false };
+        let Some(preheader) = l.get_loop_preheader(cx.function) else { return false };
+        let instruction = cx.function.instruction(icmp);
+        let Opcode::ICmp(mut pred) = instruction.opcode else { return false };
+        let Some(iv_result) = cx.function.instruction(iv_operand).result else { return false };
+        let mut iv_oper_idx = 0;
+        if Operand::Value(iv_result) != instruction.operands[0] {
+            // Swapped
+            iv_oper_idx = 1;
+            pred = pred.swapped();
+        }
+        // The SCEVs of the compare's operands, in the context of the current
+        // loop.
+        let icmp_loop =
+            cx.function.parent(icmp).and_then(|block| cx.loops.get_loop_for(block)).map(|one| one.get_header());
+        let s = e.se.get_scev_at_scope_of_value(&cx, instruction.operands[iv_oper_idx], icmp_loop).scev;
+        let x = e.se.get_scev_at_scope_of_value(&cx, instruction.operands[1 - iv_oper_idx], icmp_loop).scev;
+        let Some(found) = e.se.get_loop_invariant_predicate(&cx, pred, s, x, header, Some(icmp)) else {
+            return false;
+        };
+        // Do not generate something ridiculous.
+        let Some(term) = cx.function.terminator(preheader) else { return false };
+        let tti = MachineCosts { tti: e.outer.target().tti(), minimum_size: false };
+        let expander = llrm_analysis::scev::expander::Expander::new("indvars");
+        if expander.is_high_cost_expansion(&cx, e.se, &[found.lhs, found.rhs], header, 2 * 4, &tti, term)
+            || !expander.is_safe_to_expand_at(&cx, e.se, found.lhs, term)
+            || !expander.is_safe_to_expand_at(&cx, e.se, found.rhs, term)
+        {
+            return false;
+        }
+        (found, term)
+    };
+    e.rewriter.set_insert_point(preheader_term);
+    let scev_ty = { e.se.type_of(invariant.lhs) };
+    let new_lhs =
+        e.rewriter.expand_code_for(&e.env, e.context, e.declared, e.function, e.se, invariant.lhs, Some(scev_ty));
+    let new_rhs =
+        e.rewriter.expand_code_for(&e.env, e.context, e.declared, e.function, e.se, invariant.rhs, Some(scev_ty));
+    e.function.set_icmp_predicate(icmp, invariant.pred);
+    e.function.set_operand(icmp, 0, new_lhs);
+    e.function.set_operand(icmp, 1, new_rhs);
+    true
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L145
