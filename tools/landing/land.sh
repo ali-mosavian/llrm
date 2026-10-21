@@ -14,5 +14,9 @@ for n in "$@"; do
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git checkout -q --detach origin/feat/parity \
     && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 uv run --project tools python tools/parity_squash.py merge-batch $n > ${LAND_TMP:-/tmp/landing}/sq-$n.log 2>&1 ) 9>"$W.checkout.lock"
   echo "$n: $(refusal_lines ${LAND_TMP:-/tmp/landing}/sq-$n.log)"
-  [ "$(gh pr view $n --repo $R --json state -q .state)" = MERGED ] && echo "$n: MERGED  $title"
+  if [ "$(gh pr view $n --repo $R --json state -q .state)" = MERGED ]; then echo "$n: MERGED  $title"
+  else  # refused or failed: build-queue.sh skips this head against this feat/parity until one of them moves
+    S=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}; touch "$S"; sed -i "/^$n /d" "$S"
+    echo "$n $(gh pr view $n --repo $R --json headRefOid -q .headRefOid) $(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha)" >> "$S"
+  fi
 done
