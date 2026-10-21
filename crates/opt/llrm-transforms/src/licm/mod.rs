@@ -22,7 +22,6 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::AliasQuery;
-use llrm_analysis::mssa::shadow::Name;
 use llrm_analysis::mssa::updater::MemorySsaUpdater;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -381,19 +380,10 @@ pub fn run(
         let aa = AliasQuery::new(&memory, &fresh_accesses);
         let left = llrm_analysis::mssa::shadow::walked(&mut kept, &aa, unit.function);
         let right = llrm_analysis::mssa::shadow::walked(&mut fresh, &aa, unit.function);
-        // A use the walker answered before an edit took a clobber away keeps
-        // that answer, as LLVM's optimized accesses do: later than a fresh
-        // walk's is safe, earlier is not.
-        let in_fresh = |name: &Name| match name {
-            Name::Live => Some(fresh.live_on_entry_def()),
-            Name::Phi(at) => fresh.get_memory_phi(cfg::block(*at)),
-            Name::Site(inst) => fresh.get_memory_access(*inst),
-        };
         let differ: Vec<String> = left
             .iter()
-            .filter(|(inst, name)| match (right.get(inst), in_fresh(name)) {
-                (Some(now), Some(kept)) => now != *name && in_fresh(now).is_none_or(|now| !fresh.dominates(now, kept)),
-                _ => true,
+            .filter(|(inst, name)| {
+                right.get(inst).is_none_or(|now| !llrm_analysis::mssa::shadow::answer_is_safe(&fresh, name, now))
             })
             .map(|(inst, name)| format!("{inst:?}: kept {name:?}, fresh {:?}", right.get(&inst)))
             .collect();
