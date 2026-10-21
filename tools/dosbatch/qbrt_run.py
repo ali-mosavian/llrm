@@ -49,17 +49,40 @@ def compiling(
     return kept, failed
 
 
-def main(argv: list[str]) -> int:
+def level(text: str) -> str:
+    """`-O1`, `O1`, `1` or `s` as the compiler's `-O1` / `-Os`."""
+    return text if text.startswith("-") else "-O" + text.removeprefix("O")
+
+
+def parse(argv: list[str]) -> argparse.Namespace:
+    """The arguments, `--level -O1` as well as `--level=-O1` (argparse takes the first for an option of its own and refuses it)."""
+    joined: list[str] = []
+    for one in argv:
+        if joined and joined[-1] == "--level":
+            joined[-1] = f"--level={one}"
+        else:
+            joined.append(one)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("work", type=Path)
-    parser.add_argument("--level", default="-O2", help="-O1, -O2, -O3 or -Os")
+    parser.add_argument("--level", default="-O2", type=level, help="-O1, -O2, -O3 or -Os, with the dash or without")
     parser.add_argument("--all", action="store_true", help="every program, not those that handle errors")
     parser.add_argument("--only", nargs="+", default=[])
-    args = parser.parse_args(argv)
+    return parser.parse_args(joined)
+
+
+def load():
+    """The modules the run needs: the programs of tests/qbrt and the differential live in qbrt_programs, which does not import pytest."""
     import dosbatch
     import qbbuild
+    import qbrt_programs
     import qbruntime
-    import test_qbrt
+
+    return dosbatch, qbbuild, qbruntime, qbrt_programs
+
+
+def main(argv: list[str]) -> int:
+    args = parse(argv)
+    dosbatch, qbbuild, qbruntime, test_qbrt = load()
 
     built = qbbuild.build
     qbbuild.build = lambda source, work, objects, flags=("-O2",), tolerant=False: built(source, work, objects, (args.level,), tolerant)
