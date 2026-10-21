@@ -1143,6 +1143,16 @@ pub const X87_SEQUENCES: [(&str, &[u8]); 6] = [
     ("fround", &[0xd9, 0xfc]),
 ];
 
+/// The x87 slots the sequence `name` pushes above its operand while it runs:
+/// `fexp2` copies it and loads 1, `flog2` and `fatan` load 1.
+pub fn x87_scratch(name: &str) -> usize {
+    match name {
+        "fexp2" => 2,
+        "flog2" | "fatan" => 1,
+        _ => 0,
+    }
+}
+
 /// The bytes of the x87 operation `name` where it is a sequence.
 pub fn x87_sequence(name: &str) -> Option<&'static [u8]> {
     X87_SEQUENCES.iter().find(|(one, _)| *one == name).map(|(_, bytes)| *bytes)
