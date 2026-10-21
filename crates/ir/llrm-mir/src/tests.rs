@@ -1206,8 +1206,12 @@ fn a_flags_result_read_other_than_by_a_comparison_is_refused() {
              define i16 @f(ptr %a, ptr %b) {{\nb0:\n  %v = call i16 @cmp(ptr %a, ptr %b)\n{user}  ret i16 %r\n}}\n"
         )
     };
-    let problems = |user: &str| crate::verify::verify(&parse::module(&text(user)).unwrap_or_else(|error| panic!("{error}")));
+    let problems =
+        |user: &str| crate::verify::verify(&parse::module(&text(user)).unwrap_or_else(|error| panic!("{error}")));
     assert_eq!(problems("  %c = icmp slt i16 %v, 0\n  %r = sext i1 %c to i16\n"), Vec::<String>::new());
     let refused = problems("  %r = ashr i16 %v, 15\n");
-    assert!(refused.len() == 1 && refused[0].contains("returns flags that something other than a comparison reads"), "{refused:?}");
+    assert!(
+        refused.len() == 1 && refused[0].contains("returns flags that something other than a comparison reads"),
+        "{refused:?}"
+    );
 }

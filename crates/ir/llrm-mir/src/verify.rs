@@ -480,10 +480,14 @@ impl Checker<'_> {
             }
             Opcode::GetElementPtr { source } => self.gep(inst, *source, &at),
             Opcode::Call(info) | Opcode::Invoke(info) => {
-                // llrm's rule, not LLVM's: the flags a routine returns are read by a comparison and nothing else.
+                // llrm's rule, not LLVM's: the flags a routine returns are read
+                // by a comparison and nothing else.
                 if let Some(value) = instruction.result
                     && crate::facts::returns_flags(self.context, &self.module.globals, function, inst)
-                    && function.users(value).iter().any(|one| !matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)))
+                    && function
+                        .users(value)
+                        .iter()
+                        .any(|one| !matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)))
                 {
                     self.fail(format!("{at} returns flags that something other than a comparison reads"));
                 }
