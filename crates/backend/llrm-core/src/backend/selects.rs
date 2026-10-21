@@ -193,7 +193,8 @@ fn _run(
     let condition = function.instruction(select).operands[0];
     let following: Vec<InstId> = function.iter_block(block).skip_while(|&inst| inst != select).skip(1).collect();
     let mut run = vec![select];
-    // What is only known after the branch: the selects' results and what reads them.
+    // What is only known after the branch: the selects' results and what reads
+    // them.
     let mut group: Vec<Operand> = function.instruction(select).result.map(Operand::Value).into_iter().collect();
     let mut after: Vec<Operand> = Vec::new();
     let mut effects = false;
@@ -217,23 +218,25 @@ fn _run(
             group.extend(one.result.map(Operand::Value));
             continue;
         }
-        let pure = matches!(
-            one.opcode,
-            Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::GetElementPtr { .. }
-        ) || matches!(
-            one.opcode,
-            Opcode::Binary(
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Shl
-                    | BinaryOp::LShr
-                    | BinaryOp::AShr
-                    | BinaryOp::And
-                    | BinaryOp::Or
-                    | BinaryOp::Xor
+        let pure =
+            matches!(
+                one.opcode,
+                Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::GetElementPtr { .. }
             )
-        );
+                || matches!(
+                    one.opcode,
+                    Opcode::Binary(
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Shl
+                            | BinaryOp::LShr
+                            | BinaryOp::AShr
+                            | BinaryOp::And
+                            | BinaryOp::Or
+                            | BinaryOp::Xor
+                    )
+                );
         if reads(&group) || reads(&after) || effects || !pure {
             effects |= !pure;
             after.extend(one.result.map(Operand::Value));
@@ -241,7 +244,8 @@ fn _run(
             kept.push(inst);
         }
     }
-    let mut needed: Vec<Operand> = run.iter().flat_map(|&inst| function.instruction(inst).operands[1..].to_vec()).collect();
+    let mut needed: Vec<Operand> =
+        run.iter().flat_map(|&inst| function.instruction(inst).operands[1..].to_vec()).collect();
     let mut above: Vec<InstId> = Vec::new();
     for &inst in kept.iter().rev() {
         let one = function.instruction(inst);
@@ -286,9 +290,9 @@ fn _branched(
         None,
     );
     function.insert(branch, Position::End(block))?;
-    // What each result is on each edge: a phi may not read an earlier phi of its
-    // own block, so a select reading an earlier one reads what that was on the
-    // edge.
+    // What each result is on each edge: a phi may not read an earlier phi of
+    // its own block, so a select reading an earlier one reads what that was
+    // on the edge.
     let mut edges: Vec<(Operand, Operand, Operand)> = Vec::new();
     let at_top = function.block(join).first().expect("a block with instructions");
     for &inst in run {
@@ -362,7 +366,10 @@ mod tests {
     ) {
         for &(a, b) in inputs {
             let arguments = |one: i128, other: i128| {
-                vec![Val::Int { bits: one as u128 & 0xFFFF, width: 16 }, Val::Int { bits: other as u128 & 0xFFFF, width: 16 }]
+                vec![
+                    Val::Int { bits: one as u128 & 0xFFFF, width: 16 },
+                    Val::Int { bits: other as u128 & 0xFFFF, width: 16 },
+                ]
             };
             assert_eq!(
                 run(after, "f", arguments(a, b), 100).unwrap(),
@@ -422,8 +429,7 @@ entry:
         assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
         assert_eq!(conditional_branches(&after), 0, "{}", llrm_mir::print::module(&after));
         for (a, b) in [(0, 5), (3, 3), (4, 9), (9, 4)] {
-            let arguments =
-                vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+            let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
             assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), run(&before, "f", arguments, 100).unwrap());
         }
     }

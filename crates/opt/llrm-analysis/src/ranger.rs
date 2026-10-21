@@ -521,18 +521,7 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         body: &'a llrm_mir::forest::Body,
         above: &'a dyn Fn(ValueId) -> Option<Interval>,
     ) -> Self {
-        Self {
-            unit,
-            facts,
-            shape,
-            assumed,
-            graph,
-            positions,
-            operations,
-            body,
-            above,
-            made: Default::default(),
-        }
+        Self { unit, facts, shape, assumed, graph, positions, operations, body, above, made: Default::default() }
     }
 
     /// The value each operation makes, found when first asked.

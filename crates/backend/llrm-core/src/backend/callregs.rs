@@ -131,8 +131,8 @@ pub fn call_clobbered_high(
 type Names = IndexMap<RegId, BTreeSet<String>>;
 
 thread_local! {
-    /// `_names` by the `general` set it was built for: every call of a body asks
-    /// for the same one.
+    /// `_names` by the `general` set it was built for: every call of a body
+    /// asks for the same one.
     static NAMES: RefCell<HashMap<Vec<RegId>, Rc<Names>>> = RefCell::default();
     #[cfg(test)]
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
