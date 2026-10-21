@@ -46,7 +46,7 @@ name them in an environment variable, listed in the tool's header.
 | `qcport/strlib.c` | `strcmp` and `strncpy`, which Borland C inlines, for building the QCport modules |
 | `qcport-compile.sh` | Compiles QCport's C modules at -O2 and -Os; lists each refusal |
 | `qcport-run.py` | Runs QCport built by `llrm-c` beside the all-Borland build and compares frames and `BENCH.BMP` |
-| `qcport-swap.py` | Whole-run executed instructions of QCport arms that differ in one module (BENCH run, dosrun emulator); refuses a noisy repeat or arms that draw different work; flags a per-function change only above what identical objects move between runs |
+| `qcport-swap.py` | Whole-run executed instructions of QCport arms that differ in one module (BENCH run, dosrun emulator); refuses a noisy repeat or arms that draw different work; flags a per-function change only above the worst of 3 repeats of identical objects, and not a rise paired with a matching fall |
 
 ## Identity gates
 

@@ -65,3 +65,17 @@ def test_a_change_above_the_noise_is_flagged_and_one_below_it_is_not():
     base = {"QGLGEMMAP": 20_000_000, "_d_draw_faces@3": 24_000_000, "_clip_w@3": 100_000}
     arm = {"QGLGEMMAP": 20_100_000, "_d_draw_faces@3": 33_000_000, "_clip_w@3": 150_000}
     assert qcport_swap.flagged(base, arm, 7_400_000) == {"_d_draw_faces@3": 9_000_000}
+
+
+def test_a_rise_and_a_matching_fall_are_paged_work_not_a_finding():
+    """w-4's identical-object runs moved QGLGEMMAP +7.4M and QGLGEMFREE -7.4M: flagged above any floor of one repeat, but a pair."""
+    changes = {"QGLGEMMAP": 7_400_000, "QGLGEMFREE": -7_350_000, "_d_draw_faces@3": 2_400_000}
+    assert qcport_swap.paired(changes) == {"QGLGEMMAP", "QGLGEMFREE"}
+
+
+def test_the_repeat_arms_are_all_named_base_again_and_each_is_checked():
+    arms = [dict(name="base", exe="a", obj="o", instructions=485_835_457, frames="1", polys="1"),
+            dict(name="base-again1", exe="b", obj="o", instructions=485_835_560, frames="1", polys="1"),
+            dict(name="base-again3", exe="d", obj="o", instructions=490_000_000, frames="1", polys="1")]
+    problems = qcport_swap.verdict(arms)
+    assert problems and "base-again3" in problems[0]

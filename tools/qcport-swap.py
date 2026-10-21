@@ -6,7 +6,7 @@
 
 Every module but MODULE is built once by BASE at -O2; each arm swaps in MODULE built by its compiler. The BENCH run (`start.qmp -ticks 300`)
 executes in the dosrun emulator on virtual time and prints the instructions it executed, the md5 of each arm's EXE and of MODULE's object.
-BASE runs twice: the repeat must match the first within 0.001% (the work directory's path moves the count by ~100), and arms with the same EXE
+BASE runs 1 + QCPORT_SWAP_REPEATS (3) times: every repeat must match the first within 0.001% (the work directory's path moves the count by ~100), and arms with the same EXE
 must match exactly, or the instrument is wrong.
 Arms that draw a different frame or polygon count did different work: no comparison is made. Per-function counts (the emulator's profile, unsized for QCport: trust a total, not a split) are flagged only above the
 largest move of a function between BASE and its repeat, whose objects are the same: EMS paging order moves millions in balanced pairs.
@@ -36,8 +36,8 @@ def verdict(arms: list[dict]) -> list[str]:
                 problems.append(f"{one['name']} and {other['name']} are the same EXE and ran {one['instructions']} and {other['instructions']} instructions")
     first = arms[0]
     for one in arms[1:]:
-        if one["name"] == "base-again" and abs(one["instructions"] - first["instructions"]) * 100_000 > first["instructions"]:
-            problems.append(f"the repeat of base differs by {one['instructions'] - first['instructions']} instructions (over 0.001%): the count is noise")
+        if one["name"].startswith("base-again") and abs(one["instructions"] - first["instructions"]) * 100_000 > first["instructions"]:
+            problems.append(f"{one['name']}, the repeat of base, differs by {one['instructions'] - first['instructions']} instructions (over 0.001%): the count is noise")
     work = {(one["frames"], one["polys"]) for one in arms}
     if len(work) > 1:
         problems.append("the arms drew different work (frames, polys): " + ", ".join(f"{one['name']} {one['frames']}/{one['polys']}" for one in arms))
@@ -68,6 +68,17 @@ def noise(
     millions between functions in balanced pairs (QGLGEMMAP +7.4M, QGLGEMFREE -7.4M) with the objects the same."""
     moved = deltas(base, again).values()
     return sum(one for one in moved if one > 0), -sum(one for one in moved if one < 0)
+
+
+def paired(changes: dict[str, int]) -> set[str]:
+    """The functions whose change another function undoes to within a tenth: a rise and a fall of the same size are the EMS paging
+    order moving work between functions (QGLGEMMAP +7.4M with QGLGEMFREE -7.4M), not a cost of the module."""
+    out: set[str] = set()
+    for name, change in changes.items():
+        for other, back in changes.items():
+            if other != name and change * back < 0 and abs(change + back) * 10 <= max(abs(change), abs(back)):
+                out.update((name, other))
+    return out
 
 
 def flagged(
@@ -108,7 +119,8 @@ def main() -> int:
 
     module, base, *named = sys.argv[1:]
     arms = [("base", Path(base)), *((name, Path(path)) for name, path in (one.split("=", 1) for one in named))]
-    arms.insert(1, ("base-again", Path(base)))
+    repeats = int(os.environ.get("QCPORT_SWAP_REPEATS", "3"))
+    arms[1:1] = [(f"base-again{n}", Path(base)) for n in range(1, repeats + 1)]
     qcport, include, borland = qr.required("QCPORT"), qr.required("QCPORT_INC"), qr.required("QCPORT_BORLAND")
     linker = os.environ.get("JWLINK", "jwlink")
     flags = [flag for part in (*qr.MODULES, "qgl") for flag in ("-I", str(qcport / part))] + ["-I", str(include)]
@@ -149,13 +161,15 @@ def main() -> int:
                         "instructions": instructions_of((work / f"run-{name}" / "events.txt").read_text()),
                         "functions": functions_of((work / f"run-{name}" / "events.txt").read_text())})
     print(report(results))
-    again = results[1]["functions"]
-    floor = max((abs(one) for one in deltas(results[0]["functions"], again).values()), default=0)
-    rises, falls = noise(results[0]["functions"], again)
-    print(f"noise of identical objects (base-again): functions up {rises}, down {falls}; a function is flagged above {floor}")
-    for one in results[2:]:
-        for name, change in sorted(flagged(results[0]["functions"], one["functions"], floor).items(), key=lambda pair: -abs(pair[1]))[:10]:
-            print(f"  {one['name']}: {name} {change:+}")
+    repeated = [one["functions"] for one in results if one["name"].startswith("base-again")]
+    floor = max((abs(change) for again in repeated for change in deltas(results[0]["functions"], again).values()), default=0)
+    rises = max((noise(results[0]["functions"], again)[0] for again in repeated), default=0)
+    falls = max((noise(results[0]["functions"], again)[1] for again in repeated), default=0)
+    print(f"noise of identical objects, {len(repeated)} repeats of base: functions up {rises}, down {falls} (worst repeat); a function is flagged above {floor}")
+    for one in results[1 + len(repeated):]:
+        changes = flagged(results[0]["functions"], one["functions"], floor)
+        for name, change in sorted(changes.items(), key=lambda pair: -abs(pair[1]))[:10]:
+            print(f"  {one['name']}: {name} {change:+}{'  paired: noise' if name in paired(changes) else ''}")
     problems = verdict(results)
     print(*problems, sep="\n")
     if not problems:
