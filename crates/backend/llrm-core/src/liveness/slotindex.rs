@@ -313,6 +313,7 @@ impl SlotIndex {
 }
 
 impl PartialEq for SlotIndex {
+    #[inline(always)]
     fn eq(
         &self,
         other: &Self,
@@ -324,6 +325,7 @@ impl PartialEq for SlotIndex {
 impl Eq for SlotIndex {}
 
 impl PartialOrd for SlotIndex {
+    #[inline(always)]
     fn partial_cmp(
         &self,
         other: &Self,
@@ -333,6 +335,9 @@ impl PartialOrd for SlotIndex {
 }
 
 impl Ord for SlotIndex {
+    /// Two indexes of one epoch compare by the numbers they carry, inline like
+    /// `SlotIndex::operator<`'s two loads; a stale one goes to the arena.
+    #[inline(always)]
     fn cmp(
         &self,
         other: &Self,
@@ -341,7 +346,18 @@ impl Ord for SlotIndex {
         if self.epoch == other.epoch {
             return (self.number | u32::from(self.slot)).cmp(&(other.number | u32::from(other.slot)));
         }
-        // One borrow of the arena for both numbers.
+        self.cmp_stale(other)
+    }
+}
+
+impl SlotIndex {
+    /// `cmp` after a renumbering: one borrow of the arena for both numbers.
+    #[cold]
+    #[inline(never)]
+    fn cmp_stale(
+        &self,
+        other: &Self,
+    ) -> Ordering {
         ARENA.with(|arena| {
             let arena = arena.borrow();
             let a = arena.index[self.list_entry() as usize] | u32::from(self.slot);
