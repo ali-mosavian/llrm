@@ -931,8 +931,9 @@ enum Pointer {
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
-    /// A near address no global owns, a constant: `[disp16]`.
-    Absolute { offset: i64 },
+    /// A near address no global owns, a constant: `[disp16]`, `[disp32]` on a
+    /// flat target (`bytes`, the width of a near pointer).
+    Absolute { offset: i64, bytes: u32 },
 }
 
 /// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a
@@ -3690,7 +3691,7 @@ impl Selector<'_, '_, '_> {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
-            Pointer::Far { base: None, offset, .. } | Pointer::Absolute { offset } => semantics(
+            Pointer::Far { base: None, offset, .. } | Pointer::Absolute { offset, .. } => semantics(
                 Operation::Move,
                 "mov",
                 vec![Loc::Held(held)],
@@ -3846,7 +3847,7 @@ impl Selector<'_, '_, '_> {
         if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id)
             .filter(|_| !self.is_far(self.module.context.get(id).ty))
         {
-            return Ok(Pointer::Absolute { offset });
+            return Ok(Pointer::Absolute { offset, bytes: self.address_bytes() });
         }
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
             .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
@@ -4175,7 +4176,7 @@ impl Selector<'_, '_, '_> {
             return Ok(());
         }
         // A constant address plus the sum: the sum is the base.
-        if let Pointer::Absolute { offset: start } = pointer {
+        if let Pointer::Absolute { offset: start, .. } = pointer {
             let indexed =
                 Pointer::Based { base: sum, index: None, scale: 1, offset: start + offset as i64, segment: None };
             if self.only_addressed(address) {
@@ -5174,8 +5175,9 @@ impl Selector<'_, '_, '_> {
                 scale,
                 ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width)
             },
-            Pointer::Absolute { offset } => {
-                Mem { disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset & 0xFFFF)), width) }
+            Pointer::Absolute { offset, bytes } => {
+                let kept = if bytes >= 8 { -1 } else { (1_i64 << (8 * bytes)) - 1 };
+                Mem { disp_width: bytes.max(2), ..Mem::new(Some(Addr::new(Space::Literal, offset & kept)), width) }
             }
             Pointer::Based { base, index: None, offset, segment: None, .. } => {
                 Mem { base: Some(base), offset, ..Mem::new(None, width) }
@@ -7760,7 +7762,7 @@ impl Pointer {
             Pointer::Far { selector, base, index, scale, offset } => {
                 Pointer::Far { selector, base, index, scale, offset: offset + by }
             }
-            Pointer::Absolute { offset } => Pointer::Absolute { offset: offset + by },
+            Pointer::Absolute { offset, bytes } => Pointer::Absolute { offset: offset + by, bytes },
         }
     }
 }
