@@ -62,6 +62,28 @@ fn simplified_in(
     (before, after)
 }
 
+/// `checked` on a body that had copies of itself made.
+fn checked_copied(
+    text: &str,
+    inputs: &[Vec<i128>],
+) -> String {
+    let flagged = |module: &mut Module| {
+        let attr = llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.to_owned());
+        module.function_mut("f").expect("@f").1.attrs.push(attr);
+    };
+    let mut before = parsed(text);
+    before.datalayout = Some(LEGAL.to_owned());
+    flagged(&mut before);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(super::Algebraic { size: false, llvm: false });
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
+    assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", bare(&after));
+    bare(&after)
+}
+
 /// Edge values of a `width`-bit integer, and a few between.
 fn edges(width: u32) -> Vec<i128> {
     let top = 1_i128 << (width - 1);
@@ -515,8 +537,8 @@ no:
 /// A recursion inlined into itself tests `n - 1 == 0`, then `n - 2 == 0`: each
 /// is `n == k`, and the differences each level held (and spilled) are dead.
 /// InstCombine's `foldICmpAddConstant`, gcc's `fold_comparison`: a wrapping sum
-/// is a bijection, so equality needs no flag, and the sum's other readers do
-/// not matter.
+/// is a bijection, so equality needs no flag; in a body with self-copies the
+/// sum's other readers do not matter.
 #[test]
 fn test_a_compare_of_a_sum_with_a_constant_is_a_compare_of_the_term() {
     let text = "define i16 @f(i16 %n) {
@@ -534,7 +556,7 @@ no:
 }
 ";
     let inputs: Vec<Vec<i128>> = [0, 1, 2, 4, 5, 65535, 32767].iter().map(|&n| vec![n]).collect();
-    let printed = checked(text, &inputs);
+    let printed = checked_copied(text, &inputs);
     assert!(
         printed.contains("icmp eq i16 %n, 1")
             && printed.contains("icmp ne i16 %n, 5")
@@ -1362,4 +1384,41 @@ b0:
         &[vec![8], vec![0], vec![7]],
     );
     assert!(!division.contains("sdiv"), "{division}");
+}
+
+/// `n - 1 == 0` with the difference also read kept its subtract in a body
+/// the pin folds nothing in: the fold of a multi-use equality is only for a
+/// body that had copies of itself made, where the chain of differences is dead
+/// (rectwo, hanoi), and a loop's counter test must stay on the counter
+/// (x_heapsort, x_cordic).
+#[test]
+fn a_multi_use_equality_on_a_sum_folds_only_in_a_body_with_self_copies() {
+    let text = "define i32 @f(i32 %n) {
+b0:
+  %d = sub i32 %n, 1
+  %c = icmp eq i32 %d, 0
+  %z = zext i1 %c to i32
+  %r = add i32 %z, %d
+  ret i32 %r
+}
+";
+    let run = |copied: bool| {
+        let mut module = parsed(text);
+        module.datalayout = Some(LEGAL.to_owned());
+        if copied {
+            module
+                .function_mut("f")
+                .expect("@f")
+                .1
+                .attrs
+                .push(llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.to_owned()));
+        }
+        let mut passes = llrm_mir::passes::PassManager::default();
+        (passes.verify_each, passes.verify_invalidation) = (true, true);
+        passes.add(super::Algebraic { size: false, llvm: false });
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+        bare(&module)
+    };
+    assert!(run(false).contains("icmp eq i32 %d, 0"), "{}", run(false));
+    assert!(run(true).contains("icmp eq i32 %n, 1"), "{}", run(true));
 }

@@ -403,11 +403,21 @@ fn _extended_boolean_negated(
 /// Equality needs no flag: a wrapping sum is a bijection. An ordered test
 /// needs the sum not to wrap as its own signedness (`nsw` for a signed
 /// predicate, `nuw` for an unsigned one) and the new constant to stay in the
-/// type. InstCombine's `foldICmpAddConstant` and gcc's `fold_comparison` do it
-/// whoever else reads the sum. A recursion inlined into itself tests `n - 1 ==
+/// type. InstCombine's `foldICmpAddConstant` does the ordered one whoever else
+/// reads the sum; its equality fold (`foldICmpBinOpEqualityWithConstant`,
+/// InstCombineCompares.cpp:3760, "TODO: Remove the one-use limitation") only
+/// when the sum has no other reader.
+///
+/// DEVIATE (D10, numbered with its third part in docs/architecture/
+/// recursion-rows.md): a body that had copies of itself made (`SELF_COPIED`)
+/// folds an equality whoever else reads the sum. Those copies test `n - 1 ==
 /// 0`, `n - 2 == 0`, ... which are `n == 1`, `n == 2`: the chain of differences
-/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`); a
-/// loop's test of its step (`x - 2 < 2`) reads the counter itself again.
+/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`,
+/// `recsum`, `recpow`); the pin has no copies and so no chain. Every other body
+/// keeps the pin's rule: a loop's test of its step (`x - 1 != 0`) stays on the
+/// counter for IndVars (x_heapsort, x_cordic under #3350). Owner: w-6. Exit:
+/// D10's cleanup collapses the chains by a pin pass, or D10 goes; review
+/// 2026-11-30.
 fn _offset_compared(
     context: &Context,
     function: &mut Function,
@@ -447,6 +457,17 @@ fn _offset_compared(
         predicate,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
     );
+    if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)
+        && function.instruction(made).result.is_some_and(|result| function.users(result).into_iter().count() > 1)
+        && !function.attrs.iter().any(|one| {
+            matches!(
+                one,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::walk::SELF_COPIED
+            )
+        })
+    {
+        return false;
+    }
     let ordered =
         signed || matches!(
             predicate,
