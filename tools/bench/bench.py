@@ -464,8 +464,7 @@ def net_times(measured: dict) -> dict:
 
 def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Path) -> dict:
     """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
-    instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE: DOSBox counts a long REP in slices of its
-    cycle budget, scroll's 58,321 against 21,015), and a price of another run is no price. Reported, not gated."""
+    instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE, DOSBox's repeated string instructions counted as it does: flatcount.DOSBOX_REP_SLICE), and a price of another run is no price. Reported, not gated."""
     if instructions > flatcount.LIMIT // 2:
         print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
         return {}
@@ -473,7 +472,7 @@ def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Pa
     if ran.error or ran.region is None:
         print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)
         return {}
-    if not flatcount.agrees(ran.region.instructions, instructions):
+    if not flatcount.agrees(ran.region.instructions, instructions, ran.rep_iterations):
         print(f"WARNING {key}: no clocks: the emulator counted {ran.region.instructions} instructions, DOSBox {instructions}", file=sys.stderr)
         return {}
     return {"clocks": ran.region.clocks}
