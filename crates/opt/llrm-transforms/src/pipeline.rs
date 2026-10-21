@@ -1099,12 +1099,8 @@ pub fn recorded(
         manager.add(fixednarrow::FixedNarrow);
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
-    if applied.options.wanted("lsr") {
-        manager.add(crate::lsr_pass::LoopStrengthReduce);
-        // What the counters it chose leave behind (a bound subtracted from a
-        // counter rebased by it), as LLVM's LSR cleans with
-        // SimplifyInstructions.
-        manager.add(algebraic::Differences);
+    for pass in strength_slot(applied) {
+        manager.add_boxed(pass);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far
     // there.
@@ -1154,6 +1150,27 @@ pub fn recorded(
         }
     }
     done
+}
+
+/// Each loop's counters chosen once, on the loop the passes before leave. LSR
+/// requires LoopSimplify and LCSSA (`getAnalysisUsage`): an exit value read
+/// through a phi that is not LCSSA is not a use outside the loop, and LSR gave
+/// it `-1` scales (jpeg_single's `DECODE%` -Os grew a second counter).
+pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
+    let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
+    if applied.options.wanted("lsr") {
+        passes.push(Box::new(loopsimplify::LoopSimplify));
+        passes.push(Box::new(lcssa::LoopClosedSSA));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
+        // What the counters it chose leave behind (a bound subtracted from a
+        // counter rebased by it), as LLVM's LSR cleans with
+        // SimplifyInstructions.
+        passes.push(Box::new(algebraic::Differences));
+        // The exit phis `lcssa` made go again: the code generator copies each
+        // (recmany -Os grew 189 bytes).
+        passes.push(Box::new(lcssa::LoopOpened));
+    }
+    passes
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
