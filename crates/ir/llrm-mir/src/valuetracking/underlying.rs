@@ -31,19 +31,19 @@ fn is_pointer(
     q.type_of(v).is_some_and(|ty| matches!(q.context.types.get(ty), Type::Pointer(_)))
 }
 
-/// Whether `from` is a pointer in a space the layout marks non-integral (the
-/// target's selector alone): cast back to a far pointer it is `segment:0`, not
-/// a pointer into what it was made from.
+/// Whether `from` is a pointer in a space the layout marks `ni:` (the target's
+/// selector alone) over an object: cast back to a far pointer it is
+/// `segment:0`, not a pointer into that object.
 fn selector_source(
     q: &Query,
     from: Operand,
 ) -> bool {
-    q.type_of(from).is_some_and(|ty| {
+    (q.type_of(from).is_some_and(|ty| {
         matches!(
             q.context.types.get(ty),
             Type::Pointer(space) if q.layout.has_unstable_representation(*space)
         )
-    })
+    }) && crate::valuetracking::object_below(q.context, q.function, from))
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7289>
