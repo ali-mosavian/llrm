@@ -64,7 +64,7 @@ impl Collection<'_, '_> {
             }
             // The cost with this formula: a branch no better than the best is
             // pruned.
-            let mut new_cost = *cur_cost;
+            let mut new_cost = cur_cost.clone();
             let mut new_regs = cur_regs.clone();
             self.rate(se, &mut new_cost, f, &mut new_regs, visited, lu_idx, None);
             if new_cost.is_less(self.tti, solution_cost) {
@@ -75,7 +75,7 @@ impl Collection<'_, '_> {
                         visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
                     }
                 } else {
-                    *solution_cost = new_cost;
+                    *solution_cost = new_cost.clone();
                     *solution = workspace.clone();
                 }
                 workspace.pop();

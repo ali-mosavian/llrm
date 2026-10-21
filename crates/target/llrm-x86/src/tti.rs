@@ -61,12 +61,13 @@ pub struct X86 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealMode {
     /// What an address `base + scale * index` costs above the native form,
-    /// for each scale a primary address form holds: the legal scales. A
-    /// secondary form (the address-size prefix) is the backend's fallback, not
-    /// an address LSR may form.
+    /// for each scale some address form holds: the legal scales.
     pub scale_costs: Vec<(i64, i64)>,
     /// General registers a value may sit in.
     pub registers: u32,
+    /// What a scaled index costs in instructions, once for each scaled
+    /// register: the address-size prefix and the stall it takes.
+    pub scaled_index_insns: u32,
 }
 
 impl RealMode {
@@ -791,6 +792,11 @@ impl Tti for X86 {
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+    }
+
+    /// Real mode forms a scaled index with an address-size prefix.
+    fn scaled_index_insns(&self) -> u32 {
+        self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:
