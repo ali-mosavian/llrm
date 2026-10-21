@@ -3020,15 +3020,16 @@ fn _stable_loads_from(
                             }
                         }
                     }
-                    // An x87 load of a cell addressed by registers: made again
-                    // where it is read, its address values still there
-                    // (`allUsesAvailableAt`), as the floatassign route did
-                    // (REG_EQUIV memory).
+                    // An x87 load of a fixed cell (a frame cell, a global):
+                    // made again where it is read, as the
+                    // integer load above.
                     if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
                         if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
                             (what.dests.as_slice(), what.sources.as_slice())
                         {
                             if dest.value == *value
+                                && source.addr.is_some()
+                                && one.uses.is_empty()
                                 && one.defines == [*value]
                                 && one.clobbers.is_empty()
                                 && one.group.is_none()
