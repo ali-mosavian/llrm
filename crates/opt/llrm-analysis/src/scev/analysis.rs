@@ -220,6 +220,19 @@ impl ScevSession {
         }
     }
 
+    /// `ScalarEvolution::verify` over the function as it is now: the first
+    /// kept expression that a new one would not give, said.
+    pub fn verify(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+    ) -> Result<(), String> {
+        self.ask_within(context, layout, globals, metadata, function, |se, cx| se.verify(cx))
+    }
+
     /// Runs `query` with the expressions and the context they are read in.
     pub fn ask<R>(
         &mut self,
