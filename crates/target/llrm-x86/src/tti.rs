@@ -454,12 +454,20 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// SZ1: at most one call penalty (25) of growth over the call removed,
-    /// where the pin's 50 let crc, tile and recchop copy an external callee
-    /// into `main` at -Os (+52, +42, +15 bytes). Over the -Os corpus: 0
-    /// grows 16 programs, 25 grows 3, 50 is the pin.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        Some(25)
+    /// SZ1: an inline that stays must not grow the code. The pin's
+    /// threshold of 50 let crc, tile and recchop copy an external callee into
+    /// `main` at -Os (+52, +42, +15 bytes), and a fixed bound of 25 let a
+    /// 14-instruction loop in at ten sites of idioms.bas (+690 bytes).
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
+    /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
+    /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
+    /// 14-instruction loop of `idioms.bas` out of ten sites.
+    fn call_code_size_percent(&self) -> i64 {
+        150
     }
 
     fn is_type_legal(

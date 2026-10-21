@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:f9868bb80a0e13e12ad9063e173bb24deb5505bfe99d15212b4bb52ced9ed799 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:abbc49cc26ed700f2b21922d10d5293458803404aede491355291cafad9e7d8f -->
 
 # inlinecost
 
@@ -68,12 +68,23 @@ each site's cost and threshold beside the existing decision; with
 - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
   `minsize` (:2117).
-- D11: at -Os a callee that stays is inlined only if the target's bound
-  (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target) holds
-  the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth. The
-  pin's threshold cannot say it: its verdict is `cost < max(1, threshold)`
-  and the walk stops at cost 0, so a threshold of 0 inlines a callee whose
-  walk ends there. No shape of callee is tested.
+- D11: at -Os a callee that stays is inlined only if it does not grow the
+  code (`Tti::opt_size_inline_by_code_size`, X86: yes): the target's
+  `CodeSize` of the callee's instructions that the walk did not fold must
+  not exceed the `CodeSize` of the call and the pushes of its arguments.
+  LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
+  14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
+  of a local callee, which goes with it, is the pin's. No shape of callee
+  but the loop and the one smaller than its call is tested.
+- D12 (SZ2): a call the -Os size rule (D11) alone refuses, whose callee has
+  at most 60 instructions or reads through a parameter the call passes the
+  address of a stack slot the caller stored a constant to, is inlined if the
+  caller, simplified again with the call inlined, is smaller by the target's
+  size cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+  private callee that dies with its last call are tried together, its body
+  credited). The pin's cost does not follow a load through a pointer
+  argument, nor a recursion that folds, so it never sees the loop or the
+  arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -93,13 +104,13 @@ each site's cost and threshold beside the existing decision; with
   5946/1450 | 5932/5113; gcc's 8 and 450 cost 3-10x main's bytes. Owner:
   w-6. Exit: the copies chosen by gcc's badness heap with its growth limits,
   tail-call elimination at the pin's slot; open rows hanoi, bintree,
-  quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md).
-  A recursive callee inlined into another function is also peeled
-  (ipa-inline.cc:1033): its own calls inlined in the copy while the calls
-  of it to itself per call, to the power of the copies deep, are below
-  1 - 1/8 (squared per copy where the body has more than one call to
-  itself), a copy adds at most 15 `gcc_insns` and the
-  copies of a call at most 450; a tree is never peeled; not at -Os.
+  quicksort, x_mergesort, recsum (docs/architecture/recursion-rows.md). A
+  recursive callee inlined into another function is also peeled
+  (ipa-inline.cc:1033): its own calls inlined in the copy while the calls of
+  it to itself per call, to the power of the copies deep, are below 1 - 1/8
+  (squared per copy where the body has more than one call to itself), a copy
+  adds at most 15 `gcc_insns` and the copies of a call at most 450; a tree
+  is never peeled; not at -Os.
 
 ## See also
 [`crate::inline`](inline.md), the decision this is to replace; the plan is
