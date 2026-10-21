@@ -484,3 +484,44 @@ fn test_module_globals_keep_bcs_effective_type_suffixes() {
     }
     assert!(listing.contains("mov dword ptr IMPLICIT!, 1065353216"));
 }
+
+/// A SUB under a module-wide ON ERROR GOTO reloaded the bounds of a static
+/// array from frame cells nothing wrote (`cmp word ptr [bp-18], 0` and two
+/// more loads for each LBOUND/UBOUND; qb/bounds.bas +261 B at -Os): every local
+/// was handed to the handler, so the zero a cell was made with could not
+/// fold. Cells nothing writes hold zero, and a SUB's bounds are constants.
+#[test]
+fn test_a_cell_nothing_writes_in_a_handled_sub_folds() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "UNWRIT.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Show ()\r\nDIM SHARED s(3 TO 4)\r\nON ERROR GOTO h\r\nShow\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Show\r\n    PRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND SUB\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let show = between(&listing, "SHOW proc far", "SHOW endp");
+    assert!(show.contains("pushw 3\n    call far ptr B$PSI2"), "{show}");
+    assert!(show.contains("pushw 4\n    call far ptr B$PEI2"), "{show}");
+    assert!(!show.contains("cmp word ptr [bp-"), "{show}");
+}
+
+/// What the handler can read is not narrowed past what RESUME NEXT reads: `x`
+/// is written before the statement that raises and read after it, so it stays
+/// in the frame.
+#[test]
+fn test_a_variable_read_after_a_raising_statement_stays_in_the_frame() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "KEPT.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Keep ()\r\nON ERROR GOTO h\r\nKeep\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Keep\r\n    x = 12345\r\n    ERROR 5\r\n    PRINT x\r\nEND SUB\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let keep = between(&listing, "KEEP proc far", "KEEP endp");
+    let cell = regex::Regex::new(r"mov word ptr \[bp-(\d+)\], 12345")
+        .unwrap()
+        .captures(&keep)
+        .map(|found| found[1].to_owned());
+    let cell = cell.unwrap_or_else(|| panic!("x is not stored in the frame: {keep}"));
+    assert!(keep.contains(&format!("push word ptr [bp-{cell}]\n    call far ptr B$PEI2")), "{keep}");
+}

@@ -122,7 +122,12 @@ fn scev_enabled() -> bool {
 }
 
 /// `decided`, then its chains merged, as the old Decide.
-pub struct Decide;
+pub struct Decide {
+    /// Branches on known numbers, switches and non-null pointers are decided
+    /// too (`consts`, `constant_cycles`). Off in LLVM's order: SimplifyCFG,
+    /// CVP and SCCP fold those there, and nothing in the rows needs them here.
+    pub constants: bool,
+}
 
 impl FunctionPass for Decide {
     fn name(&self) -> &'static str {
@@ -141,7 +146,7 @@ impl FunctionPass for Decide {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled())
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled(), self.constants)
             .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -166,7 +171,7 @@ pub fn decided_using(
     outer: &Outer,
     scev: bool,
 ) -> Result<bool, String> {
-    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev)
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev, true)
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
@@ -176,17 +181,18 @@ fn _decided(
     function: &mut Function,
     analyses: &mut Analyses,
     use_scev: bool,
+    constants: bool,
 ) -> Result<bool, String> {
     // What the values say, as LLVM's SimplifyCFG decides a branch: a number
     // memory gave is `fold`'s to put in the condition first. Solving memory
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
-    let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
+    let registers = constants.then(|| analyses.get::<llrm_analysis::manager::Registers>(context, layout, function));
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
     let scev = LazyScevView::new(analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev, use_scev)?;
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), registers.as_deref(), &scev, use_scev)?;
     if decisions.is_empty() {
         return Ok(false);
     }
@@ -199,8 +205,49 @@ fn _decided(
     Ok(true)
 }
 
-/// Each block whose terminator's way is known, with that way.
+/// Each block whose terminator's way is known, with that way; `facts` None:
+/// only what the guards and ScalarEvolution prove of a branch's compare.
 fn _decisions(
+    unit: &Unit,
+    facts: Option<&IndexMap<ValueId, Known>>,
+    scev: &LazyScevView,
+    use_scev: bool,
+) -> Result<Vec<(BlockId, BlockId)>, String> {
+    if let Some(facts) = facts {
+        return _decisions_known(unit, facts, scev, use_scev);
+    }
+    let function = unit.function;
+    let mut out = Vec::new();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..] else {
+            continue;
+        };
+        let answer = _implied(unit, scev, block, last, use_scev);
+        out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
+    }
+    Ok(out)
+}
+
+/// Whether the compare `last` branches on holds or fails there: by what
+/// ScalarEvolution proves, then by the guards.
+fn _implied(
+    unit: &Unit,
+    scev: &LazyScevView,
+    block: BlockId,
+    last: InstId,
+    use_scev: bool,
+) -> Option<bool> {
+    if use_scev {
+        _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
+    } else {
+        _implied_by_guards(unit, block, last)
+    }
+}
+
+/// Each block whose terminator's way is known, with that way, from the numbers
+/// the values and the cycles of the constants say.
+fn _decisions_known(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
     scev: &LazyScevView,
@@ -261,14 +308,8 @@ fn _decisions(
         let [_, Operand::Block(taken), Operand::Block(other)] = instruction.operands[..] else {
             continue;
         };
-        let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
-        if answer.is_none() {
-            answer = if use_scev {
-                _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
-            } else {
-                _implied_by_guards(unit, block, last)
-            };
-        }
+        let answer =
+            _outcome(unit, block, &facts, Some(&nonnull)).or_else(|| _implied(unit, scev, block, last, use_scev));
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)

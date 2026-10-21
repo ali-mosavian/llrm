@@ -1520,6 +1520,163 @@ fn frame_groups<'h>(
         .collect()
 }
 
+/// The places of `function` some instruction may write: every place an
+/// instruction names, but as the operand an `Op::Load` or `Op::Copy` reads.
+fn written_places(function: &model::Function) -> HashSet<i64> {
+    let mut written = HashSet::default();
+    let named = |operand: &Operand, written: &mut HashSet<i64>| match operand {
+        Operand::PlaceRef(one) => {
+            written.insert(one.place);
+        }
+        Operand::ArrayElement(one) => {
+            written.insert(one.place);
+        }
+        Operand::ProjectedPlace(one) => {
+            written.insert(one.place);
+        }
+        _ => {}
+    };
+    for block in &function.blocks {
+        for one in &block.instructions {
+            let read_only = matches!(one.op, Op::Load | Op::Copy);
+            for (at, operand) in one.operands.iter().enumerate() {
+                if !(read_only && at == 0) {
+                    named(operand, &mut written);
+                }
+            }
+            if one.callee.is_some() || one.asm.is_some() {
+                one.operands.iter().for_each(|operand| named(operand, &mut written));
+            }
+        }
+    }
+    written
+}
+
+/// The frame groups an error handler can read, by index: those live at a
+/// statement RESUME or RESUME NEXT continues at (the statement a call may
+/// raise in, and the one after it) or at a handler of the function, and those
+/// something may write through an address. A group a statement makes and
+/// reads before the next begins is in none: the runtime enters the handler
+/// with nothing restored, and RESUME starts a statement afresh. None where
+/// the groups cannot be told (a place read as a whole).
+fn resumable_groups(
+    function: &model::Function,
+    groups: &[FrameGroup<'_>],
+    statements: &[model::Statement],
+    handlers: &[i64],
+) -> Option<HashSet<usize>> {
+    let group_of: HashMap<i64, usize> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(at, group)| group.places.iter().map(move |place| (place.id, at)))
+        .collect();
+    let single: Vec<bool> = groups.iter().map(|group| group.places.len() == 1).collect();
+    let rows = handling::numbered(statements, function.id);
+    // The group a place operand reads or writes, and whether the whole of it.
+    let named = |operand: &Operand| -> Option<(usize, bool)> {
+        match operand {
+            Operand::PlaceRef(one) => group_of.get(&one.place).map(|at| (*at, single[*at])),
+            Operand::ArrayElement(one) => group_of.get(&one.place).map(|at| (*at, false)),
+            Operand::ProjectedPlace(one) => group_of.get(&one.place).map(|at| (*at, false)),
+            _ => None,
+        }
+    };
+    let mut escaped: HashSet<usize> = HashSet::default();
+    // Per block: the groups read before the block writes them, and those it
+    // writes whole.
+    let mut used: HashMap<i64, HashSet<usize>> = HashMap::default();
+    let mut killed: HashMap<i64, HashSet<usize>> = HashMap::default();
+    for block in &function.blocks {
+        let (mut read, mut wrote): (HashSet<usize>, HashSet<usize>) = Default::default();
+        for one in &block.instructions {
+            let mut reads = |operand: &Operand, read: &mut HashSet<usize>, wrote: &HashSet<usize>| {
+                if let Some((at, _)) = named(operand) {
+                    if !wrote.contains(&at) {
+                        read.insert(at);
+                    }
+                }
+            };
+            match one.op {
+                Op::Load | Op::Copy => one.operands.iter().for_each(|operand| reads(operand, &mut read, &wrote)),
+                Op::Store if one.callee.is_none() && one.asm.is_none() && one.operands.len() == 2 => {
+                    reads(&one.operands[1], &mut read, &wrote);
+                    if let Some((at, whole)) = named(&one.operands[0]) {
+                        if whole && matches!(one.operands[0], Operand::PlaceRef(_)) {
+                            wrote.insert(at);
+                        } else if !wrote.contains(&at) {
+                            // Part of a group: what is not written stays read.
+                            read.insert(at);
+                        }
+                    }
+                }
+                _ => {
+                    for operand in &one.operands {
+                        if let Some((at, _)) = named(operand) {
+                            escaped.insert(at);
+                        }
+                    }
+                }
+            }
+        }
+        for operand in &block.terminator.operands {
+            if let Some((at, _)) = named(operand) {
+                if !wrote.contains(&at) {
+                    read.insert(at);
+                }
+            }
+        }
+        used.insert(block.id, read);
+        killed.insert(block.id, wrote);
+    }
+    // Live into each block, to a fixpoint.
+    let mut live_in: HashMap<i64, HashSet<usize>> =
+        function.blocks.iter().map(|one| (one.id, used[&one.id].clone())).collect();
+    loop {
+        let mut changed = false;
+        for block in function.blocks.iter().rev() {
+            let mut now = used[&block.id].clone();
+            let after = block.terminator.targets.iter().chain(block.terminator.cases.iter().map(|(_, target)| target));
+            for target in after {
+                for at in live_in.get(target)? {
+                    if !killed[&block.id].contains(at) {
+                        now.insert(*at);
+                    }
+                }
+            }
+            if now.len() != live_in[&block.id].len() {
+                live_in.insert(block.id, now);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Where RESUME continues: the statement a call may raise in, and the next.
+    let mut targets: Vec<i64> = handlers.to_vec();
+    let mut raising = vec![false; rows.len()];
+    for one in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if one.callee.is_some() || matches!(
+            one.op,
+            Op::Div | Op::Rem | Op::Udiv | Op::Urem | Op::Divmod | Op::Udivmod
+        )
+        {
+            if let Some(row) = rows.partition_point(|row| row.instruction <= one.id).checked_sub(1) {
+                raising[row] = true;
+            }
+        }
+    }
+    for (row, _) in raising.iter().enumerate().filter(|(_, raises)| **raises) {
+        targets.push(rows[row].block);
+        targets.push(rows[(row + 1).min(rows.len() - 1)].block);
+    }
+    let mut needed = escaped;
+    for target in targets {
+        needed.extend(live_in.get(&target)?.iter().copied());
+    }
+    Some(needed)
+}
+
 /// The memset a zeroed aggregate local calls.
 const MEMSET: &str = "llvm.memset.p0.i16";
 
@@ -2294,7 +2451,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.blocks.insert(block.id, id);
         }
         self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
-        self.allocate(handled.map(|one| one.frame))?;
+        self.allocate(handled.map(|one| one.frame), statements)?;
         self.declare_variables();
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
@@ -2436,14 +2593,29 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn allocate(
         &mut self,
         frame: Option<(ConstantId, TypeId)>,
+        statements: &[model::Statement],
     ) -> Emit<()> {
         let groups = frame_groups(&mut self.b.context.types, self.tables, self.function)?;
-        for group in &groups {
+        // A zeroed place nothing writes always holds zero: nothing to hand the
+        // handler, and the optimiser folds what reads it.
+        let written = self.tables.zeroed.contains(&self.function.id).then(|| written_places(self.function));
+        // What the handler can read: the groups live where RESUME continues.
+        let needed = match &self.tables.module_handler {
+            Some(handler) if handler.owner == self.function.id => None,
+            _ => handling::handlers(self.function)
+                .ok()
+                .and_then(|handlers| resumable_groups(self.function, &groups, statements, &handlers)),
+        };
+        for (at, group) in groups.iter().enumerate() {
             for place in &group.places {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
             let object = self.b.alloca(group.ty, "");
-            if group.places.iter().any(|one| !one.name.starts_with("$arg")) {
+            let constant = written
+                .as_ref()
+                .is_some_and(|written| group.places.iter().all(|one| !one.volatile && !written.contains(&one.id)));
+            let dead = needed.as_ref().is_some_and(|needed| !needed.contains(&at));
+            if !constant && !dead && group.places.iter().any(|one| !one.name.starts_with("$arg")) {
                 self.variables.push(object);
             }
             self.objects.push(object);

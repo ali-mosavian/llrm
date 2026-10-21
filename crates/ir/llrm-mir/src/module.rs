@@ -800,21 +800,43 @@ impl Function {
         &self,
         block: BlockId,
     ) -> crate::blocklist::BlockList {
-        let users = self.block_users(block);
-        if users.has_n_uses_or_more(SCAN + 1) {
-            return self.parents_once(users);
-        }
         let mut out = crate::blocklist::BlockList::new();
-        for one in users {
+        for one in self.block_users(block) {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
                 && let Some(parent) = self.parent(user)
                 && !out.contains(&parent)
             {
+                // Past `SCAN` blocks the repeats are found by a set.
+                if out.len() == SCAN {
+                    return self.parents_once(self.block_users(block));
+                }
                 out.push(parent);
             }
         }
         out
+    }
+
+    /// The one block whose terminators name `block`, if there is exactly one:
+    /// `predecessors(block)` of one block, without the list.
+    pub fn sole_predecessor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let mut found = None;
+        for one in self.block_users(block) {
+            let user = one.user;
+            if self.instruction(user).opcode.is_terminator()
+                && let Some(parent) = self.parent(user)
+            {
+                match found {
+                    None => found = Some(parent),
+                    Some(earlier) if earlier == parent => {}
+                    Some(_) => return None,
+                }
+            }
+        }
+        found
     }
 
     /// LLVM's `predecessors(block)`: the blocks whose terminators name
