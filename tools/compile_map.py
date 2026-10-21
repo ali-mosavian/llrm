@@ -312,12 +312,13 @@ def show(result: dict, old: dict | None = None) -> str:
     out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", ""]
     total = result["total_M"]
     inst = result["instrumented_M"]
-    gap = inst - result["rows_sum_M"]
+    thread = result["debug_total_M"] if result.get("debug_total_M") is not None else inst  # an old map without the thread total: the instrumented total
+    gap = thread - result["rows_sum_M"]  # the rows add up to the timed thread; the instrumented total also holds the process around it
     out += [f"Output kind: {result['header'].get('output', 'asm')} for llrm, gcc and clang alike (asm = -S, the listing is written; obj = an object file).",
             "Accounting (M instructions; quote it with any figure of this map):"] + [f"  {label:56}{value:>9,.1f}" for label, value in accounting(result)]
-    out.append(f"The rows sum to {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
-    if abs(gap) > 0.02 * inst:
-        out.append("WARNING: the rows are not within 2% of the instrumented total; read nothing off this map until that is explained.")
+    out.append(f"The rows sum to {100 * result['rows_sum_M'] / thread:.1f}% of the timed thread and {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total (the instrument's own cost and the process around the thread are in the second only). Tolerance: rows within 2% of the timed thread, else the map is wrong.")
+    if abs(gap) > 0.02 * thread:
+        out.append("WARNING: the rows are not within 2% of the timed thread; read nothing off this map until that is explained.")
     out.append(f"gcc {result['gcc_total_M']:,.0f} M, clang {result['clang_total_M']:,.0f} M (perf total, one file). llrm/gcc {total / result['gcc_total_M']:.1f}x, llrm/clang {total / result['clang_total_M']:.1f}x.")
     if "cycles" in result:
         out += ["", f"Cycles (best of {CYCLE_RUNS}; spread = worst over best, how far the host's load moved them; per-step cycles are not available)"]

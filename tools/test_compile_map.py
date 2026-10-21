@@ -109,3 +109,16 @@ def test_both_outputs_are_the_same_kind_for_all_three_compilers_and_the_listing_
     assert llrm_asm == foreign_asm == ["-S", "-o", "/dev/null"]
     assert llrm_obj == ["-o", "/t/o.obj"] and foreign_obj == ["-c", "-o", "/t/o.o"]
     assert m.owner_of("masm text")[0] == "emit"
+
+
+def test_the_tolerance_compares_the_rows_to_the_timed_thread_not_to_the_process():
+    """The rows were 97.8% of the instrumented total and the map warned, though they were 99.6% of the thread they time (22 M is the process around it)."""
+    result = {
+        "header": {"commit": "c", "llrm": "l", "gcc": "g", "clang": "k"},
+        "total_M": 1000.0, "instrumented_M": 1030.0, "rows_sum_M": 1000.0, "debug_total_M": 1004.0, "outside_every_step_M": 4.0, "startup_M": 10.0, "scale": 1.0,
+        "gcc_total_M": 100.0, "clang_total_M": 80.0, "rows": [], "categories": {},
+    }
+    text = m.show(result)
+    assert "WARNING" not in text and "of the timed thread" in text and "instrumented total" in text
+    result["rows_sum_M"] = 900.0
+    assert "WARNING" in m.show(result)
