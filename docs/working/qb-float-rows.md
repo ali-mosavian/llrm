@@ -3,6 +3,8 @@
 `llrm-qb` rounds each SINGLE and DOUBLE assignment as BC does (`-fexcess-precision=standard`, #3352), which makes `nbody_single.bas` print 86016 at -O1 and -O2.
 That costs one `fstp dword` and a reload per assignment. Oversight ruled the cost a correctness trade (2026-10-21). Each row below is above main (854bb7efc) in at least one counter; owner w-1, exit 2026-10-31: translate main's way of printing 86016 at its low counts (skip the rounding of a value already exactly f32), and hand the feat/parity-versus-main part (the `feat/parity` column) to w-4.
 
+Main's 86016 on `nbody_single.bas` was luck, not a mechanism: main is the plain loop in fast mode, which rounds only at the program's array stores, and the same shape printed 86015 in C (575cecf0d). There is nothing in main to translate; the cost of rounding each assignment is BC's own (one `fstp` per assignment). A reload fold finds no site in these rows: of the 45 `fstp [t]; fld [t]` round trips in nbody_single -O2 none is followed by an arithmetic op that can take the cell as a memory operand (st-form, `fxch`, `fld st(i)` or a store follow).
+
 Measured with `tools/bench/bench.py --lang bas bq16 bq32 --no-judge` (executed instructions and the 486 model, so the build profile does not enter): main (the dist build of 854bb7efc) | feat/parity without #3352 | #3352 (`-` where the base has no counter). 31 rows (jpeg_single, stft_single and every bq32 floats/nbody rows) have no counters in the bench and are not listed.
 
 | row | program/lang/level | instructions | clocks | code bytes |

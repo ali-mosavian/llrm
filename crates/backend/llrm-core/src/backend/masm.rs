@@ -2040,9 +2040,11 @@ pub fn _memory(
             };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
-        // A direct address, as `[disp16]`: the offset is unsigned.
+        // A direct address, as `[disp16]` (`[disp32]` where the cell says its
+        // displacement is a dword): the offset is unsigned.
         Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
-            return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
+            let kept = if cell.disp_width >= 4 { 0xFFFF_FFFF } else { 0xFFFF };
+            return Ok(format!("{size}[{}]", address.disp & kept));
         }
         Space::Far if address.segment != (RegId::None).iced() => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };

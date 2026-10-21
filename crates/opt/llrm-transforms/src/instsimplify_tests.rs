@@ -9,8 +9,9 @@ fn simplified(text: &str) -> (String, bool, bool) {
     let before = results(&module, &[&[3, 5], &[0, 0], &[-7, 2]]);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
+    let callees = llrm_mir::memory::callees(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = instsimplify(context, &globals, &metadata, &DataLayout::default(), function);
+    let changed = instsimplify(context, &globals, &metadata, &DataLayout::default(), &callees, function);
     let same = results(&module, &[&[3, 5], &[0, 0], &[-7, 2]]) == before;
     (printed(&module), changed, same)
 }
@@ -70,4 +71,37 @@ b1:
 ";
     let (text, changed, _) = simplified(body);
     assert!(!changed, "{text}");
+}
+
+/// A call that reads and writes nothing and returns, whose only reader
+/// simplified away, goes with it (`RecursivelyDeleteTriviallyDeadInstructions`
+/// over `isInstructionTriviallyDead`). LFTR's `smax` of an exit limit stayed
+/// in d_faces' body until `ipa-pure` removed six of them and the whole
+/// Simplify list ran again over it: -O1 1317 -> 1725 M instructions.
+#[test]
+fn a_pure_call_whose_reader_simplified_away_is_deleted() {
+    let mut module = parsed(
+        "declare i16 @pure(i16) readnone nounwind willreturn
+declare i16 @spins(i16) readnone nounwind
+
+define i16 @f(i16 %x, i16 %y) {
+b0:
+  %p = call i16 @pure(i16 %x)
+  %q = call i16 @spins(i16 %x)
+  %c = icmp eq i16 %p, %p
+  %d = icmp eq i16 %q, %q
+  %s = select i1 %c, i16 %x, i16 %y
+  %t = select i1 %d, i16 %s, i16 %y
+  ret i16 %t
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(instsimplify(context, &globals, &metadata, &DataLayout::default(), &callees, function));
+    let text = printed(&module);
+    assert!(!text.contains("call i16 @pure"), "the pure call stands:\n{text}");
+    assert!(text.contains("call i16 @spins"), "a call that may not return went:\n{text}");
 }
