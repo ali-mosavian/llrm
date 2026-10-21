@@ -31,6 +31,21 @@ fn is_pointer(
     q.type_of(v).is_some_and(|ty| matches!(q.context.types.get(ty), Type::Pointer(_)))
 }
 
+/// Whether `from` is a pointer in a space the layout marks non-integral (the
+/// target's selector alone): cast back to a far pointer it is `segment:0`, not
+/// a pointer into what it was made from.
+fn selector_source(
+    q: &Query,
+    from: Operand,
+) -> bool {
+    q.type_of(from).is_some_and(|ty| {
+        matches!(
+            q.context.types.get(ty),
+            Type::Pointer(space) if q.layout.has_unstable_representation(*space)
+        )
+    })
+}
+
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7289>
 ///
 /// `max_lookup` 0 is unbounded, as in C++.
@@ -50,6 +65,10 @@ pub fn get_underlying_object(
                     operands.first().map(|&base| Operand::Constant(base))
                 }
                 ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+                    // A selector alone names no object (DEVIATE C1).
+                    if selector_source(q, Operand::Constant(*value)) {
+                        return v;
+                    }
                     Some(Operand::Constant(*value))
                 }
                 _ => return v,
@@ -57,6 +76,11 @@ pub fn get_underlying_object(
             Operand::Value(_) => {
                 let Some((_, instruction)) = q.instruction_of(v) else { return v };
                 match instruction.opcode {
+                    Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                        if instruction.operands.first().is_some_and(|&from| selector_source(q, from)) =>
+                    {
+                        return v;
+                    }
                     Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => {
                         instruction.operands.first().copied()
                     }

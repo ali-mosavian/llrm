@@ -147,6 +147,31 @@ b0:
     assert_ne!(folded, kept, "the selector space composed as an integral one");
 }
 
+/// A far pointer is non-integral by its width (bits beyond its index), and
+/// the gate of the pair fold named that: a pair through a far middle, near ->
+/// far -> huge, stopped folding (25 objects of the sweep moved with it). Only
+/// a space `ni:` names, the selector alone, is no point on the way.
+#[test]
+fn a_pair_through_a_far_middle_still_folds_when_the_selector_space_is_ni() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@g = global i16 0
+
+define ptr addrspace(3) @f() {{
+b0:
+  %huge = addrspacecast ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to ptr addrspace(3)
+  ret ptr addrspace(3) %huge
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32";
+    let marked = dump(&text(&format!("{base}-ni:2"))).expect("parses");
+    assert!(!marked.contains("addrspace(1)"), "the far middle stayed: {marked}");
+}
+
 /// A load through `segment:0` of a global's selector read the global's own
 /// initializer at the offset (`@k[3]`, 100) where the address is DS:3.
 #[test]

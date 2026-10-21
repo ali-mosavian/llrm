@@ -146,7 +146,7 @@ impl<'a> BasicAA<'a> {
             && self
                 .unit
                 .space(one.operands[0])
-                .is_some_and(|space| self.unit.layout.is_non_integral_address_space(space)))
+                .is_some_and(|space| self.unit.layout.has_unstable_representation(space)))
     }
 
     /// `stripPointerCastsForAliasAnalysis`: casts only.

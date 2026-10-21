@@ -532,7 +532,17 @@ fn strip_offsets(
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
                     Opcode::GetElementPtr { source } => (Some(source), &instruction.operands),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, &instruction.operands),
+                    // A selector alone names no object (DEVIATE C1).
+                    Opcode::Cast(CastOp::AddrSpaceCast)
+                        if !function.operand_type(context, instruction.operands[0]).is_some_and(|ty| {
+                            matches!(
+                                context.types.get(ty),
+                                crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                            )
+                        }) =>
+                    {
+                        (None, &instruction.operands)
+                    }
                     _ => break,
                 }
             }
@@ -541,7 +551,12 @@ fn strip_offsets(
                     made = operands.iter().map(|&one| Operand::Constant(one)).collect();
                     (Some(*source), &made)
                 }
-                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value })
+                    if !matches!(
+                        context.types.get(context.get(*value).ty),
+                        crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                    ) =>
+                {
                     made = vec![Operand::Constant(*value)];
                     (None, &made)
                 }
