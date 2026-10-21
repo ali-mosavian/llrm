@@ -3828,6 +3828,11 @@ impl Compiler {
                     );
                 }
                 Statement::Resume { target, .. } => {
+                    // RESUME 0 is RESUME: the statement again.
+                    let target = match target {
+                        ResumeTarget::Label(label) if label == "0" => &ResumeTarget::Current,
+                        target => target,
+                    };
                     match target {
                         ResumeTarget::Next => {
                             // B$RESN validates that an error is active, clears
