@@ -92,6 +92,18 @@ pub trait PhysInterference {
         0..0
     }
 
+    /// `LiveIntervals::getRegMaskSlotsInBlock`: the same numbers for block
+    /// `mbb`, whose slots are `[start, stop)`. A set that keeps its runs per
+    /// block gives them without a search.
+    fn reg_mask_range_in_block(
+        &self,
+        _mbb: usize,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.reg_mask_range(start, stop)
+    }
+
     /// Whether regmask number `i` destroys any register: an entry that only
     /// reads one (the data segment an access takes without naming it) is
     /// not a regmask operand of the instruction.

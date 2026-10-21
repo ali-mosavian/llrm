@@ -223,7 +223,7 @@ impl Entry {
             }
 
             // Also check for register mask interference.
-            masks = fixed.reg_mask_range(start, stop);
+            masks = fixed.reg_mask_range_in_block(mbb_num, start, stop);
             let limit = if first.is_valid() { first } else { stop };
             for i in masks.clone() {
                 if fixed.reg_mask_slot(i) >= limit {
