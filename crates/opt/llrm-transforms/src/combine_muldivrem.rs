@@ -20,7 +20,7 @@
 //!
 //! DEVIATE 2 (temporary): steps that call a helper another family owns are
 //! left out and named where they stood: `foldBinopWithPhiOperands` (phi
-//! family), `foldUsingDistributiveLaws` (shared helpers),
+//! family),
 //! `foldBinOpIntoSelectOrPhi`, `foldBinOpSelectBinOp`,
 //! `foldBinOpOfSelectAndCastOfSelectCondition` and `FoldOpIntoSelect` (select
 //! family). Each is a
@@ -90,6 +90,7 @@ use llrm_mir::valuetracking::range::{
 use llrm_mir::valuetracking::{Query, known};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_shared::{has_one_use, query, replace_operand, simplify_associative_or_commutative};
 
 /// `m_BinOp(op, a, b)`: the operands and flags of `v` if it is that operation.
@@ -1006,7 +1007,9 @@ pub fn visit_mul(
     }
     // DEVIATE 1: foldVectorBinop.
     // DEVIATE 2: foldBinopWithPhiOperands.
-    // DEVIATE 2: foldUsingDistributiveLaws.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
     let (op0, op1, flags) = parts(c, inst);
     let (has_nsw, has_nuw) = (flags.contains(Flags::NSW), flags.contains(Flags::NUW));
 

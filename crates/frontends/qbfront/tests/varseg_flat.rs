@@ -23,18 +23,21 @@ fn real() -> Options {
 
 /// qbdemo's fracline did `DEF SEG = VARSEG(array(i))` and POKEd the interrupt
 /// table at -m32: it died with no message, and a DEF SEG = &HB800 program wrote
-/// the first kilobytes of memory instead of the screen. Every DEF SEG says it
-/// is ignored, at the line.
+/// the first kilobytes of memory instead of the screen; far3.bas (a string
+/// flipped in case through DEF SEG = VARSEG(a) and SADD) printed it unchanged
+/// with n = 0. A DEF SEG with a segment is refused, at the line; a bare DEF SEG
+/// stays accepted, and says it is ignored.
 #[test]
-fn every_def_seg_warns_where_there_is_one_address_space_and_real_mode_does_not() {
-    let source = "DIM a(100) AS INTEGER\nDEF SEG = VARSEG(a(0))\nDEF SEG = &HB800\nDEF SEG\nPOKE 5, 1\n";
-    let found = compiled(source, &flat()).expect("compiles");
-    assert_eq!(found.len(), 3, "{found:?}");
-    for (at, line) in found.iter().zip([2, 3, 4]) {
-        assert!(at.starts_with(&format!("line {line}: warning: DEF SEG is ignored at one address space")), "{at}");
-        assert!(at.contains("vram& = &HB8000") && at.contains("docs/frontends/qb/memory-model.md"), "{at}");
+fn a_def_seg_with_a_segment_is_refused_where_there_is_one_address_space_and_real_mode_accepts_it() {
+    for source in ["DIM a(100) AS INTEGER\nDEF SEG = VARSEG(a(0))\n", "DEF SEG = &HB800\nPOKE 5, 1\n"] {
+        let error = compiled(source, &flat()).expect_err("refused");
+        assert!(error.contains("DEF SEG with a non-default segment is not supported at one address space"), "{error}");
+        assert!(compiled(source, &real()).expect("compiles").is_empty());
     }
-    assert!(compiled(source, &real()).expect("compiles").is_empty());
+    let found = compiled("DEF SEG\nPOKE 5, 1\n", &flat()).expect("compiles");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("line 1: warning: DEF SEG is ignored at one address space"), "{found:?}");
+    assert!(compiled("DEF SEG\nPOKE 5, 1\n", &real()).expect("compiles").is_empty());
 }
 
 /// The image's segment and offset are 16-bit words: a flat program names the

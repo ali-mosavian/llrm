@@ -388,6 +388,7 @@ pub fn get_access_type(
 pub fn is_always_foldable(
     tti: &dyn Tti,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -404,7 +405,7 @@ pub fn is_always_foldable(
         scale = 0;
         has_base_reg = true;
     }
-    is_am_completely_folded_at(tti, kind, base_gv, base_offset, has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, addr_space, base_gv, base_offset, has_base_reg, scale)
 }
 
 /// `isAlwaysFoldable(TTI, SE, MinOffset, MaxOffset, Kind, AccessTy, S,
@@ -416,6 +417,7 @@ pub fn is_always_foldable_scev(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     s: Scev,
     has_base_reg: bool,
 ) -> bool {
@@ -437,6 +439,7 @@ pub fn is_always_foldable_scev(
         min_offset,
         max_offset,
         kind,
+        addr_space,
         base_gv.is_some(),
         base_offset,
         has_base_reg,
@@ -540,13 +543,13 @@ impl<'a, 'b> Collection<'a, 'b> {
         // Conservatively, a base register is assumed.
         if new_offset < lu.min_offset {
             let span = Immediate(lu.max_offset.0.wrapping_sub(new_offset.0));
-            if !is_always_foldable(self.tti, kind, false, span, has_base_reg) {
+            if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, span, has_base_reg) {
                 return false;
             }
             new_min = new_offset;
         } else if new_offset > lu.max_offset {
             let span = Immediate(new_offset.0.wrapping_sub(lu.min_offset.0));
-            if !is_always_foldable(self.tti, kind, false, span, has_base_reg) {
+            if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, span, has_base_reg) {
                 return false;
             }
             new_max = new_offset;
@@ -570,7 +573,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) -> (usize, Immediate, Scev) {
         let (mut offset, mut stripped) = extract_immediate(se, self.cx, expr);
         // A basic use cannot take any offset.
-        if !is_always_foldable(self.tti, kind, false, offset, true) {
+        if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, offset, true) {
             stripped = expr;
             offset = Immediate::ZERO;
         }
@@ -729,7 +732,10 @@ impl<'a, 'b> Collection<'a, 'b> {
         self.insert_attempts += 1;
         let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
-        assert!(is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, f), "Formula is illegal");
+        assert!(
+            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f),
+            "Formula is illegal"
+        );
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }

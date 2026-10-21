@@ -703,3 +703,19 @@ def test_lang_keeps_the_other_languages_out_of_the_run(monkeypatch):
     assert {one.language for one in bench.variants(bench.BENCH / "fib")} == {"c"}
     monkeypatch.setattr(bench, "ONLY", None)
     assert {"c", "bas"} <= {one.language for one in bench.variants(bench.BENCH / "fib")}
+
+
+def test_a_row_whose_kernel_the_compiler_folded_away_is_marked_and_out_of_the_geomeans(tmp_path, monkeypatch):
+    """parity branch, loop, qlight and qmove at bq32 -Os ran, printed the right text and counted 0 instructions: the kernel is a constant. A zero
+    is no ratio and no clocks, and the row was silently absent from the table."""
+    root = tmp_path
+    for name, instructions in (("kept", 10), ("gone", 0)):
+        (root / name).mkdir()
+        (root / name / "bench.toml").write_text('[region]\nc = "f"\n')
+        bench.write_expected(root / name, {(name, "bcc", "O2"): {"instructions": 20, "memory_operands": 4, "code_bytes": 40, "data_bytes": 0, "bss_bytes": 0}}, name, "t")
+    measured = {(n, "c", "O2"): {"instructions": i, "memory_operands": 2, "code_bytes": 20, "data_bytes": 0, "bss_bytes": 0} for n, i in (("kept", 10), ("gone", 0))}
+    monkeypatch.setattr(bench, "BENCH", root)
+    text = "\n".join(bench.standing(measured, [], ["O2"]))
+    assert "instructions -50.0% (n=1)" in text and "folded, out of the geomeans: gone" in text, text
+    assert bench.clock_lines({("gone", "c", "O2"): {"instructions": 0}}, ["gone"]) == ["gone c -O2: folded (the kernel is never entered)"]
+    assert not bench.folded({"error": "run: timeout", "instructions": 0}) and not bench.folded({"instructions": 3})
