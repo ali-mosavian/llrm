@@ -441,7 +441,7 @@ impl Options {
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
     /// how a miscompile is bisected.
-    fn wanted(
+    pub(crate) fn wanted(
         &self,
         name: &str,
     ) -> bool {

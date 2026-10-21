@@ -653,7 +653,7 @@ m:
         assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
         let text = llrm_mir::print::module(&module);
         assert!(text.contains("phi i16 [ 1, %entry ], [ %a, %p1 ]"), "{text}");
-        assert!(text.contains("%r = phi i16 [ 2, %p2 ], [ %ph, %0 ]"), "{text}");
+        assert!(text.contains("%r = phi i16 [ 2, %p2 ], [ %r.ph, %0 ]"), "{text}");
     }
 
     /// `split_block` moves everything after the phis, and a successor's phi
