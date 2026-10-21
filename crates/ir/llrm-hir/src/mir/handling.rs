@@ -21,7 +21,7 @@ use crate::model::{self, Operand, Statement, Storage};
 use crate::onerror::Handled;
 
 const REGISTER: &str = "$QB$OERG:";
-pub(super) const LABEL: &str = "$QB$RESA:";
+const LABEL: &str = "$QB$RESA:";
 const NEXT: &str = "B$RESN";
 const AGAIN: &str = "B$RES0";
 const ERR: &str = "B$FERR";
