@@ -22,6 +22,7 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::AliasQuery;
+use llrm_analysis::mssa::shadow::Name;
 use llrm_analysis::mssa::updater::MemorySsaUpdater;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -360,7 +361,17 @@ pub fn run(
         let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
             .with_registers(&registers)
             .with_shape(&shape);
-        let (mut fresh, fresh_accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+        // The accesses the manager would make of the body now, as the kept
+        // graph's were: a call's footprint from its callee's summary.
+        let mut clean = Analyses::new(std::rc::Rc::clone(&outer));
+        let fresh_accesses =
+            llrm_analysis::memoryssa::Accesses::managed(unit.context, unit.layout, unit.function, &mut clean)
+                .unwrap_or_else(|error| panic!("LLRM_CHECK_LICM_GRAPH after {what}: {error}"));
+        let mut fresh = llrm_analysis::mssa::Mssa::build(
+            unit.function,
+            &shape.dominance,
+            &llrm_analysis::mssa::shadow::effect_of(&fresh_accesses, unit.function),
+        );
         // What the walker answers is what is compared: the kept graph's uses
         // read what the walker found, a fresh graph's what is nearest.
         let mut kept = built.mssa.clone();
@@ -370,9 +381,20 @@ pub fn run(
         let aa = AliasQuery::new(&memory, &fresh_accesses);
         let left = llrm_analysis::mssa::shadow::walked(&mut kept, &aa, unit.function);
         let right = llrm_analysis::mssa::shadow::walked(&mut fresh, &aa, unit.function);
+        // A use the walker answered before an edit took a clobber away keeps
+        // that answer, as LLVM's optimized accesses do: later than a fresh
+        // walk's is safe, earlier is not.
+        let in_fresh = |name: &Name| match name {
+            Name::Live => Some(fresh.live_on_entry_def()),
+            Name::Phi(at) => fresh.get_memory_phi(cfg::block(*at)),
+            Name::Site(inst) => fresh.get_memory_access(*inst),
+        };
         let differ: Vec<String> = left
             .iter()
-            .filter(|(inst, name)| right.get(inst) != Some(*name))
+            .filter(|(inst, name)| match (right.get(inst), in_fresh(name)) {
+                (Some(now), Some(kept)) => now != *name && in_fresh(now).is_none_or(|now| !fresh.dominates(now, kept)),
+                _ => true,
+            })
             .map(|(inst, name)| format!("{inst:?}: kept {name:?}, fresh {:?}", right.get(&inst)))
             .collect();
         if !differ.is_empty() {
