@@ -128,7 +128,7 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 
 ## 5. Risks, numbered
 
-1. **The table's size and walk cost** (§3): priced at C0 with callgrind on the interpreter; no estimate yet.
+1. **The table's size and walk cost** (§3), priced at C0 (2026-10-22, callgrind on `examples/price.rs`, eight scalar node shapes): the pin's table is 639,106 bytes, 308,885 items decoded; pruned to the i486 CPU it is 15,108 items (P5 15,116), 24 bytes each, 362 KB static. The interpreter costs 3,495 Ir per selected node with reused buffers (4,819 before; 1.7k of it the walk itself). Projection on d_faces -O2 (i486, 1.28 G compile): the pin's llc makes 3,792 `Select` calls and spends 6.65 M Ir in `SelectCodeCommon` (1,755 per node, hooks included; whole isel bucket 54.5 M); the same count at 3,495 is 13.3 M, 1.0% of the compile. Our figure is a bench of simple shapes with a stub DAG, so it is a floor until A1 gives real nodes. If the walk proves slow, the `match` fallback below stays open.
 2. **Combiner scale**: 32.5k lines of C++ plus X86's `PerformDAGCombine`; the plan lands visitors by corpus frequency and leaves the rest as numbered MISSING rows in this file's table (to be added at B2), not as a gap with no owner.
 3. **m16 patterns the pin lacks** (SD2..SD4, SD9): the largest source of DEVIATEs; each carries a pin-dump premise test that shows the pin cannot express it.
 4. **Quality regressions against the hand-tuned selector**: the shadow report is the instrument; per [pr-rules](pr-rules.md) rows above main are fixed generally or kept by a numbered DEVIATE with the row as evidence, never by a shape patch.
@@ -158,8 +158,9 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
+| SD20 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
 
-Next free: **SD20**.
+Next free: **SD21**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941

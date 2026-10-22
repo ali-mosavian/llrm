@@ -22,6 +22,17 @@ impl SDNodeFlags {
     pub const NO_SIGNED_WRAP: SDNodeFlags = SDNodeFlags(2);
     pub const EXACT: SDNodeFlags = SDNodeFlags(4);
     pub const NON_NEG: SDNodeFlags = SDNodeFlags(8);
+    pub const DISJOINT: SDNodeFlags = SDNodeFlags(16);
+    pub const SAME_SIGN: SDNodeFlags = SDNodeFlags(32);
+    pub const IN_BOUNDS: SDNodeFlags = SDNodeFlags(64);
+
+    pub fn union(self, other: SDNodeFlags) -> SDNodeFlags {
+        SDNodeFlags(self.0 | other.0)
+    }
+
+    pub fn with(self, flag: SDNodeFlags, on: bool) -> SDNodeFlags {
+        if on { self.union(flag) } else { self }
+    }
 
     pub fn intersect(self, other: SDNodeFlags) -> SDNodeFlags {
         SDNodeFlags(self.0 & other.0)
@@ -47,6 +58,25 @@ pub enum NodeData {
     Global { symbol: u32, offset: i64 },
     Block(u32),
     Symbol(u32),
+    Mem(MemInfo),
+}
+
+/// What identifies a memory access beyond its operands: the pin's
+/// `MachineMemOperand` as far as `CSEMap` and the dump use it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MemInfo {
+    pub mem_vt: EVT,
+    pub align: u32,
+    pub volatile: bool,
+    pub base: MemBase,
+}
+
+/// `MachinePointerInfo`'s value: what the access is relative to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MemBase {
+    Unknown,
+    Global(u32),
+    Stack(i32),
 }
 
 #[derive(Clone, Debug)]
@@ -73,12 +103,14 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// The pointer type (`TLI->getPointerTy`).
+    pub pointer: EVT,
 }
 
 impl Default for DagConfig {
-    /// x86: 0 or 1, and symbol offsets fold.
+    /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false for the default PIC model).
     fn default() -> DagConfig {
-        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: true }
+        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: false, pointer: EVT::I32 }
     }
 }
 
@@ -90,17 +122,44 @@ pub struct SelectionDAG {
     cse: HashMap<CseKey, u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
+    root: SDValue,
+    /// Names the dump prints for `Global`/`Block` payloads, by id.
+    pub global_names: Vec<String>,
+    pub block_names: Vec<String>,
 }
 
 impl SelectionDAG {
     pub fn new(config: DagConfig) -> SelectionDAG {
-        let mut dag = SelectionDAG { nodes: Vec::new(), cse: HashMap::new(), config, entry: SDValue { node: 0, res: 0 } };
-        dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None);
+        let zero = SDValue { node: 0, res: 0 };
+        let mut dag = SelectionDAG { nodes: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
+        dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
+        dag.root = dag.entry;
         dag
     }
 
     pub fn entry_node(&self) -> SDValue {
         self.entry
+    }
+
+    pub fn get_root(&self) -> SDValue {
+        self.root
+    }
+
+    pub fn set_root(&mut self, root: SDValue) {
+        self.root = root;
+    }
+
+    pub fn config(&self) -> &DagConfig {
+        &self.config
+    }
+
+    /// How many results of other nodes read `value`'s node (`use_size`).
+    pub fn use_count(&self, node: u32) -> usize {
+        self.nodes.iter().flat_map(|other| &other.ops).filter(|op| op.node == node).count()
+    }
+
+    pub fn nodes(&self) -> &[SDNode] {
+        &self.nodes
     }
 
     pub fn node_count(&self) -> usize {
@@ -217,6 +276,81 @@ impl SelectionDAG {
             BooleanContents::ZeroOrOne => (bits <= 1).then_some(bits == 1),
             BooleanContents::ZeroOrNegativeOne => (bits == 0 || bits == all_ones).then_some(bits != 0),
             BooleanContents::Undefined => Some(bits != 0),
+        }
+    }
+
+    pub fn get_basic_block(&mut self, block: u32) -> SDValue {
+        self.intern(ISD::BasicBlock, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Block(block))
+    }
+
+    pub fn get_frame_index(&mut self, vt: EVT, index: i32) -> SDValue {
+        self.intern(ISD::FrameIndex, &[vt], &[], SDNodeFlags::default(), NodeData::FrameIndex(index))
+    }
+
+    /// `getTokenFactor`.
+    pub fn get_token_factor(&mut self, chains: &[SDValue]) -> SDValue {
+        self.get_node(ISD::TokenFactor, EVT::OTHER, chains)
+    }
+
+    /// `getCopyToReg` without glue.
+    pub fn get_copy_to_reg(&mut self, chain: SDValue, reg: u32, value: SDValue) -> SDValue {
+        let reg_node = self.get_register(self.value_type(value), reg);
+        self.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, reg_node, value])
+    }
+
+    /// `getCopyFromReg`: the value is result 0, the chain result 1.
+    pub fn get_copy_from_reg(&mut self, chain: SDValue, reg: u32, vt: EVT) -> SDValue {
+        let reg_node = self.get_register(vt, reg);
+        self.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER], &[chain, reg_node])
+    }
+
+    /// `getLoad` (unindexed, non-extending): `load chain, ptr, poison`.
+    pub fn get_load(&mut self, vt: EVT, chain: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
+        let offset = self.get_poison(self.value_type(ptr));
+        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
+    /// `getStore` (unindexed, not truncating): `store chain, value, ptr, poison`.
+    pub fn get_store(&mut self, chain: SDValue, value: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
+        let offset = self.get_poison(self.value_type(ptr));
+        self.intern(ISD::Store, &[EVT::OTHER], &[chain, value, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
+    /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
+    /// target asks to preserve pointer arithmetic, and ours does not).
+    pub fn get_mem_base_plus_offset(&mut self, ptr: SDValue, offset: SDValue, flags: SDNodeFlags) -> SDValue {
+        let vt = self.value_type(ptr);
+        let flags = SDNodeFlags(flags.0 & !SDNodeFlags::IN_BOUNDS.0);
+        self.get_node_flags(ISD::Add, vt, &[ptr, offset], flags)
+    }
+
+    /// `getObjectPtrOffset` with a constant offset; the constant node exists
+    /// even when it is zero and the add folds away, as in the pin.
+    pub fn get_object_ptr_offset(&mut self, ptr: SDValue, offset: i64) -> SDValue {
+        let vt = self.value_type(ptr);
+        let index = self.get_constant(offset as u128, vt);
+        self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
+    }
+
+    pub fn get_zext_or_trunc(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    pub fn get_sext_or_trunc(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::SignExtend, vt, &[value])
         }
     }
 
