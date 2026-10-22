@@ -476,12 +476,14 @@ def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(t
     assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
 
 
-def test_a_red_head_file_refuses_neither_a_clean_pr_nor_the_fix_but_a_new_red_file_is_named(tmp_path, monkeypatch):
-    """precheck refused five PRs for fmt files that feat/parity itself fails (saverestore.rs, flow.rs ...): with any red head file nothing passed, the fixes included."""
-    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1") == "1: PASS"  # head red in A, PR adds none
-    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR fixes A
+def test_a_red_head_file_no_longer_excuses_an_unformatted_pr_file_but_the_fix_passes(tmp_path, monkeypatch):
+    """The user's order: tools/fmt.sh applies to every PR. precheck had excused any fmt failure the head already had (92 files of parity were unformatted that way): a PR that leaves a head-red file unformatted is refused,
+    the PR that formats it passes, and a new red file is named as before. Ratchets keep the old excuse."""
+    line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1")  # head red in A, the PR leaves A red
+    assert line.startswith("1: REFUSED: fmt") and "a.rs" in line, line
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR formats A
     line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs", "b.rs"}), number="3")  # the PR adds B
-    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line and "a.rs" not in line, line
+    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line, line
 
 
 def test_a_precheck_logs_the_seconds_each_check_took(tmp_path, monkeypatch):
@@ -868,6 +870,65 @@ def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tm
     run("add", "-A")
     run("commit", "-q", "-m", "pr")
     assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))
+
+
+def fmt_repo(tmp_path, stub):
+    """A repo with a stub tools/fmt.sh, a bare origin, a `base` branch and a `pr` branch that adds a.rs with trailing blanks."""
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+
+    def run(*args, cwd=repo):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "--bare", "-b", "base", str(origin), cwd=tmp_path)
+    run("init", "-q", "-b", "base", str(repo), cwd=tmp_path)
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "fmt.sh").write_text(stub)
+    (repo / "tools" / "fmt.sh").chmod(0o755)
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("remote", "add", "origin", str(origin))
+    run("push", "-q", "origin", "base")
+    run("checkout", "-q", "-b", "pr")
+    return repo, origin, run
+
+
+STRIP = "#!/bin/sh\nif [ \"$1\" = --stdin ]; then sed 's/[ \\t]*$//'; fi\n"
+
+
+def test_an_unformatted_pr_is_squashed_from_a_formatted_commit_pushed_to_its_branch(tmp_path):
+    """The user's order: tools/fmt.sh applies to every PR; 92 files of parity were unformatted because the runner excused a red head."""
+    repo, origin, run = fmt_repo(tmp_path, STRIP)
+    (repo / "a.rs").write_text("fn a() {}   \nfn b() {}\t\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    head = run("rev-parse", "HEAD")
+    sha, why = ps.format_head(head, "pr", base="base", cwd=repo)
+    assert why == "" and sha != head
+    assert run("show", f"{sha}:a.rs") == "fn a() {}\nfn b() {}"
+    assert subprocess.run(["git", "rev-parse", "refs/heads/pr"], cwd=origin, capture_output=True, text=True).stdout.strip() == sha
+
+
+def test_an_already_formatted_pr_keeps_its_head_and_pushes_nothing(tmp_path):
+    repo, origin, run = fmt_repo(tmp_path, STRIP)
+    (repo / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    head = run("rev-parse", "HEAD")
+    assert ps.format_head(head, "pr", base="base", cwd=repo) == (head, "")
+    assert subprocess.run(["git", "rev-parse", "--verify", "refs/heads/pr"], cwd=origin, capture_output=True).returncode != 0
+
+
+def test_a_formatter_that_crashes_refuses_the_landing(tmp_path):
+    """fmt.sh exit 2 or more is a missing toolchain or a crash: a gate that tolerates 1 must not tolerate the rest."""
+    repo, origin, run = fmt_repo(tmp_path, "#!/bin/sh\nexit 2\n")
+    (repo / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    sha, why = ps.format_head(run("rev-parse", "HEAD"), "pr", base="base", cwd=repo)
+    assert sha == "" and "exit 2" in why and "a.rs" in why
 
 
 def test_a_batch_that_does_not_build_drops_the_pr_that_breaks_the_build_alone_and_lands_the_rest():
