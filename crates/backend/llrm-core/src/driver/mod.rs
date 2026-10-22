@@ -82,6 +82,8 @@ pub struct Options {
     /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
     /// attribute), whichever frontend made them.
     pub no_inline: Vec<String>,
+    /// `--isel=`: the instruction selector.
+    pub isel: crate::backend::shadow::Selector,
 }
 
 impl Options {
@@ -108,6 +110,7 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
+            isel: Default::default(),
         }
     }
 
@@ -234,6 +237,7 @@ pub fn compiled(
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,
+                options.isel,
                 &*options.arch,
             )
         })?;
@@ -314,6 +318,7 @@ pub fn compiled_module(
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
+            options.isel,
             &*options.arch,
         )
     })?;

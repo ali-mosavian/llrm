@@ -426,7 +426,8 @@ fn arms(n: usize) -> String {
 }
 
 /// The pass is linear in the sites: four times the arms cost about four times,
-/// not sixteen (a slope test at 1x and 4x, the least of three runs of each).
+/// not sixteen (a slope test of the work at 1x and 4x, the least of three runs
+/// of each).
 #[test]
 fn the_time_grows_with_the_arms_not_with_their_square() {
     let least = |n: usize| {
@@ -434,14 +435,12 @@ fn the_time_grows_with_the_arms_not_with_their_square() {
         (0..3)
             .map(|_| {
                 let mut module = parsed(&format!("{DOS}{text}"));
-                let start = std::time::Instant::now();
-                managed(&mut module, TailCallElim);
-                start.elapsed().as_secs_f64()
+                llrm_support::debug::work_of(|| managed(&mut module, TailCallElim)).1 as f64
             })
             .fold(f64::MAX, f64::min)
     };
     let (small, large) = (least(150), least(600));
-    assert!(large < small * 6.0, "150 arms {small:.4} s, 600 arms {large:.4} s: a ratio of {:.1}", large / small);
+    assert!(large < small * 6.0, "150 arms {small:.0} work, 600 arms {large:.0}: a ratio of {:.1}", large / small);
 }
 
 /// A function marked `DEFERRED` keeps its call: D10 copies a tree recursion
