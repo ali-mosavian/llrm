@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 10] = [
+const UNOPTIMIZED: [&str; 11] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -69,10 +69,11 @@ const UNOPTIMIZED: [&str; 10] = [
     "OptimizePHIs",
     "LateCleanup",
     "FixupSetCC",
+    "CopyPropagation",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 23] = [
+const SLOTS: [(&str, &str); 24] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -96,6 +97,7 @@ const SLOTS: [(&str, &str); 23] = [
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
+    ("CopyPropagation", "copyprop@18"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
@@ -201,6 +203,8 @@ pub fn machine_with<'a>(
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
+        // The pin runs MachineCopyPropagation again after tail duplication.
+        Box::new(crate::backend::machinecp::CopyPropagation),
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");

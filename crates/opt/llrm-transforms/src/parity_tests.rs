@@ -121,6 +121,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "coalesce@10",
             "latecleanup@13",
             "jumps@17",
+            "copyprop@18",
             "allocate@11",
             "unknown@1",
         ],
