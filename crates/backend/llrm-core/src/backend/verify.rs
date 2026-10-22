@@ -594,7 +594,7 @@ mod tests {
         let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, Vec::new()) };
         let next = LirBlock { phis: vec![Phi { result: 2, incoming: vec![(0, 1), (7, 1)] }].into(), ..LirBlock::new(1, Vec::new()) };
         let body = LirBody::new("p", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
-        let said = verify_for_test(&body);
+        let said = verify(&body, true);
         assert!(said.iter().any(|one| one.contains("is not a predecessor")), "{said:?}");
     }
 
