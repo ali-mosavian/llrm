@@ -2741,7 +2741,7 @@ fn _min(
 
 /// The values an instruction makes impure.
 fn _impure_names(one: &Insn) -> Vec<u32> {
-    if spiller::_plain_move(one).is_some() {
+    if crate::backend::bodyfacts::_plain_move(one).is_some() {
         return Vec::new();
     }
     let in_place = one

@@ -782,7 +782,7 @@ pub fn decide_with_split(
             .flat_map(|block| block.insns.iter())
             .flat_map(|one| one.defines.iter().copied())
             .collect();
-        crate::backend::spiller::_stable_loads_by(body, &defined, &Default::default(), postings)
+        crate::backend::bodyfacts::_stable_loads_by(body, &defined, &Default::default(), postings)
             .keys()
             .copied()
             .collect::<std::collections::BTreeSet<u32>>()

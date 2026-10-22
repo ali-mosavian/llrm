@@ -412,6 +412,44 @@ impl<'a> TypeLegalizer<'a> {
                     setcc
                 }
             }
+            ISD::Truncate => {
+                // `PromoteIntRes_TRUNCATE`: truncate the (promoted) input to
+                // the promoted type.
+                let input = self.dag.operand(value, 0);
+                let source = match self.action(self.dag.value_type(input)) {
+                    TypeAction::PromoteInteger => self.promoted_integer(input),
+                    _ => input,
+                };
+                self.dag.get_node(ISD::Truncate, to, &[source])
+            }
+            op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => {
+                // `PromoteIntRes_INT_EXTEND`: a promoted source already has the
+                // result width if it was promoted all the way;
+                // extend it in the register.
+                let input = self.dag.operand(value, 0);
+                let from = self.dag.value_type(input);
+                let mut made = None;
+                if self.action(from) == TypeAction::PromoteInteger {
+                    let promoted = self.promoted_integer(input);
+                    if self.dag.value_type(promoted) == to {
+                        made = Some(match op {
+                            ISD::SignExtend => {
+                                let ty = self.dag.get_value_type_node(from);
+                                self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, ty])
+                            }
+                            ISD::ZeroExtend => {
+                                let mask = self.dag.get_constant(super::fold::mask(from.size_in_bits()), to);
+                                self.dag.get_node(ISD::And, to, &[promoted, mask])
+                            }
+                            _ => promoted,
+                        });
+                    }
+                }
+                match made {
+                    Some(result) => result,
+                    None => self.dag.get_node(op, to, &[input]),
+                }
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -537,6 +575,7 @@ impl<'a> TypeLegalizer<'a> {
                 let hi = self.dag.get_constant_with(bits >> width, half, false, self.dag.is_opaque(value));
                 (lo, hi)
             }
+            op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => self.expand_extend(value, op, half),
             ISD::Load if vt == EVT::Simple(MVT::Far) => {
                 // A far pointer is `les`: the offset, with the selector left in
                 // `ES` and read back on the chain (SD2).
@@ -559,6 +598,7 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
+            ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
@@ -726,6 +766,93 @@ impl<'a> TypeLegalizer<'a> {
         } else {
             self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, carry])
         };
+        Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_ZERO_EXTEND`, `_SIGN_EXTEND`, `_ANY_EXTEND`: the source
+    /// fits the half (extend it for the low part; the high part is zero, its
+    /// sign, or undefined) or was promoted to the whole result (split it, and
+    /// clear or extend the excess bits of the high part).
+    fn expand_extend(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let input = self.dag.operand(value, 0);
+        let from = self.dag.value_type(input);
+        if from.bits_le(half) {
+            let lo = self.dag.get_node(op, half, &[input]);
+            let hi = match op {
+                ISD::ZeroExtend => self.dag.get_constant(0, half),
+                ISD::SignExtend => {
+                    let sign = self.dag.get_constant(u128::from(half.size_in_bits() - 1), EVT::I8);
+                    self.dag.get_node(ISD::Sra, half, &[lo, sign])
+                }
+                _ => self.dag.get_undef(half),
+            };
+            return (lo, hi);
+        }
+        // Over the half but not the whole: the source was promoted to the
+        // result's type.
+        let promoted = self.promoted_integer(input);
+        let (lo, hi) = self.split_integer(promoted, half);
+        let excess = from.size_in_bits() - half.size_in_bits();
+        let hi = match op {
+            ISD::ZeroExtend => {
+                let mask = self.dag.get_constant(super::fold::mask(excess), half);
+                self.dag.get_node(ISD::And, half, &[hi, mask])
+            }
+            ISD::SignExtend => {
+                let ty = self.dag.get_value_type_node(EVT::integer(excess));
+                self.dag.get_node(ISD::SignExtendInReg, half, &[hi, ty])
+            }
+            _ => hi,
+        };
+        (lo, hi)
+    }
+
+    /// `SplitInteger`: the low and high halves of `value` as `truncate` and
+    /// `truncate (srl value, half)`.
+    fn split_integer(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let whole = self.dag.value_type(value);
+        let lo = self.dag.get_node(ISD::Truncate, half, &[value]);
+        let by = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
+        let upper = self.dag.get_node(ISD::Srl, whole, &[value, by]);
+        (lo, self.dag.get_node(ISD::Truncate, half, &[upper]))
+    }
+
+    /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
+    /// halves, plus the two cross products in the high half. The cases that
+    /// need known bits (a zero-extended or sign-extended operand, SD202) and
+    /// the library call are not translated.
+    fn expand_mul(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
+            let both = self.dag.get_node_multi(ISD::UMulLoHi, &[half, half], &[ll, rl]);
+            (both, SDValue { node: both.node, res: 1 })
+        } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
+            (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
+        } else {
+            return Err(LegalizeError::Unsupported {
+                op: ISD::Mul,
+                ty: self.dag.value_type(value),
+                what: "expand multiply without a widening multiply",
+            });
+        };
+        let cross_right = self.dag.get_node(ISD::Mul, half, &[ll, rh]);
+        let cross_left = self.dag.get_node(ISD::Mul, half, &[lh, rl]);
+        let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_right]);
+        let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_left]);
         Ok((lo, hi))
     }
 

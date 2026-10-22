@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
 use crate::backend::layout::_OPPOSITE;
-use crate::backend::{masm, spiller};
+use crate::backend::masm;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
@@ -874,7 +874,11 @@ pub fn merged(
             folder.rename.keys().map(|one| (*one, super::_root(&folder.rename, *one))).collect();
         order = order
             .iter()
-            .map(|block| block.with_insns(block.insns.iter().map(|one| spiller::_renamed(one, &rename)).collect()))
+            .map(|block| {
+                block.with_insns(
+                    block.insns.iter().map(|one| crate::backend::bodyfacts::_renamed(one, &rename)).collect(),
+                )
+            })
             .collect();
     }
     let mut out = body.with_blocks(order);

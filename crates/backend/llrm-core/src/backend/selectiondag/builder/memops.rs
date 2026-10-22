@@ -151,7 +151,7 @@ impl Builder<'_> {
 
     /// `getMemcpyLoadsAndStores`: loads from the source and stores to the
     /// destination, the chains joined as `load0:1, store0, load1:1, ...`.
-    fn inline_memcpy(
+    pub(super) fn inline_memcpy(
         &mut self,
         chain: SDValue,
         dst: SDValue,
@@ -428,7 +428,7 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
-        let _ = self.lower_call(target_symbol, values, &extends, &plan, first, pointer_type)?;
+        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type)?;
         Ok(self.dag.get_root())
     }
 

@@ -83,6 +83,8 @@ pub struct TargetLowering {
     load_ext: HashMap<(LoadExt, MVT, MVT), Action>,
     trunc_store: HashMap<(MVT, MVT), Action>,
     cond_code: HashMap<(CondCode, MVT), Action>,
+    /// `addLegalFPImmediate`: the float constants an instruction makes.
+    legal_fp_immediates: Vec<(MVT, u128)>,
 }
 
 impl TargetLowering {
@@ -95,6 +97,7 @@ impl TargetLowering {
             load_ext: HashMap::new(),
             trunc_store: HashMap::new(),
             cond_code: HashMap::new(),
+            legal_fp_immediates: Vec::new(),
         }
     }
 
@@ -157,6 +160,23 @@ impl TargetLowering {
         action: Action,
     ) {
         self.cond_code.insert((cc, vt), action);
+    }
+
+    pub fn add_legal_fp_immediate(
+        &mut self,
+        vt: MVT,
+        bits: u128,
+    ) {
+        self.legal_fp_immediates.push((vt, bits));
+    }
+
+    /// `isFPImmLegal`.
+    pub fn is_fp_imm_legal(
+        &self,
+        vt: MVT,
+        bits: u128,
+    ) -> bool {
+        self.legal_fp_immediates.contains(&(vt, bits))
     }
 
     /// `getOperationAction`: a type with no simple form is expanded.
@@ -350,6 +370,16 @@ impl TargetLowering {
         // L806..L870: f80
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
+        // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
+        for (vt, one, sign) in [
+            (MVT::F32, 0x3F80_0000u128, 1u128 << 31),
+            (MVT::F64, 0x3FF0_0000_0000_0000, 1u128 << 63),
+            (MVT::F80, (0x3FFFu128 << 64) | (1u128 << 63), 1u128 << 79),
+        ] {
+            for bits in [0, sign, one, one | sign] {
+                t.add_legal_fp_immediate(vt, bits);
+            }
+        }
         // L2757..L2776
         t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], &ints, Custom);
         t
