@@ -413,7 +413,8 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
             ISD::Truncate => {
-                // `PromoteIntRes_TRUNCATE`: truncate the (promoted) input to the promoted type.
+                // `PromoteIntRes_TRUNCATE`: truncate the (promoted) input to
+                // the promoted type.
                 let input = self.dag.operand(value, 0);
                 let source = match self.action(self.dag.value_type(input)) {
                     TypeAction::PromoteInteger => self.promoted_integer(input),
@@ -422,8 +423,9 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::Truncate, to, &[source])
             }
             op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => {
-                // `PromoteIntRes_INT_EXTEND`: a promoted source already has the result width
-                // if it was promoted all the way; extend it in the register.
+                // `PromoteIntRes_INT_EXTEND`: a promoted source already has the
+                // result width if it was promoted all the way;
+                // extend it in the register.
                 let input = self.dag.operand(value, 0);
                 let from = self.dag.value_type(input);
                 let mut made = None;
@@ -770,7 +772,12 @@ impl<'a> TypeLegalizer<'a> {
     /// fits the half (extend it for the low part; the high part is zero, its
     /// sign, or undefined) or was promoted to the whole result (split it, and
     /// clear or extend the excess bits of the high part).
-    fn expand_extend(&mut self, value: SDValue, op: ISD, half: EVT) -> (SDValue, SDValue) {
+    fn expand_extend(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
         let input = self.dag.operand(value, 0);
         let from = self.dag.value_type(input);
         if from.bits_le(half) {
@@ -785,7 +792,8 @@ impl<'a> TypeLegalizer<'a> {
             };
             return (lo, hi);
         }
-        // Over the half but not the whole: the source was promoted to the result's type.
+        // Over the half but not the whole: the source was promoted to the
+        // result's type.
         let promoted = self.promoted_integer(input);
         let (lo, hi) = self.split_integer(promoted, half);
         let excess = from.size_in_bits() - half.size_in_bits();
@@ -805,7 +813,11 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `SplitInteger`: the low and high halves of `value` as `truncate` and
     /// `truncate (srl value, half)`.
-    fn split_integer(&mut self, value: SDValue, half: EVT) -> (SDValue, SDValue) {
+    fn split_integer(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
         let whole = self.dag.value_type(value);
         let lo = self.dag.get_node(ISD::Truncate, half, &[value]);
         let by = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);

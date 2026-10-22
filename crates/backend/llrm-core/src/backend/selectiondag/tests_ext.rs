@@ -13,7 +13,11 @@ fn p5() -> TargetLowering {
     TargetLowering::x86_32(Features::default(), MVT::I32)
 }
 
-fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+fn load(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    slot: i32,
+) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(slot) };
@@ -34,7 +38,9 @@ fn a_truncate_to_i1_is_promoted_to_a_truncate_to_i8() {
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
     legalizer.run().unwrap();
     assert!(legalizer.all_legal());
-    let narrow = (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).find(|&v| dag.opcode(v) == ISD::Truncate && dag.value_type(v) == EVT::I8);
+    let narrow = (0..dag.node_count() as u32)
+        .map(|node| SDValue { node, res: 0 })
+        .find(|&v| dag.opcode(v) == ISD::Truncate && dag.value_type(v) == EVT::I8);
     assert_eq!(narrow.map(|v| dag.operand(v, 0)), Some(x));
 }
 
