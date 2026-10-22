@@ -17,6 +17,10 @@ pub struct Node {
     pub load: Option<LoadExt>,
     pub memory_vt: Option<Vt>,
     pub symbol: Option<Wrapped>,
+    /// A `VTSDNode`'s type.
+    pub vt_node: Option<Vt>,
+    /// The segment register the memory node addresses through.
+    pub segment: Option<u16>,
     pub dead: bool,
 }
 
@@ -40,6 +44,11 @@ impl TestDag {
     #[allow(dead_code)]
     pub fn make_constant(&mut self, value: i64, vt: Vt) -> SDValue {
         SDValue::new(self.add(Node { opcode: isd::Constant, vts: vec![vt], constant: Some(value), ..Node::default() }), 0)
+    }
+
+    /// A `VTSDNode`.
+    pub fn make_value_type_node(&mut self, vt: Vt) -> SDValue {
+        SDValue::new(self.add(Node { opcode: isd::VALUETYPE, vts: vec![mvt::Other], vt_node: Some(vt), ..Node::default() }), 0)
     }
 
     pub fn frame_index(&mut self, index: i32, vt: Vt) -> SDValue {
@@ -135,8 +144,8 @@ impl Dag for TestDag {
     fn cond_code(&self, _: SDValue) -> Option<u8> {
         None
     }
-    fn value_type_node(&self, _: SDValue) -> Option<Vt> {
-        None
+    fn value_type_node(&self, value: SDValue) -> Option<Vt> {
+        self.nodes[value.node as usize].vt_node
     }
     fn is_undef(&self, _: SDValue) -> bool {
         false
@@ -227,6 +236,10 @@ impl Dag for TestDag {
         n.vts = vts.to_vec();
         n.ops = operands.to_vec();
         (node, Vec::new())
+    }
+    fn update_node_operands(&mut self, node: u32, operands: &[SDValue]) -> u32 {
+        self.nodes[node as usize].ops = operands.to_vec();
+        node
     }
     fn replace_uses(&mut self, from: SDValue, to: SDValue) {
         for n in self.nodes.iter_mut().filter(|n| !n.dead) {
@@ -381,6 +394,15 @@ impl AddrDag for TestDag {
             let n = &self.nodes[user as usize];
             n.opcode == isd::CopyToReg || (n.opcode == isd::STORE && n.ops.get(1) == Some(&value))
         })
+    }
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[SDValue]) -> SDValue {
+        SDValue::new(self.node(opcode, &[vt], ops), 0)
+    }
+    fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue {
+        self.make_constant(value, vt)
+    }
+    fn segment_override(&self, node: u32) -> Option<u16> {
+        self.nodes[node as usize].segment
     }
     fn is_non_temporal(&self, _: u32) -> bool {
         false

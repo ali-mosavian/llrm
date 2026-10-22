@@ -7,7 +7,7 @@
 //! with one use, whose one operand is a normal load of the store's own address that nothing else
 //! uses, and whose chain reaches the store with no path from the load round the arithmetic.
 //! Then the load, the arithmetic and the store become one machine node on the address
-//! `selectAddr` makes; `i64` memory types do not occur at 32 bits (SD34).
+//! `selectAddr` makes; `i64` memory types do not occur at 32 bits (SD35).
 //!
 //! # Used by
 //! The `X86DAGToDAGISel::Select` loop, before the table, for `ISD::STORE`.
@@ -129,7 +129,7 @@ pub fn fold_load_store_into_mem_operand<D: AddrDag>(dag: &mut D, hooks: &X86Hook
     let Some((load, input_chain)) = found else { return false };
 
     let ptr = dag.operand(load, 1);
-    let Some(a) = (Matcher { dag, pointer_type: mvt::i32 }).select_addr(ptr) else { return false };
+    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode }).select_addr_of(Some(load), ptr) else { return false };
     let address = [a.base, a.scale, a.index, a.disp, a.segment];
     let results = [mvt::i32, mvt::Other];
 

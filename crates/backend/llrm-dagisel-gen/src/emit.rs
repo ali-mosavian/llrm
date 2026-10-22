@@ -20,6 +20,8 @@ pub struct Source<'a> {
     pub node_predicates: &'a [Vec<String>],
     pub complex_patterns: &'a [ComplexPattern],
     pub xforms: &'a [String],
+    /// The names of the instructions (not registers or classes, whose numbers collide with theirs).
+    pub instructions: &'a BTreeSet<String>,
 }
 
 fn vt(v: Vt) -> String {
@@ -108,7 +110,7 @@ fn expr(e: &Expr, cpu: &Cpu) -> Result<String, String> {
 }
 
 /// The machine opcodes the table emits, by number, with the pin's names.
-fn machine_opcodes(flat: &Flat, ids: &Ids) -> BTreeMap<u16, String> {
+fn machine_opcodes(flat: &Flat, ids: &Ids, instructions: &BTreeSet<String>) -> BTreeMap<u16, String> {
     let wanted: BTreeSet<u16> = flat
         .items
         .iter()
@@ -120,7 +122,7 @@ fn machine_opcodes(flat: &Flat, ids: &Ids) -> BTreeMap<u16, String> {
     let mut by_value: BTreeMap<u16, Vec<&str>> = BTreeMap::new();
     for (name, &value) in &ids.0 {
         let short = name.strip_prefix("X86::").or_else(|| name.strip_prefix("TargetOpcode::"));
-        if let (Some(short), true) = (short, wanted.contains(&(value as u16))) {
+        if let (Some(short), true) = (short.filter(|s| instructions.contains(*s)), wanted.contains(&(value as u16))) {
             by_value.entry(value as u16).or_default().push(short);
         }
     }
@@ -200,7 +202,7 @@ pub fn render(src: &Source) -> Result<String, String> {
 
     writeln!(w, "/// The machine opcodes the table emits, with the pin's names (`X86::` and `TargetOpcode::`).").unwrap();
     writeln!(w, "pub const MACHINE_OPCODES: &[(u16, &str)] = &[").unwrap();
-    for (value, name) in machine_opcodes(flat, src.ids) {
+    for (value, name) in machine_opcodes(flat, src.ids, src.instructions) {
         writeln!(w, "    ({value}, {name:?}),").unwrap();
     }
     writeln!(w, "];").unwrap();
@@ -288,10 +290,12 @@ pub fn render_instr_info(lines: &str, ids: &Ids, emitted: &BTreeSet<u16>) -> Res
     for line in lines.lines() {
         let mut parts = line.split(' ');
         let mut next = || parts.next().ok_or_else(|| format!("short instrinfo line `{line}`"));
-        let opcode: u32 = next()?.parse().map_err(|_| format!("bad opcode in `{line}`"))?;
+        let name = next()?;
+        let Some(&opcode) = ids.0.get(&format!("X86::{name}")) else { continue };
         if !emitted.contains(&(opcode as u16)) {
             continue;
         }
+        let opcode = opcode as u32;
         let (num_ops, num_defs, size) = (next()?, next()?, next()?);
         let flags = next()?;
         let (uses, defs) = (regs(next()?)?, regs(next()?)?);
