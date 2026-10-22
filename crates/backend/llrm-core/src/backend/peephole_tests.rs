@@ -3709,6 +3709,87 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
 }
 
+/// A body of one `lea eax, address` and, where `flags_read`, a `jb` after it.
+fn lea_body(
+    address: AddressRef,
+    flags_read: bool,
+) -> LirBody {
+    let eax = rl(RegId::EAX, 4);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![eax], vec![Loc::Address(address)])),
+        vec![1],
+        vec![1],
+    ));
+    if !flags_read {
+        // A compare writes every flag before anything reads one.
+        let compare = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(8, 4)])),
+            vec![],
+            vec![1],
+        ));
+        return body("lea", 1, vec![block(1, vec![lea, compare], vec![]).into()]);
+    }
+    let branch =
+        Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
+    body("lea", 1, vec![block(1, vec![lea, branch], vec![3]).into(), block(3, vec![], vec![]).into()])
+}
+
+fn sum(
+    through: RegId,
+    index_through: RegId,
+    scale: i64,
+    offset: i64,
+) -> AddressRef {
+    AddressRef { through, index_through, scale, offset, ..AddressRef::new(None) }
+}
+
+/// X86FixupLEAs `optTwoAddrLEA`: `lea eax,[eax+ecx]` is `add eax,ecx`, in
+/// either operand order, where no flag is read after it. Without the pass the
+/// LEA stayed an LEA: 3 bytes for `add`, 3 for `lea`, but the pin's output
+/// differs in 37 IRs.
+#[test]
+fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
+    for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
+        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let what = done.insns()[0].what.clone().unwrap();
+        assert_eq!(what.name.as_deref(), Some("add"));
+        assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
+    }
+}
+
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
+/// `increments` makes `inc`.
+#[test]
+fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
+    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let what = done.insns()[0].what.clone().unwrap();
+    assert_eq!(what.name.as_deref(), Some("add"));
+    assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
+    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    assert_eq!(names(&one.insns())[0], "inc");
+}
+
+/// The pin leaves a three-address or scaled LEA alone: only the two-address
+/// scale-1 forms are the pass's.
+#[test]
+fn test_lea_that_is_not_two_address_stays() {
+    for address in [
+        sum(RegId::ECX, RegId::EDX, 1, 0),
+        sum(RegId::EAX, RegId::ECX, 2, 0),
+        sum(RegId::EAX, RegId::ECX, 1, 4),
+        sum(RegId::ECX, RegId::None, 1, 8),
+    ] {
+        let done = lea_fixed(rules(), &lea_body(address, false));
+        assert_eq!(names(&done.insns())[0], "lea");
+    }
+}
+
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
 /// only for `sub x, 1`, so recmany and recfloat grew (`dec ecx` became `add
 /// edx, -1`, 3 bytes against 1). X86's patterns select DEC for `add x, -1` as
@@ -5054,5 +5135,81 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
     for result in [commuted(rules(), &input), borrows(rules(), &input), shuttles(rules(), &input)] {
         assert!(result.blocks[0].same_as(&input.blocks[0]));
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
+    }
+}
+
+/// x_collatz ran `mov dl, cl; and dl, 1; jne` where the pin selects `test cl,
+/// 1; jne` (`(brcond (and x, m))`): the `and` writes a register nothing reads,
+/// and the copy that kept `cl` is not needed. Not when the register is read
+/// afterwards.
+#[test]
+fn test_a_mask_only_a_branch_reads_is_a_test_of_its_source() {
+    for (variant, rewritten) in [("dead", true), ("read after", false)] {
+        let copy = insn(
+            0,
+            None,
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::CL, 1)], vec![rl(RegId::AL, 1)])),
+            vec![],
+            vec![],
+        );
+        let mask = insn(
+            2,
+            None,
+            Some(sem(Operation::Binary, "and", vec![rl(RegId::CL, 1)], vec![rl(RegId::CL, 1), im(1, 1)])),
+            vec![],
+            vec![],
+        );
+        let branch = insn(5, None, Some(semt(Operation::Branch, "jne", vec![], vec![], Some(11))), vec![], vec![]);
+        let fall = if rewritten {
+            sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AX, 2), im(1, 2)])
+        } else {
+            sem(Operation::Move, "mov", vec![rl(RegId::BL, 1)], vec![rl(RegId::CL, 1)])
+        };
+        let taken = sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AX, 2), im(2, 2)]);
+        let blocks = vec![
+            block(0, vec![Arc::new(copy), Arc::new(mask), Arc::new(branch)], vec![7, 11]),
+            block(
+                7,
+                vec![
+                    Arc::new(insn(7, None, Some(fall), vec![], vec![])),
+                    Arc::new(insn(
+                        9,
+                        None,
+                        Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(0))),
+                        vec![],
+                        vec![],
+                    )),
+                ],
+                vec![0],
+            ),
+            block(
+                11,
+                vec![
+                    Arc::new(insn(11, None, Some(taken), vec![], vec![])),
+                    Arc::new(insn(
+                        13,
+                        None,
+                        Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(0))),
+                        vec![],
+                        vec![],
+                    )),
+                ],
+                vec![0],
+            ),
+        ];
+        let result = tested_masks(rules(), &body("mask", 0, crate::model::lir::shared(blocks)));
+        let kept: Vec<&Insn> = result.blocks[0]
+            .insns
+            .iter()
+            .map(|one| &**one)
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing))
+            .collect();
+        let shape: Vec<&str> = kept.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap()).collect();
+        if rewritten {
+            assert_eq!(shape, ["test", "jne"], "{variant}");
+            assert_eq!(kept[0].what.as_ref().unwrap().sources, vec![rl(RegId::AL, 1), im(1, 1)], "{variant}");
+        } else {
+            assert_eq!(shape, ["mov", "and", "jne"], "{variant}");
+        }
     }
 }

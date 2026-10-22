@@ -1542,12 +1542,18 @@ pub fn greedy_rewritten(
     let empty = BTreeSet::new();
     let mut unspill: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
     unspill.extend(protected.unwrap_or(&empty).iter().copied());
+    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+        eprintln!("greedy-entry {} phis={}", body.name, body.blocks.iter().any(|block| !block.phis.is_empty()));
+    }
     let mut current = body.clone();
     let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
-    let mut floor = splitkit::_next_value(&current);
+    let mut floor = current.next_value();
     // The spills are written into the function as the allocation goes
     // (`InlineSpiller`); the rounds below are the fallback.
-    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
+    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS")
+        && !llrm_support::env_flag!("LLRM_FORCE_FALLBACK")
+        && body.blocks.iter().all(|block| block.phis.is_empty())
+    {
         let kept = frame.saved();
         // The classes are all the greedy allocator reads of `Facts`, as
         // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
@@ -1661,7 +1667,7 @@ pub fn greedy_rewritten(
             sets: Some(&sets),
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
-        if decided.report.stats.failed > 0 {
+        if decided.report.stats.failed > 0 || llrm_support::env_flag!("LLRM_FORCE_FALLBACK") {
             break;
         }
         let to_spill: BTreeSet<u32> = decided.spilled.iter().copied().collect();
@@ -1684,7 +1690,7 @@ pub fn greedy_rewritten(
             ));
         }
         let (moved, made) = spiller::spilled_from(&current, &to_spill, Some(frame), floor, classes)?;
-        floor = floor.max(splitkit::_next_value(&moved));
+        floor = floor.max(moved.next_value());
         unspill.extend(made);
         spilled_all.extend(to_spill);
         current = moved;
@@ -2273,7 +2279,7 @@ fn _allocated(
         }
     }
     // Every value this allocation has known: a new one is numbered above them.
-    let mut floor = splitkit::_next_value(&body);
+    let mut floor = body.next_value();
     let mut fixed: IndexMap<u32, RegId> = pinned.cloned().unwrap_or_default();
     let mut required_seen: Option<crate::analysis::facts::Stamp> = None;
     // Values a split made or left behind, never split again: LLVM's `RS_Split2`
@@ -4104,7 +4110,7 @@ impl RegAlloc {
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
         if crate::support::debug::enabled("regclass") {
-            let skip = crate::backend::ssaspill::untouchable(&body);
+            let skip = crate::backend::regclass::untouchable(&body);
             let found = crate::backend::regclass::violations(&body, &segments, &self.classes, &skip);
             let crowded =
                 found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
@@ -4191,7 +4197,7 @@ impl RegAlloc {
             };
             let read_at_use = spiller::_folded_reads(&body, &wanted);
             if !read_at_use.is_empty() {
-                let floor = splitkit::_next_value(&body);
+                let floor = body.next_value();
                 let (moved, made) =
                     spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
                 body = moved;
@@ -4891,6 +4897,19 @@ fn _placed(
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
+    // A value read as undef has no register of its own: any one will do
+    // (`VirtRegRewriter` gives an undef operand the first of its class).
+    let undef_held;
+    let held = if one.undefs.iter().any(|value| !held.contains_key(value)) {
+        let mut more = held.clone();
+        for value in &one.undefs {
+            more.entry(*value).or_insert(classes.available[0]);
+        }
+        undef_held = more;
+        &undef_held
+    } else {
+        held
+    };
     let dests = what.dests.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let mut name = what.name.clone();
@@ -5532,6 +5551,25 @@ mod tests {
         let made = _named(&got, "shl");
         assert_eq!(made.len(), 1);
         assert_eq!(ir::root(registers(&made[0].sources)[1]), RegId::ECX, "{:?}", made[0].sources);
+    }
+
+    /// An operand read as undef names a value with no register: the rewrite gives it the first register of
+    /// the class where it used to stop with `Unplaced`.
+    #[test]
+    fn test_an_operand_read_as_undef_is_placed_in_any_register() {
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 2 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
+        one.undefs = vec![9];
+        let held: IndexMap<u32, RegId> = IndexMap::from_iter([(2, RegId::BX)]);
+        let classes = RegisterClasses::m16();
+        let placed = _placed(&Arc::new(one), &held, &classes).expect("placed");
+        let sources = &placed.what.as_ref().expect("semantics").sources;
+        assert!(matches!(&sources[0], Loc::Reg(_)), "{sources:?}");
     }
 
     #[test]
@@ -6396,9 +6434,9 @@ mod tests {
             body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
 
-        let before = splitkit::_next_value(&body);
+        let before = body.next_value();
         let after = through(body, phases).expect("allocates");
-        let made = splitkit::_next_value(&after) - before;
+        let made = after.next_value() - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }
 

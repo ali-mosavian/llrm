@@ -220,7 +220,6 @@ const ROWS: &[Disposition] = &[
         "runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
         "",
     ),
-    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(
         Simplify,
         "libcalls-shrinkwrap",
@@ -473,7 +472,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
@@ -481,7 +480,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "constmerge",
         Why::Missing,
-        "merging identical constants: data bytes at -Os; not measured",
+        "merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight",
         "w-6, 11-09",
     ),
     row(

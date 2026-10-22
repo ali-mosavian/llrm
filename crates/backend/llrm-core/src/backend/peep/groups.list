@@ -14,6 +14,7 @@ restored_copies body
 fused body
 fused_calls body
 far_loads body
+lea_fixup body
 increments body
 borrows body
 stepped_after_compare body
@@ -22,6 +23,9 @@ narrowed_arithmetic body
 widened_moves body
 zero_extensions body
 zero_compares body
+tested_masks body
+tested_lone_masks body
+byte_word_fixup body
 memory_arguments insns
 paired_pushes insns
 immediate_arguments insns

@@ -358,7 +358,7 @@ impl Peephole {
         let body = addresses(&body, &self.cpu)?;
         let body = stepped_after_compare(self.rules, &body);
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
-        let body = borrows(self.rules, &increments(self.rules, &body));
+        let body = borrows(self.rules, &increments(self.rules, &lea_fixed(self.rules, &body)));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and
@@ -377,7 +377,9 @@ impl Peephole {
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         ));
+        let body = tested_lone_masks(self.rules, &tested_masks(self.rules, &body));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = byte_word_fixup(self.rules, &body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -676,6 +678,16 @@ pub fn narrowed_moves(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.narrowed_moves, body, &Facts::new(body, None))
+}
+
+/// A byte or word load, copy or extension whose register's other bytes are dead
+/// is the dword form (`peephole.peep`): `X86FixupBWInsts`.
+pub fn byte_word_fixup(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    peep::rewritten(rules.byte_word_fixup, body, &Facts::new(body, Some(cpu)))
 }
 
 /// Use a saved accumulator in place for commutative two-address operations
@@ -2294,6 +2306,15 @@ fn _affine_address(
     Ok(Some((last + 1, made)))
 }
 
+/// An LEA that is a two-address add or step, as the add, where no flag is read
+/// after it (`peephole.peep`; X86FixupLEAs `optTwoAddrLEA`).
+pub fn lea_fixed(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.lea_fixup, body, &Facts::new(body, None))
+}
+
 /// Select compact INC/DEC for a unit add whose carry result is dead
 /// (`peephole.peep`).
 pub fn increments(
@@ -2677,6 +2698,22 @@ static _FLAG_READERS: LazyLock<HashSet<String>> = LazyLock::new(|| {
 
 pub(crate) fn _reads_flags(name: &str) -> bool {
     _FLAG_READERS.contains(name)
+}
+
+/// An `and` whose register is dead is a `test` (`peephole.peep`).
+pub fn tested_lone_masks(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.tested_lone_masks, body, &Facts::new(body, None))
+}
+
+/// `mov d,s; and d,m; jcc` with `d` dead is `test s,m; jcc` (`peephole.peep`).
+pub fn tested_masks(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.tested_masks, body, &Facts::new(body, None))
 }
 
 /// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter (`peephole.peep`).

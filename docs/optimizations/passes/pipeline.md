@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b8e3c4199f44f105491b401a1c67367a0eeaae5e8b62377f346d3a8bce13b429 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:f6ab428ea4c9c5c9f4a3aa8d43eef063b4bcec9991237368a0cbe72c06e129e1 -->
 
 # pipeline
 
@@ -107,7 +107,7 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -121,7 +121,7 @@ the intervals of counted loops. `limits` are the copy budgets of the
 unroller.
 
 ## Needs
-`Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+`Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 up front, and frozen at the end of D so the passes of E read them without
 recomputing after each edit.
 

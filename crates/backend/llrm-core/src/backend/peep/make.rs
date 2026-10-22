@@ -57,6 +57,23 @@ pub fn root_upper(
     _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| lane.1 >= 2).collect()
 }
 
+/// The lanes of a register's root that the register itself does not cover.
+pub fn rest_of_root(
+    regs: Regs,
+    one: Reg,
+) -> Lanes {
+    let own = _lanes(regs, one.register);
+    _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| !own.contains(lane)).collect()
+}
+
+/// The dword register a byte or word view belongs to (`eax` for `al` and `ax`).
+pub fn dword_of(
+    regs: Regs,
+    one: Reg,
+) -> Loc {
+    Loc::Reg(Reg { register: regs.named(regs.root(one.register), 4), width: 4 })
+}
+
 /// The whole register a view belongs to, as a dword operand.
 pub fn widen(
     _regs: Regs,
@@ -147,6 +164,28 @@ pub fn renamed(
     to: Reg,
 ) -> Loc {
     _register_operand(regs, one, from.register, to.register)
+}
+
+/// The register of a sum `lea d,[x+y]` that is not `d`: both are `d` when the
+/// address doubles it.
+pub fn other_term(
+    _regs: Regs,
+    one: &Loc,
+    d: Reg,
+) -> Loc {
+    let Loc::Address(a) = one else { unreachable!("sums_into proved an address") };
+    let other = if a.through == d.register { a.index_through } else { a.through };
+    Loc::Reg(Reg { register: other, width: d.width })
+}
+
+/// The displacement of `lea d,[d+disp]` as an immediate the width of `d`.
+pub fn step(
+    _regs: Regs,
+    one: &Loc,
+    d: Reg,
+) -> Loc {
+    let Loc::Address(a) = one else { unreachable!("steps_in_place proved an address") };
+    Loc::Imm(Imm { value: a.offset, width: d.width, address: None })
 }
 
 /// The point `one` stands at.

@@ -209,6 +209,17 @@ pub fn no_longer(
     )
 }
 
+/// `after` encodes, and in real mode in no more bytes than `before`: the
+/// dword form takes the operand-size prefix there. DEVIATE W1 of the byte/word
+/// fixup (`peephole.peep`).
+pub fn short_in_real_mode(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    after: &Arc<Insn>,
+) -> bool {
+    if cx.bits() == 16 { no_longer(cx, before, after) } else { encodable(cx, after) }
+}
+
 /// Both encode, in as many bytes.
 pub fn same_length(
     cx: &Cx,
@@ -283,6 +294,21 @@ pub fn byte_loadable(
     d.width == 4
         && regs.named(d.register, 1) != d.register
         && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
+}
+
+/// `d` is the low part of its root (not `ah`): the byte or word starts the
+/// dword, so a dword access to the root keeps its place.
+pub fn low_view(
+    cx: &Cx,
+    d: Reg,
+) -> bool {
+    let regs = cx.regs();
+    _lanes(regs, d.register).iter().all(|lane| lane.1 < d.width as u32)
+}
+
+/// The code is for size (`shouldOptimizeForSize`).
+pub fn for_size(cx: &Cx) -> bool {
+    cx.cpu().size
 }
 
 /// The target prices `add r,r` below `shl r,1`.
@@ -562,6 +588,33 @@ pub fn operand(
             one,
             Loc::Reg(value) if ir::root(value.register) != ir::root(r.register)
         )
+}
+
+/// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
+/// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
+pub fn sums_into(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none()
+        && a.scale == 1
+        && a.offset == 0
+        && a.through != RegId::None
+        && a.index_through != RegId::None
+        && (a.through == d.register || a.index_through == d.register)
+}
+
+/// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
+/// (`optTwoAddrLEA`, case 2).
+pub fn steps_in_place(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none() && a.through == d.register && a.index_through == RegId::None
 }
 
 /// `r` is how the cell is reached.

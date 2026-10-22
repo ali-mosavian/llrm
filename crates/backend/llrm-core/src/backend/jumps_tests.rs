@@ -214,7 +214,8 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         false,
     )
     .unwrap()
-    .pop()
+    .into_iter()
+    .find(|phase| phase.class_name() == "ControlFlow")
     .unwrap()
     .transform(source)
     .unwrap();
@@ -918,7 +919,8 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
         false,
     )
     .unwrap()
-    .pop()
+    .into_iter()
+    .find(|phase| phase.class_name() == "ControlFlow")
     .unwrap()
     .transform(two_zero_tails(true))
     .unwrap();
@@ -1885,4 +1887,76 @@ fn test_placement_reads_the_frequencies_the_body_already_has() {
     placed(&made).unwrap();
     let worked = crate::analysis::frequency::WORKED.with(|one| one.get());
     assert_eq!(worked, 0, "{worked} frequency runs for frequencies the body had");
+}
+
+/// `Loop: xxx; jcc Out; jmp Loop` in `OptimizeBranches` alone: the pin reverses
+/// it (`OptimizeBlock` L1685) so the loop is `jncc Loop; jmp Out`.
+#[test]
+fn test_a_one_block_loop_is_folded_into_a_branch_back() {
+    let blocks: Vec<Block> = vec![
+        block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+        block(4, vec![_compare(4), _branch(5, "je", 9), _jump(6, 4)], vec![9, 4]).into(),
+        block(7, vec![_move(7, bx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ];
+    let folded = branchfold::folded(&body("f", 1, blocks), &std::collections::BTreeSet::new());
+    let tail: Vec<(String, Option<i64>)> = physical(&folded)
+        .into_iter()
+        .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
+}
+
+/// A block that is one conditional branch identical to the branch that ends
+/// the block before it: the earlier one is redundant (`OptimizeBlock` L1586).
+#[test]
+fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_branch(5, "je", 9)], vec![9, 7]).into(),
+        block(7, vec![_move(7, cx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
+}
+
+/// `HoistCommonCodeInSuccs` (L2043): both ways begin with `mov cx, 5` and this
+/// block is the only way into either; it runs once, ahead of the compare.
+#[test]
+fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let set = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![imm(5)], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![set(4), _move(5, bx()), _return(6)], vec![]).into(),
+        block(9, vec![set(9), _move(10, cx()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "mov cx, 5").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
+    let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
+    assert!(at < compare, "{lines:?}");
+}
+
+/// The pin copies propagation twice, again after tail duplication and block
+/// placement (row 84): the phases end `ControlFlow`, `CopyPropagation`.
+#[test]
+fn test_copy_propagation_runs_again_after_the_control_flow() {
+    let names = |cpu: &str| -> Vec<&'static str> {
+        crate::flow::machine(
+            &IndexMap::default(),
+            Some(Rc::new(RefCell::new(Frame::new(0)))),
+            None,
+            Some(&IndexMap::default()),
+            false,
+            cpu,
+            &crate::backend::target::BUILT_IN,
+            false,
+        )
+        .unwrap()
+        .iter()
+        .map(|phase| phase.class_name())
+        .collect()
+    };
+    let optimized = names("386");
+    assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
 }
