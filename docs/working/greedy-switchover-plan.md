@@ -33,7 +33,7 @@ Source: grep of calls from outside each module (non-test), crates/backend/llrm-c
 
 ## Plan of record (each its own PR, fail-first test, rows pricing; switch-over first, tuning after)
 
-1. 10-26. Relocate the helpers (`_copy`, `_next_value`, `ssaspill::floating/untouchable`, `_encodable`, `remade_values`) with their callers; behaviour identical (objects identical on the objsweep and QCport). Small, mechanical.
+1. 10-26. Relocate the helpers with their callers; behaviour identical (objsweep identical). Done: `_copy`, `_next_value`, `ssaspill::floating/untouchable` (#3617); `_encodable` with the spill emission (#3626). Left: `remade_values`, which is a translation, not a move: the pin asks per def (`isTriviallyReMaterializable`, `allUsesAvailableAt`) where it reads a set precomputed by `_literals_by`/`_addresses_by`/`_stable_loads_by`; dated 10-30 with the spill emission.
 2. 10-28. `recompute_class` (the pin's `calculateRegClassAndHint` -> `recomputeRegClass`, InlineSpiller.cpp#L1383, LiveRangeEdit.cpp#L426, SplitKit.cpp#L628) for spill- and split-created values, over `regclass::collected`, respecting the m16 base/index two-colouring; test: the 7 functions allocate in one greedy pass, no rounds, and a unit test of the recompute on the stored-word shape.
 3. 10-30. Spill emission into greedy/tii (`_store`, `_reload`, `_in_place`): the pin's `insertSpill`/`insertReload`/`foldMemoryOperand` shape; objects identical or numbered.
 4. 10-31. Ladder for what is left of the rounds.
