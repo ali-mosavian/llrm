@@ -43,11 +43,17 @@ among the folds left out (DEVIATE 2). Plan: translate `foldNot` and `getFreelyIn
 float constant fold of `fmul`/`fptosi` in `combine` (w-6, 2026-11-06; the pin folds a binop of constants in `simplifyFMul`);
 C and D close as numbers (C is a gain).
 
-## FR-3: objects larger without fold@837 (owner w-6, review 2026-11-04)
+## FR-3: objects changed by removing fold@837, by cause (owner w-6, 2026-11-06)
 
-objsweep (rows corpus, `fold837` dists 9f2600f8fc vs 045b53cb7c): larger x_fir m16 O2/O3 +350, x_cordic m16 O3 +118, lru
-m32/m16 Os +53/+50, x_cordic m32 O3 +38; smaller x_fir m32 O2/O3 -55, floats m32 Os -20, sieve m32 Os -16, nbody m32 Os -13.
-QCport m16: ls O2/O3 +165, savegame Os +147, weapons O1 +48, mdl_ai +6..+37, mod_tex +6..+29, pl_trace Os +29;
-smaller combat O1/O2/O3 -33/-87/-83, mdl O3 -40, d_faces Os -19. qbq-llrm d_faces: object identical (8170 B).
-x_fir is w-8's attribution to GlobalOpt SRA and localize (docs/working/fold.md). The per-object rewrite is not named yet:
-stage diff of each body before and after the slot, then translate into `combine` or accept the number (w-6, 2026-11-04).
+QCport m16 (+553 B, 33 objects; earliest differing normalised stage of `LLRM_MIR_STAGES` of the `fold837` dists, `~/scratch/ledger4/fr2/run3.py`):
+
+| Cause | Objects | B |
+|---|---|--:|
+| A. `foldNot` untranslated (the FR-2 cause: `xor i1 %c, true` kept before a branch) | 23: combat O1/O2/O3/Os -33/-87/-83/-1, d_alias Os +1, d_faces Os -19, ent Os -1, mdl O3 -40, mdl_ai O1/O2/O3/Os +6/+35/+37/+28, pak Os -1, pl_trace Os +29, savegame O1/O2/O3/Os +4/+13/+16/+147, sc Os +1, weapons O1/O2/O3/Os +48/+27/+27/+18 | +172 |
+| B. float constants not folded (the FR-2 cause) | ls O2/O3 +165 each | +330 |
+| E. not classified: the first hunk is none of the above | keybind Os -5, mod_tex O1/O2/O3/Os +29/+10/+10/+6, sbar O1 +5, snd_mix Os +1, sys Os -5 | +51 |
+
+Rows corpus objsweep (+800 B, 11 objects; not stage-diffed here): x_fir m16 O2/O3 +350 each and m32 O2/O3 -55 each (w-8 attributes
+x_fir to GlobalOpt SRA and localize, docs/working/fold.md), x_cordic m16 O3 +118 and m32 O3 +38, lru m32/m16 Os +53/+50, floats m32 Os -20,
+sieve m32 Os -16, nbody m32 Os -13: causes owed with the E group, w-6, 2026-11-06. The translations of FR-2 (`foldNot`,
+the float constant fold) are expected to close A and B. qbq-llrm d_faces: object identical (8170 B).
