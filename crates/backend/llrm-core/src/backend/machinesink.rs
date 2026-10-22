@@ -695,6 +695,17 @@ impl Sinker {
             || self.live.as_ref().is_none_or(|live| live.live_out(self.at[sink_to], value))
     }
 
+    /// Whether `value` is live out of `block` whatever `one` does: moving a
+    /// reader of it then lengthens nothing. None known is no.
+    fn crosses_already(
+        &self,
+        value: u32,
+        block: usize,
+    ) -> bool {
+        use crate::backend::allocate::LiveAt;
+        self.live.as_ref().is_some_and(|live| live.live_out(self.at[block], value))
+    }
+
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
     /// successor or its edge marked for splitting. Whether it moved.
     fn sink_instruction(
@@ -718,6 +729,11 @@ impl Sinker {
             return false;
         }
         if self.size && one.uses.iter().any(|&value| self.read_below(value, &one, sink_to)) {
+            return false;
+        }
+        // An operand that dies in this block would live over the edge it now
+        // crosses (pl_trace -Os +125 bytes: x87 operands held in memory).
+        if self.size && one.uses.iter().any(|&value| !self.crosses_already(value, block)) {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break
@@ -968,6 +984,49 @@ mod tests {
         let moved = sunk(&body, true);
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the add left the block");
         assert_eq!(names(&moved, 1), ["add", "mov"], "and went into the arm");
+    }
+
+    /// qcport pl_trace -Os +125 bytes: an `fsub` moved into an arm took its two
+    /// operands, loaded in the entry, across the edge, and the stackifier
+    /// held them in memory (`fld; fstp` pairs for what were `fsub m` folds).
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_stays() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::FloatArith, "fsub", vec![wide(3)], vec![wide(7), wide(8)], vec![3], vec![7, 8]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(65520)], vec![], vec![1]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![wide(5)], vec![wide(3)], vec![5], vec![3])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 7)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![wide(6)], vec![wide(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "trace",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 7, 8].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["fsub", "cmp", "jbe"], "the fsub stayed");
     }
 
     /// The same, with the operand read again in the arm: the `add` then needs
