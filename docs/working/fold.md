@@ -23,7 +23,14 @@ coef[16] filled by a constant loop, read by an unrolled inner loop: LoopFullUnro
 2. (11-02) Delete `_numbers` (115.9 M) when 1 holds on the corpus; keep the edge fold (phi of numbers = SCCP/JT) only if an object needs it. First Ir drop.
 3. floatfold (52.4 M): the pin folds exact floats in InstSimplify/ConstantFolding inside InstCombine; name the 14 objects' pass the same way, then delete or merge into combine.
 4. `writes` (30.8 M) goes with its last caller.
-Open: attribution for qcport/lights, client, savegame needs the pinned clang with qcport flags (not run); loop_fusion is -Omax only.
+Open: loop_fusion is -Omax only.
+
+## Attribution of lights, client, savegame (2026-10-22, `_numbers` on vs `FOLD_NO_NUMBERS=1`, pin = `pin.py` m32 on the 12-pipeline dump)
+| object | what `_numbers` folds | pin pass | gap |
+|---|---|---|---|
+| client | `_pl_death_selftest@3`: loop with a float exit and an integer exit `frame == 13` | loop-unroll-full, 14 trips from the integer exit (not SCEV's float brute force: same at `-scalar-evolution-max-iterations=5`); instcombine/simplifycfg then fold the float chain | `unroll.rs` takes only a loop that leaves from its header; a multi-exit unroll is missing (hypothesis until the fail-first test) |
+| lights | `_ent_lights_selftest@3`: 26 stores, 92 loads of the 30-byte local `l[3]` | `sroa` alone: 26 -> 0 stores, 92 -> 5 loads | the local is read through `addrspacecast ptr %1 to ptr addrspace(5)`; `promote.rs` names no cast (hypothesis until the fail-first test) |
+| savegame | `_savegame_selftest@3`: 341 vs 380 lines | none: pin `default<O2>` leaves 380 lines, like ours without `_numbers` | ours-only gain; nothing to translate |
 
 ## Mechanism, to be checked on the stage dumps before the PR (2026-10-22)
 
@@ -31,6 +38,6 @@ The x_fir coefficient table is an array global of 16 elements stored by constant
 
 ## Dates
 
-- 10-28: attribution of qcport/lights, client and savegame (pinned clang with qcport flags).
+- 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).
 - 10-30: GVN forwarding fix and GlobalOpt after the inliner, one PR each, objects of the 12 identical with `_numbers` off.
 - 11-02: delete `_numbers`.
