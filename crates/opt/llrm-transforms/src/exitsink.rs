@@ -65,6 +65,7 @@
 //! [`crate::lcssa`]; LLVM LICM `sinkRegion`.
 
 use llrm_analysis::cfg;
+use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
@@ -95,8 +96,16 @@ fn _sinkable(
     loops: &[Loop],
 ) -> Option<(Loop, InstId, InstId)> {
     for loop_ in loops.iter().cloned() {
-        for &block in function.layout().iter().filter(|&&block| !loop_.body.contains(&cfg::id(block))) {
+        // A candidate phi has an input from the loop: it is in a block the loop
+        // exits to, found by the edges and not by every phi of the function.
+        let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<std::collections::BTreeSet<_>>();
+        for &block in function
+            .layout()
+            .iter()
+            .filter(|&&block| exits.contains(&cfg::id(block)) && !loop_.body.contains(&cfg::id(block)))
+        {
             for phi in edges::phis(function, block) {
+                llrm_mir::counts::bump(llrm_mir::counts::Event::ExitSinkPhis);
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };
                 let ValueDef::Instruction(op) = function.value(value).def else { continue };
                 let inside = |inst: InstId| function.parent(inst).is_some_and(|at| loop_.body.contains(&cfg::id(at)));

@@ -22,7 +22,13 @@
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
-//!   L6066): an alloca a `Declare` names is left alone.
+//!   L6066): an alloca a `Declare` names is processed like any other, so `-g`
+//!   does not change the code. One that SROA splits loses its `Declare` with
+//!   the alloca (the variable is reported dropped), where LLVM migrates it to
+//!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
+//!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
+//!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
+//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
@@ -490,8 +496,11 @@ fn build_slices(
             instruction.result.is_none_or(|result| function.users(result).is_empty())
         };
         match &instruction.opcode {
-            // `visitBitCastInst` (L1084).
-            Opcode::Cast(CastOp::BitCast) if used.index == 0 && is_pointer(context, instruction.ty) => {
+            // `visitBitCastInst` (L1084) and `visitAddrSpaceCastInst` (L1091):
+            // the pointer's users are the alloca's.
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                if used.index == 0 && is_pointer(context, instruction.ty) =>
+            {
                 if result_unused(instruction) {
                     mark_dead(&mut found);
                 } else if let Some(result) = instruction.result {
@@ -1242,28 +1251,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.context
     }
 
-    /// The allocas a debug record names (DEVIATE: left alone).
-    /// DEVIATE: `findDVRDeclares` (SROA.cpp#L6160) is not migrated; the alloca
-    /// stays.
-    fn declared_allocas(&self) -> llrm_mir::dense::IdSet<InstId> {
-        self.function()
-            .debug_records()
-            .iter()
-            .filter_map(|one| match one.what {
-                llrm_mir::DebugWhat::Declare(Operand::Value(value)) => Some(value),
-                _ => None,
-            })
-            .filter_map(|value| match self.function().value(value).def {
-                llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// `SROA::runSROA`. SROA.cpp#L6430
     fn run_sroa(&mut self) -> bool {
         let Some(entry) = self.function().entry() else { return false };
-        let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
             .iter_block(entry)
@@ -1271,7 +1261,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
             ))
-            .filter(|inst| !declared.contains(inst))
             .collect();
         for inst in allocas {
             self.worklist.push(inst);
@@ -2404,6 +2393,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// `getNewAllocaSlicePtr` and `getAdjustedPtr`. SROA.cpp#L3396, L2036
+    ///
+    /// The pointer is made in the old pointer's type
+    /// (`CreatePointerBitCastOrAddrSpaceCast(Ptr, PointerTy)`, L2042): a use
+    /// through an `addrspacecast` gets a cast of the new alloca back, so a call
+    /// that takes the pointer still takes the type it declares.
     fn new_alloca_slice_ptr(
         &mut self,
         rewriter: &Rewriter,
@@ -2411,26 +2405,34 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     ) -> Operand {
         let offset = rewriter.new_begin - rewriter.new_alloca_begin;
         let base = Operand::Value(rewriter.new_ai_value);
-        if offset == 0 {
-            return base;
-        }
         let ptr_ty = self.function().instruction(rewriter.new_ai).ty;
-        let space = pointer_space(self.context(), ptr_ty);
-        let index_ty = self.unit.context.types.int(self.unit.layout.pointer(space).index_bits);
-        let byte = self.unit.context.types.int(8);
-        let index = self.int_constant(index_ty, offset as i128);
-        let created = self
-            .unit
-            .function
-            .create_instruction(
-                Opcode::GetElementPtr { source: byte },
-                ptr_ty,
-                vec![base, index],
-                Flags::INBOUNDS,
-                Some("sroa_idx"),
-            );
-        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
-        Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+        let pointer = if offset == 0 {
+            base
+        } else {
+            let space = pointer_space(self.context(), ptr_ty);
+            let index_ty = self.unit.context.types.int(self.unit.layout.pointer(space).index_bits);
+            let byte = self.unit.context.types.int(8);
+            let index = self.int_constant(index_ty, offset as i128);
+            let created = self
+                .unit
+                .function
+                .create_instruction(
+                    Opcode::GetElementPtr { source: byte },
+                    ptr_ty,
+                    vec![base, index],
+                    Flags::INBOUNDS,
+                    Some("sroa_idx"),
+                );
+            self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+            Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+        };
+        let wanted = rewriter.old_ptr.map(|old| self.type_of(old));
+        match wanted {
+            Some(wanted) if wanted != ptr_ty && is_pointer(self.context(), wanted) => {
+                self.build(at, Opcode::Cast(CastOp::AddrSpaceCast), wanted, vec![pointer], Some("sroa_cast"))
+            }
+            _ => pointer,
+        }
     }
 
     /// `getSliceAlign`. SROA.cpp#L3431
@@ -3391,7 +3393,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 Opcode::GetElementPtr { .. } if instruction.flags.contains(Flags::INBOUNDS) => {
                     current = instruction.operands[0];
                 }
-                Opcode::Cast(CastOp::BitCast) => current = instruction.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => current = instruction.operands[0],
                 _ => return None,
             }
         }
@@ -3436,7 +3438,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         changed = true;
                     }
                 }
-                Opcode::Cast(CastOp::BitCast) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                | Opcode::GetElementPtr { .. }
+                | Opcode::Phi
+                | Opcode::Select => {
                     if let Some(result) = instruction.result {
                         enqueue(self.unit.function, &mut queue, &mut visited, result);
                     }

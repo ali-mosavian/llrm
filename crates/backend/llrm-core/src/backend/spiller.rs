@@ -123,7 +123,11 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
-use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::greedy::remat::group_source;
+use crate::greedy::tii::{
+    _inserted, _mov, _width, _with, fold_copy_member, is_encodable, load_reg_from_stack_slot, store_reg_to_stack_slot,
+};
+use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyset::PySet;
@@ -152,15 +156,6 @@ impl CellOf for Frame {
 
 fn _set(values: &[u32]) -> BTreeSet<u32> {
     values.iter().copied().collect()
-}
-
-fn _with<F: FnOnce(&mut Insn)>(
-    one: &Insn,
-    change: F,
-) -> Arc<Insn> {
-    let mut made = one.clone();
-    change(&mut made);
-    Arc::new(made)
 }
 
 /// `body` with each of `values` living in a frame slot, and the reloads.
@@ -516,7 +511,7 @@ pub fn materialized(
                 insns.push(add);
                 one = rewritten;
             }
-            if let Some(source) = _group_source(&one) {
+            if let Some(source) = group_source(&one) {
                 if let Some(constant) = constants.get(&source.value) {
                     let what = one.what.clone().expect("a group source has semantics");
                     one = _with(&one, |made| {
@@ -587,7 +582,7 @@ pub fn materialized(
                         vec![source.value],
                     )
                 } else {
-                    _reload(&one, fresh, &frame_loads[&value])
+                    load_reg_from_stack_slot(&one, fresh, &frame_loads[&value])
                 };
                 let product = _with(&inserted, |made| made.rematerialized = true);
                 match &mut copy {
@@ -606,7 +601,7 @@ pub fn materialized(
             if let Some(folded) = _source(&one, &stored, frame)? {
                 one = folded;
             }
-            let direct = match _in_place(&one, &stored, frame, &|value| value)? {
+            let direct = match fold_copy_member(&one, &stored, frame, &|value| value)? {
                 Some(direct) => Some(direct),
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
@@ -640,7 +635,11 @@ pub fn materialized(
                     fresh += 1;
                 }
                 if !constants.contains_key(value) {
-                    after.push(_store(&one, rename[value], &frame.cell(*value, _width(&one, *value))?));
+                    after.push(store_reg_to_stack_slot(
+                        &one,
+                        rename[value],
+                        &frame.cell(*value, _width(&one, *value))?,
+                    ));
                 }
             }
             insns.extend(before);
@@ -742,7 +741,7 @@ fn _reloaded(
             continue;
         }
         rename.insert(*value, *fresh);
-        before.push(_reload(one, *fresh, &frame.cell(*value, _width(one, *value))?));
+        before.push(load_reg_from_stack_slot(one, *fresh, &frame.cell(*value, _width(one, *value))?));
         *fresh += 1;
     }
     Ok((before, rename))
@@ -757,7 +756,7 @@ fn _sunk_from_copies<'b>(
     body: &'b LirBody,
     reading: &BTreeSet<u32>,
 ) -> Cow<'b, LirBody> {
-    let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
+    let moved = |one: &Insn| group_source(one).is_some_and(|source| reading.contains(&source.value));
     // A copy of a value in `reading` reads it, so it is among that value's
     // readers.
     let any = postings::following(body, |postings| {
@@ -908,7 +907,7 @@ fn _short_update_runs_whole(
             let renamed = IndexMap::from_iter([(into, outof)]);
             insns.extend_from_slice(&block.insns[copied..position]);
             insns.push(_renamed(second, &renamed));
-            insns.push(_store(second, outof, &frame.cell(into, width)?));
+            insns.push(store_reg_to_stack_slot(second, outof, &frame.cell(into, width)?));
             copied = position + 2;
             after_last = Some(position + 2);
         }
@@ -1041,9 +1040,9 @@ fn _local_updates_whole(
             for at in &reads {
                 working[*at] = _renamed(&working[*at], &renamed);
             }
-            let mut run = vec![_reload(&update, register, &cell), _renamed(&update, &renamed)];
+            let mut run = vec![load_reg_from_stack_slot(&update, register, &cell), _renamed(&update, &renamed)];
             if kept {
-                run.push(_store(&update, register, &cell));
+                run.push(store_reg_to_stack_slot(&update, register, &cell));
             }
             shift += run.len() - 1;
             working.splice(position..=position, run);
@@ -1784,7 +1783,7 @@ fn _identities_dropped(body: &LirBody) -> LirBody {
             let mut same = vec![value];
             let mut next = at + 1;
             while let Some(one) = block.insns.get(next) {
-                match crate::backend::coalesce::_copy(one) {
+                match one.copy_of() {
                     Some((to, from)) if same.contains(&from) && one.group.is_none() => same.push(to),
                     _ => break,
                 }
@@ -4351,31 +4350,6 @@ fn _address_source(
     }))
 }
 
-/// An unconstrained full-width parallel copy can take a literal in place.
-fn _group_source(one: &Insn) -> Option<Held> {
-    if one.group.is_none() || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
-        return None;
-    }
-    let what = one.what.as_ref()?;
-    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-        match (what.dests.as_slice(), what.sources.as_slice()) {
-            ([Loc::Held(dest)], [Loc::Held(source)])
-                if dest.width == source.width && one.uses == [source.value] && one.defines == [dest.value] =>
-            {
-                return Some(*source);
-            }
-            // Into a spilled value's slot.
-            ([Loc::Mem(dest)], [Loc::Held(source)])
-                if dest.width == source.width && one.uses == [source.value] && one.defines.is_empty() =>
-            {
-                return Some(*source);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
@@ -4573,7 +4547,7 @@ fn _literals_by(
         }
         if postings.uses(value).iter().any(|at| {
             let one = _at(body, *at);
-            one.group.is_some() && _group_source(one).is_none()
+            one.group.is_some() && group_source(one).is_none()
         }) {
             return None;
         }
@@ -4655,7 +4629,7 @@ fn _literals(
         }
         if one.group.is_some() {
             excluded.extend(one.defines.iter().copied());
-            if _group_source(one).is_none() {
+            if group_source(one).is_none() {
                 excluded.extend(one.uses.iter().copied());
             }
         }
@@ -4877,142 +4851,12 @@ pub fn _widest(
     widths
 }
 
-/// How wide this instruction reads or writes the value, defaulting to a word.
-pub fn _width(
-    one: &Insn,
-    value: u32,
-) -> u32 {
-    for (held, _register) in one.requires.iter().chain(&one.delivers) {
-        if held.value == value {
-            return held.width;
-        }
-    }
-    for (named, width) in &one.widths {
-        if *named == value {
-            return *width;
-        }
-    }
-    let Some(what) = &one.what else {
-        return WORD;
-    };
-    // A cell's base and index too.
-    for place in what.dests.iter().chain(&what.sources) {
-        for held in ir::values(place) {
-            if held.value == value {
-                return held.width;
-            }
-        }
-    }
-    WORD
-}
-
-fn _mov(
-    into: Loc,
-    out_of: Loc,
-) -> Semantics {
-    Semantics {
-        name: Some("mov".to_owned()),
-        dests: vec![into],
-        sources: vec![out_of],
-        ..Semantics::new(Operation::Move)
-    }
-}
-
-/// The load that puts a spilled value back for one instruction.
-pub fn _reload(
-    beside: &Insn,
-    into: u32,
-    cell: &Mem,
-) -> Arc<Insn> {
-    let inserted = _inserted(
-        beside,
-        _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())),
-        vec![into],
-        Vec::new(),
-    );
-    _with(&inserted, |made| made.spill_reload = true)
-}
-
-/// The store that puts a spilled value away as soon as it is written.
-pub fn _store(
-    beside: &Insn,
-    out_of: u32,
-    cell: &Mem,
-) -> Arc<Insn> {
-    let inserted = _inserted(
-        beside,
-        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),
-        Vec::new(),
-        vec![out_of],
-    );
-    _with(&inserted, |made| made.spill_store = true)
-}
-
-/// An instruction that stands beside another and claims none of its bytes.
-fn _inserted(
-    beside: &Insn,
-    what: Semantics,
-    defines: Vec<u32>,
-    uses: Vec<u32>,
-) -> Arc<Insn> {
-    let at = beside.covers.map_or(beside.at, |covers| covers.0);
-    let mut made = Insn::new(beside.at, Some((at, at)), Some(what), defines, uses);
-    made.call = beside.call.clone();
-    Arc::new(made)
-}
-
 /// The instruction reading and writing the reload's value instead.
 pub fn _renamed(
     one: &Arc<Insn>,
     rename: &IndexMap<u32, u32>,
 ) -> Arc<Insn> {
     one.renamed(&|value| rename.get(&value).copied().unwrap_or(value))
-}
-
-/// One move of a parallel copy, with its spilled end read or written where it
-/// lives.
-pub(crate) fn _in_place(
-    one: &Insn,
-    values: &BTreeSet<u32>,
-    frame: &mut Frame,
-    home: &dyn Fn(u32) -> u32,
-) -> Result<Option<Arc<Insn>>, Error> {
-    let Some(what) = &one.what else {
-        return Ok(None);
-    };
-    if one.group.is_none() || what.op != Operation::Move {
-        return Ok(None);
-    }
-    if what.dests.len() != 1 || what.sources.len() != 1 {
-        return Ok(None);
-    }
-    let into: Vec<u32> = one.defines.iter().copied().filter(|v| values.contains(v)).collect();
-    let outof: Vec<u32> = one.uses.iter().copied().filter(|v| values.contains(v)).collect();
-    if into.is_empty() && outof.is_empty() {
-        return Ok(None);
-    }
-    if !into.is_empty() && !outof.is_empty() {
-        let dest = frame.cell(home(into[0]), _width(one, into[0]))?;
-        let source = frame.cell(home(outof[0]), _width(one, outof[0]))?;
-        return Ok(Some(_with(one, |made| {
-            made.what =
-                Some(Semantics { dests: vec![Loc::Mem(dest)], sources: vec![Loc::Mem(source)], ..what.clone() });
-            made.defines = one.defines.iter().copied().filter(|value| !into.contains(value)).collect();
-            made.uses = one.uses.iter().copied().filter(|value| !outof.contains(value)).collect();
-        })));
-    }
-    let value = if into.is_empty() { outof[0] } else { into[0] };
-    let cell = frame.cell(home(value), _width(one, value))?;
-    if !into.is_empty() {
-        return Ok(Some(_with(one, |made| {
-            made.what = Some(Semantics { dests: vec![Loc::Mem(cell)], ..what.clone() });
-            made.defines = one.defines.iter().copied().filter(|v| *v != value).collect();
-        })));
-    }
-    Ok(Some(_with(one, |made| {
-        made.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
-        made.uses = one.uses.iter().copied().filter(|v| *v != value).collect();
-    })))
 }
 
 /// The load, and the instruction reading the loaded value instead.
@@ -5127,7 +4971,7 @@ fn _tied(
         sources: what.sources.iter().map(swap).collect(),
         ..what.clone()
     };
-    if !_encodable(bits, &made, classes)? {
+    if !is_encodable(bits, &made, classes)? {
         return Ok(None);
     }
     Ok(Some(_with(one, |insn| {
@@ -5135,69 +4979,6 @@ fn _tied(
         insn.defines = one.defines.iter().copied().filter(|v| *v != value).collect();
         insn.uses = one.uses.iter().copied().filter(|v| *v != value).collect();
     })))
-}
-
-/// Whether this form exists, asked of the one place that knows.
-pub(crate) fn _encodable(
-    bits: u32,
-    what: &Semantics,
-    classes: &RegisterClasses,
-) -> Result<bool, Error> {
-    let regs = classes.registers;
-    let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
-        .into_iter()
-        .map(|width| {
-            (
-                width,
-                classes
-                    .available
-                    .iter()
-                    .copied()
-                    .filter(|one| {
-                        regs.width_of(regs.named(*one, i64::from(width)))
-                            .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
-                            == Some(i64::from(width))
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
-
-    let mut placed = |operand: &Loc| -> Loc {
-        let Loc::Held(held) = operand else {
-            return operand.clone();
-        };
-        if !taken.contains_key(&held.value) {
-            let row = rows.get(&held.width).cloned().unwrap_or_default();
-            if taken.len() >= row.len() {
-                // refuses below, which is the safe answer
-                return operand.clone();
-            }
-            taken.insert(held.value, row[taken.len()]);
-        }
-        Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
-    };
-
-    let probe = Semantics {
-        dests: what.dests.iter().map(&mut placed).collect(),
-        sources: what.sources.iter().map(&mut placed).collect(),
-        ..what.clone()
-    };
-    Ok(super::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
-}
-
-/// One past the highest value id this body names.
-pub fn _next_value(body: &LirBody) -> u32 {
-    let mut seen: BTreeSet<u32> = BTreeSet::from([0]);
-    for block in &body.blocks {
-        seen.extend(block.arrives());
-        for one in &block.insns {
-            seen.extend(one.defines.iter().copied());
-            seen.extend(one.uses.iter().copied());
-        }
-    }
-    seen.last().copied().expect("seeded with zero") + 1
 }
 
 #[cfg(test)]

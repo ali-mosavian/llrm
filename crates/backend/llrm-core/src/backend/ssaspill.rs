@@ -737,54 +737,6 @@ fn stated(
     out
 }
 
-/// Values the spiller leaves alone: x87 values, pinned ones, and the body's
-/// inputs.
-pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
-    let mut out = floating(body);
-    out.extend(body.pins.keys().copied().chain(body.inputs.iter().copied()));
-    out
-}
-
-/// Values no general register holds: x87 values and wider ones, and every phi
-/// web they join.
-pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
-    let regs = body.regs();
-    let mut out: BTreeSet<u32> = BTreeSet::new();
-    for one in body.insns() {
-        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
-            out.extend(one.uses.iter().chain(&one.defines).copied());
-        }
-        // A value no general register holds: a float, whatever reads it.
-        for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
-            for held in crate::model::ir::values(place) {
-                if held.width > 4 {
-                    out.insert(held.value);
-                }
-            }
-        }
-    }
-    // A phi joins its result and arguments: the web is as wide as its widest
-    // member.
-    loop {
-        let mut grew = false;
-        for block in &body.blocks {
-            for phi in &block.phis {
-                let web: Vec<u32> =
-                    std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
-                if web.iter().any(|value| out.contains(value)) {
-                    for value in web {
-                        grew |= out.insert(value);
-                    }
-                }
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    out
-}
-
 /// `one` reading `value` from `cell` as its second source (`op reg, [slot]`), a
 /// commutative operation turning its operands over first, as Greedy folds a
 /// spilled source; None where it cannot. The operand is as wide as the
@@ -884,7 +836,7 @@ fn changed(
     let flow = llrm_support::debug::timed("ssa flow", || Flow::of(body, &loops));
     let confined =
         llrm_support::debug::timed("ssa classes", || regclass::classes(body, &BTreeSet::new(), segments, classes));
-    let skip = untouchable(body);
+    let skip = crate::backend::regclass::untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
@@ -2207,9 +2159,9 @@ fn written(
     let in_memory = |value: &u32| stored.contains(value) && !remakes.contains_key(value);
     let reload = |beside: &Insn, value: u32| match remakes.get(&value) {
         Some(one) => remade(one, beside),
-        None => spiller::_reload(beside, value, &cells[&value]),
+        None => crate::greedy::tii::load_reg_from_stack_slot(beside, value, &cells[&value]),
     };
-    let store = |beside: &Insn, value: u32| spiller::_store(beside, value, &cells[&value]);
+    let store = |beside: &Insn, value: u32| crate::greedy::tii::store_reg_to_stack_slot(beside, value, &cells[&value]);
     // The code on each edge.
     let mut crossing: IndexMap<(i64, i64), Crossing> = IndexMap::default();
     for (edge, values) in across {
@@ -2258,7 +2210,7 @@ fn written(
                 if !edits[&from].w_out.contains(&value) {
                     made.push(reload(beside, value));
                 }
-                made.push(spiller::_store(beside, value, &cells[&result]));
+                made.push(crate::greedy::tii::store_reg_to_stack_slot(beside, value, &cells[&result]));
                 made
             }
         }

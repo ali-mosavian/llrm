@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+import stamp  # noqa: E402
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 
@@ -88,7 +89,9 @@ def m16_only(source: Path) -> bool:
     sys.path.insert(0, str(ROOT / "tools/dosbatch"))
     import run_tests  # noqa: PLC0415
 
-    return any(dialect in M16_ONLY_DIALECTS or any(flag in M16_ONLY_FLAGS for flag in flags) for _, flags, dialect in run_tests.configurations(run_tests.header(source)))
+    settings = run_tests.header(source)
+    # a `dialect:` line passes `--runtime <dialect>`, the Microsoft runtime, which has no flat form (intrinsics_qb45 and range_exp failed at -m32 with relocation overlaps)
+    return "dialect" in settings or any(dialect in M16_ONLY_DIALECTS or any(flag in M16_ONLY_FLAGS for flag in flags) for _, flags, dialect in run_tests.configurations(settings))
 
 
 def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
@@ -212,13 +215,14 @@ def main() -> int:
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
-    head = subprocess.run(["git", "rev-parse", "origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    # The binary names what was swept: origin/feat/parity moves during a run, and a report must not name a sha it did not test.
+    head, dirty = stamp.read(compiler)
     failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
     modules = len(list((qcport / "render").glob("*.c"))) + sum(len(list((qcport / p).glob("*.c"))) for p in MODULES if p != "render")
-    print(f"QCport sweep of feat/parity {head[:9]}: {modules} modules x {len(LEVELS)} levels + {len(extra_jobs())} front-end compiles ({len([s for s in qb_flat_programs() if m16_only(s)])} m16-only programs not compiled at -m32), {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
+    print(f"QCport sweep of {head[:9]}{"+dirty" if dirty else ""}: {modules} modules x {len(LEVELS)} levels + {len(extra_jobs())} front-end compiles ({len([s for s in qb_flat_programs() if m16_only(s)])} m16-only programs not compiled at -m32), {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
     for why, where in groups.items():
         entry = next((e for e in known if e["match"] in why), None)
         print(f"  {'KNOWN #' + str(entry['issue']) if entry else 'NEW'}: {why} -- {', '.join(sorted({f'{m} {l}' for m, l in where})[:8])}")

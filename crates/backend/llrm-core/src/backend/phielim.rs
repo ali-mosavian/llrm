@@ -285,7 +285,7 @@ pub fn eliminated_priced(
     let widths = _widths(body);
     // Renaming a phi whose copies the predecessor could hold saves nothing
     // (only an edge block); an x87 value has no copy to save.
-    let floating = crate::backend::ssaspill::floating(body);
+    let floating = crate::backend::regclass::floating(body);
 
     // `copies` copies on the edge from `from` to `into` cost less than in
     // `from`.

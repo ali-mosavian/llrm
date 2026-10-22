@@ -2721,12 +2721,13 @@ fn checked_division_raises_error_11_where_bcs_divide_traps() {
         })
         .count();
     assert!(divisions >= 3, "{divisions}");
-    // Where errors land the narrow overflow is code anyway (BC's 16-bit divide
-    // traps on it), the zero divisor the IR's own; the option adds the zeros.
+    // The zero divisor is code with and without the option (MIR's sdiv by zero
+    // is undefined: -O2 deleted an unused quotient and no error 11 was raised,
+    // QB-DIVZERO-1); the option no longer adds the zeros.
     let raised =
         |program: &llrm_core::hir::model::Program| instructions(program).iter().filter(|one| raises(one, 11)).count();
     let checked = hir(true);
-    assert!(raised(&plain) < raised(&checked), "{} {}", raised(&plain), raised(&checked));
+    assert!(raised(&plain) >= divisions, "{} {divisions}", raised(&plain));
     assert!(raised(&checked) >= divisions, "{checked:?}");
 }
 
@@ -2736,11 +2737,12 @@ fn test_checked_division_raises_on_the_rich_route() {
     let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let text = listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
     assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
-    // Without the option a division where errors land is raised as code too
-    // (the next test); with no handler it stays the processor's.
+    // Without the option a division by a variable is raised as code too, with
+    // or without a handler (QB-DIVZERO-1: the processor's trap is undefined in
+    // MIR and -O2 deleted it).
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "plain.bas", b"DEFINT A-Z\nINPUT d\nPRINT 10 \\ d\n");
-    assert!(!listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
+    assert!(listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
 }
 
 /// An error raised in a FUNCTION called from a SUB, with the handler in the

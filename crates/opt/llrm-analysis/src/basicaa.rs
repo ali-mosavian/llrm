@@ -30,7 +30,7 @@
 //! # Provides
 //! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
@@ -108,6 +108,40 @@ pub(crate) fn is_identified_function_local(
     operand: Operand,
 ) -> bool {
     BasicAA::new(unit).is_identified_local(operand)
+}
+
+/// `CallBase::getMemoryEffects`: the site's attributes met with the direct
+/// callee's.
+pub(crate) fn call_memory_effects(
+    unit: &Unit,
+    call: llrm_mir::module::InstId,
+) -> MemoryEffects {
+    let function = unit.function;
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+        return MemoryEffects::unknown();
+    };
+    let site = MemoryEffects::of_attrs(&info.attrs);
+    let callee = llrm_mir::memory::callee(unit.context, function, call)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+}
+
+/// `isIdentifiedObject`: an identified local, or a global variable.
+pub(crate) fn is_identified_object(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    let basic = BasicAA::new(unit);
+    basic.is_identified_local(operand) || basic.global_variable(operand)
+}
+
+/// `getUnderlyingObject`: through geps and casts.
+pub(crate) fn underlying_object(
+    unit: &Unit,
+    operand: Operand,
+) -> Operand {
+    BasicAA::new(unit).underlying(operand)
 }
 
 pub struct BasicAA<'a> {
@@ -190,12 +224,39 @@ impl<'a> BasicAA<'a> {
         operand
     }
 
+    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant expression.
+    fn is_gep_operator(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.constant_gep_base(operand).is_some()
+            || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
+    }
+
+    /// The base of a `getelementptr` constant expression, if `operand` is one.
+    fn constant_gep_base(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        match operand {
+            Operand::Constant(id) => match &self.unit.context.get(id).kind {
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => Some(Operand::Constant(operands[0])),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// `getUnderlyingObject`: through geps and casts, `MAX_LOOKUP` steps.
     fn underlying(
         &self,
         mut operand: Operand,
     ) -> Operand {
         for _ in 0..MAX_LOOKUP {
+            if let Some(base) = self.constant_gep_base(operand) {
+                operand = base;
+                continue;
+            }
             let Some(one) = self.defining(operand) else { break };
             match one.opcode {
                 Opcode::GetElementPtr { .. } => operand = one.operands[0],
@@ -230,6 +291,26 @@ impl<'a> BasicAA<'a> {
         DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
+            // A `getelementptr` constant expression is a GEPOperator as well: DecomposeGEPExpression reads it as it reads the instruction.
+            if let Operand::Constant(id) = operand {
+                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) = &self.unit.context.get(id).kind {
+                    found.inbounds &= *inbounds;
+                    found.nuw &= *nuw;
+                    let indices: Vec<Option<i128>> = operands[1..]
+                        .iter()
+                        .map(|&index| {
+                            let index = Operand::Constant(index);
+                            self.unit.int_constant(index).map(|bits| self.signed(index, bits))
+                        })
+                        .collect();
+                    let (constant, variable) = self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
+                    debug_assert!(variable.is_empty(), "a constant expression's indices are constants");
+                    found.offset += constant;
+                    operand = Operand::Constant(operands[0]);
+                    found.base = operand;
+                    continue;
+                }
+            }
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
@@ -632,9 +713,7 @@ impl<'a> BasicAA<'a> {
         o2: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> AliasResult {
-        let is_gep = |operand: Operand| {
-            self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
-        };
+        let is_gep = |operand: Operand| self.is_gep_operator(operand);
         if is_gep(a.ptr) {
             let result = self.alias_gep(a, b, o1, o2, aaqi);
             if result != AliasResult::MayAlias {
@@ -684,12 +763,8 @@ impl<'a> BasicAA<'a> {
                 return AliasResult::MayAlias;
             }
             let joins = |operand| {
-                self.defining(operand).is_some_and(|one| {
-                    matches!(
-                        one.opcode,
-                        Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-                    )
-                })
+                self.is_gep_operator(operand)
+                    || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Phi | Opcode::Select))
             };
             if joins(other.ptr) || joins(underlying1) || joins(underlying2) {
                 return base_objects(self, aaqi);
@@ -1030,15 +1105,7 @@ impl AAResults for BasicAA<'_> {
         call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        let function = self.unit.function;
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
-            return MemoryEffects::unknown();
-        };
-        let site = MemoryEffects::of_attrs(&info.attrs);
-        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
-            .and_then(|one| self.unit.globals.get(one.0 as usize))
-            .and_then(|one| one.function());
-        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+        call_memory_effects(self.unit, call)
     }
 
     /// A call against a location is `getModRefInfo(Call, Loc)`; every other

@@ -137,8 +137,44 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
     (corpus / "huge.bas").write_text("' flags: -O2 --huge-arrays\nPRINT 3\n")
     (corpus / "frames.bas").write_text("' flags: -O2 --own-frames -fsanitize=stack\nPRINT 4\n")
     (corpus / "vb.bas").write_text("' dialect: qb45 vbdos\nPRINT 5\n")
+    (corpus / "ms_runtime.bas").write_text("' flags: -O1 | -O2\n' dialect: qb45\nPRINT 6\n")
     machines = {}
     for tool, source, machine, level in q.extra_jobs(tmp_path):
         if source.parent == corpus:
             machines.setdefault(source.name, set()).add(machine)
-    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}}, machines
+    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}, "ms_runtime.bas": {"-m16"}}, machines
+
+
+def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
+    """origin/feat/parity moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
+    binary.chmod(0o755)
+    moved = "f" * 40
+    real_run = q.subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return real_run(["echo", moved], *args, **kwargs)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(q.subprocess, "run", run)
+    monkeypatch.setattr(q, "sweep", lambda *a, **k: [])
+    monkeypatch.setattr(q, "sweep_extra", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    q.main()
+    header = capsys.readouterr().out.splitlines()[0]
+    assert "aaaaaaaaa" in header and "fffffffff" not in header
+
+
+def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho usage: llrm-c [-h] source\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    try:
+        q.main()
+    except SystemExit as why:
+        assert "no build stamp" in str(why)
+    else:
+        raise AssertionError("an unstamped binary was swept")

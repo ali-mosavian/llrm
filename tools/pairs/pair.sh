@@ -13,6 +13,8 @@ for p in "base $B" "new $W"; do set -- $p
   fi
   touch $T/dist/llrm-* $T/dist/nibfront
 done
+# A build is the sha the caller names, in a tree without changes: tools/stamp.py (a worktree moved during a build once gave a number for another commit).
+python3 $R/tools/stamp.py --expect-sha $B $S/sb-$N-base/dist/llrm-c && python3 $R/tools/stamp.py --expect-sha $W $S/sb-$N-new/dist/llrm-c || { echo "stamp refused" >> $D/status; exit 3; }
 { md5sum $S/sb-$N-base/dist/llrm-c $S/sb-$N-new/dist/llrm-c | awk '{print substr($1,1,12), $2}'; } > $D/md5.txt
 cd $R
 export ROWS_WORK=$S/rows-$N; mkdir -p $ROWS_WORK; ln -sfn $S/rows/main24d $ROWS_WORK/main24d

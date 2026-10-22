@@ -702,9 +702,12 @@ fn get_underlying_object(
         return c;
     }
     for _ in 0..6 {
-        match expr(context, value) {
-            Some(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
-            Some(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+        // Read in place: a clone of the expression's operands per step was most
+        // of this function's cost (every load is asked).
+        match &context.get(value).kind {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+                let source = *source;
                 if !is_pointer(context, ty_of(context, source)) {
                     return value;
                 }
@@ -1593,7 +1596,7 @@ fn constant_fold_inst_operands_impl(
                 op,
                 BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
             ) {
-                return None;
+                return constfold::float_binary(context, *op, flags, ops[0], ops[1]);
             }
             constant_fold_binary_op_operands(context, env, *op, ops[0], ops[1])
         }
