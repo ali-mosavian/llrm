@@ -26,8 +26,8 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-18 | d_faces compile (#3575) | O2 | Ir | 1280.1 M | 1298.3 M | +18.2 M (+1.4%) | a function a pass declares is seen by the passes after it: a design cost the pin shares | w-8 | 2026-10-30 | #3575 |
 | AM-19 | queens m32 | O3 | clocks | 94766 | 151958 | +57192 (+60.4%) | executed instructions 113712 vs 78024. Ruled out by experiment on e1dd29df45: D10 admission (a single self-call in a loop is not admitted; admitting it copies `_place`, code 757 to 1717 B, clocks 150113), ipa-cp clones (without them 160838), loop alignment nops (none: clocks unchanged). Main's `_place` is peeled 3 deep with `safe` inlined and its inner loop counts to zero (`add edx,4; inc ebx; je`), the form the pin's llc does not emit (as AM-7); open: whether the count-to-zero loop form accounts for the rest | w-6 | 2026-10-26 | #3507 |
 | AM-20 | queens m32 | O1 | clocks | 175007 | 198281 | +23274 (+13.3%) | as AM-19 (same code at -O1; ipa-cp clones and alignment are not the cause) | w-6 | 2026-10-26 | #3507 |
-| AM-SL-1 | QCport render/d_alias | O3 | bytes | not stated | not stated | +179 (+1.04%) over the PR's base | simplifyLoadInst folds more bounds, so more unrolling (cause not yet attributed); bytes do not bind at -O3; no clocks row | w-3 | a clocks read at -O3 | #3597 |
-| AM-SL-2 | QCport render/r_portal | O3 | bytes | not stated | not stated | +142 (+0.5%) over the PR's base | as AM-SL-1 | w-3 | a clocks read at -O3 | #3597 |
+| AM-SL-1 | QCport render/d_alias | O3 | bytes | not stated | not stated | +179 (+1.04%) over #3597's base | x87 spill reshuffle on a smaller IR (MIR -10%, unroll decisions unchanged), not simplify_load (w-3, ~/scratch/w3-qo/sl-d_alias-{B,N}.s); bytes do not bind at -O3; no clocks harness for the module | X87-GAP holder (asked of w-1/w-4) | the x87 allocation work, date to be confirmed | #3597 |
+| AM-SL-2 | QCport render/r_portal | O3 | bytes | not stated | not stated | +142 (+0.5%) over #3597's base | as AM-SL-1 (sl-r_portal-{B,N}.s) | X87-GAP holder (asked of w-1/w-4) | the x87 allocation work, date to be confirmed | #3597 |
 
 ## To add by their owners
 
