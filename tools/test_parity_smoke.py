@@ -522,10 +522,21 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
 
 
 def test_integration_failures_name_the_red_tests_less_the_listed_ones():
-    class Done:
-        returncode = 101
-        stdout = "     Running tests/attribute.rs (x)\ntest a_red_one ... FAILED\ntest result: FAILED. 0 passed; 1 failed\n"
-        stderr = ""
+    """The positive control of #3542 printed `integration ?::test`: cargo's `Running tests/X.rs` lines are on stderr and the test lines on stdout, read as two blocks."""
+    import subprocess as sp
 
-    assert ps.integration_failures(["attribute"], run=lambda *a, **k: Done()) == {"integration attribute::a_red_one"}
-    assert ps.integration_failures([], run=lambda *a, **k: Done()) == set()
+    def run(command, **kwargs):
+        interleaved = "     Running tests/attribute.rs (x)\ntest a_red_one ... FAILED\ntest result: FAILED. 0 passed; 1 failed\n"
+
+        class Done:
+            returncode = 101
+
+        done = Done()
+        if kwargs.get("stderr") is sp.STDOUT:
+            done.stdout, done.stderr = interleaved, ""
+        else:  # two pipes: the Running line is in stderr, the tests in stdout
+            done.stdout, done.stderr = interleaved.split("\n", 1)[1], interleaved.split("\n", 1)[0] + "\n"
+        return done
+
+    assert ps.integration_failures(["attribute"], run=run) == {"integration attribute::a_red_one"}
+    assert ps.integration_failures([], run=run) == set()
