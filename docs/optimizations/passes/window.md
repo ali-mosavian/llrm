@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/window.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/window.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:514d785ce136b9588502739b8fae4960bc093fe3aa7aba07d172b2abab240be1 -->
+<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:944d2e0f666d5d40b8797699eb2268ab1bed24407c5b39c883a6cc6f3f4178ca -->
 
 # window
 
@@ -64,6 +64,9 @@ saving must exceed the windows (`trips / most`, rounded up) times the setup,
 where an unknown count is taken as its bound or `profit::UNKNOWN_TRIPS`.
 For size (-Os), the saving must exceed one setup. A loop that fails is
 left alone. The new branches carry `branch_weights`.
+
+DEVIATE LP-4 (no pin pass: huge-pointer windows are the DOS exception, LLVM has no huge pointer; exit: none
+planned, kept; to migrate off the old analyses it reads; owner w-6; review 2026-11-27).
 
 ## Example
 Before:

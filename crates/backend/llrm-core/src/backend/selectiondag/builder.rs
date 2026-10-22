@@ -11,6 +11,9 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+mod memops;
+mod switch;
+
 use crate::backend::isel::{Convention, Parameter, convention_for};
 use llrm_lir::registers::RegId;
 
@@ -18,7 +21,7 @@ use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG
 use super::fold::mask;
 use super::isd::{CondCode, ISD};
 use super::function_lowering::FunctionLoweringInfo;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// An instruction the builder does not translate yet; the shadow harness
 /// counts these per reason.
@@ -54,6 +57,9 @@ pub struct BlockDag {
     pub phi_updates: Vec<(ValueId, u32)>,
     /// The argument registers copied to virtual registers, in the entry block.
     pub live_ins: Vec<(RegId, u32)>,
+    /// The blocks a `switch` lowering made, built after it: their ids start
+    /// at the function's block capacity.
+    pub extra: Vec<(BlockId, BlockDag)>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -68,25 +74,8 @@ pub fn build_block(
     info: &mut FunctionLoweringInfo,
     block: BlockId,
 ) -> Result<BlockDag, Refused> {
-    let mut builder = Builder {
-        module,
-        function,
-        layout,
-        target,
-        arch,
-        convention,
-        info,
-        live_ins: Vec::new(),
-        dag: SelectionDAG::new(target.dag),
-        node_map: IdMap::new(),
-        pending_loads: Vec::new(),
-        pending_exports: Vec::new(),
-        constants_out: HashMap::new(),
-        phi_updates: Vec::new(),
-        block,
-    };
-    builder.dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-    builder.dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
+    let order = function.layout().to_vec();
+    let mut builder = Builder::new(module, function, layout, target, arch, convention, info, block, order, function.block_capacity() as u32, None);
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
     }
@@ -96,8 +85,71 @@ pub fn build_block(
     }
     let root = builder.control_root();
     builder.dag.set_root(root);
-    Ok(BlockDag { dag: builder.dag, phi_updates: builder.phi_updates, live_ins: builder.live_ins })
+    let switch_name = dag_name(&builder.dag, block);
+    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, .. } = builder;
+    // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that is final
+    let mut extra = Vec::new();
+    let mut next = next_synthetic;
+    for item in deferred {
+        let block = item.block();
+        let mut one = Builder::new(module, function, layout, target, arch, convention, info, block, order.clone(), next, Some(switch_name.clone()));
+        one.visit_deferred(item)?;
+        let root = one.control_root();
+        one.dag.set_root(root);
+        next = one.next_synthetic;
+        extra.push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
+    }
+    Ok(BlockDag { dag, phi_updates, live_ins, extra })
 }
+
+fn dag_name(dag: &SelectionDAG, block: BlockId) -> String {
+    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+}
+
+impl<'a> Builder<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        module: &'a Module,
+        function: &'a Function,
+        layout: &'a DataLayout,
+        target: &'a BuilderTarget,
+        arch: &'a dyn llrm_target::Target,
+        convention: &'a Convention,
+        info: &'a mut FunctionLoweringInfo,
+        block: BlockId,
+        order: Vec<BlockId>,
+        next_synthetic: u32,
+        synthetic_name: Option<String>,
+    ) -> Builder<'a> {
+        let mut dag = SelectionDAG::new(target.dag);
+        dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
+        dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
+        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+        dag.block_names.resize(next_synthetic as usize, name);
+        Builder {
+            module,
+            function,
+            layout,
+            target,
+            arch,
+            convention,
+            info,
+            live_ins: Vec::new(),
+            dag,
+            node_map: IdMap::new(),
+            pending_loads: Vec::new(),
+            pending_exports: Vec::new(),
+            constants_out: HashMap::new(),
+            phi_updates: Vec::new(),
+            block,
+            order,
+            deferred: Vec::new(),
+            next_synthetic,
+            plan: None,
+        }
+    }
+}
+
 
 struct Builder<'a> {
     module: &'a Module,
@@ -115,6 +167,11 @@ struct Builder<'a> {
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     block: BlockId,
+    /// The blocks in layout order, with the ones a switch lowering adds.
+    order: Vec<BlockId>,
+    deferred: Vec<switch::Deferred>,
+    next_synthetic: u32,
+    plan: Option<super::switchcg::SwitchPlan>,
 }
 
 fn flags_of(flags: llrm_mir::opcode::Flags) -> SDNodeFlags {
@@ -126,6 +183,34 @@ fn flags_of(flags: llrm_mir::opcode::Flags) -> SDNodeFlags {
         .with(SDNodeFlags::DISJOINT, flags.contains(Flags::DISJOINT))
         .with(SDNodeFlags::NON_NEG, flags.contains(Flags::NNEG))
         .with(SDNodeFlags::SAME_SIGN, flags.contains(Flags::SAMESIGN))
+        .with(SDNodeFlags::NO_NANS, flags.contains(Flags::NNAN))
+        .with(SDNodeFlags::NO_INFS, flags.contains(Flags::NINF))
+        .with(SDNodeFlags::NO_SIGNED_ZEROS, flags.contains(Flags::NSZ))
+        .with(SDNodeFlags::ALLOW_RECIPROCAL, flags.contains(Flags::ARCP))
+        .with(SDNodeFlags::ALLOW_CONTRACT, flags.contains(Flags::CONTRACT))
+        .with(SDNodeFlags::ALLOW_REASSOC, flags.contains(Flags::REASSOC))
+}
+
+fn float_cond_code(predicate: llrm_mir::opcode::FloatPredicate) -> CondCode {
+    use llrm_mir::opcode::FloatPredicate as P;
+    match predicate {
+        P::False => CondCode::SetFalse,
+        P::Oeq => CondCode::SetOEq,
+        P::Ogt => CondCode::SetOGt,
+        P::Oge => CondCode::SetOGe,
+        P::Olt => CondCode::SetOLt,
+        P::Ole => CondCode::SetOLe,
+        P::One => CondCode::SetONe,
+        P::Ord => CondCode::SetO,
+        P::Ueq => CondCode::SetUEq,
+        P::Ugt => CondCode::SetUGt,
+        P::Uge => CondCode::SetUGe,
+        P::Ult => CondCode::SetULt,
+        P::Ule => CondCode::SetULe,
+        P::Une => CondCode::SetUNe,
+        P::Uno => CondCode::SetUo,
+        P::True => CondCode::SetTrue,
+    }
 }
 
 fn cond_code(predicate: IntPredicate) -> CondCode {
@@ -149,7 +234,11 @@ impl Builder<'_> {
             Type::Int(bits) if (1..=128).contains(bits) => Ok(EVT::integer(*bits)),
             Type::Pointer(0) => Ok(self.target.dag.pointer),
             Type::Pointer(_) => Err(Refused("pointer in another address space")),
-            Type::Float(_) => Err(Refused("floating point")),
+            Type::Float(kind) => Ok(EVT::Simple(match kind {
+                llrm_mir::types::FloatKind::Float => MVT::F32,
+                llrm_mir::types::FloatKind::Double => MVT::F64,
+                llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
+            })),
             _ => Err(Refused("aggregate or vector value")),
         }
     }
@@ -157,6 +246,9 @@ impl Builder<'_> {
     /// The register type a value of `vt` is carried in across blocks:
     /// itself when legal, else the next legal width up.
     fn register_type(&self, vt: EVT) -> Result<EVT, Refused> {
+        if vt.is_floating_point() {
+            return Ok(vt);
+        }
         let bits = vt.size_in_bits();
         self.target.legal_ints.iter().find(|legal| **legal >= bits).map(|legal| EVT::integer(*legal)).ok_or(Refused("integer wider than a register"))
     }
@@ -274,23 +366,31 @@ impl Builder<'_> {
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(&mut self, instruction: &llrm_mir::module::Instruction, info: &llrm_mir::opcode::CallInfo) -> Result<(), Refused> {
         let (callee, arguments) = instruction.operands.split_last().expect("a call names its callee");
-        let Operand::Constant(callee_id) = *callee else { return Err(Refused("indirect call")) };
-        let ConstantKind::Global(global) = self.module.context.get(callee_id).kind else { return Err(Refused("indirect call")) };
-        if self.module.global(global).intrinsic().is_some() {
-            return Err(Refused("intrinsic call"));
+        // A direct call names a function; an indirect one calls the value.
+        let direct = match *callee {
+            Operand::Constant(id) => match self.module.context.get(id).kind {
+                ConstantKind::Global(global) => Some(global),
+                _ => return Err(Refused("call of a constant expression")),
+            },
+            _ => None,
+        };
+        if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
+            return self.visit_intrinsic(instruction, info, &intrinsic);
         }
-        let types = &self.module.context.types;
         let mut arg_types = Vec::new();
         for argument in arguments {
             arg_types.push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
         let first = self.arch.first_argument_offset(false);
-        let plan = convention_for(self.module, self.layout, self.arch, first, info.calling_convention, info.function_type, &arg_types, &info.argument_attrs)
+        let (result_type, _, variadic) = self.module.signature(info.function_type);
+        let plan = convention_for(self.module, self.layout, self.arch, first, info.calling_convention, result_type, variadic, &arg_types, &info.argument_attrs)
             .map_err(|_| Refused("call the convention does not describe"))?;
-        let (result_type, _, _) = self.module.signature(info.function_type);
         // Evaluate the callee and the arguments before the call sequence starts.
-        let _ = self.get_value(*callee)?;
-        let callee_node = self.dag.get_target_global_address(self.target.dag.pointer, global.0, 0);
+        let called = self.get_value(*callee)?;
+        let callee_node = match direct {
+            Some(global) => self.dag.get_target_global_address(self.target.dag.pointer, global.0, 0),
+            None => called,
+        };
         let mut values = Vec::new();
         for argument in arguments {
             let value = self.get_value(*argument)?;
@@ -299,6 +399,21 @@ impl Builder<'_> {
             }
             values.push(value);
         }
+        let attrs = |at: usize| info.argument_attrs.get(at).map_or(&[][..], Vec::as_slice);
+        let extends: Vec<ISD> = (0..values.len())
+            .map(|at| if llrm_mir::memory::has(attrs(at), "signext") { ISD::SignExtend } else if llrm_mir::memory::has(attrs(at), "zeroext") { ISD::ZeroExtend } else { ISD::AnyExtend })
+            .collect();
+        let result = self.lower_call(callee_node, values, &extends, &plan, first, result_type)?;
+        if let (Some(value), Some(result)) = (instruction.result, result) {
+            self.set_value(value, result);
+        }
+        Ok(())
+    }
+
+    /// `LowerCall` for arguments already evaluated: the sequence from
+    /// `callseq_start` to the result read back; the result, if any.
+    pub(super) fn lower_call(&mut self, callee_node: SDValue, values: Vec<SDValue>, extends: &[ISD], plan: &Convention, first: i64, result_type: TypeId) -> Result<Option<SDValue>, Refused> {
+        let types = &self.module.context.types;
         let bytes = (plan.stack_arguments - first).max(0) as u64;
         let root = self.root();
         let start = self.dag.get_callseq_start(root, bytes);
@@ -306,9 +421,17 @@ impl Builder<'_> {
         let mut stores = Vec::new();
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
-        for (value, parameter) in values.iter().zip(&plan.parameters) {
+        for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
             match parameter {
                 Parameter::Cell(displacement) => {
+                    // a narrow argument fills its stack slot (`CCPromoteToType`)
+                    let slot = EVT::integer(self.arch.stack_slot_bytes() as u32 * 8);
+                    let narrow = self.dag.value_type(*value);
+                    let value = &if narrow.is_integer() && narrow.bits_lt(slot) {
+                        self.dag.get_node(extends.get(at).copied().unwrap_or(ISD::AnyExtend), slot, &[*value])
+                    } else {
+                        *value
+                    };
                     let sp = *stack_pointer.get_or_insert_with(|| {
                         let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
@@ -344,9 +467,12 @@ impl Builder<'_> {
         let glue = SDValue { node: end.node, res: 1 };
         if types.is_void(result_type) {
             self.dag.set_root(chain);
-            return Ok(());
+            return Ok(None);
         }
         let vt = self.type_of(result_type)?;
+        if vt.is_floating_point() {
+            return Err(Refused("floating-point result of a call"));
+        }
         let [reg] = plan.returns[..] else { return Err(Refused("result in several registers")) };
         if self.register_type(vt)? != vt {
             return Err(Refused("result of an illegal integer type"));
@@ -355,10 +481,7 @@ impl Builder<'_> {
         let result = self.dag.get_copy_from_phys_reg(chain, reg, vt, glue);
         chain = SDValue { node: result.node, res: 1 };
         self.dag.set_root(chain);
-        if let Some(value) = instruction.result {
-            self.set_value(value, result);
-        }
-        Ok(())
+        Ok(Some(result))
     }
 
     /// The convention names a result register by its widest view; the DAG
@@ -376,15 +499,20 @@ impl Builder<'_> {
         if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
-            let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
-            if self.register_type(vt)? != vt {
-                return Err(Refused("result of an illegal integer type"));
+            if vt.is_floating_point() {
+                // x87 returns in st(0), which no register names: the value is RET_GLUE's operand
+                ops.push(value);
+            } else {
+                let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
+                if self.register_type(vt)? != vt {
+                    return Err(Refused("result of an illegal integer type"));
+                }
+                let reg = self.sized_register(reg, vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(vt, reg));
             }
-            let reg = self.sized_register(reg, vt);
-            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
-            chain = SDValue { node: copy.node, res: 0 };
-            glue = Some(SDValue { node: copy.node, res: 1 });
-            ops.push(self.dag.get_phys_register(vt, reg));
         }
         let popped = self.dag.get_constant_with(self.convention.popped as u128, EVT::I32, true, false);
         let mut all = vec![chain, popped];
@@ -415,6 +543,8 @@ impl Builder<'_> {
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
+            ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
+            ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
@@ -482,6 +612,8 @@ impl Builder<'_> {
             Opcode::Binary(op) => self.visit_binary(&instruction, *op)?,
             Opcode::Cast(op) => self.visit_cast(&instruction, *op)?,
             Opcode::ICmp(predicate) => self.visit_icmp(&instruction, *predicate)?,
+            Opcode::FCmp(predicate) => self.visit_fcmp(&instruction, *predicate)?,
+            Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
@@ -490,7 +622,7 @@ impl Builder<'_> {
             Opcode::Alloca { .. } if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
-            Opcode::Switch => return Err(Refused("switch (A2)")),
+            Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
             Opcode::Invoke(_) => return Err(Refused("invoke")),
             _ => return Err(Refused("instruction not in the scalar subset")),
@@ -520,7 +652,11 @@ impl Builder<'_> {
             BinaryOp::And => ISD::And,
             BinaryOp::Or => ISD::Or,
             BinaryOp::Xor => ISD::Xor,
-            _ => return Err(Refused("floating point")),
+            BinaryOp::FAdd => ISD::FAdd,
+            BinaryOp::FSub => ISD::FSub,
+            BinaryOp::FMul => ISD::FMul,
+            BinaryOp::FDiv => ISD::FDiv,
+            BinaryOp::FRem => ISD::FRem,
         };
         let lhs = self.get_value(instruction.operands[0])?;
         let mut rhs = self.get_value(instruction.operands[1])?;
@@ -556,6 +692,15 @@ impl Builder<'_> {
                     operand
                 }
             }
+            CastOp::FPExt => self.dag.get_node(ISD::FpExtend, dest, &[operand]),
+            CastOp::FPTrunc => {
+                let zero = self.dag.get_constant_with(0, self.target.dag.pointer, true, false);
+                self.dag.get_node(ISD::FpRound, dest, &[operand, zero])
+            }
+            CastOp::FPToSI => self.dag.get_node(ISD::FpToSInt, dest, &[operand]),
+            CastOp::FPToUI => self.dag.get_node(ISD::FpToUInt, dest, &[operand]),
+            CastOp::SIToFP => self.dag.get_node(ISD::SIntToFp, dest, &[operand]),
+            CastOp::UIToFP => self.dag.get_node_flags(ISD::UIntToFp, dest, &[operand], flags),
             _ => return Err(Refused("cast not in the scalar subset")),
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
@@ -570,6 +715,26 @@ impl Builder<'_> {
         let flags = flags_of(instruction.flags);
         let node = self.dag.get_node_flags(ISD::SetCC, dest, &[lhs, rhs, cc], SDNodeFlags(flags.0 & SDNodeFlags::SAME_SIGN.0));
         self.set_value(instruction.result.expect("a compare has a result"), node);
+        Ok(())
+    }
+
+    fn visit_fcmp(&mut self, instruction: &llrm_mir::module::Instruction, predicate: llrm_mir::opcode::FloatPredicate) -> Result<(), Refused> {
+        let lhs = self.get_value(instruction.operands[0])?;
+        let rhs = self.get_value(instruction.operands[1])?;
+        let dest = self.type_of(instruction.ty)?;
+        let cc = self.dag.get_cond_code(float_cond_code(predicate));
+        let flags = flags_of(instruction.flags);
+        let flags = SDNodeFlags(flags.0 & (SDNodeFlags::NO_NANS.0 | SDNodeFlags::NO_INFS.0 | SDNodeFlags::NO_SIGNED_ZEROS.0 | SDNodeFlags::ALLOW_RECIPROCAL.0 | SDNodeFlags::ALLOW_CONTRACT.0 | SDNodeFlags::ALLOW_REASSOC.0));
+        let node = self.dag.get_node_flags(ISD::SetCC, dest, &[lhs, rhs, cc], flags);
+        self.set_value(instruction.result.expect("a compare has a result"), node);
+        Ok(())
+    }
+
+    fn visit_fneg(&mut self, instruction: &llrm_mir::module::Instruction) -> Result<(), Refused> {
+        let operand = self.get_value(instruction.operands[0])?;
+        let vt = self.dag.value_type(operand);
+        let node = self.dag.get_node_flags(ISD::FNeg, vt, &[operand], flags_of(instruction.flags));
+        self.set_value(instruction.result.expect("an fneg has a result"), node);
         Ok(())
     }
 
@@ -736,9 +901,8 @@ impl Builder<'_> {
     }
 
     fn next_block(&self) -> Option<BlockId> {
-        let layout = self.function.layout();
-        let at = layout.iter().position(|block| *block == self.block)?;
-        layout.get(at + 1).copied()
+        let at = self.order.iter().position(|block| *block == self.block)?;
+        self.order.get(at + 1).copied()
     }
 
     /// `HandlePHINodesInSuccessorBlocks`: the incoming value of each phi of
