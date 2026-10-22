@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:f32389043d093bdb0e28602df6df0fb432908f1f233e358fee2ce8b4916290b6 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:a93cb4719dd948ddc57595f67272c7af66be7409c83339f2d2517bdef227fbce -->
 
 # selectiondag
 
@@ -19,11 +19,14 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`lowering::FunctionLoweringInfo`): the block
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the block
 that defines it ends in `CopyToReg`, the blocks that read it start from
 `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
-Calls, returns, arguments and switches are refused (`Refused`) until A2.
+Arguments and returns go through the target's `Convention` (stack
+parameters are loads of fixed objects, register ones live-in copies;
+`ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+register are refused (`Refused`) until their pieces land.
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The

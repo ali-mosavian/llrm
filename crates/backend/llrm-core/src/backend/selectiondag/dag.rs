@@ -54,6 +54,8 @@ pub enum NodeData {
     CondCode(CondCode),
     ValueType(EVT),
     Register(u32),
+    /// A physical register of the target being compiled.
+    PhysReg(llrm_lir::registers::RegId),
     FrameIndex(i32),
     Global { symbol: u32, offset: i64 },
     Block(u32),
@@ -422,6 +424,19 @@ impl SelectionDAG {
 
     pub fn get_global_address(&mut self, vt: EVT, symbol: u32, offset: i64) -> SDValue {
         self.intern(ISD::GlobalAddress, &[vt], &[], SDNodeFlags::default(), NodeData::Global { symbol, offset })
+    }
+
+    pub fn get_phys_register(&mut self, vt: EVT, reg: llrm_lir::registers::RegId) -> SDValue {
+        self.intern(ISD::Register, &[vt], &[], SDNodeFlags::default(), NodeData::PhysReg(reg))
+    }
+
+    /// `getCopyToReg` of a physical register with glue: results are the chain
+    /// and the glue.
+    pub fn get_copy_to_phys_reg(&mut self, chain: SDValue, reg: llrm_lir::registers::RegId, value: SDValue, glue: Option<SDValue>) -> SDValue {
+        let reg_node = self.get_phys_register(self.value_type(value), reg);
+        let mut ops = vec![chain, reg_node, value];
+        ops.extend(glue);
+        self.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops)
     }
 
     pub fn get_register(&mut self, vt: EVT, reg: u32) -> SDValue {
