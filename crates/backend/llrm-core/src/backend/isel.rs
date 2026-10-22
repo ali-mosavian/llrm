@@ -6936,7 +6936,8 @@ impl Selector<'_, '_, '_> {
             return refused();
         }
         let Some(length) = self.length(length) else { return refused() };
-        if length / 4 + (length % 4).count_ones() as i64 > MEMCPY_MOVES {
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
+        if length / 4 + (length % 4).count_ones() as i64 > most {
             return refused();
         }
         let volatile = self.constant(volatile, 1) != Some(0);
