@@ -883,7 +883,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
