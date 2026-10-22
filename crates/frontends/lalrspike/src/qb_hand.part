@@ -1,0 +1,432 @@
+// ---- lexical leaves: the token's index is the payload ---------------------
+
+Ident: Tree = <l:@L> "ident" => Tree::at(l);
+IntLit: Tree = <l:@L> "int" => Tree::at(l);
+RealLit: Tree = <l:@L> "real" => Tree::at(l);
+StrLit: Tree = <l:@L> "str" => Tree::at(l);
+
+NL: Tree = "tkNewLine" => Tree::List(vec![]);
+
+// ---- program and lines ----------------------------------------------------
+//
+// Block structure is not the grammar's: IF/ELSEIF/ELSE/END IF, SUB bodies,
+// loops and SELECT CASE are lines of a flat list, nested by a later pass. On
+// one line, THEN, ELSE and `:` separate statements and `IF c THEN x ELSE y`
+// is the flat list [IF c, THEN, x, ELSE, y]; which IF an ELSE closes is
+// that pass's answer, so there is no dangling else here.
+
+pub Program: Tree = <l:Line*> => Tree::List(l);
+
+Line: Tree = {
+    NL,
+    <s:LineStart> NL => s,
+};
+
+LineStart: Tree = {
+    // a line number is a label; statements may follow it
+    <n:IntLit> <s:Stmts> => Tree::node("Label", vec![n, s]),
+    // a name and a colon at the line start is a label, never a call
+    <n:Ident> "tkColon" <s:Stmts> => Tree::node("Label", vec![n, s]),
+    // a lone name is a call; deferred: it may also be a label use or a variable
+    <n:Ident> => Tree::node("Call", vec![n]),
+    <s:SimpleNoBare> <t:Tail> => Tree::List(vec![s, t]),
+    <h:Head> <s:StmtsAfterHead> => Tree::List(vec![h, s]),
+    "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
+    "tkColon" <s:Stmts> => s,
+};
+
+// A statement position that may be empty.
+Stmts: Tree = {
+    => Tree::Empty,
+    <s:Simple> <t:Tail> => Tree::List(vec![s, t]),
+    <h:Head> <s:StmtsAfterHead> => Tree::List(vec![h, s]),
+    "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
+};
+
+// After THEN or ELSE a bare line number is a GOTO.
+StmtsAfterHead: Tree = {
+    Stmts,
+    <n:IntLit> <t:Tail> => Tree::node("ThenLine", vec![n, t]),
+};
+
+Tail: Tree = {
+    => Tree::Empty,
+    "tkColon" <s:Stmts> => s,
+    "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
+};
+
+Head: Tree = {
+    "tkIF" <c:Exp> "tkTHEN" => Tree::node("IF", vec![c]),
+    "tkELSEIF" <c:Exp> "tkTHEN" => Tree::node("ELSEIF", vec![c]),
+};
+
+Simple: Tree = {
+    SimpleNoBare,
+    <n:Ident> => Tree::node("Call", vec![n]),
+};
+
+SimpleNoBare: Tree = {
+    AutoStatement,
+    ExtStatement,
+    "tkIF" <c:Exp> "tkGOTO" <l:N_LabLn> => Tree::node("IFGOTO", vec![c, l]),
+    "tkDATA" <e:OptExpList> => Tree::node("DATA", vec![e]),
+    "tkREM" => Tree::node("REM", vec![]),
+    // PAINT and VIEW end in `commaOptExp commaOptExp`, two optional
+    // `, [exp]` items the recovered grammar parses greedily; as a grammar
+    // the pair is ambiguous, so it is written as the one nesting it means.
+    "tkPAINT" <c:N_coordStep> <t:PaintTail> => Tree::node("PAINT", vec![c, t]),
+    "tkVIEW" <t:ViewBody> => Tree::node("VIEW", vec![t]),
+    // `RUN 100` and `RUN "file"`: a bare integer is a line number, which an
+    // expression also spells, so a pass reads it.
+    "tkRUN" <e:Exp?> => Tree::node("RUN", vec![Tree::opt(e)]),
+    // `RESUME 0` is `RESUME LabLn` with the label 0, `OPTION BASE 1` an
+    // integer: the literals Lit0 and Lit1 are checked later, not parsed.
+    "tkRESUME" <t:ResumeTarget> => Tree::node("RESUME", vec![t]),
+    "tkOPTION" "tkBASE" <n:IntLit> => Tree::node("OPTION", vec![n]),
+    // `LINE (x,y)-(x,y)[, [color][, [B|BF][, style]]]`: B and BF are names.
+    "tkLINE" <c:OptCoordStep> "tkMinus" <d:N_coord2Step> <t:LineTail> => Tree::node("LINE", vec![c, d, t]),
+    // `KEY ON|OFF|LIST`, `KEY (n) ON`, `KEY n, text$`: the key number is an
+    // expression either way.
+    "tkKEY" <w:KeyWord> => Tree::node("KEY", vec![w]),
+    "tkKEY" <n:Exp> <t:KeyTail> => Tree::node("KEY", vec![n, t]),
+    // ON ERROR / ON KEY(n) / ON TIMER(n) / ON expr; PEN, PLAY and STRIG
+    // events are `ON expr GOSUB` with a function call for `expr`.
+    "tkON" "tkERROR" "tkGOTO" <l:N_LabLn> => Tree::node("ONERROR", vec![l]),
+    "tkON" <e:OnEvent> "tkGOSUB" <l:N_LabLn> => Tree::node("ONEVENT", vec![e, l]),
+    "tkON" <e:Exp> <g:GotoGosub> <l:LabLnList> => Tree::node("ON", vec![e, g, l]),
+    "dynamic" => Tree::node("DYNAMIC", vec![]),
+    "static" => Tree::node("STATIC", vec![]),
+    // `x = e`, `a(i) = e`, `r.f = e`: the target is a name until a pass
+    // knows what the name is.
+    <t:NameRef> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
+    // `foo a, b`: a call without CALL or parentheses.
+    <n:Ident> <a:ExpListNP> => Tree::node("CallArgs", vec![n, a]),
+    // `foo (a), b` and `foo(a, b)`: parentheses that are the call's or the
+    // first argument's, which only the symbol table can tell.
+    <n:NameRefApplied> => Tree::node("CallApplied", vec![n]),
+    <n:NameRefApplied> "tkComma" <a:ExpList> => Tree::node("CallAppliedList", vec![n, a]),
+    // TYPE members: `name AS type`.
+    // a member may be named by any word, `pos`, `name`: reserved only as a
+    // statement, and a member line says AS next
+    <n:Ident> <a:AsPart> => Tree::node("Member", vec![n, a]),
+    <n:NameRefApplied> <a:AsPart> => Tree::node("Member", vec![n, a]),
+    <k:Keyword> <a:AsPart> => Tree::node("Member", vec![k, a]),
+    <k:FnKeyword> "tkLParen" <d:ArgList> "tkRParen" <a:AsPart> => Tree::node("Member", vec![k, d, a]),
+    // FUNCTION name(params) [AS type] [STATIC], also after DECLARE
+    "tkFUNCTION" <n:N_IdFuncDef> <p:N_parms> <r:OptReturnAs> <s:"tkSTATIC"?> => Tree::node("FUNCTION", vec![n, p, r]),
+    "tkDECLARE" "tkFUNCTION" <n:N_IdFuncDecl> <p:N_parms> <r:OptReturnAs> => Tree::node("DECLAREFUNCTION", vec![n, p, r]),
+    "tkDECLARE" "tkSUB" <n:N_IdSubDecl> <p:N_parms> => Tree::node("DECLARESUB", vec![n, p]),
+};
+
+// ---- names ----------------------------------------------------------------
+
+// A name written with parentheses is an array element, a function call or a
+// parenthesised argument; with fields it is a record access. Nothing here
+// chooses.
+NameRef: Tree = {
+    <i:Ident> => Tree::node("Name", vec![i]),
+    NameRefApplied,
+    <r:NameRef> "period" <i:FieldName> => Tree::node("Field", vec![r, i]),
+};
+
+NameRefApplied: Tree = {
+    <i:Ident> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("Apply", vec![i, a]),
+    <r:NameRef> "period" <i:FieldName> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("FieldApply", vec![r, i, a]),
+};
+
+ArgList: Tree = {
+    => Tree::List(vec![]),
+    ExpList,
+};
+
+// An argument may be a range, `TO`: array bounds read like arguments.
+ExpList: Tree = {
+    <e:ArgItem> => Tree::List(vec![e]),
+    <l:ExpList> "tkComma" <e:ArgItem> => Tree::push(l, e),
+};
+ArgItem: Tree = {
+    Exp,
+    <a:Exp> "tkTO" <b:Exp> => Tree::node("To", vec![a, b]),
+};
+
+ExpListNP: Tree = {
+    <e:ExpNP> => Tree::List(vec![e]),
+    <l:ExpListNP> "tkComma" <e:Exp> => Tree::push(l, e),
+};
+
+OptExpList: Tree = {
+    <e:OptExp> => Tree::List(vec![e]),
+    <l:OptExpList> "tkComma" <e:OptExp> => Tree::push(l, e),
+};
+
+OptExp: Tree = {
+    => Tree::Empty,
+    Exp,
+};
+
+// ---- expressions ------------------------------------------------------------
+//
+// QuickBASIC precedence, loosest first: IMP EQV XOR OR AND NOT relations
+// + - MOD \ * / unary-minus ^. `P` is the primary a level starts with: the
+// full one, or the one without a leading parenthesis, which a statement
+// `foo (a), b` needs to leave to NameRef.
+
+Exp: Tree = Imp<Primary>;
+ExpNP: Tree = Imp<PrimaryNP>;
+
+Binary<Op, Left, Right>: Tree = {
+    <l:Left> <o:Op> <r:Right> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+};
+
+Imp<P>: Tree = { Eqv<P>, Binary<"tkIMP", Imp<P>, Eqv<Primary>> };
+Eqv<P>: Tree = { Xor<P>, Binary<"tkEQV", Eqv<P>, Xor<Primary>> };
+Xor<P>: Tree = { Or<P>, Binary<"tkXOR", Xor<P>, Or<Primary>> };
+Or<P>: Tree = { And<P>, Binary<"tkOR", Or<P>, And<Primary>> };
+And<P>: Tree = { Not<P>, Binary<"tkAND", And<P>, Not<Primary>> };
+Not<P>: Tree = {
+    Rel<P>,
+    <o:"tkNOT"> <e:Not<Primary>> => Tree::node("Unary", vec![Tree::tok(o), e]),
+};
+Rel<P>: Tree = {
+    Add<P>,
+    <l:Rel<P>> <o:RelOp> <r:Add<Primary>> => Tree::node("Binary", vec![l, o, r]),
+};
+RelOp: Tree = {
+    <o:"tkEQ"> => Tree::tok(o),
+    <o:"tkLT"> => Tree::tok(o),
+    <o:"tkGT"> => Tree::tok(o),
+    <l:@L> "le" => Tree::at(l),
+    <l:@L> "ne" => Tree::at(l),
+    <l:@L> "ge" => Tree::at(l),
+};
+Add<P>: Tree = {
+    Mod<P>,
+    Binary<AddOp, Add<P>, Mod<Primary>>,
+};
+AddOp: Tok = { "tkAdd", "tkMinus" };
+Mod<P>: Tree = { IDiv<P>, Binary<"tkMOD", Mod<P>, IDiv<Primary>> };
+IDiv<P>: Tree = { Mul<P>, Binary<"tkIdiv", IDiv<P>, Mul<Primary>> };
+Mul<P>: Tree = {
+    Neg<P>,
+    Binary<MulOp, Mul<P>, Neg<Primary>>,
+};
+MulOp: Tok = { "tkMult", "tkDiv" };
+Neg<P>: Tree = {
+    Pow<P>,
+    <o:AddOp> <e:Neg<Primary>> => Tree::node("Unary", vec![Tree::tok(o), e]),
+};
+Pow<P>: Tree = {
+    P,
+    Binary<"tkPwr", Pow<P>, PowOperand>,
+};
+PowOperand: Tree = {
+    Primary,
+    <o:AddOp> <e:PowOperand> => Tree::node("Unary", vec![Tree::tok(o), e]),
+};
+
+Primary: Tree = {
+    PrimaryNP,
+    "tkLParen" <e:Exp> "tkRParen" => Tree::node("Paren", vec![e]),
+};
+
+PrimaryNP: Tree = {
+    IntLit,
+    RealLit,
+    StrLit,
+    AutoFunction,
+    NameRef,
+};
+
+// ---- the externals of qbasbnf.prs ---------------------------------------------
+
+N_Exp: Tree = Exp;
+
+N_Assignment: Tree = <t:NameRef> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]);
+N_ConstAssign: Tree = <i:Ident> "tkEQ" <e:Exp> => Tree::node("ConstAssign", vec![i, e]);
+
+N_IdAry: Tree = <i:Ident> <p:EmptyParens?> <a:OptAs> => Tree::node("IdAry", vec![i, a]);
+N_IdArray: Tree = <i:Ident> <p:EmptyParens?> => Tree::node("IdArray", vec![i]);
+N_IdAryI: Tree = <i:Ident> <p:("tkLParen" <IntLit?> "tkRParen")?> <a:OptAs> => Tree::node("IdAryI", vec![i, a]);
+N_IdAryDim: Tree = <i:Ident> <d:("tkLParen" <DimList?> "tkRParen")?> <a:OptAs> => Tree::node("IdAryDim", vec![i, a]);
+N_IdAryRedim: Tree = N_IdAryDim;
+N_IdAryElem: Tree = NameRef;
+N_IdAryElemRef: Tree = NameRef;
+N_IdAryGetPut: Tree = NameRef;
+N_IdFor: Tree = NameRef;
+N_IdCallArg: Tree = {
+    <b:"tkBYVAL"?> <s:"tkSEG"?> <e:Exp> => Tree::node("CallArg", vec![e]),
+};
+N_IdParm: Tree = {
+    <m:ParmMode?> <i:Ident> <p:EmptyParens?> <a:OptAs> => Tree::node("Parm", vec![i, a]),
+};
+ParmMode: Tree = { <t:"tkBYVAL"> => Tree::tok(t), <t:"tkSEG"> => Tree::tok(t) };
+EmptyParens: Tree = "tkLParen" "tkRParen" => Tree::Empty;
+
+N_IdFn: Tree = Ident;
+N_IdFuncDecl: Tree = Ident;
+N_IdFuncDef: Tree = Ident;
+N_IdSubDecl: Tree = Ident;
+N_IdSubDef: Tree = Ident;
+N_IdSubRef: Tree = Ident;
+N_IdType: Tree = { Ident, FnKeyword };
+
+FieldName: Tree = { Ident, Keyword };
+N_IdNamCom: Tree = Ident;
+
+DimList: Tree = {
+    <d:Dim> => Tree::List(vec![d]),
+    <l:DimList> "tkComma" <d:Dim> => Tree::push(l, d),
+};
+Dim: Tree = <a:Exp> <b:("tkTO" <Exp>)?> => Tree::node("Dim", vec![a, Tree::opt(b)]);
+
+OptAs: Tree = {
+    => Tree::Empty,
+    AsPart,
+};
+// `AS VOLATILE INTEGER`: a modifier is a name before the type.
+AsPart: Tree = "tkAS" <m:Ident*> <c:N_AsClauseAny> <n:("tkMult" <Exp>)?> => Tree::node("As", vec![c, Tree::opt(n)]);
+
+N_LabLn: Tree = { Ident, IntLit };
+N_Ln: Tree = IntLit;
+N_Lit0: Tree = IntLit;
+N_Lit1: Tree = IntLit;
+N_LitString: Tree = StrLit;
+N_RwB: Tree = Ident;
+N_RwF: Tree = Ident;
+N_RwBF: Tree = Ident;
+N_CommaNoEos: Tree = "tkComma" => Tree::Empty;
+
+N_NArgsMax3: Tree = OptExpList;
+N_NArgsMax4: Tree = OptExpList;
+N_NArgsMax5: Tree = OptExpList;
+
+N_CaseRelation: Tree = <o:RelOp> <e:Exp> => Tree::node("CaseRel", vec![o, e]);
+
+N_DeflistI2: Tree = LetterRanges;
+N_DeflistI4: Tree = LetterRanges;
+N_DeflistR4: Tree = LetterRanges;
+N_DeflistR8: Tree = LetterRanges;
+N_DeflistSD: Tree = LetterRanges;
+LetterRanges: Tree = {
+    <r:LetterRange> => Tree::List(vec![r]),
+    <l:LetterRanges> "tkComma" <r:LetterRange> => Tree::push(l, r),
+};
+LetterRange: Tree = <a:Ident> <b:("tkMinus" <Ident>)?> => Tree::node("Range", vec![a, Tree::opt(b)]);
+
+// ---- overridden internals ---------------------------------------------------------
+
+// `PRINT a; b, TAB(3) c USING f$; x`: an expression is followed by a
+// separator, the end of the statement, ELSE or USING, never another
+// expression, so the last expression is the list's final item.
+N_printList: Tree = <h:PrintHead> <f:PrintFinal> <u:UsingTail?> => Tree::node("PrintList", vec![h, f, Tree::opt(u)]);
+UsingTail: Tree = "tkUSING" <e:Exp> "tkSColon" <h:PrintHead> <f:PrintFinal> => Tree::List(vec![e, h, f]);
+PrintHead: Tree = {
+    => Tree::List(vec![]),
+    <l:PrintHead> <s:PrintStep> => Tree::push(l, s),
+};
+PrintStep: Tree = {
+    "tkTAB" <a:N_fn1arg> => Tree::node("TAB", vec![a]),
+    "tkSPC" <a:N_fn1arg> => Tree::node("SPC", vec![a]),
+    "tkComma" => Tree::Empty,
+    "tkSColon" => Tree::Empty,
+    <e:Exp> "tkComma" => e,
+    <e:Exp> "tkSColon" => e,
+};
+PrintFinal: Tree = { => Tree::Empty, Exp };
+
+// `#n` or an expression; the file number is any expression.
+N_optFilenum: Tree = {
+    "tkLbs" <e:Exp> => Tree::node("Filenum", vec![e]),
+    Exp,
+};
+
+// `(x, y)` or `STEP(x, y)`
+N_coordStep: Tree = {
+    "tkSTEP" <a:N_fn2arg> => Tree::node("Step", vec![a]),
+    N_fn2arg,
+};
+N_coord2Step: Tree = N_coordStep;
+
+
+PaintTail: Tree = {
+    => Tree::Empty,
+    "tkComma" <a:OptExp> <t:PaintTail2> => Tree::List(vec![a, t]),
+};
+PaintTail2: Tree = {
+    => Tree::Empty,
+    "tkComma" <a:OptExp> <t:PaintTail3> => Tree::List(vec![a, t]),
+};
+PaintTail3: Tree = {
+    => Tree::Empty,
+    "tkComma" <e:Exp> => e,
+};
+
+ViewBody: Tree = {
+    "tkPRINT" <r:(<Exp> "tkTO" <Exp>)?> => Tree::node("Print", vec![Tree::opt(r.map(|(a, b)| Tree::List(vec![a, b])))]),
+    "tkSCREEN" <a:N_fn2arg> "tkMinus" <b:N_fn2arg> <t:ViewTail> => Tree::node("Screen", vec![a, b, t]),
+    <a:N_fn2arg> "tkMinus" <b:N_fn2arg> <t:ViewTail> => Tree::node("Window", vec![a, b, t]),
+    => Tree::Empty,
+};
+ViewTail: Tree = {
+    => Tree::Empty,
+    "tkComma" <a:OptExp> <t:ViewTail2> => Tree::List(vec![a, t]),
+};
+ViewTail2: Tree = {
+    => Tree::Empty,
+    "tkComma" <a:OptExp> => a,
+};
+
+ResumeTarget: Tree = {
+    => Tree::Empty,
+    N_LabLn,
+    <t:"tkNEXT"> => Tree::tok(t),
+};
+
+OptCoordStep: Tree = { => Tree::Empty, N_coordStep };
+
+LineTail: Tree = {
+    => Tree::Empty,
+    "tkComma" <a:OptExp> <t:LineTail2> => Tree::List(vec![a, t]),
+};
+LineTail2: Tree = {
+    => Tree::Empty,
+    "tkComma" <b:Ident?> <t:LineTail3> => Tree::List(vec![Tree::opt(b), t]),
+};
+LineTail3: Tree = {
+    => Tree::Empty,
+    "tkComma" <e:Exp> => e,
+};
+
+KeyWord: Tree = {
+    <t:"tkOFF"> => Tree::tok(t),
+    <t:"tkON"> => Tree::tok(t),
+    <t:"tkLIST"> => Tree::tok(t),
+};
+KeyTail: Tree = {
+    N_evSwitch,
+    "tkComma" <e:Exp> => e,
+};
+
+OnEvent: Tree = {
+    "tkKEY" <a:N_fn1arg> => Tree::node("KEY", vec![a]),
+    "tkCOM" <a:N_fn1arg> => Tree::node("COM", vec![a]),
+    "tkSIGNAL" <a:N_fn1arg> => Tree::node("SIGNAL", vec![a]),
+    "tkTIMER" <a:N_fn1arg> => Tree::node("TIMER", vec![a]),
+    "tkPEN" => Tree::node("PEN", vec![]),
+    "tkUEVENT" => Tree::node("UEVENT", vec![]),
+};
+
+GotoGosub: Tree = {
+    <t:"tkGOTO"> => Tree::tok(t),
+    <t:"tkGOSUB"> => Tree::tok(t),
+};
+
+LabLnList: Tree = {
+    <l:N_LabLn> => Tree::List(vec![l]),
+    <s:LabLnList> "tkComma" <l:N_LabLn> => Tree::push(s, l),
+};
+
+// The signature after a procedure name: parameters, and the return type
+// VBDOS writes after them.
+FunctionTail: Tree = <p:N_parms> <r:OptReturnAs> => Tree::List(vec![p, r]);
+OptReturnAs: Tree = { => Tree::Empty, "tkAS" <c:N_AsClause> => c };
