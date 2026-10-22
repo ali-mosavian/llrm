@@ -187,7 +187,59 @@ impl Selector<'_, '_, '_> {
         let Some(chosen) = self.chosen(candidates, &m)? else {
             return refuse(self.function.instruction(inst).opcode.mnemonic());
         };
-        (self.compiled.emit)(self, chosen, &m, out)
+        let first = out.len();
+        (self.compiled.emit)(self, chosen, &m, out)?;
+        if self.loads_constant_memory(inst) {
+            for one in &mut out[first..] {
+                let plain = one
+                    .what
+                    .as_ref()
+                    .is_some_and(
+                        |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
+                            && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
+                    );
+                if plain && !one.volatile {
+                    *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `AA->pointsToConstantMemory` for a load: its pointer is into a global
+    /// that is constant, defined here and not externally initialized
+    /// (`SelectionDAGBuilder::visitLoad`'s `isInvariant`).
+    fn loads_constant_memory(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let instruction = self.function.instruction(inst);
+        let (Opcode::Load { volatile: false, .. }, Some(&pointer)) =
+            (&instruction.opcode, instruction.operands.first())
+        else {
+            return false;
+        };
+        let query = llrm_mir::valuetracking::Query::new(self.module, self.function, &self.layout);
+        let Operand::Constant(object) = llrm_mir::valuetracking::underlying::get_underlying_object(&query, pointer, 0)
+        else {
+            return false;
+        };
+        let ConstantKind::Global(global) = self.module.context.get(object).kind else { return false };
+        let global = self.module.global(global);
+        matches!(
+            &global.kind,
+            llrm_mir::module::GlobalKind::Variable(variable)
+                if variable.constant
+                    && variable.initializer.is_some()
+                    && !variable.externally_initialized
+                    && !matches!(
+                        global.linkage,
+                        llrm_mir::module::Linkage::Weak
+                            | llrm_mir::module::Linkage::LinkOnce
+                            | llrm_mir::module::Linkage::Common
+                            | llrm_mir::module::Linkage::ExternWeak
+                    )
+        )
     }
 
     fn matched<'a>(
