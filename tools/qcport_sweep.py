@@ -85,17 +85,32 @@ def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
     return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines for level in ("-O1", "-O2")]
 
 
-def sweep_extra(bins: Path, jobs: int = 8) -> list[tuple[str, str, str]]:
+# A refusal the compiler states as policy: a program that needs a second address space is not compiled for the flat target.
+BY_DESIGN = re.compile(r"is not supported at one address space")
+
+
+def program_flags(source: Path) -> list[str]:
+    """What a tests/run program's header asks of the compiler apart from level and cpu (`--dialect pds71 --runtime pds71 --huge-arrays`), as tests/run builds it: swept
+    without them, hugelp and hugerg failed with a backend selection error that tests/run never sees."""
+    sys.path.insert(0, str(ROOT / "tools/dosbatch"))
+    import run_tests  # noqa: PLC0415
+
+    return run_tests.compiler_arguments(source) if source.suffix == ".bas" and "tests/run" in source.as_posix() else []
+
+
+def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT) -> list[tuple[str, str, str]]:
     """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on."""
     env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
 
     def one(job):
         tool, source, machine, level = job
-        done = subprocess.run([str(bins / tool), str(source), level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
-        return None if done.returncode == 0 else (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
+        done = subprocess.run([str(bins / tool), str(source), *program_flags(source), level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
+        if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
+            return None
+        return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
 
     with ThreadPoolExecutor(jobs) as pool:
-        return [r for r in pool.map(one, extra_jobs()) if r]
+        return [r for r in pool.map(one, extra_jobs(root)) if r]
 
 
 def grouped(failures: list[tuple[str, str, str]]) -> dict[str, list[tuple[str, str]]]:
