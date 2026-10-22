@@ -6,7 +6,7 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 
 | id | program/module | level | metric | main | parity | delta | cause | owner | exit | PR |
 |---|---|---|---|--:|--:|--:|---|---|---|---|
-| AM-1 | x_mergesort m32 | O1,O2,O3 | clocks | 65146 | 84585 | +19439 (+29.8%) | boolean/select lowered as setcc chains the pin also emits; main branched | w-2 | 2026-10-30, setcc plan | #3571 |
+| AM-1 | x_mergesort m32 | O1,O2,O3 | clocks | 65146 | 84585 | +19439 (+29.8%) | boolean/select lowered as setcc chains the pin also emits; main branched | w-2 | landed in #3654: clocks -25.6/-25.6/-25.4/-25.0% at O1/O2/O3/Os on its own pair, so 84585 x 0.744 = 62.9k, below main's 65146 by arithmetic, not measured against main; closes when w-2 or I re-measure vs main (2026-11-05) | #3654 |
 | AM-2 | stft_fixed bq32 | O2,O3 | clocks | 215.0 M | 240.0 M | +25.0 M (+11.6%) | same: string leaves (`str_is_tmp` 3 branches on main, a setcc chain on parity and in the pin's llc) | w-2 | 2026-10-30, setcc plan | #3572 |
 | AM-3 | stft_single bq32 | O2,O3 | clocks | 256.8 M | 293.3 M | +36.5 M (+14.2%) | same as AM-2 | w-2 | 2026-10-30, setcc plan | #3572 |
 | AM-4 | bintree bq32 | O2,O3 | clocks | 140.0 k | 147.3 k | +7.3 k (+5.2%) | allocation: `depth+1` rematerialised twice and spilled in `WALK&`; fewer instructions than main, more clocks | splitkit | 2026-10-24, ladder check | |
