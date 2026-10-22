@@ -436,7 +436,10 @@ pub fn compare_float(
 /// result is exact in the format, which every evaluation width at least the
 /// format's reproduces. It refuses a non-finite operand or result, an
 /// `x86_fp80`, an inexact result, and (as the pin does when non-deterministic
-/// results are not allowed) `nsz`, `reassoc`, `contract` and `arcp`.
+/// results are not allowed) `nsz`, `reassoc`, `contract` and `arcp`. Exit: a
+/// "strict float width" fact in the profile, true only under the
+/// standard-precision flag (every assignment rounded), where the pin's fold in
+/// the format is faithful.
 pub fn float_binary(
     context: &Context,
     op: BinaryOp,
