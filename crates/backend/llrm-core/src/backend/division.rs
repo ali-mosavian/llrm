@@ -127,7 +127,7 @@ fn chain_product(
             let cell =
                 ir::Mem { base: Some(product), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
             parts.push(ir::Semantics {
-                name: Some("lea".to_owned()),
+                name: Some("lea".into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Mem(cell)],
                 ..ir::Semantics::new(ir::Operation::Address)
@@ -138,14 +138,14 @@ fn chain_product(
         if name == "fadd" || name == "fsub" {
             let shifted = ir::Held { value: fresh(), width };
             parts.push(ir::Semantics {
-                name: Some("shl".to_owned()),
+                name: Some("shl".into()),
                 dests: vec![ir::Loc::Held(shifted)],
                 sources: vec![ir::Loc::Held(product), ir::Loc::Imm(ir::Imm { value: amount, width: 1, address: None })],
                 ..ir::Semantics::new(ir::Operation::Binary)
             });
             let op = if name == "fadd" { "add" } else { "sub" };
             parts.push(ir::Semantics {
-                name: Some(op.to_owned()),
+                name: Some(op.into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Held(shifted), ir::Loc::Held(product)],
                 ..ir::Semantics::new(ir::Operation::Binary)
@@ -157,7 +157,7 @@ fn chain_product(
             let cell =
                 ir::Mem { base: Some(quotient), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
             ir::Semantics {
-                name: Some("lea".to_owned()),
+                name: Some("lea".into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Mem(cell)],
                 ..ir::Semantics::new(ir::Operation::Address)
@@ -169,7 +169,7 @@ fn chain_product(
                 ir::Loc::Held(quotient)
             };
             ir::Semantics {
-                name: Some(name.to_owned()),
+                name: Some(name.into()),
                 dests: vec![ir::Loc::Held(into)],
                 sources: vec![ir::Loc::Held(product), other],
                 ..ir::Semantics::new(ir::Operation::Binary)
@@ -215,7 +215,7 @@ pub fn reciprocal<'a>(
         return Ok(None);
     };
     parts.push(ir::Semantics {
-        name: Some("neg".to_owned()),
+        name: Some("neg".into()),
         dests: vec![ir::Loc::Held(results[0])],
         sources: vec![ir::Loc::Held(magnitude)],
         ..ir::Semantics::new(ir::Operation::Unary)
@@ -308,7 +308,7 @@ fn positive_reciprocal<'a>(
      -> ir::Held {
         let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
         parts.push(ir::Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
             sources,
             ..ir::Semantics::new(operation)
@@ -321,7 +321,7 @@ fn positive_reciprocal<'a>(
     let low = ir::Held { value: fresh(), width };
     let mut high = ir::Held { value: fresh(), width };
     parts.push(ir::Semantics {
-        name: Some("imul".to_owned()),
+        name: Some("imul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
         // The accumulator is the first source and the r/m operand the last: the
         // dividend, the one whose length the early-out reads, goes where it is
@@ -492,7 +492,7 @@ pub fn unsigned_reciprocal<'a>(
      -> ir::Held {
         let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
         parts.push(ir::Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
             sources,
             ..ir::Semantics::new(operation)
@@ -503,7 +503,7 @@ pub fn unsigned_reciprocal<'a>(
     let low = ir::Held { value: fresh(), width };
     let high = ir::Held { value: fresh(), width };
     parts.push(ir::Semantics {
-        name: Some("mul".to_owned()),
+        name: Some("mul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
         sources: vec![ir::Loc::Held(constant), ir::Loc::Held(dividend)],
         ..ir::Semantics::new(ir::Operation::Multiply)

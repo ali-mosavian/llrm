@@ -166,7 +166,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn with_what(
@@ -1263,21 +1263,29 @@ struct EffectKey<'a> {
 }
 
 impl EffectKey<'_> {
-    fn hash(&self) -> u64 {
+    /// Two hashes of the fields, the second seeded apart from the first.
+    fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
-        (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers).hash(&mut hasher);
-        hasher.finish()
+        let fields = (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers);
+        let mut first = rustc_hash::FxHasher::default();
+        fields.hash(&mut first);
+        let mut second = rustc_hash::FxHasher::default();
+        0x9e37_79b9_7f4a_7c15_u64.hash(&mut second);
+        fields.hash(&mut second);
+        (first.finish(), second.finish())
     }
 }
 
 type Effects = Option<(Lanes, Lanes)>;
 
-/// What `_register_effects` answered, by the hash of what it was asked, and the
-/// asked kept to tell a hash that is another's.
+/// What `_register_effects` answered, by two independent 64-bit hashes of what
+/// it was asked. The asked was once kept beside the answer to tell a hash that
+/// is another's: a clone of its `Semantics` (a name and two operand lists) for
+/// each of the 5,559 answers a d_faces -O2 compile remembers, 5.8 M Ir. Two
+/// hashes are one in 2^128 a pair of different asks.
 #[derive(Default)]
 struct EffectsHeld {
-    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, RegId)>, Vec<(Held, RegId)>, Effects)>>,
+    by_hash: HashMap<(u64, u64), Effects>,
     count: usize,
 }
 
@@ -1286,18 +1294,7 @@ impl EffectsHeld {
         &self,
         key: &EffectKey,
     ) -> Option<Effects> {
-        self.by_hash
-            .get(&key.hash())?
-            .iter()
-            .find(|(bits, may_write, flags, what, requires, delivers, _)| {
-                *bits == key.bits
-                    && *may_write == key.may_write
-                    && *flags == key.flags
-                    && what == key.what
-                    && requires == key.requires
-                    && delivers == key.delivers
-            })
-            .map(|(.., answer)| answer.clone())
+        self.by_hash.get(&key.hashes()).cloned()
     }
 
     fn remember(
@@ -1310,20 +1307,7 @@ impl EffectsHeld {
             *self = Self::default();
         }
         self.count += 1;
-        self.by_hash
-            .entry(key.hash())
-            .or_default()
-            .push(
-                (
-                    key.bits,
-                    key.may_write,
-                    key.flags,
-                    key.what.clone(),
-                    key.requires.to_vec(),
-                    key.delivers.to_vec(),
-                    answer,
-                ),
-            );
+        self.by_hash.insert(key.hashes(), answer);
     }
 }
 

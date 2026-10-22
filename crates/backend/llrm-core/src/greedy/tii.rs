@@ -132,12 +132,7 @@ pub(crate) fn _mov(
     into: Loc,
     out_of: Loc,
 ) -> Semantics {
-    Semantics {
-        name: Some("mov".to_owned()),
-        dests: vec![into],
-        sources: vec![out_of],
-        ..Semantics::new(Operation::Move)
-    }
+    Semantics { name: Some("mov".into()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
 }
 
 /// `X86InstrInfo::loadRegFromStackSlot`, as `InlineSpiller::insertReload` calls
