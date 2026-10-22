@@ -155,13 +155,14 @@ pub fn emit(
 const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
+/// A LIR operand's width: bytes, as the old selector writes it.
 fn width(vt: EVT) -> u32 {
     match vt {
-        EVT::Simple(MVT::I1 | MVT::I8) => 8,
-        EVT::Simple(MVT::I16) => 16,
-        EVT::Simple(MVT::I32) => 32,
-        EVT::Int(bits) => bits,
-        _ => 32,
+        EVT::Simple(MVT::I1 | MVT::I8) => 1,
+        EVT::Simple(MVT::I16) => 2,
+        EVT::Simple(MVT::I32) => 4,
+        EVT::Int(bits) => bits.div_ceil(8),
+        _ => 4,
     }
 }
 
@@ -426,7 +427,7 @@ impl Emitter<'_, '_> {
     ) -> Result<Loc, EmitError> {
         if let NodeData::Const { bits, .. } = self.dag.node(value).data {
             let w = width_of(self.dag, value);
-            return Ok(Loc::Imm(Imm { value: sign_extend(bits, w), width: w, address: None }));
+            return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if self.dag.opcode(value) == ISD::Register {
             return self.register(value);
@@ -511,7 +512,7 @@ fn width_of_node(
     n: u32,
 ) -> u32 {
     let node = dag.node(SDValue { node: n, res: 0 });
-    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(32, |vt| width(*vt))
+    node.values.first().filter(|vt| **vt != EVT::OTHER).map_or(4, |vt| width(*vt))
 }
 
 fn sign_extend(
