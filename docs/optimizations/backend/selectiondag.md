@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:49125dfcf125ec76d4e11b53cd9bc5b0a134c7ad96fb44b4aabd9847f8957489 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:0a0b34d17dd860e09364eace3dce38f5ef0aeda3b949cd1202b2b4099bede175 -->
 
 # selectiondag
 
@@ -19,13 +19,15 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
-block that defines it ends in `CopyToReg`, the blocks that read it start
-from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the block
+that defines it ends in `CopyToReg`, the blocks that read it start from
+`CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
 Arguments and returns go through the target's `Convention` (stack
 parameters are loads of fixed objects, register ones live-in copies;
-`ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+`ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+Indirect calls, intrinsics, switches, floats and values wider than a
 register are refused (`Refused`) until their pieces land.
 
 ## Runs
@@ -68,6 +70,10 @@ ones; comparisons renumber them. Exit: none. Owner sdag-a.
 DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
 `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD20: a call's `TargetGlobalAddress` carries no relocation flag
+(`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+Exit: none. Owner sdag-a.
 
 ## See also
 LLVM's `SelectionDAG::getNode`
