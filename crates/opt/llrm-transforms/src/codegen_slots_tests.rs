@@ -251,9 +251,9 @@ const ROWS: &[Row] = &[
     row(
         "CodeGen Prepare",
         Executed,
-        "addresssink.rs (sinkCmpExpression, address-phi sink), cgpaddr.rs (optimizeMemoryInst), extload.rs (ext-load promotion)",
+        "cgpaddr.rs (sinkCmpExpression, sinkAndCmp0Expression, optimizeMemoryInst), extload.rs (ext-load promotion)",
         "-disable-cgp",
-        "w-4; 2026-10-23: address-mode sinking translated (cgpaddr.rs, DEVIATE CGP1: no promoted extensions, no phi/select combiner); compare sink in addresssink.rs; ext-load promotion in extload.rs; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1611 instr 6318 B, pin-with 1412 instr 5482 B, pin-without 1482 instr 5642 B (6 programs); -Os: ours 486 instr 1392 B, pin-with 463 instr 1378 B, pin-without 488 instr 1474 B (5 programs)",
+        "w-4; 2026-10-23: address-mode sinking translated (cgpaddr.rs, DEVIATE CGP1: no promoted extensions, no phi/select combiner); compare sink in cgpaddr.rs; ext-load promotion in extload.rs; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1611 instr 6318 B, pin-with 1412 instr 5482 B, pin-without 1482 instr 5642 B (6 programs); -Os: ours 486 instr 1392 B, pin-with 463 instr 1378 B, pin-without 488 instr 1474 B (5 programs)",
     ),
     row(
         "Exception handling preparation",
