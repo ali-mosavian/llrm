@@ -142,7 +142,8 @@ pub fn hoisted(
         if blocks[pre_at].succ.len() != 1 {
             continue;
         }
-        // The values named in the loop: the pressure the hoisted one adds to.
+        // The values the loop reads from outside, and its phis: the registers
+        // it holds across its trips, which the hoisted one joins.
         let named: HashSet<u32> = inside
             .iter()
             .flat_map(|at| {
@@ -150,7 +151,8 @@ pub fn hoisted(
                 block
                     .insns
                     .iter()
-                    .flat_map(|one| one.uses.iter().chain(&one.defines).copied())
+                    .flat_map(|one| one.uses.iter().copied())
+                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
                     .chain(block.phis.iter().map(|phi| phi.result))
                     .collect::<Vec<_>>()
             })
@@ -177,10 +179,15 @@ pub fn hoisted(
                         && invariant
                         && value.is_some_and(|value| !floating.contains(&value))
                         && named.len() < limit;
-                    if movable && let Some(effect) = liveness::effect(regs, body.bits, one) {
-                        if flags(&effect.all_reads()) {
+                    if movable {
+                        let effect = liveness::effect(regs, body.bits, one);
+                        let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
+                        let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
+                            || effect.as_ref().is_some_and(|effect| flags(&effect.all_reads()));
+                        let sets = effect.as_ref().is_none_or(|effect| flags(&effect.writes));
+                        if reads {
                             movable = false;
-                        } else if flags(&effect.writes) {
+                        } else if sets {
                             // Flags set here must not be read below, in the
                             // block.
                             for later in &insns[index + 1..] {
@@ -191,6 +198,11 @@ pub fn hoisted(
                                     }
                                     Some(next) if flags(&next.writes) => break,
                                     Some(_) => {}
+                                    None if later.what.as_ref().is_some_and(|what| {
+                                        what.op == Operation::Move
+                                            || what.op == Operation::Jump
+                                            || matches!(what.name.as_deref(), Some("jcxz" | "jecxz" | "loop"))
+                                    }) => {}
                                     None => {
                                         movable = false;
                                         break;
@@ -198,8 +210,6 @@ pub fn hoisted(
                                 }
                             }
                         }
-                    } else if movable {
-                        movable = false;
                     }
                     if movable {
                         hoisted_values.extend(value);
@@ -237,4 +247,64 @@ pub fn hoisted(
         blocks[pre_at] = blocks[pre_at].with_insns(insns);
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::LirBlock;
+    use crate::support::hash::IndexMap;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4 })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `x = a + b` made on every trip of a loop that changes neither (the pin's
+    /// EarlyMachineLICM runs ahead of MachineCSE): it is made once, before the
+    /// loop.
+    #[test]
+    fn test_a_sum_of_values_the_loop_does_not_change_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let add = insn(10, Operation::Binary, "add", vec![held(10)], vec![held(1), held(2)], vec![10], vec![1, 2]);
+        let copy = insn(11, Operation::Move, "mov", vec![held(11)], vec![held(3)], vec![11], vec![3]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![add, copy, branch(12)]).into(),
+                block(2, vec![], vec![insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let classes = RegisterClasses::m16();
+        let done = hoisted(&body, &classes);
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(names(0), ["add", "jmp"]);
+        assert_eq!(names(1), ["mov", "jcxz"]);
+    }
 }

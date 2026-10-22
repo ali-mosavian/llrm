@@ -206,6 +206,7 @@ pub mod machinecp;
 pub mod machinelicm;
 pub mod machinecse;
 pub mod latecleanup;
+pub mod leaopt;
 pub mod machinedce;
 pub mod machinesink;
 pub mod masm;
