@@ -53,3 +53,25 @@ QO-13b, cause (2026-10-22, observed, not inferred): the phi's temporary has no r
 That fix is a partial answer and is not landed (tuning freeze; branch `mir-undef/phi-temp-class`, test `test_a_far_pointers_phi_is_not_copied_through_ax`). Priced on parity 3ce2ce70ab (pair ex7, `llrm-c` dc805365b661 -> de89a6c3371b, QCport qcport.py bytes): -Os 262521 -> 262505, host/demo only -6 of its +35 B (about 29 B remain, not explained), snd_mix +6; -O2 319978 -> 319891, render/dl -29, r_bsp -43, but host/demo +43 B (+0.59%) and sc +28 B (+0.19%). So the rows stay open; their exit is the translated lowering and the allocator work (steps 2 and 4 of the plan), not the palette.
 
 QO-6 (render/d_alias) is now smaller with the change (-27 at -Os, -13 at -O2). The earlier rows' numbers above were taken on older parities and are kept as history.
+
+## QO-SIZE-1: where the -Os bytes are (w-3, 2026-10-22)
+
+target: llrm-c -Os (m16), 65 QCport modules, code bytes from `jwasm -Fl` listings of `-S` output, calibrated against the OMF CODE bytes. base: main 854bb7efc4, llrm-c md5 56f120bb59fa. new: sha 97623a29d689 (stamp clean), md5 e52b0cf85b26, built with `pair_build.sh` (`cargo build --profile dist --bin llrm-c ...`, `CARGO_INCREMENTAL=0`). Script: `bytes.py`/`bytes2.py` (w-3 scratch `w3-qo`; the method is in this paragraph). Pin counterpart: none; the pin's x86 backend has no 16-bit code generation.
+
+Calibration: main 215,484 B in the listings against 215,034 B in the objects (+0.2%); delta 4,908 against 4,879 (no-inline arm), 2,072 against 1,986 (default arm): residual -29 and -86 B.
+
+| class (bytes, parity - main) | no-inline arm | default arm |
+|---|---|---|
+| mov (integer) | +4,449 | +4,896 |
+| x87 (all `f*`) | +3,800 | +3,617 |
+| frame (push/pop/leave/ret) | +1,363 | -602 |
+| other | +270 | -410 |
+| alu/lea | -367 | -1,050 |
+| branch/cmp/setcc | -4,607 | -4,379 |
+| listing total | +4,908 | +2,072 |
+| OMF CODE | +4,879 | +1,986 |
+| residual | -29 | -86 |
+
+Data adds +457 B in the default arm (LEDATA +2,443 in all). The inliner is a net saving: without it the CODE growth is +4,879, with it +1,986.
+
+Modules carrying the `mov` growth (default arm, bytes): host/host +1,287, render/sc +872, game/mdl_ai +442, game/triggers +442, host/cmd +328, render/dl +268, r_bsp +248, game/item +244; down: host/savegame -633, d_faces -285. x87: render/d_alias +667, game/triggers +369, mdl_ai +358. Function lists (top 30 by `mov` and by x87 bytes, both arms) are in `w3-qo/byfn-*.json`; a function that main inlined but parity keeps shows as 0 -> N in the no-inline arm, so rank by module when inlining differs.

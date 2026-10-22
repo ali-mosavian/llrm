@@ -296,3 +296,27 @@ b0:
     );
     assert!(changed && !text.contains("load i16"), "{text}");
 }
+
+/// A store through a `getelementptr` constant expression of the same global
+/// does not clobber a load of another part: BasicAA read only the instruction
+/// GEP as a GEPOperator, so x_fir's 16 unrolled loads of `coef[k]` after 16
+/// constant stores all stayed (the pin's GVN leaves 3) and Fold's numbers had
+/// to carry them.
+#[test]
+fn test_a_store_through_a_constant_gep_of_the_global_leaves_a_load_of_another_part() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  store i16 %x, ptr @g
+  store i16 %y, ptr getelementptr inbounds nuw (i8, ptr @g, i32 2)
+  store i16 %x, ptr getelementptr inbounds nuw (i8, ptr @g, i32 4)
+  %a = load i16, ptr @g
+  %b = load i16, ptr getelementptr inbounds nuw (i8, ptr @g, i32 2)
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+        XY,
+    );
+    assert!(changed && !text.contains("load"), "{text}");
+}

@@ -702,9 +702,12 @@ fn get_underlying_object(
         return c;
     }
     for _ in 0..6 {
-        match expr(context, value) {
-            Some(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
-            Some(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+        // Read in place: a clone of the expression's operands per step was most
+        // of this function's cost (every load is asked).
+        match &context.get(value).kind {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+                let source = *source;
                 if !is_pointer(context, ty_of(context, source)) {
                     return value;
                 }
