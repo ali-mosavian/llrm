@@ -7260,6 +7260,7 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
+            let operand = self.argument_checked("fsin", operand, type_id)?;
             let result = self.value(type_id);
             if intrinsic.lowering == Lowering::Tan {
                 let sine = self.value(type_id);
@@ -7298,6 +7299,11 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
+            let operand = if intrinsic.lowering == Lowering::Log {
+                self.argument_checked("flog2", operand, type_id)?
+            } else {
+                operand
+            };
             let result = self.value(type_id);
             if intrinsic.lowering == Lowering::Log {
                 let logarithm = self.value(type_id);
@@ -7308,7 +7314,8 @@ impl Compiler {
                 let log2e = self.floating_literal("1.4426950408889634074", type_id)?;
                 let scaled = self.value(type_id);
                 self.emit("fmul", vec![scaled], vec![operand, log2e]);
-                self.emit("fexp2", vec![result], vec![Operand::Value(scaled)]);
+                let scaled = self.argument_checked("fexp2", Operand::Value(scaled), type_id)?;
+                self.emit("fexp2", vec![result], vec![scaled]);
             }
             return Ok(Some((Operand::Value(result), type_id)));
         }
@@ -8199,6 +8206,40 @@ impl Compiler {
         }
     }
 
+    /// `operand` as BC's routine for `routine` takes it: ERROR where it is out
+    /// of the range `intrinsics::ARGUMENT_CHECKS` gives. A float value does
+    /// not cross a block, so it is kept in a cell and read again.
+    fn argument_checked(
+        &mut self,
+        routine: &str,
+        operand: Operand,
+        type_id: u32,
+    ) -> Result<Operand, SemanticError> {
+        let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
+        let cell = self.temporary(type_id)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(cell), operand]);
+        let value = self.value(type_id);
+        self.emit("load", vec![value], vec![Operand::Place(cell)]);
+        let mut tested = Operand::Value(value);
+        if check.range == intrinsics::Range::AbsAbove {
+            tested = self.computed("fabs", type_id, vec![tested]);
+        }
+        let bound = self.floating_literal(check.bound, type_id)?;
+        let op = if check.range == intrinsics::Range::AtMost {
+            "le"
+        } else if check.range == intrinsics::Range::AtLeast {
+            "ge"
+        } else {
+            "gt"
+        };
+        let truth = self.value(BOOLEAN);
+        self.emit(op, vec![truth], vec![tested, bound]);
+        self.raise_if(Operand::Value(truth), check.error)?;
+        let again = self.value(type_id);
+        self.emit("load", vec![again], vec![Operand::Place(cell)]);
+        Ok(Operand::Value(again))
+    }
+
     /// ERROR `number` where `condition` holds, raised as ERROR raises it.
     fn raise_if(
         &mut self,
@@ -8517,8 +8558,9 @@ impl Compiler {
         };
         let product = self.value(common);
         self.emit("fmul", vec![product], vec![logarithm, exponent]);
+        let product = self.argument_checked("fexp2", Operand::Value(product), common)?;
         let result = self.value(common);
-        self.emit("fexp2", vec![result], vec![Operand::Value(product)]);
+        self.emit("fexp2", vec![result], vec![product]);
         Ok((Operand::Value(result), common))
     }
 
@@ -8552,7 +8594,7 @@ impl Compiler {
             Ok::<_, SemanticError>(Operand::Value(truth))
         };
         // exp2(y * log2(magnitude)) into `result`.
-        let exponential = |this: &mut Self, negate_base: bool| {
+        let exponential = |this: &mut Self, negate_base: bool| -> Result<(), SemanticError> {
             let mut magnitude = load(this, x);
             if negate_base {
                 let negated = this.value(common);
@@ -8564,9 +8606,11 @@ impl Compiler {
             let exponent = load(this, y);
             let product = this.value(common);
             this.emit("fmul", vec![product], vec![Operand::Value(logarithm), exponent]);
+            let product = this.argument_checked("fexp2", Operand::Value(product), common)?;
             let power = this.value(common);
-            this.emit("fexp2", vec![power], vec![Operand::Value(product)]);
+            this.emit("fexp2", vec![power], vec![product]);
             this.emit("store", Vec::new(), vec![Operand::Place(result), Operand::Value(power)]);
+            Ok(())
         };
         let positive = self.new_block();
         let not_positive = self.new_block();
@@ -8586,7 +8630,7 @@ impl Compiler {
         let truth = compare(self, "gt", x, "0")?;
         self.terminate("branch", vec![truth], vec![positive, not_positive])?;
         self.select_block(positive);
-        exponential(self, false);
+        exponential(self, false)?;
         self.terminate("jump", Vec::new(), vec![join])?;
 
         self.select_block(not_positive);
@@ -8619,7 +8663,7 @@ impl Compiler {
         self.emit("eq", vec![truth], vec![back, exponent]);
         self.terminate("branch", vec![Operand::Value(truth)], vec![negative_integral, illegal])?;
         self.select_block(negative_integral);
-        exponential(self, true);
+        exponential(self, true)?;
         let whole = self.value(LONG);
         self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
         let parity = self.value(LONG);
