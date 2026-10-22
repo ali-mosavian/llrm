@@ -1582,11 +1582,17 @@ pub(crate) fn unrolled_blocks(
 /// `LoopFullUnrollPass` over a function: every loop, innermost first; the loops
 /// a complete unroll makes of the inner loops are visited next. Whether any
 /// loop was unrolled.
-pub fn unroll_loops(run: &mut Run) -> bool {
+pub fn unroll_loops(
+    run: &mut Run,
+    closed_already: bool,
+) -> bool {
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
     // LCSSA first, whether or not anything is unrolled.
     let simplified = crate::loopsimplify::simplified(run.function);
-    let closed = crate::lcssa::closed(run.function).unwrap_or(false);
+    // Known closed (`LcssaForm`) and left as it was by the simplify: nothing to
+    // scan.
+    let closed =
+        if closed_already && !simplified { false } else { crate::lcssa::closed(run.function).unwrap_or(false) };
     let mut analyzed = Analyzed::of(run);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
@@ -1745,7 +1751,8 @@ impl FunctionPass for LoopFullUnroll {
                 prepare_for_lto: false,
             },
         };
-        let changed = unroll_loops(&mut run);
+        let closed_already = analyses.cached::<crate::lcssa::LcssaForm>().is_some_and(|known| *known);
+        let changed = unroll_loops(&mut run, closed_already);
         *self.created.borrow_mut() = std::mem::take(&mut run.created);
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -1791,7 +1798,7 @@ pub fn unroll_function(
         peeled: Default::default(),
         created: Vec::new(),
     };
-    Ok(unroll_loops(&mut run))
+    Ok(unroll_loops(&mut run, false))
 }
 
 #[cfg(test)]

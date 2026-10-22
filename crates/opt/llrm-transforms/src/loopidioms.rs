@@ -181,7 +181,7 @@ impl FunctionPass for LoopIdioms {
             &mut llrm_analysis::memory::Standing::held(&registers),
             &|_| true,
         );
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if changed { PreservedAnalyses::none().preserve::<crate::lcssa::LcssaForm>() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -222,7 +222,11 @@ impl FunctionPass for Merge {
             analyses.outer(),
             self.size,
         );
-        if constants | memset | copies { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if constants | memset | copies {
+            PreservedAnalyses::none().preserve::<crate::lcssa::LcssaForm>()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 

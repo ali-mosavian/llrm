@@ -150,7 +150,7 @@ impl FunctionPass for LoopIdiom {
             }
         }
         if changed {
-            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve::<crate::lcssa::LcssaForm>()
         } else {
             PreservedAnalyses::all()
         }

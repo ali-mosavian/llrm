@@ -266,7 +266,10 @@ impl FunctionPass for IndVars {
             && dead::dead(unit.context, outer.callees(), unit.function);
         if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
             // Blocks and edges are as they were.
-            PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
+            PreservedAnalyses::none()
+                .preserve::<passes::Dominators>()
+                .preserve::<passes::Loops>()
+                .preserve::<crate::lcssa::LcssaForm>()
         } else {
             PreservedAnalyses::all()
         }

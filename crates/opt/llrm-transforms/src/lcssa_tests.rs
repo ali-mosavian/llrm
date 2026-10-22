@@ -324,3 +324,35 @@ fn test_closing_over_a_held_shape_is_closing() {
     assert!(super::closed_in(f(&mut module), &shape).unwrap());
     assert_eq!(printed(&module), closed_once(LOOP_WITH_EXIT_USE));
 }
+
+/// A loop value read after the exit is not LCSSA form; once closed it is. The
+/// fact `lcssa` and the unroll skip on must not say "closed" of the first.
+#[test]
+fn test_lcssa_form_is_false_before_closing_and_true_after() {
+    use llrm_mir::passes::Analysis;
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    let form = |module: &mut llrm_mir::Module| {
+        let function = f(module).clone();
+        let outer = llrm_mir::passes::Outer::of(module, Some(std::rc::Rc::new(llrm_mir::target::Neutral)));
+        let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+        super::LcssaForm::run(&module.context, &llrm_analysis::testing::layout(module), &function, &mut analyses)
+    };
+    assert!(!form(&mut module), "a loop value read past its exit");
+    closed(f(&mut module)).unwrap();
+    assert!(form(&mut module));
+}
+
+/// Three `lcssa` slots in a row: the second seeds `LcssaForm`, the third skips
+/// on it; `verify_invalidation` checks the seeded fact against a fresh one.
+#[test]
+fn test_a_closed_function_seeds_lcssa_form_and_the_next_slot_skips() {
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.verify_invalidation = true;
+    for _ in 0..3 {
+        manager.add(LoopClosedSSA);
+    }
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(printed(&module).matches(".lcssa = phi").count(), 1);
+}

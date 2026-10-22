@@ -84,11 +84,32 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Analysis, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 
 use crate::{edges, lcssamerges};
 
 pub struct LoopClosedSSA;
+
+/// Whether `closed` would change nothing: every loop is already in closed SSA
+/// form. LLVM's loop passes keep it (`LCSSAVerificationPass` asserts it), so
+/// the pin never scans for it; here `lcssa` seeds it and a pass that keeps the
+/// form declares `preserve::<LcssaForm>()`.
+pub struct LcssaForm;
+
+impl Analysis for LcssaForm {
+    type Result = bool;
+    const READS_OUTER: bool = false;
+    const NAME: &'static str = "lcssa-form";
+
+    fn run(
+        _: &llrm_mir::context::Context,
+        _: &llrm_mir::datalayout::DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> bool {
+        matches!(closed(&mut function.clone()), Ok(false))
+    }
+}
 
 /// Takes the loop-closing phis away again once the loop passes are done: a
 /// phi that names one value is that value. The code generator copies each
@@ -132,10 +153,19 @@ impl FunctionPass for LoopClosedSSA {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        if analyses.cached::<LcssaForm>().is_some_and(|known| *known) {
+            return PreservedAnalyses::all();
+        }
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
         match closed_in(unit.function, &shape) {
-            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            Ok(false) => PreservedAnalyses::all(),
+            Ok(true) => {
+                analyses.seed::<LcssaForm>(unit.function, std::rc::Rc::new(true));
+                PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve::<LcssaForm>()
+            }
+            Ok(false) => {
+                analyses.seed::<LcssaForm>(unit.function, std::rc::Rc::new(true));
+                PreservedAnalyses::all()
+            }
             Err(error) => panic!("lcssa: {error}"),
         }
     }

@@ -937,7 +937,11 @@ impl FunctionPass for LoopDeletion {
             function: unit.function,
             emptied: Vec::new(),
         };
-        if delete_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if delete_loops(&mut run) {
+            PreservedAnalyses::none().preserve::<crate::lcssa::LcssaForm>()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 
