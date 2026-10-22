@@ -7,7 +7,7 @@
 //! [`DagisAdapter`] keeps the set of nodes that selection removed and every use query skips them.
 //!
 //! Numbered deviations (reason / owner / exit / review):
-//! - **SD44** `have_no_common_bits_set`, `ConstantFP` to target form, memory operands on machine
+//! - **SD300** `have_no_common_bits_set`, `ConstantFP` to target form, memory operands on machine
 //!   nodes (kept in [`DagisAdapter::mem_refs`]) and extending loads are not in our DAG yet; the
 //!   adapter answers conservatively. Owner sdag-c. Exit: the combiner (sdag-b) brings known bits.
 //!   Review 2026-12-10.
@@ -143,6 +143,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        RegisterMask => pin::RegisterMask,
         // The pin's X86ISD numbers.
         Target(code) => code,
         // A machine node reads as the pin's `~opcode`.
@@ -323,7 +324,7 @@ impl Dag for DagisAdapter<'_> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
     }
     fn load_ext_type(&self, node: u32) -> Option<LoadExt> {
-        // Our `Load` never extends (SD44).
+        // Our `Load` never extends (SD300).
         (self.dag.nodes()[node as usize].opcode == ISD::Load).then_some(LoadExt::NonExt)
     }
     fn is_indexed(&self, _: u32) -> bool {

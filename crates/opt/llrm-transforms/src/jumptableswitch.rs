@@ -35,9 +35,10 @@
 //! # Runs
 //! Slot `jumptableswitch@672`, after `cvp@669`. The pin reads
 //! `getInstructionCount` of each callee, which a function pass cannot see
-//! here: `Declared::size_of` answers `Unknown` and the manager counts those
-//! functions, then runs the pass over this function again. A function with no
-//! call through a table asks nothing, so nothing is counted.
+//! here: the pass `wants_sizes`, and the manager counts the functions a global
+//! initializer names (a table's entries, the only ones asked about) before the
+//! pass runs, and again for each it changes. A program with no function in a
+//! constant counts nothing.
 
 use llrm_mir::constantfolding::constant_fold_load_from_const;
 use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId, signed};
@@ -66,6 +67,10 @@ impl FunctionPass for JumpTableToSwitch {
         Some("jump-table-to-switch")
     }
 
+    fn wants_sizes(&self) -> bool {
+        true
+    }
+
     fn adds_memory_operations(&self) -> bool {
         false
     }
@@ -76,8 +81,8 @@ impl FunctionPass for JumpTableToSwitch {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let declared = &mut *unit.declared;
-        if converted(unit.context, unit.layout, unit.function, &outer, &mut |id| declared.size_of(id)) {
+        let declared = &*unit.declared;
+        if converted(unit.context, unit.layout, unit.function, &outer, &|id| declared.size_of(id)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -86,21 +91,20 @@ impl FunctionPass for JumpTableToSwitch {
 }
 
 /// Every call of `function` through a table, as a switch; whether any was.
-/// `size` is how big a function is: `Unknown` makes the manager count it and
-/// run the pass again, so a function with no table is never counted.
+/// `size` is how big a function is: `Unknown` where no constant names it.
 pub fn converted(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
-    size: &mut dyn FnMut(GlobalId) -> Size,
+    size: &dyn Fn(GlobalId) -> Size,
 ) -> bool {
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut current = Some(block);
         while let Some(here) = current {
             let Some((call, table)) = function.iter_block(here).collect::<Vec<_>>().into_iter().find_map(|inst| {
-                parse_jump_table(context, layout, function, outer, &mut *size, inst).map(|table| (inst, table))
+                parse_jump_table(context, layout, function, outer, size, inst).map(|table| (inst, table))
             }) else {
                 break;
             };
@@ -123,7 +127,7 @@ fn parse_jump_table(
     layout: &DataLayout,
     function: &Function,
     outer: &passes::Outer,
-    size_of: &mut dyn FnMut(GlobalId) -> Size,
+    size_of: &dyn Fn(GlobalId) -> Size,
     inst: InstId,
 ) -> Option<Table> {
     let call = function.instruction(inst);

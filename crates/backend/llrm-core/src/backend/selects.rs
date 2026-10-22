@@ -516,10 +516,12 @@ entry:
         assert!(llrm_mir::print::module(&kept).contains("zext"), "{}", llrm_mir::print::module(&kept));
     }
 
-    /// nhstutil's `p >= lo && p < hi` as a value: two `setcc`, an `and` and a
-    /// `movzx`, where main branches around the second compare.
+    /// nhstutil's `p >= lo && p < hi` as a value: two `setcc` and an `and`, as
+    /// the pin lowers it (`FindMergedConditions` short-circuits only a branch's
+    /// condition). Main branched around the second compare: 9 instructions
+    /// against the pin's 8 at -Os (STRISTMP-1).
     #[test]
-    fn test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second() {
+    fn test_an_and_of_two_compares_as_a_value_stays_two_setcc_and_an_and() {
         let text = "define i1 @f(i16 %p, i16 %lo, i16 %hi) {
 entry:
   %a = icmp uge i16 %p, %lo
@@ -529,18 +531,17 @@ entry:
 }
 ";
         let (before, after) = branched(text, &i486);
-        assert!(!llrm_mir::print::module(&after).contains(" and "), "{}", llrm_mir::print::module(&after));
-        assert_eq!(conditional_branches(&after), 1, "{}", llrm_mir::print::module(&after));
+        assert!(llrm_mir::print::module(&after).contains(" and "), "{}", llrm_mir::print::module(&after));
+        assert_eq!(conditional_branches(&after), 0, "{}", llrm_mir::print::module(&after));
         for (p, lo, hi) in [(5, 3, 9), (2, 3, 9), (9, 3, 9), (3, 3, 9)] {
             let arguments = || [p, lo, hi].map(|v| Val::Int { bits: v, width: 16 }).to_vec();
             assert_eq!(run(&after, "f", arguments(), 100).unwrap(), run(&before, "f", arguments(), 100).unwrap());
         }
     }
 
-    /// qcport snd -Os grew 35 bytes: an `and` of compares of longs in 16-bit
-    /// code was branched, the second compare moved into the arm, and its
-    /// operands, two registers each, were spilled across the branch. A compare
-    /// wider than a near pointer stays a chain.
+    /// qcport snd -Os grew 35 bytes when an `and` of compares of longs in
+    /// 16-bit code was branched. No `and` of compares is branched now, of any
+    /// width.
     #[test]
     fn test_a_compare_wider_than_a_register_is_left_a_chain() {
         let body = |ty: &str| {
@@ -557,7 +558,7 @@ entry:
             )
         };
         let (_, word) = branched(&body("i16"), &i486);
-        assert_eq!(conditional_branches(&word), 1, "{}", llrm_mir::print::module(&word));
+        assert_eq!(conditional_branches(&word), 0, "{}", llrm_mir::print::module(&word));
         let (_, long) = branched(&body("i32"), &i486);
         assert_eq!(conditional_branches(&long), 0, "{}", llrm_mir::print::module(&long));
         assert!(llrm_mir::print::module(&long).contains(" and "), "{}", llrm_mir::print::module(&long));

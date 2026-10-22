@@ -18,7 +18,12 @@
 //! block that defines it ends in `CopyToReg`, the blocks that read it start
 //! from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
-//! Calls, returns, arguments and switches are refused (`Refused`) until A2.
+//! Arguments and returns go through the target's `Convention` (stack
+//! parameters are loads of fixed objects, register ones live-in copies;
+//! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+//! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+//! Indirect calls, intrinsics, switches, floats and values wider than a
+//! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -61,6 +66,10 @@
 //! `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 //! Owner sdag-a. Review 2026-11-13.
 //!
+//! DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
+//! (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+//! Exit: none. Owner sdag-a.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -74,6 +83,7 @@ pub mod builder;
 mod dag;
 pub mod dagisel_adapter;
 pub mod dump;
+pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
@@ -82,14 +92,21 @@ pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
+pub mod x86_lowering;
 pub mod schedule;
+pub mod switchcg;
+pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
-pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
+pub use dag::{
+    BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
+};
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod emit_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
