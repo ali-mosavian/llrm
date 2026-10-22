@@ -393,3 +393,64 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
     compiler.chmod(0o755)
     verdict, _, names = ps.qc_modules(tmp_path)
     assert verdict == "fail" and names == ["qc_modules game/combat.c", "qc_modules sound/snd.c"], names
+
+
+def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
+    for path in ("crates/frontends/llrm-qb/src/compile.rs", "crates/frontends/qbfront/src/semantic.rs", "crates/frontends/llrm-qbruntime/src/runtime.toml", "runtime/qb/strconv.c",
+                 "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
+        assert ps.runs_whole_groups([path]), path
+    for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
+        assert not ps.runs_whole_groups([path]), path
+    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qbfront/src/lexer.rs"])
+
+
+def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():
+    """The gate ran a dozen programs, so three tests/run qb programs (12 results) went red on parity unseen. A group's FAIL line is a failing name; the merged tree failing it, the head not, refuses."""
+    import parity_squash as sq
+
+    class Done:
+        returncode = 1
+        stdout = "[qb] 170 programs: 169 pass, 0 known, 1 fail\nFAIL  qb/log_exp_digits.bas [-O2]: line 1: want ' 2.30', got ' 2.31'\n"
+        stderr = ""
+
+    failed = ps.group_failures("/bins", run=lambda *a, **k: Done())
+    assert failed == {"run qb/log_exp_digits.bas [-O2]"}, failed
+    why = sq.subset_refusals(set(), failed, fixes=False)
+    assert why and "qb/log_exp_digits.bas [-O2]" in why[0], why
+    assert sq.subset_refusals(failed, failed, fixes=False) == []
+
+    class Clean:
+        returncode = 0
+        stdout = "[qb] 170 programs: 170 pass, 0 known, 0 fail\n"
+        stderr = ""
+
+    assert ps.group_failures("/bins", run=lambda *a, **k: Clean()) == set()
+
+    class Silent:
+        returncode = 2
+        stdout = ""
+        stderr = "boom"
+
+    assert ps.group_failures("/bins", run=lambda *a, **k: Silent()) == {"run-groups-did-not-finish"}
+
+
+def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path):
+    """#3422 broke QCport `item` at four levels and passed the gate: qc_modules compiled four modules at -O2. A crate PR now compiles all 65 at four levels, and a failing one is a name."""
+    assert ps.touches_the_compiler(["crates/opt/llrm-transforms/src/simplifycfg.rs"]) and not ps.touches_the_compiler(["docs/arch.md", "tools/gate/gate.py"])
+    (tmp_path / "src").mkdir()
+    (tmp_path / "inc").mkdir()
+    import os
+
+    os.environ["QCPORT"], os.environ["QCPORT_INC"] = str(tmp_path / "src"), str(tmp_path / "inc")
+    try:
+        seen = {}
+
+        def sweep(compiler, qcport, include):
+            seen["compiler"] = compiler
+            return [("item", "-O1", "a poison initializer"), ("item", "-Os", "a poison initializer")]
+
+        assert ps.qcport_failures("/bins", sweep=sweep) == {"qc item -O1", "qc item -Os"}
+        assert str(seen["compiler"]) == "/bins/llrm-c"
+        assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
+    finally:
+        del os.environ["QCPORT"], os.environ["QCPORT_INC"]

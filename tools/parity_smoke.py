@@ -412,6 +412,60 @@ def failing_programs(output: str) -> list[str]:
     return list(dict.fromkeys(f"run {one}" for one in RUN_FAIL.findall(output)))
 
 
+# A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
+# parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
+WHOLE_GROUP_TRIGGERS = (
+    "crates/frontends/llrm-qb/",
+    "crates/frontends/qbfront/",
+    "crates/frontends/llrm-qbruntime/",
+    "runtime/qb/",
+    "crates/target/llrm-x86/",
+    "crates/backend/llrm-core/",
+)
+
+
+def runs_whole_groups(files: list[str] | set[str]) -> bool:
+    """Whether a PR with these changed files runs every tests/run group in the gate."""
+    return any(path.startswith(WHOLE_GROUP_TRIGGERS) for path in files)
+
+
+def group_failures(
+    bins: Path | str,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `run <program> [<flags>]` of every tests/run group (tools/dosbatch/run_groups.py) on `bins`, a launch that was stopped by its group, or `run-groups-did-not-finish`."""
+    done = run([sys.executable, str(ROOT / "tools/dosbatch/run_groups.py")], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(bins)})
+    output = done.stdout + done.stderr
+    names = set(failing_programs(output))
+    names |= {f"run {line.split(']')[0][1:]} launch stopped" for line in output.splitlines() if "LAUNCH STOPPED" in line}
+    if not names and (done.returncode or not re.search(r"^\[\w+\] \d+ programs: ", output, re.M)):
+        names.add("run-groups-did-not-finish")
+    return names
+
+
+def touches_the_compiler(files: list[str] | set[str]) -> bool:
+    """Whether a PR changes a crate: any of them can change what a QCport module compiles to, and QCport's `item` stopped compiling at four levels on a mid-end PR
+    (#3422) the gate passed, because it compiled four QCport modules at -O2."""
+    return any(path.startswith("crates/") for path in files)
+
+
+def qcport_failures(
+    bins: Path | str,
+    sweep=None,
+) -> set[str]:
+    """The failing `qc <module> <level>` of every QCport module (all 65) at all four levels on `bins`: 260 compiles, 3 s of wall at 8 at a time. Nothing when the QCport sources are
+    not on this host (the `qc_modules` step says so)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
+    import qcport_sweep  # noqa: PLC0415
+
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not qcport.is_dir() or not include.is_dir():
+        return set()
+    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / "llrm-c", qcport, include)}
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:
