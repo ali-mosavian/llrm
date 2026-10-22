@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/consts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/consts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:a3228c1dc510b8543ada73cc59d9a9ebf9489d92b7ff4b685f14b323ff8b55ae -->
+<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:12bf56f4be5b1eb3be590f3304a48ddb81be8a7a948bd5cf7c247fc754d58199 -->
 
 # consts
 
@@ -38,7 +38,7 @@ adds what counted float loops leave in memory at their exits
 ```
 
 The caller states what each call writes (`Calls`, from
-`alias::calls_by_attributes`); a call not listed writes what
+`alias::calls_annotated`); a call not listed writes what
 `memory::unmodeled_write` says. A far store through a segment selector
 nothing yet resolves is taken to write no program object, and the solve is
 made again without any such selector that did not resolve to a number.

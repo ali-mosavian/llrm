@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 121 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -40,8 +40,6 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 121 documented
 | expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and | [expansion](expansion.md) |
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
-| fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
-| flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
 | floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
@@ -104,9 +102,8 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 121 documented
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
 | selectconstants | A select between two constants made arithmetic on its condition. | Once per program in `driver::optimized`, in front of `selects::lowered` | [selectconstants](selectconstants.md) |
-| selectiondag | SelectionDAG: value types, opcodes, the node arena, `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`), and the builder that makes one DAG per block of MIR (pin `SelectionDAGBuilder.cpp`, scalar subset). | Nothing runs it yet but the tests and the shadow harness (sdag-d). The | [selectiondag](selectiondag.md) |
+| selectiondag | SelectionDAG: value types, opcodes, the node arena and `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`). | Nothing runs it yet: the builder (A1) and legalizer are the callers. The | [selectiondag](selectiondag.md) |
 | selects | Turns each MIR `select` into a branch around an empty block and a phi, where the target has no conditional move. | Once per program in `driver::optimized`, after `fpconvert` and before the | [selects](selects.md) |
-| shadow | Which instruction selector runs, and the row each function leaves for `tools/pairs/isel_shadow.py`. | `assemble::staged` (the choice and the dump), `assemble::machined` (the | [shadow](shadow.md) |
 | sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |
 | shrinkwrap | Sets up a procedure's frame and kept registers where they are first needed, not at the entry, and takes them back only on the returns that path reaches. | `wrapped` runs when masm builds a procedure's items, for a procedure that | [shrinkwrap](shrinkwrap.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of | [slots](slots.md) |
