@@ -72,6 +72,7 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupSetCC",
     "CopyPropagation",
     "X86OptimizeLEAs",
+    "MachineLICM",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -81,6 +82,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
@@ -145,6 +147,9 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, a loop-invariant computation in the preheader (the pin:
+        // EarlyMachineLICM, ahead of MachineCSE).
+        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
