@@ -88,7 +88,9 @@ def m16_only(source: Path) -> bool:
     sys.path.insert(0, str(ROOT / "tools/dosbatch"))
     import run_tests  # noqa: PLC0415
 
-    return any(dialect in M16_ONLY_DIALECTS or any(flag in M16_ONLY_FLAGS for flag in flags) for _, flags, dialect in run_tests.configurations(run_tests.header(source)))
+    settings = run_tests.header(source)
+    # a `dialect:` line passes `--runtime <dialect>`, the Microsoft runtime, which has no flat form (intrinsics_qb45 and range_exp failed at -m32 with relocation overlaps)
+    return "dialect" in settings or any(dialect in M16_ONLY_DIALECTS or any(flag in M16_ONLY_FLAGS for flag in flags) for _, flags, dialect in run_tests.configurations(settings))
 
 
 def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:

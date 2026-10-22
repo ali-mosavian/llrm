@@ -31,12 +31,17 @@ def stub(scratch: Path, log: Path) -> dict:
         echo "$CARGO_TARGET_DIR" >> {log}
         sleep 0.3
         mkdir -p $CARGO_TARGET_DIR/dist $CARGO_TARGET_DIR/deps
-        for b in llrm-c llrm-qb llrm-nib nibfront; do git rev-parse HEAD > $CARGO_TARGET_DIR/dist/$b; done
+        # llrm-c reads a header from the tree it was built in when it runs, as the real one does
+        for b in llrm-c llrm-qb llrm-nib nibfront; do printf '#!/bin/sh\\n# %s\\ncat "%s/tree.txt"\\n' "$(git rev-parse HEAD)" "$(pwd)" > $CARGO_TARGET_DIR/dist/$b; done
         for t in jwasm jwlink dosbox-x; do echo $t > $CARGO_TARGET_DIR/dist/$t; done
         chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-c: src.rs" > $CARGO_TARGET_DIR/dist/llrm-c.d
         """))
     stub.chmod(0o755)
     return {**os.environ, "PAIR_CARGO": f"{stub} cargo"}
+
+
+def built_from(binary: Path) -> str:
+    return binary.read_text().splitlines()[1].lstrip("# ")
 
 
 def build(scratch: Path, repo: Path, sha: str, env: dict) -> None:
@@ -56,9 +61,9 @@ def test_two_concurrent_builds_of_different_shas_each_carry_their_own_tree(tmp_p
     for worker in workers:
         worker.join()
     for sha in (first, second):
-        assert (scratch / f"sbp-{sha}" / "dist" / "llrm-c").read_text().strip() == sha
+        assert built_from(scratch / f"sbp-{sha}" / "dist" / "llrm-c") == sha
     assert subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() == second
-    assert not list(scratch.glob("wt-pair-*")), "the build worktrees are removed"
+    assert len(list(scratch.glob("wt-pair-*"))) == 2, "the build worktrees are kept for the dist to read"
 
 
 def test_a_pair_leaves_only_the_binaries_per_sha_and_all_builds_share_one_target(tmp_path):
@@ -77,3 +82,43 @@ def test_a_pair_leaves_only_the_binaries_per_sha_and_all_builds_share_one_target
     assert set(log.read_text().split()) == {str(scratch / "tgt-dist")}
     build(scratch, repo, shas[0], env)  # built already: no second build
     assert len(log.read_text().split()) == 2
+
+
+def test_a_built_dist_is_write_once_and_a_rebuild_goes_to_another_dir(tmp_path):
+    """Another session copied a different llrm-c over a built sbp-<sha>/dist (md5 01fdf3625b2a became ecbc4f3de389): `ok` records the sums, the files are read-only, a changed file is refused, a rebuild never overwrites."""
+    repo = tmp_path / "wt-head10"
+    (sha,) = repo_with_commits(repo, 1)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, sha, env)
+    ok = (scratch / f"sbp-{sha}" / "ok").read_text()
+    assert f"sha: {sha}" in ok and "cmd: build --profile dist" in ok and "  llrm-c" in ok, ok
+    binary = scratch / f"sbp-{sha}" / "dist" / "llrm-c"
+    assert not os.access(binary, os.W_OK)
+    original = binary.read_bytes()
+    binary.chmod(0o755)
+    binary.write_text("another tree\n")
+    refused = subprocess.run(["bash", str(SCRIPT), str(scratch), sha], cwd=repo, env=env, capture_output=True, text=True)
+    assert refused.returncode != 0 and "not what its ok recorded" in refused.stderr, refused
+    binary.write_bytes(original)
+    build(scratch, repo, sha, env)  # restored: kept as it is
+    subprocess.run(["bash", str(SCRIPT), str(scratch), sha], cwd=repo, env={**env, "PAIR_REBUILD": "1"}, check=True)
+    assert built_from(scratch / f"sbp-{sha}-2" / "dist" / "llrm-c") == sha
+    assert built_from(binary) == sha
+
+
+def test_the_dist_still_compiles_after_the_pair_and_an_old_worktree_is_pruned(tmp_path):
+    """w-1's ex4 was void: the build worktree was removed on exit, and llrm-c opens predefined.h under the build tree at run time, so every compile failed on both arms."""
+    repo = tmp_path / "wt-head10"
+    first, second = repo_with_commits(repo, 2)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, first, env)
+    ran = subprocess.run([str(scratch / f"sbp-{first}" / "dist" / "llrm-c")], capture_output=True, text=True)
+    assert ran.returncode == 0 and ran.stdout.strip() == "tree 0", ran
+    old = scratch / f"wt-pair-{first}"
+    os.utime(old, (1, 1))
+    build(scratch, repo, second, {**env, "PAIR_KEEP_MIN": "60"})
+    assert not old.exists() and (scratch / f"wt-pair-{second}").exists()

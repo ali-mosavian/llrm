@@ -46,3 +46,17 @@ def test_the_options_are_taken_from_the_line_and_the_environment(monkeypatch):
     assert (rest, named, allow) == (["-O2", "x"], {"sha": "abc", "base_sha": "def"}, True)
     monkeypatch.setenv("LLRM_EXPECT_SHA", "ghi")
     assert stamp.options([]) == ([], {"sha": "ghi", "base_sha": None}, False)
+
+
+def test_a_binary_overwritten_after_its_ok_is_refused(tmp_path):
+    """w-1's sbp-65eed2ad7b dist: another session copied a different llrm-c over it after the build; md5 01fdf3625b2a became ecbc4f3de389."""
+    import hashlib
+
+    dist = tmp_path / "sbp-aaaa1111" / "dist"
+    dist.mkdir(parents=True)
+    binary = stub(dist, "llrm-c", "llrm-c aaaa1111")
+    (tmp_path / "sbp-aaaa1111" / "ok").write_text(f"sha: aaaa1111\n{hashlib.md5(binary.read_bytes()).hexdigest()}  llrm-c\n")
+    assert stamp.check(binary, "aaaa1111") == "aaaa1111"
+    binary.write_text("#!/bin/sh\necho 'llrm-c aaaa1111'\n# another build\n")
+    with pytest.raises(SystemExit, match="recorded when it was built"):
+        stamp.check(binary, "aaaa1111")

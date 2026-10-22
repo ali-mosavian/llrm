@@ -1,0 +1,36 @@
+# Fold: what it costs, what it carries, how it goes (llrm-only bucket, d_faces -O2)
+
+Measured with callgrind --separate-callers=30 on d_faces -O2, dist f782e4c567e6 (parity 7c4d1afdb), 2026-10-21 (a shared-dir build: re-take before any number here is quoted). Pin side: clang -m32 -march=i486 (pin side), our `llrm-c -m32 -mabi=sysv -march=i486 -O2`; dist f782e4c567e6 (parity 7c4d1afdb), callgrind --separate-callers=30, 2026-10-21.
+
+## What Fold costs (200.4 M Ir of 1318 M)
+| part | Ir (M) | what runs |
+|---|---|---|
+| `_numbers` | 115.9 | ThroughMemory 46.6 (MemorySSA walk, w-7's Annotated chain), `Held::of` 34.5 (Counted/Bounded ranges chain, mine), floatfacts `Solved` 29.3 |
+| `floatfold::_folded` | 52.4 | `FloatFacts` 47.7 |
+| `manager::writes` | 30.8 | call-effects table, shared by both |
+| `canonical` (compares, identities) | ~1 | cheap |
+
+Invocations: 61 on d_faces -O2 (55 at -Os), 5 change anything (1 the numbers/edge fold), ~3.3 M Ir for a run that changes nothing, ~20 K Ir per instruction. 28 of 61 find the function byte-identical to the last Fold's end, but those are the small ones (218 of 9932 instructions): a skip test saves little.
+
+## What Fold carries (objects, -O2, 416 compared)
+Skipping all of Fold changes 50 (27 bigger, 13 smaller); `_numbers` alone 12 (10 bigger: run/loop_fusion -Omax +1674/+1447 B, qcport/lights +641, x_fir +244, client +108, nbody_fixed +64, savegame +81...); floatfold alone 14 (6 bigger, 2 smaller); the rest is canonical forms (cheap). Replaced values on the differing objects: 134 loads, 67 icmp (downstream of loads), 23 casts, 9 binary, 8 phi: it is load forwarding of known memory.
+
+## Which pin pass does the job (x_fir, `opt -passes='default<O2>' -print-after-all`, system clang/opt 20)
+coef[16] filled by a constant loop, read by an unrolled inner loop: LoopFullUnroll makes 16 loads of @coef; **GVN** (the pass after unroll, store-to-load forwarding) leaves 3; the module-level **GlobalOpt** after the inliner folds the rest (an internal global only stored constants). Our order already has unroll@753 -> sroa@776 -> gvn@787; so the job is GVN's load forwarding (MemDep/MemorySSA) + a GlobalOpt after the CGSCC inliner, not Fold.
+
+## Plan (order by Ir; each PR has Ir before/after on dist and objects identical or a bytes/clocks row; `Deletes:` line, no switch)
+1. (10-30) Find, per differing object, the load our GVN leaves that the pin's removes (stages diff with/without `_numbers`: x_fir first), fix GVN's forwarding (translation fidelity) and run GlobalOpt once more after the inliner: then `_numbers`' load path has no object left to carry. Row: objects of the 12 identical with Fold's numbers off.
+2. (11-02) Delete `_numbers` (115.9 M) when 1 holds on the corpus; keep the edge fold (phi of numbers = SCCP/JT) only if an object needs it. First Ir drop.
+3. floatfold (52.4 M): the pin folds exact floats in InstSimplify/ConstantFolding inside InstCombine; name the 14 objects' pass the same way, then delete or merge into combine.
+4. `writes` (30.8 M) goes with its last caller.
+Open: attribution for qcport/lights, client, savegame needs the pinned clang with qcport flags (not run); loop_fusion is -Omax only.
+
+## Mechanism, to be checked on the stage dumps before the PR (2026-10-22)
+
+The x_fir coefficient table is an array global of 16 elements stored by constant stores and read by 16 unrolled loads. LLVM's GlobalOpt splits an array global of up to 16 elements into one global per element (SRAGlobal) and replaces a global stored once by a constant (optimizeOnceStoredGlobal); our GlobalOpt only marks a never-stored global constant. So after the GVN forwarding fix, the second GlobalOpt slot needs SRA of small arrays and the once-stored fold, not only `never_stored`.
+
+## Dates
+
+- 10-28: attribution of qcport/lights, client and savegame (pinned clang with qcport flags).
+- 10-30: GVN forwarding fix and GlobalOpt after the inliner, one PR each, objects of the 12 identical with `_numbers` off.
+- 11-02: delete `_numbers`.

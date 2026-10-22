@@ -707,7 +707,13 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![
+                // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
+                slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
+                simplify_cfg("decide@1178"),
+                sroa("sroa@1179"),
+                earlycse("earlycse@1180"),
+            ]
         }
         Phase::Cleanup => vec![
             Box::new(Together {

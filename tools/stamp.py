@@ -5,8 +5,10 @@ built from another tree (a shared worktree moved during the build gave a number 
 from a tree with changes unless `--allow-dirty` (or LLRM_ALLOW_DIRTY=1) says so. The stamp is printed, never hashed.
 """
 import os
+import hashlib
 import subprocess
 import sys
+from pathlib import Path
 
 
 def read(binary) -> tuple[str, bool]:
@@ -22,8 +24,24 @@ def read(binary) -> tuple[str, bool]:
     return sha, flag == "dirty"
 
 
+def verify_dist(binary) -> None:
+    """A binary in SCRATCH/sbp-SHA/dist whose `ok` recorded md5s (pair_build.sh) must still have the recorded one: a file
+    copied over it after the build is refused. A dist without recorded sums (built before) is not checked."""
+    path = Path(binary).resolve()
+    ok = path.parent.parent / "ok"
+    if path.parent.name != "dist" or not ok.is_file():
+        return
+    for line in ok.read_text().splitlines():
+        want, _, name = line.partition("  ")
+        if name == path.name and len(want) == 32:
+            got = hashlib.md5(path.read_bytes()).hexdigest()
+            if got != want:
+                raise SystemExit(f"{binary}: md5 {got} is not the {want} recorded when it was built ({ok}): refused")
+
+
 def check(binary, expect_sha: str | None = None, allow_dirty: bool = False, label: str = "") -> str:
     """Prints the stamp; refuses a sha that does not start with `expect_sha` and a dirty tree unless allowed. Returns the sha."""
+    verify_dist(binary)
     sha, dirty = read(binary)
     print(f"stamp {label or binary}: {sha}{'+dirty' if dirty else ''}", file=sys.stderr)
     if expect_sha and not sha.startswith(expect_sha) and not expect_sha.startswith(sha):
