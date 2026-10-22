@@ -882,6 +882,7 @@ pub fn assembled(
             cpu,
             segments: &segments,
             selection: options.selection,
+            selector: options.isel,
             arch: &*options.arch,
             classes: &classes,
             runtime: runtime.tables(),

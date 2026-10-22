@@ -347,6 +347,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Old,
         "lir-cleanup-poc",
     ),
+    entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     partial(
         "pushfold@6",
