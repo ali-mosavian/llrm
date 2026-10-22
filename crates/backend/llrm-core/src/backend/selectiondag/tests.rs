@@ -403,11 +403,12 @@ mod builder {
         let target = BuilderTarget::m32();
         let mut built = BTreeMap::new();
         let mut refused = Vec::new();
-        for (_, global, function) in module.functions() {
+        for (id, global, function) in module.functions() {
+            let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
-                let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap());
-                match build_block(&module, function, &layout, &target, &mut info, block) {
+                let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
+                match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
                     Ok(done) => {
                         built.insert(name, normalized(&done.dag.dump()));
                     }
@@ -416,14 +417,6 @@ mod builder {
             }
         }
         (built, refused)
-    }
-
-    /// A `ret` is refused with its reason, not built wrongly.
-    #[test]
-    fn a_return_is_refused_until_calls_and_returns_land() {
-        let (built, refused) = our_blocks("define void @f() {\nb0:\n  ret void\n}\n");
-        assert!(built.is_empty());
-        assert_eq!(refused, vec!["f:b0: ret (A2)".to_string()]);
     }
 
     /// Every block of the scalar function the builder takes has the DAG the
@@ -436,6 +429,23 @@ mod builder {
         let (ours, refused) = our_blocks(ll);
         assert_eq!(refused, Vec::<String>::new());
         assert_eq!(ours.len(), 4, "all four blocks are built");
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// Entry blocks lower the arguments and `ret` copies to the return
+    /// register: the same DAG as the pin's for stack arguments (`load` from
+    /// `FrameIndex<-1>`, ...), an argument read in another block (`CopyToReg`
+    /// of the load), and `RET_GLUE`. Without `lower_arguments` the first
+    /// block is refused for its arguments.
+    #[test]
+    fn arguments_and_returns_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/args.ll");
+        let pin = pin_blocks(include_str!("golden/args.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4, "the entry of f, e and n of h, the entry of v");
         for (name, dag) in &ours {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }

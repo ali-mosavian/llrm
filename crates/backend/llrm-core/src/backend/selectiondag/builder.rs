@@ -11,6 +11,9 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+use crate::backend::isel::{Convention, Parameter};
+use llrm_lir::registers::RegId;
+
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::{CondCode, ISD};
@@ -49,14 +52,18 @@ pub struct BlockDag {
     pub dag: SelectionDAG,
     /// `PHINodesToUpdate`: the phi and the register its incoming value is in.
     pub phi_updates: Vec<(ValueId, u32)>,
+    /// The argument registers copied to virtual registers, in the entry block.
+    pub live_ins: Vec<(RegId, u32)>,
 }
 
-/// `SelectionDAGISel::SelectBasicBlock` for `block`.
+/// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
+/// lowers the arguments (`LowerArguments`), so it must be built first.
 pub fn build_block(
     module: &Module,
     function: &Function,
     layout: &DataLayout,
     target: &BuilderTarget,
+    convention: &Convention,
     info: &mut FunctionLoweringInfo,
     block: BlockId,
 ) -> Result<BlockDag, Refused> {
@@ -65,7 +72,9 @@ pub fn build_block(
         function,
         layout,
         target,
+        convention,
         info,
+        live_ins: Vec::new(),
         dag: SelectionDAG::new(target.dag),
         node_map: IdMap::new(),
         pending_loads: Vec::new(),
@@ -76,13 +85,16 @@ pub fn build_block(
     };
     builder.dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
     builder.dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
+    if Some(block) == function.entry() {
+        builder.lower_arguments()?;
+    }
     // selection starts at the first non-phi (`getFirstNonPHIIt`)
     for inst in function.iter_block(block).filter(|inst| function.instruction(*inst).opcode != Opcode::Phi).collect::<Vec<_>>() {
         builder.visit(inst)?;
     }
     let root = builder.control_root();
     builder.dag.set_root(root);
-    Ok(BlockDag { dag: builder.dag, phi_updates: builder.phi_updates })
+    Ok(BlockDag { dag: builder.dag, phi_updates: builder.phi_updates, live_ins: builder.live_ins })
 }
 
 struct Builder<'a> {
@@ -90,6 +102,8 @@ struct Builder<'a> {
     function: &'a Function,
     layout: &'a DataLayout,
     target: &'a BuilderTarget,
+    convention: &'a Convention,
+    live_ins: Vec<(RegId, u32)>,
     info: &'a mut FunctionLoweringInfo,
     dag: SelectionDAG,
     node_map: IdMap<ValueId, SDValue>,
@@ -200,6 +214,84 @@ impl Builder<'_> {
         }
     }
 
+    /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
+    /// `Convention`: a stack parameter is a load from a fixed object (indices
+    /// -1, -2, ... in parameter order), a register parameter the copy of a
+    /// live-in virtual register. A parameter read outside the entry block is
+    /// also copied to a register of its own.
+    fn lower_arguments(&mut self) -> Result<(), Refused> {
+        let entry = self.function.entry();
+        let mut outside = std::collections::HashSet::new();
+        for &block in self.function.layout() {
+            for inst in self.function.iter_block(block) {
+                let instruction = self.function.instruction(inst);
+                for operand in &instruction.operands {
+                    if let Operand::Value(value) = operand {
+                        if Some(block) != entry || instruction.opcode == Opcode::Switch {
+                            outside.insert(*value);
+                        }
+                    }
+                }
+            }
+        }
+        let mut fixed = 0;
+        for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
+            let vt = self.type_of(self.function.value(arg).ty)?;
+            if self.register_type(vt)? != vt {
+                return Err(Refused("argument of an illegal integer type"));
+            }
+            let entry_node = self.dag.entry_node();
+            let value = match self.convention.parameters.get(at) {
+                Some(Parameter::Cell(_)) => {
+                    fixed += 1;
+                    let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
+                    let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                    let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(-fixed) };
+                    self.dag.get_load(vt, entry_node, ptr, info)
+                }
+                Some(Parameter::Registers(regs)) if regs.len() == 1 => {
+                    let vreg = self.info.new_reg();
+                    self.live_ins.push((regs[0], vreg));
+                    self.dag.get_copy_from_reg(entry_node, vreg, vt)
+                }
+                _ => return Err(Refused("argument passed in several places or by value")),
+            };
+            self.node_map.insert(arg, value);
+            if outside.contains(&arg) {
+                let reg = self.info.create_reg(arg);
+                self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `visitRet` and X86's `LowerReturn`: the value copied to the return
+    /// register, then `RET_GLUE chain, popped, register, glue`.
+    fn visit_ret(&mut self, instruction: &llrm_mir::module::Instruction) -> Result<(), Refused> {
+        let mut chain = self.control_root();
+        let mut ops = Vec::new();
+        let mut glue = None;
+        if let Some(&operand) = instruction.operands.first() {
+            let value = self.get_value(operand)?;
+            let vt = self.dag.value_type(value);
+            let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
+            if self.register_type(vt)? != vt {
+                return Err(Refused("result of an illegal integer type"));
+            }
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+            ops.push(self.dag.get_phys_register(vt, reg));
+        }
+        let popped = self.dag.get_constant_with(self.convention.popped as u128, EVT::I32, true, false);
+        let mut all = vec![chain, popped];
+        all.extend(ops);
+        all.extend(glue);
+        let node = self.dag.get_node(super::x86isd::RET_GLUE, EVT::OTHER, &all);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
     /// `getNonRegisterValue`.
     fn non_register_value(&mut self, operand: Operand) -> Result<SDValue, Refused> {
         match operand {
@@ -235,7 +327,7 @@ impl Builder<'_> {
             return Ok(self.dag.get_frame_index(vt, *index));
         }
         match self.function.value(value).def {
-            ValueDef::Argument(_) => Err(Refused("argument (A2)")),
+            ValueDef::Argument(_) => Err(Refused("argument read before the entry block was built")),
             // an exported value read before its definition's block: its register
             ValueDef::Instruction(_) => {
                 let reg = *self.info.value_regs.get(&value).ok_or(Refused("value with no register"))?;
@@ -294,7 +386,7 @@ impl Builder<'_> {
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. } if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Unreachable => {}
-            Opcode::Ret => return Err(Refused("ret (A2)")),
+            Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => return Err(Refused("switch (A2)")),
             Opcode::Call(_) | Opcode::Invoke(_) => return Err(Refused("call (A2)")),
             _ => return Err(Refused("instruction not in the scalar subset")),
