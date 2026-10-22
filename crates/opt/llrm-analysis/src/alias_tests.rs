@@ -1693,10 +1693,10 @@ fn an_effect_of_the_unknown_covers_a_fresh_slice_of_an_escaped_object_and_not_th
 /// address of where the kept effect has what a callee may reach (`Nonlocal`),
 /// whole: that reaches every escaped object, a frame one aside, as
 /// `objects_may_alias` says. `covers` took the global for a new read, and
-/// `LLRM_CHECK_REPLAY` stopped arrprm.bas at -O1 and -O2 (m16) once -O1 inlined:
-/// 'call-effects: the result kept past 4 sound edits contradicts what deriving
-/// it afresh gives' (no object changed: the kept effect was the less precise,
-/// both sound).
+/// `LLRM_CHECK_REPLAY` stopped arrprm.bas at -O1 and -O2 (m16) once -O1
+/// inlined: 'call-effects: the result kept past 4 sound edits contradicts what
+/// deriving it afresh gives' (no object changed: the kept effect was the less
+/// precise, both sound).
 #[test]
 fn an_effect_of_what_a_callee_reaches_covers_a_fresh_slice_of_an_escaped_global() {
     let escaped = MemoryObject {

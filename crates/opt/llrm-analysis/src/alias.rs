@@ -2297,13 +2297,16 @@ impl Effect {
                 old.contains(one)
                     || (names_nothing(one)
                         && one.provenance.as_ref().is_some_and(|provenance| {
-                            provenance.slices.iter().all(|slice| {
-                                slice_covered(slice, kept_slices())
-                                    || (unknown_whole && slice.object.captured())
-                                    || (nonlocal_whole
-                                        && slice.object.captured()
-                                        && !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack))
-                            })
+                            provenance
+                                .slices
+                                .iter()
+                                .all(
+                                    |slice| slice_covered(slice, kept_slices())
+                                        || (unknown_whole && slice.object.captured())
+                                        || (nonlocal_whole
+                                            && slice.object.captured()
+                                            && !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)),
+                                )
                         }))
             })
         };
