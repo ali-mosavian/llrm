@@ -96,6 +96,8 @@ pub mod actions;
 pub mod builder;
 mod dag;
 pub mod dag_combiner;
+pub mod dag_function;
+pub mod dag_select;
 pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
@@ -125,6 +127,10 @@ pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod dag_function_tests;
+#[cfg(test)]
+mod dag_select_tests;
 #[cfg(test)]
 mod dagisel_tests;
 #[cfg(test)]

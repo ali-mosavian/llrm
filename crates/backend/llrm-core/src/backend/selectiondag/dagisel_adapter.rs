@@ -49,6 +49,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FrameIndex => pin::FrameIndex,
         TargetFrameIndex => pin::TargetFrameIndex,
         ConstantPool => pin::ConstantPool,
+        TargetConstantPool => pin::TargetConstantPool,
         BasicBlock => pin::BasicBlock,
         ValueType => pin::VALUETYPE,
         CondCodeNode => pin::CONDCODE,
@@ -231,6 +232,15 @@ impl<'a> DagisAdapter<'a> {
         node: u32,
     ) -> bool {
         self.dead.contains(&node)
+    }
+
+    /// Whether a node selection has not removed uses `node`'s results
+    /// (`!Node->use_empty()`).
+    pub fn has_live_users(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.live_node_users(node).next().is_some()
     }
 
     fn live_users(
