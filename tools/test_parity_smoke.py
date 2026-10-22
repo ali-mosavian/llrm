@@ -475,3 +475,57 @@ def test_a_planted_qbrt_difference_is_a_failing_name_and_a_program_that_did_not_
         stderr = "boom"
 
     assert ps.qbrt_failures("/bins", run=lambda *a, **k: Silent()) == {"qbrt-did-not-finish"}
+
+
+def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_core_and_a_red_one_is_a_new_name():
+    """Five llrm-core isel tests were red on parity for days: a PR touching llrm-transforms never ran llrm-core's lib tests. The closure comes from cargo metadata, not a list."""
+    import parity_squash as sq
+
+    packages, graph = ps.workspace_graph()
+    touched = ps.touched_packages(["crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md"], packages)
+    assert touched == {"llrm-transforms"}
+    closure = ps.dependants(touched, graph)
+    assert {"llrm-transforms", "llrm-core", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
+    head = {"unit llrm-core::backend::isel_tests::test_old_red"}
+    merged = head | {"unit llrm-core::backend::isel_tests::test_made_red_by_transforms"}
+    why = sq.subset_refusals(head, merged, fixes=False)
+    assert why and "test_made_red_by_transforms" in why[0] and "test_old_red" not in why[0].split(", which")[0], why
+
+
+def test_dependants_lib_failures_name_each_failing_test_per_package():
+    class Done:
+        returncode = 101
+        stdout = "failures:\n\nfailures:\n    backend::isel_tests::test_x\n\ntest result: FAILED. 1 passed; 1 failed\n"
+        stderr = ""
+
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command[-3:])
+        return Done()
+
+    assert ps.dependants_lib_failures({"llrm-core"}, run=run) == {"unit llrm-core::backend::isel_tests::test_x"}
+    assert ran == [["-p", "llrm-core", "--lib"]]
+
+
+def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
+    """A transforms PR that breaks loop_rotation must run it: each root integration target is mapped from what its source imports and the compilers it runs. A new target with
+    no crate behind it that is neither a scanner nor nightly-only fails here."""
+    mapping = ps.integration_map()
+    assert len(mapping) >= 116 and ps.unmapped_targets(mapping) == [], ps.unmapped_targets(mapping)
+    assert ps.unmapped_targets({**mapping, "a_new_target_nobody_mapped": set()}) == ["a_new_target_nobody_mapped"]
+    assert "loop_rotation" in ps.integration_targets_for(["crates/opt/llrm-transforms/src/gvn.rs"], {"llrm-transforms"}, mapping)
+    nib_only = ps.integration_targets_for(["crates/frontends/llrm-nib/src/x.rs"], {"llrm-nib"}, mapping)
+    assert "loop_rotation" not in nib_only and set(ps.SCANNERS) <= set(nib_only) and not set(ps.NIGHTLY_ONLY) & set(nib_only)
+    assert "docs_links" in ps.integration_targets_for(["docs/arch.md"], set(), mapping)
+    assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
+
+
+def test_integration_failures_name_the_red_tests_less_the_listed_ones():
+    class Done:
+        returncode = 101
+        stdout = "     Running tests/attribute.rs (x)\ntest a_red_one ... FAILED\ntest result: FAILED. 0 passed; 1 failed\n"
+        stderr = ""
+
+    assert ps.integration_failures(["attribute"], run=lambda *a, **k: Done()) == {"integration attribute::a_red_one"}
+    assert ps.integration_failures([], run=lambda *a, **k: Done()) == set()

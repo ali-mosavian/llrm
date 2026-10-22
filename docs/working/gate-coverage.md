@@ -12,7 +12,7 @@ Counts are `#[test]` attributes in the crate's sources at feat/parity a0843c575 
 
 ## Never run by the gate
 
-- The lib tests of every crate the PR does not touch: a change in llrm-transforms never runs llrm-core's 1433 (five isel tests were red on parity unseen).
+- The lib tests of every crate the PR does not touch (now run: those of the touched crates and their dependants, from `cargo metadata`): a change in llrm-transforms never runs llrm-core's 1433 (five isel tests were red on parity unseen).
 - Integration tests (`tests/*.rs` targets) except the 8 named ratchets: the root crate has 116 targets with 645 tests; the 11 ratchets run 8 of them.
 
 | crate | lib tests | integration targets | integration tests |
@@ -63,3 +63,9 @@ Run the lib tests of every crate that depends on a touched crate, names vs the h
 ## Ratchets with no per-test names
 
 `ratchet:docs`, `ratchet:prepush-docs|facts|fmt|scans|test docs_links`, `ratchet:warnings` and `workspace` print no test names; a second failure inside one is hidden. Each needs to print its items or be split.
+
+## Measured (tinytim, 2026-10-22)
+
+- Root crate integration targets: 126 binaries, run 275 s (turbo 138 s, run 70 s, cv4 30 s, the other 123 about 37 s); rebuilding all of them after a transforms change 277 s at load 14. 63 tests in 40 targets are red on parity (names: `tools/gate/nightly_integration.py`).
+- Each target is mapped from what it imports and the compilers it runs (`parity_smoke.integration_map`; a new target nobody can map fails its test). A PR runs the targets whose crates include a touched crate, the 11 scanners, and a target whose own file changed. A llrm-transforms or llrm-core change selects 109 targets (every compiler depends on them); a llrm-nib change 22; qbfront 34. turbo, cv4 and run are nightly only (`tools/gate/nightly_integration.py`, report to the board).
+- tests/run groups: 75 s alone, 252 s at load; qbrt `--all` 67 s at load 7; QCport 65x4 3 s.

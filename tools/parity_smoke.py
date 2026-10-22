@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -441,6 +442,155 @@ def group_failures(
     if not names and (done.returncode or not re.search(r"^\[\w+\] \d+ programs: ", output, re.M)):
         names.add("run-groups-did-not-finish")
     return names
+
+
+def workspace_graph(
+    root: Path = ROOT,
+    metadata: dict | None = None,
+) -> tuple[dict[str, Path], dict[str, set[str]]]:
+    """(package -> its directory, package -> the workspace packages it depends on, dev-dependencies included) from `cargo metadata --no-deps`."""
+    if metadata is None:
+        metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=root, capture_output=True, text=True, check=True).stdout)
+    packages = {one["name"]: Path(one["manifest_path"]).parent for one in metadata["packages"]}
+    return packages, {one["name"]: {dep["name"] for dep in one["dependencies"]} & packages.keys() for one in metadata["packages"]}
+
+
+def touched_packages(files: list[str] | set[str], packages: dict[str, Path], root: Path = ROOT) -> set[str]:
+    """The packages that own a changed file: the longest package directory above it."""
+    owners = {name: directory.relative_to(root).as_posix() for name, directory in packages.items() if directory != root}
+    found = set()
+    for path in files:
+        match = max((name for name, directory in owners.items() if path.startswith(directory + "/")), key=lambda name: len(owners[name]), default=None)
+        if match:
+            found.add(match)
+    return found
+
+
+def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
+    """`touched` and every package that depends on one of them, through any chain: the lib tests a change can turn red."""
+    out = set(touched)
+    while grown := {name for name, deps in graph.items() if deps & out} - out:
+        out |= grown
+    return out
+
+
+def dependants_lib_failures(
+    packages: set[str],
+    root: Path = ROOT,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `unit <package>::<test>` of every lib test of `packages`, run one package at a time and not stopped at the first red, less the tests tools/xfail.toml lists."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import xfail  # noqa: PLC0415
+
+    failed = set()
+    for package in sorted(packages):
+        done = run(slotted(["cargo", "test", "-q", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
+        output = done.stdout + done.stderr
+        found = {f"unit {package}::{test}" for test in failed_tests(output)}
+        if done.returncode and not found and "no library targets" not in output and "error: " in output:
+            found = {f"unit {package}::did-not-run"}
+        failed |= found
+    return failed - xfail.load().keys()
+
+
+# Root integration targets (tests/*.rs) the landing gate does not run per PR, with the reason: the nightly run (tools/gate/nightly_integration.py) does.
+NIGHTLY_ONLY = {
+    "turbo": "a Turbo Debugger session over a program: 138 s and needs the debugger's DOS image",
+    "cv4": "30 s of CodeView debug-info checks",
+    "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
+}
+# Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
+SCANNERS = {
+    "block_list_ratchet": "counts a pattern in sources",
+    "build_script_reruns": "reads build scripts",
+    "core_depends_on_no_target": "reads crates' manifests",
+    "core_fixtures_are_for_core_tests": "reads test fixtures",
+    "descriptions_are_read": "reads the target descriptions",
+    "docs_links": "reads markdown",
+    "dosbox_progress": "reads the harness",
+    "no_kill_by_pattern": "scans scripts",
+    "no_local_paths": "scans docs",
+    "no_todo": "scans sources",
+    "tracked_build_products": "lists tracked files",
+}
+TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+
+
+def integration_map(
+    root: Path = ROOT,
+    metadata: dict | None = None,
+) -> dict[str, set[str]]:
+    """target -> the workspace packages whose change can change it, derived and not listed: the crates its source imports (`llrm_x::`), the crates each compiler it
+    runs (`CARGO_BIN_EXE_<bin>`) imports, all four compilers where it drives tools/dosbatch; each with its dependencies, to any depth. A target with no such crate and no
+    entry in SCANNERS is unmapped (test_every_integration_target_is_mapped refuses it)."""
+    if metadata is None:
+        metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=root, capture_output=True, text=True, check=True).stdout)
+    packages, graph = workspace_graph(root, metadata)
+    pattern = re.compile(r"\b(llrm_[a-z0-9_]+|qbfront)::")
+    named = lambda text: {name.replace("_", "-") for name in pattern.findall(text)} & packages.keys()  # noqa: E731
+    bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
+    out = {}
+    for source in sorted((root / "tests").glob("*.rs")):
+        text = source.read_text(errors="replace")
+        used = named(text)
+        for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
+            used |= {name} & bins.keys() and bins[name]
+        if "tools/dosbatch" in text or "run_tests" in text:
+            used |= set().union(*(bins.get(name, set()) for name in TOOL_COMPILERS))
+        reach = set(used)
+        while grown := {dep for one in reach for dep in graph.get(one, set())} - reach:
+            reach |= grown
+        out[source.stem] = reach
+    return out
+
+
+def unmapped_targets(mapping: dict[str, set[str]]) -> list[str]:
+    """The targets with no crate behind them that SCANNERS and NIGHTLY_ONLY do not name."""
+    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY)
+
+
+def integration_targets_for(
+    files: list[str] | set[str],
+    touched: set[str],
+    mapping: dict[str, set[str]],
+) -> list[str]:
+    """The root integration targets a PR runs: those whose crates include a touched one, every scanner, and a target whose own tests/NAME.rs changed; never NIGHTLY_ONLY."""
+    own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
+    chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
+    return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
+
+
+def red_tests(output: str) -> list[str]:
+    """`integration <target>::<test>` of each `test NAME ... FAILED` line, by the `Running tests/TARGET.rs` line above it. The `test result: FAILED. N passed; M failed`
+    summary line of each binary is not a test: counting it read 94 red where 63 were."""
+    target, found = "?", []
+    for line in output.splitlines():
+        if match := re.match(r"\s+Running (?:unittests )?(?:tests/)?(\w+?)(?:\.rs)?\s", line):
+            target = match[1]
+        if match := re.match(r"test (?!result:)(\S+) \.\.\. FAILED", line):
+            found.append(f"integration {target}::{match[1]}")
+    return sorted(dict.fromkeys(found))
+
+
+def integration_failures(
+    targets: list[str],
+    root: Path = ROOT,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `integration <target>::<test>` of the root crate's `targets`, less the tests tools/xfail.toml lists; `integration-did-not-run` if nothing ran."""
+    if not targets:
+        return set()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import xfail  # noqa: PLC0415
+
+    command = ["cargo", "test", "--release", "--no-fail-fast", "-p", "llrm", *[arg for name in targets for arg in ("--test", name)]]
+    done = run(slotted(command), cwd=root, capture_output=True, text=True)
+    output = done.stdout + done.stderr
+    found = set(red_tests(output))
+    if done.returncode and not found:
+        found = {"integration-did-not-run"}
+    return found - xfail.load().keys()
 
 
 def qbrt_failures(
