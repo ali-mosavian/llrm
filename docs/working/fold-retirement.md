@@ -15,10 +15,10 @@ Asm of the `fold677` dists (62d45c8880 vs 77048ad015) per object, instruction mu
 |---|--:|---|---|
 | savegame O1/O2/O3 | +2/+21/+21 | the same instructions; `je`/`jne` flipped and blocks reordered | layout: a block order that changes jump encodings, not a rewrite |
 | mdl_ai O2/O3 | +2/+9 | O3 identical multiset; O2 `jl` for `jge` | layout, as above |
-| mdl_ai O1 | +15 | two extra stores: `mov [bx+48], 0` and `mov dword [bx+54], 1094189056` | a store the old fold dropped (its value evaluator proved the cell already held it); the pin drops it in GVN/DSE, not InstCombine: to check |
-| savegame Os | +51 | `sete`/`xor al, 1` for `setne` (4 sites) | `xor (icmp eq), true` = `icmp ne`: InstCombine has it (visitXor on a compare); to translate into `combine` |
-| mdl O3 | +12 | a spill slot and one extra `mov` | register/slot choice after a one-instruction difference: unexplained |
+| mdl_ai O1 | +15 | two extra stores: `mov [bx+48], 0` and `mov dword [bx+54], 1094189056` | a store the old fold dropped (its value evaluator proved the cell already held it); which pin pass drops it, and which of ours misses it: stage diff before/after the slot, w-6, 2026-11-04 |
+| savegame Os | +51 | `sete`/`xor al, 1` for `setne` (4 sites) | `xor (icmp eq), true` = `icmp ne`: pin check (`pin.opt('instcombine')`, m32 target): `icmp eq x,0` then `xor true` becomes `icmp ne x,0`; ours: `algebraic` does it, `fold` and `combine` do not (visitXor untranslated); translate into `combine`, w-6, 2026-11-04 |
+| mdl O3 | +12 | a spill slot and one extra `mov` | register/slot choice after a one-instruction difference: unexplained; explain by 2026-11-02 (regalloc row for splitkit, or pin-faithful) |
 
-Not checked against the pin's asm for the same IR. Owner w-6: translate the xor-of-compare fold into `combine`
+The pin cannot give asm for these m16 objects (its code16 target has 32-bit registers, no 8086 model), so the check is at the IR level with the pin's own passes. Owner w-6: translate the xor-of-compare fold into `combine`
 (2026-11-04), find the stores' pass (2026-11-04); the layout rows stay as growth with this number.
 Later slot PRs carry a row per growth cause in their body.
