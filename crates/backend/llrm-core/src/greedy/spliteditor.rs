@@ -1706,7 +1706,7 @@ mod tests {
             _beside: Option<&Insn>,
         ) -> Arc<Insn> {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(Held { value: to, width: 2 })],
                 sources: vec![Loc::Held(Held { value: from, width: 2 })],
                 ..Semantics::new(Operation::Move)
@@ -1863,7 +1863,7 @@ mod tests {
         use crate::model::ir::Imm;
         let literal = |value: i64| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(Held { value: 2, width: 2 })],
                 sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
                 ..Semantics::new(Operation::Move)

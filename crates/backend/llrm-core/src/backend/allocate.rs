@@ -2896,7 +2896,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -3300,7 +3300,7 @@ mod tests {
     #[test]
     fn test_an_operand_read_as_undef_is_placed_in_any_register() {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 2, width: 2 })],
             sources: vec![Loc::Held(Held { value: 9, width: 2 })],
             ..Semantics::new(Operation::Move)
@@ -3816,7 +3816,7 @@ mod tests {
         let mut call = Insn::new(
             2,
             Some((2, 2)),
-            Some(Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) }),
+            Some(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) }),
             vec![],
             vec![],
         );

@@ -9,7 +9,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 /// A load of `cell`, then a return: a body as the frame rewriters receive it.
 fn loading(cell: Mem) -> LirBody {
     let semantics = |op, name: &str, dests, sources| {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     };
     let load = Insn::new(
         0,

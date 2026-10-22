@@ -264,7 +264,7 @@ pub fn split_push_smaller(
 ) -> bool {
     let push = |width: u32, value: i64| {
         let what = ir::Semantics {
-            name: Some("push".to_owned()),
+            name: Some("push".into()),
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };

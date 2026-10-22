@@ -1,13 +1,7 @@
-//! Float constants in the legalizer (`ConstantFP`): the x87 immediates and the constant pool.
-
 use super::*;
 
-fn dag() -> SelectionDAG {
-    SelectionDAG::new(DagConfig::default())
-}
-
-use super::legalize_dag::DagLegalizer;
-use super::x86_lowering::{x86isd, X86Lowering};
+use super::super::legalize_dag::DagLegalizer;
+use super::super::x86_lowering::{x86isd, X86Lowering};
 
 fn legalized(bits: u128, vt: EVT) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
