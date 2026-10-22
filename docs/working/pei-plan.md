@@ -34,3 +34,12 @@ Ours stands in: `prologue.rs` (frame growth, `sub sp,N` and its release),
 
 Each lands when it builds and passes the gate; the first is a numbered DEVIATE
 until its comparison runs. Owner w-6, plan 10-22, PEI-1 11-06.
+
+## FI-1: frame indices in `frame.rs` (owner w-6, review 2026-11-20)
+
+Slot table row 80 is DEVIATE CG7. Today `Frame::slot` returns a displacement
+the spiller writes into the instruction. The pin writes a frame index and
+`replaceFrameIndices` fills the offset once `calculateFrameObjectOffsets` has
+run. Exit: spill cells carry an index and one pass resolves them with
+`frameobjects::calculate_frame_object_offsets`; then `emitPrologue` and
+`emitEpilogue` (PEI-2) replace `prologue.rs` and `masm::parts`.
