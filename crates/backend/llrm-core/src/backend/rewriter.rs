@@ -230,6 +230,19 @@ pub(crate) fn _placed(
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
+    // A value read as undef has no register of its own: any one will do
+    // (`VirtRegRewriter` gives an undef operand the first of its class).
+    let undef_held;
+    let held = if one.undefs.iter().any(|value| !held.contains_key(value)) {
+        let mut more = held.clone();
+        for value in &one.undefs {
+            more.entry(*value).or_insert(classes.available[0]);
+        }
+        undef_held = more;
+        &undef_held
+    } else {
+        held
+    };
     let dests = what.dests.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let mut name = what.name.clone();

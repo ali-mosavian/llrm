@@ -25,9 +25,15 @@ X=$S/lib/Target/X86
 # Only the tables name matcher symbols; the predicate code after them names types too.
 sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/X86GenDAGISel.inc" |
   grep -oE '\b(ISD|X86ISD|MVT|X86|TargetOpcode|MCRegister)::[A-Za-z0-9_]+' | sort -u > "$WORK/symbols.txt"
+# The pin's MCInstrDesc rows, implicit register lists and operand infos, as one line per
+# instruction: `opcode numops numdefs size flags uses defs ops` (see tools/dagisel/instrinfo.py).
+"$LLVM_BUILD/bin/llvm-tblgen" -gen-instr-info -I"$X" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" \
+  -omit-comments "$X/X86.td" -o "$WORK/X86GenInstrInfo.inc"
+python3 -I "$ROOT/tools/dagisel/instrinfo.py" "$WORK/X86GenInstrInfo.inc" "$WORK/instrinfo.txt" "$WORK/instr_symbols.txt"
+
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
 extras=$(cat "$ROOT/tools/dagisel/extra_symbols.txt")
-{ cat "$WORK/symbols.txt"; echo "$extras"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
+{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; echo "$extras"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
 # The OPC_* and OPFL_* enums are protected members of SelectionDAGISel, and its header will not compile alone: copy the text.
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$WORK/enums.cpp"
 sed 's/.*/P(&);/' "$WORK/members.txt" > "$WORK/members.cpp"
@@ -44,4 +50,4 @@ g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" -I"$X" -I"$LLVM_BUILD/l
 
 mkdir -p "$OUT"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
-"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --out "$OUT"
+"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --out "$OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --instrinfo "$WORK/instrinfo.txt"

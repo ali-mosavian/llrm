@@ -182,6 +182,26 @@ fn bit_counts_of_constants() {
     assert_eq!(dag.constant(swapped), Some(0x3412));
 }
 
+/// Replacing a value rewrites its users; two users that become equal are one
+/// node after (the pin's `AddModifiedNodeToCSEMaps`), or a later `getNode` of
+/// the rewritten expression would build a second copy.
+#[test]
+fn replacing_a_value_rewrites_users_and_merges_equal_ones() {
+    let mut dag = dag();
+    let (x, y, z) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2), arg(&mut dag, EVT::I32, 3));
+    let xz = dag.get_node(ISD::Add, EVT::I32, &[x, z]);
+    let yz = dag.get_node(ISD::Add, EVT::I32, &[y, z]);
+    let outer_x = dag.get_node(ISD::Mul, EVT::I32, &[xz, z]);
+    let outer_y = dag.get_node(ISD::Mul, EVT::I32, &[yz, z]);
+    assert_eq!(dag.users(xz).collect::<Vec<_>>(), vec![outer_x.node]);
+    dag.replace_all_uses_with(x, y);
+    assert_eq!(dag.users(x).count(), 0);
+    assert_eq!(dag.get_node(ISD::Add, EVT::I32, &[y, z]), yz, "x+z became y+z, the existing node");
+    assert_eq!(dag.get_node(ISD::Mul, EVT::I32, &[yz, z]), outer_y, "and (x+z)*z the existing (y+z)*z");
+    assert_eq!(dag.node(outer_x).ops[0], yz);
+    assert_eq!(dag.node_ids().count(), dag.node_count());
+}
+
 mod type_actions {
     use super::*;
 
@@ -419,5 +439,96 @@ mod builder {
         for (name, dag) in &ours {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }
+    }
+}
+
+mod legalize_types {
+    use super::super::legalize_types::{LegalizeError, TypeLegalizer};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn legalize(dag: &mut SelectionDAG, tli: &TargetLowering) -> Result<bool, LegalizeError> {
+        TypeLegalizer::new(dag, tli).run()
+    }
+
+    fn all_legal(dag: &mut SelectionDAG, tli: &TargetLowering) -> bool {
+        TypeLegalizer::new(dag, tli).all_legal()
+    }
+
+    /// `trunc(load i12 + load i12)` to a byte: before legalization the root
+    /// reads an `i12`, which no register holds. After it the add is an `i16`
+    /// add of extending loads, and the root is rewritten to read it.
+    #[test]
+    fn an_odd_width_add_is_promoted_and_its_user_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let i12 = EVT::Int(12);
+        let (a, b) = (load(&mut dag, i12, 1), load(&mut dag, i12, 2));
+        let sum = dag.get_node(ISD::Add, i12, &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[sum]);
+        dag.set_root(byte);
+        assert!(!all_legal(&mut dag, &tli));
+        assert_eq!(legalize(&mut dag, &tli), Ok(true));
+        assert!(all_legal(&mut dag, &tli));
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Truncate);
+        let wide = dag.operand(root, 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::Add, EVT::I16));
+        assert_ne!(dag.operand(wide, 0), dag.operand(wide, 1), "each operand is its own promoted load");
+        for operand in [dag.operand(wide, 0), dag.operand(wide, 1)] {
+            assert_eq!((dag.opcode(operand), dag.value_type(operand)), (ISD::Load, EVT::I16));
+        }
+    }
+
+    /// The load's chain result stands for the promoted load's: a node that
+    /// read the old chain would read a load nothing uses.
+    #[test]
+    fn a_promoted_loads_chain_users_follow() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let chain_user = dag.get_node(ISD::TokenFactor, EVT::OTHER, &[SDValue { node: a.node, res: 1 }, dag.entry_node()]);
+        dag.set_root(chain_user);
+        legalize(&mut dag, &tli).unwrap();
+        // A token factor of one chain and the entry is that chain.
+        let chain = dag.get_root();
+        assert_eq!(chain.res, 1);
+        assert_eq!(dag.value_type(SDValue { node: chain.node, res: 0 }), EVT::I16, "the promoted load");
+    }
+
+    /// An `i64` load truncated to a word reads the low half; the constants of
+    /// an `i64` are two `i32`.
+    #[test]
+    fn an_i64_constant_is_two_halves_and_logic_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let k = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
+        let word = dag.get_node(ISD::Truncate, EVT::I32, &[k]);
+        dag.set_root(word);
+        legalize(&mut dag, &tli).unwrap();
+        assert!(all_legal(&mut dag, &tli));
+        assert_eq!(dag.constant(dag.get_root()), Some(0x5566_7788), "trunc of the low half is the low half");
+    }
+
+    /// A node nothing translated handles is refused by name rather than left
+    /// with an illegal type.
+    #[test]
+    fn an_unhandled_node_is_refused_by_name() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let b = load(&mut dag, EVT::Int(12), 2);
+        let shifted = dag.get_node(ISD::Shl, EVT::Int(12), &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+        dag.set_root(byte);
+        let error = legalize(&mut dag, &tli).unwrap_err();
+        assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
     }
 }
