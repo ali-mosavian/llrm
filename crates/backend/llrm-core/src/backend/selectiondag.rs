@@ -72,6 +72,7 @@
 pub mod actions;
 pub mod builder;
 mod dag;
+pub mod dagisel_adapter;
 pub mod dump;
 pub mod fold;
 pub mod function_lowering;
@@ -92,5 +93,7 @@ pub use mvt::{EVT, MVT};
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod tests;
