@@ -61,6 +61,11 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
+    /// Each instruction's place in program order, made once for the loop the
+    /// first time a value has two users (IU1).
+    order: Option<IdMap<InstId, usize>>,
+    /// How many times `order` was made: 0 or 1.
+    order_builds: u32,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -146,7 +151,7 @@ impl IvUsers {
         l: BlockId,
         env: &Env,
     ) -> Self {
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new() };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -202,8 +207,11 @@ impl IvUsers {
         let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
-            let order: IdMap<InstId, usize> =
-                cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect();
+            if self.order.is_none() {
+                self.order_builds += 1;
+                self.order = Some(cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect());
+            }
+            let order = self.order.as_ref().expect("made above");
             users.sort_by_key(|user| std::cmp::Reverse(order.get(user).copied()));
         }
         for user in users {
@@ -250,6 +258,11 @@ impl IvUsers {
             self.uses.push(IvStrideUse { user, operand: value, post_inc_loops });
         }
         true
+    }
+
+    /// How many times the program-order map was made: once per loop at most.
+    pub fn order_builds(&self) -> u32 {
+        self.order_builds
     }
 
     /// `isIVUserOrOperand`: whether the walk reached `inst`.
