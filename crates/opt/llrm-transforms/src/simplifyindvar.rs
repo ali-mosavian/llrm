@@ -228,6 +228,7 @@ pub fn simplified_and_extended_in(
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
+        crate::loopfilter::retain(&mut headers);
         headers
     };
     // `Rewriter.disableCanonicalMode()`.

@@ -101,6 +101,7 @@ use SlotKind::{Missing, Old, Partial, Translated};
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
 pub(crate) const REGISTRY: &[Entry] = &[
+    entry("lowerexpect@1177", Early, "lower-expect", Translated, "lowerexpect.rs"),
     partial(
         "decide@1178",
         Early,
@@ -242,6 +243,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
+    entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",
         Simplify,
@@ -288,21 +290,22 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg@1438",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
+        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
+        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     partial(
         "simplifycfg@2376",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the calls of the value-comparison folds from simplifyCondBranch (SimplifyCFG.cpp:8963; switchvalue.rs DEVIATE D3); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those calls made (llrm-w-4, 2026-10-27)",
+        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
@@ -312,12 +315,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
+    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     partial(
@@ -526,6 +531,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "GlobalsAA",
         "GlobalsAA (GlobalsModRef.cpp)",
         "globalsmodref.rs (funcattrs-port, #2636), caching on top (parity-pipeline)",
+    ),
+    old_analysis(
+        "forged-selectors",
+        "ForgedSelectors",
+        "none",
+        "none: DEVIATE or delete candidate (a data-segment pointer forged from an integer is a real-mode fact; globals-aa reads it)",
     ),
     old_analysis(
         "summaries",

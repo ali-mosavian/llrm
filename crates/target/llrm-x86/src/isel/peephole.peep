@@ -31,6 +31,8 @@ meta moved_argument = argument uses
 meta rewritable = clobbers requires delivers spread group
 meta rewritable_named = rewritable symbol
 meta widening = clobbers clobbers_high requires delivers spread group frame_adjust spill_reload spill_store
+// A load whose segment is required in a register (ES for a far access) may widen: the requirement stays on the instruction.
+meta widening_load = clobbers clobbers_high delivers spread group frame_adjust spill_reload spill_store
 meta tested = clobbers symbol
 
 // Sets of mnemonics, from x86.instr. What an operation on memory can be:
@@ -56,7 +58,7 @@ group extensions
 
 rule loaded_extension
     match   mov m:reg, src:mem ; ... independent(@0, *) ; x=(movsx|movzx) d:reg, m
-    when    free(@0, widening), free(@1, widening), same_width(m, src), narrower(m, d), feeds_once(@0, @1),
+    when    free(@0, widening_load), free(@1, widening), same_width(m, src), narrower(m, d), feeds_once(@0, @1),
             encodable($0), hoistable($0, @0, gap)
     rewrite @0: x d, src {defines: @1.defines, uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
             anchor @1 {defines: [], uses: []}

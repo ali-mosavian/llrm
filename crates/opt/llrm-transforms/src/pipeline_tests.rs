@@ -260,6 +260,57 @@ b3:
     assert!(!body.contains("load"), "{text}");
 }
 
+/// A declaration a pass makes is seen by the passes after it in the same run,
+/// as LLVM's `getOrInsertFunction` puts it in the module at once. Loop idiom
+/// declared `llvm.memset` (the module had none), and the merge after it did not
+/// know the callee for a memset: lru's two 14-byte fills stayed two calls,
+/// 52 clocks and 61 bytes at -Os.
+#[test]
+fn two_fills_made_into_memsets_in_a_module_with_none_are_one_memset() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@c = global [14 x i16] zeroinitializer
+
+define void @main() {{
+b0:
+  %second = getelementptr i16, ptr @c, i16 7
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %p = getelementptr i16, ptr @c, i16 %i
+  store i16 -1, ptr %p
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 7
+  br i1 %more, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %k = phi i16 [ 0, %b2 ], [ %l, %b3 ]
+  %q = getelementptr i16, ptr %second, i16 %k
+  store i16 -1, ptr %q
+  %l = add i16 %k, 1
+  %again = icmp ult i16 %l, 7
+  br i1 %again, label %b3, label %b4
+
+b4:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    let calls: Vec<&str> = text.lines().filter(|line| line.contains("call void @llvm.memset")).collect();
+    assert!(calls.len() == 1 && calls[0].contains("i16 28"), "{text}");
+}
+
 /// matmul8's init: an inner loop branching on `i == j` is peeled, then its
 /// outer loop, which decides every branch. Peel ran once per body, so the
 /// outer loop stayed rolled around eight undecided diamonds.
@@ -1465,11 +1516,13 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     assert_eq!(
         late,
         [
+            "float2int@1594",
             "loop-interchange@1631",
             "loop-load-elim@1400",
             "simplifycfg@1438",
-            "float2int@1594",
+            "licm@1508",
             "instsimplify@1662",
+            "tailrec@1677",
             "simplifycfg@1682",
             "simplifycfg@2376"
         ]
@@ -2246,11 +2299,13 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     assert_eq!(
         late,
         [
+            "float2int@1594",
             "loop-interchange@1631",
             "loop-load-elim@1400",
             "simplifycfg@1438",
-            "float2int@1594",
+            "licm@1508",
             "instsimplify@1662",
+            "tailrec@1677",
             "simplifycfg@1682",
             "simplifycfg@2376"
         ]
@@ -2259,10 +2314,12 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
 
 /// d_faces -O2 under the LLVM order ran `hoist` three times in its slots and
 /// `sink` (a register-pressure forecast) after the fixed point, where LLVM has
-/// no such pass; `sink` is gone and the translated LICM runs in its three
-/// slots and once after the header copy (`rotate` is not a slot yet).
+/// no such pass; `sink` is gone and the translated LICM runs in the pin's four
+/// slots (the fourth, `licm@1508`, after the unroll: x_gcd's `umax(n/20, 2)`
+/// was computed inside the outer loop without it) and once after the header
+/// copy (`rotate` is not a slot yet).
 #[test]
-fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_copy() {
+fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_once_after_the_header_copy() {
     let text = "define i16 @f(i16 %n, i16 %a) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = mul i16 %a, 3\n  %j = add i16 %i, %k\n  br label %h\nx:\n  ret i16 %i\n}\n";
     llrm_mir::counts::per_pass();
     let ran = |licm: bool| {
@@ -2286,7 +2343,11 @@ fn test_the_llvm_order_runs_licm_in_its_three_slots_and_once_after_the_header_co
         let after = llrm_mir::counts::lines();
         runs(&after, "licm") - runs(&before, "licm")
     };
-    assert_eq!(ran(true), 4, "licm@724, licm@730, licm@823 and the one after the header copy");
+    assert_eq!(
+        ran(true),
+        5,
+        "licm@724, licm@730, licm@823, licm@1508 (the pin has four) and the one after the header copy"
+    );
 }
 
 /// The write-through `Promote` ran after the translated SROA and mem2reg at
@@ -2371,6 +2432,30 @@ out:
     }
 }
 
+/// recmany -O1 -m32 ran 1500 frames deep (60 KB of stack, DOS/32A exception
+/// 06h): the pin's -O1 has TailCallElim only at PassBuilderPipelines.cpp#L1677,
+/// a slot ours did not have, so a self-recursive tail call stayed a call. The
+/// slot must be built at every level and turn the call into a loop.
+#[test]
+fn test_the_late_tail_call_slot_makes_a_loop_of_a_self_call_at_every_level() {
+    let text = "define i32 @f(i32 %a, i32 %n) {\nb0:\n  %z = icmp eq i32 %n, 0\n  br i1 %z, label %done, label %rec\nrec:\n  %m = sub i32 %n, 1\n  %b = add i32 %a, %n\n  %r = tail call i32 @f(i32 %b, i32 %m)\n  ret i32 %r\ndone:\n  ret i32 %a\n}\n";
+    for (level, options) in [
+        ("-O1", pipeline::Options::basic()),
+        ("-O2", pipeline::Options::standard()),
+        ("-Os", pipeline::Options::size()),
+        ("-O3", pipeline::Options::speed()),
+    ] {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("tailrec@1677".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "tailrec@1677"), "{level}: no slot");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        let after = llrm_mir::print::module(&module);
+        assert!(!after.contains("call i32 @f"), "{level}: the self call stayed:\n{after}");
+    }
+}
+
 /// Drops one of the two inputs of the phi that two edges feed (#3016).
 #[cfg(debug_assertions)]
 struct ShortPhi;
@@ -2410,7 +2495,9 @@ fn a_slot_names_the_member_that_left_a_phi_short() {
 
 /// `ret` took `frame` in, and `selftest` was then given the body `ret` had
 /// before, with its calls to `frame`, which had no body left: the load of
-/// `b.draw` was folded past them and `selftest` returned 0, not 1.
+/// `b.draw` was folded past them and `selftest` returned 0, not 1. Run at
+/// -O2: at -Os `frame` stays a call, for its body is bigger than the call
+/// (D11).
 #[test]
 fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
     let mut module = llrm_analysis::testing::parsed(
@@ -2485,7 +2572,7 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
 !9 = !{!8, !8, i64 0}
 "#,
     );
-    let applied = Applied { options: pipeline::Options::size(), ..Applied::default() };
+    let applied = Applied { options: pipeline::Options::default(), ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("_main".to_owned());
         pipeline::applied(program, &applied)

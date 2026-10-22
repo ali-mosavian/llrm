@@ -5,6 +5,9 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_core::support::version::asked(&argv, "llrm-qb", env!("LLRM_BUILD_SHA"), env!("LLRM_BUILD_DIRTY")) {
+        return;
+    }
     if let Err(why) = llrm_mir::dumpdir::refuse(&argv) {
         eprintln!("llrm-qb: {why}");
         std::process::exit(2);

@@ -105,6 +105,9 @@ pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
+pub mod combine_distribute;
+#[cfg(test)]
+mod combine_flags_result_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_index;
@@ -128,6 +131,7 @@ pub mod combine_select_op_op;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
+pub mod combine_shift_binop;
 pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
@@ -163,6 +167,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod extload;
 pub mod fixednarrow;
 pub mod float2int;
 pub mod floatfold;
@@ -211,6 +216,7 @@ pub mod local;
 mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
+pub mod loopfilter;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
@@ -224,6 +230,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -254,6 +261,10 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod codegen_slots_tests;
+#[cfg(test)]
+mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

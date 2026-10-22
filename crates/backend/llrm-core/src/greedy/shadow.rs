@@ -384,7 +384,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         // A literal or address is rematerializable per definition, as
         // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
         // the register's facts say its cell holds (D-I).
-        let load = what.op == Operation::Move && matches!(what.sources[0], Loc::Mem(_));
+        let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
         if load && !self.tables.remat.borrow().contains(&parent) {
             return None;
         }
@@ -457,6 +457,17 @@ struct CallMasks {
 
 thread_local! {
     static CALLS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// (searches for the regmask slots of a range, runs read for a block) on
+    /// this thread.
+    static RANGE_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BLOCK_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread searched the regmask slots for a block's range,
+/// and how many times it read the block's run: for a test that the interference
+/// cache and the region splitter do the second.
+pub fn regmask_lookups() -> (usize, usize) {
+    (RANGE_SEARCHES.with(std::cell::Cell::get), BLOCK_RUNS.with(std::cell::Cell::get))
 }
 
 /// The calls `reg_mask_clobbered` has looked at on this thread, for a test that
@@ -569,7 +580,22 @@ impl PhysInterference for CallMasks {
         start: SlotIndex,
         stop: SlotIndex,
     ) -> std::ops::Range<usize> {
+        #[cfg(test)]
+        RANGE_SEARCHES.with(|searches| searches.set(searches.get() + 1));
         self.calls.partition_point(|(slot, ..)| *slot < start)..self.calls.partition_point(|(slot, ..)| *slot < stop)
+    }
+
+    /// `LiveIntervals::getRegMaskSlotsInBlock` (LiveIntervals.h#L400): the run
+    /// the block was given when the calls were collected.
+    fn reg_mask_range_in_block(
+        &self,
+        mbb: usize,
+        _start: SlotIndex,
+        _stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        #[cfg(test)]
+        BLOCK_RUNS.with(|runs| runs.set(runs.get() + 1));
+        self.blocks[mbb].2.clone()
     }
 
     fn reg_mask_slot(
@@ -647,6 +673,32 @@ pub fn decide_with(
 }
 
 /// `decide_with`, with live range splitting (`trySplit`) chosen.
+/// The blocks an x87 value is live into and out of, as (in, out) by block.
+fn float_live_blocks(
+    lis: &mut LiveIntervals,
+    floats: &crate::support::hash::HashSet<u32>,
+    count: usize,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut live_in = vec![false; count];
+    let mut live_out = vec![false; count];
+    if floats.is_empty() {
+        return (live_in, live_out);
+    }
+    let starts: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_start_idx(at)).collect();
+    let ends: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_end_idx(at)).collect();
+    for &reg in floats {
+        for segment in &lis.interval(reg).segments {
+            let mut at = starts.partition_point(|start| *start <= segment.start).saturating_sub(1);
+            while at < count && starts[at] < segment.end {
+                live_in[at] |= segment.start <= starts[at];
+                live_out[at] |= segment.end >= ends[at];
+                at += 1;
+            }
+        }
+    }
+    (live_in, live_out)
+}
+
 pub fn decide_with_split(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
@@ -670,7 +722,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let lis = LiveIntervals::new(body);
+    let mut lis = LiveIntervals::new(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -720,12 +772,22 @@ pub fn decide_with_split(
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
+    let (float_in, float_out) = float_live_blocks(&mut lis, &floats, body.blocks.len());
     for (at, block) in body.blocks.iter().enumerate() {
         let first = calls.len();
-        for one in block.insns.iter() {
+        let last = block.insns.len().saturating_sub(1);
+        for (n, one) in block.insns.iter().enumerate() {
+            // DEVIATE D-DS1 (exit: a spill or split tells the masks): the
+            // masks are made once, before allocation. A split or a spill of an
+            // x87 value that lives through a block stores or reloads it
+            // (`fstp`, `fld`) at the block's ends, where no instruction of the
+            // body names it; those need the data group (`needs_data_group`),
+            // and `datagroup` then loads `ds` from `ss` there. A selector
+            // placed in `ds` over such an end is lost.
+            let at_edge = (n == 0 && float_in[at]) || (n == last && float_out[at]);
             let read: RegSet = inputs
                 .data
-                .filter(|_| crate::backend::target::needs_data_group(one))
+                .filter(|_| at_edge || crate::backend::target::needs_data_group(one))
                 .map(crate::model::ir::root)
                 .into_iter()
                 .collect();
@@ -860,6 +922,19 @@ mod tests {
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
 
+    /// The interference cache searched the regmask slots twice (two binary
+    /// searches over `SlotIndex`es, 364 instructions) for every block it
+    /// computed: 3.9 M of d_faces -O2's 1,548 M. A block's run is read as
+    /// `getRegMaskSlotsInBlock` does.
+    #[test]
+    fn test_a_block_s_regmask_slots_are_read_not_searched() {
+        let (searched, read) = regmask_lookups();
+        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
+        let (searched_now, read_now) = regmask_lookups();
+        assert!(read_now > read, "premise: some block's interference was computed");
+        assert_eq!(searched_now - searched, 0, "searches for a block's regmask slots");
+    }
+
     /// Under RFP an x87 value takes one of FP0..FP6 or is
     /// spilled: nine live at once over seven registers, two at least go to
     /// memory. A value that lived in an x87 register over an instruction that
@@ -984,6 +1059,34 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&across(2)).is_none_or(|roots| roots.is_empty()));
     }
 
+    /// A value in no width table is held as wide as the widest: the complement
+    /// of a split has no entry until `note_split_from` gives it its parent's,
+    /// and read as narrow it was placed in `esi` across a call that destroys
+    /// the high half (crc.bas -O2 m16 printed 14630 for -873187034).
+    #[test]
+    fn test_a_value_in_no_width_table_is_held_against_a_call_that_destroys_a_high_half() {
+        let insns: Vec<Arc<Insn>> = (0..10).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let masks = CallMasks::of(
+            vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
+            Vec::new(),
+            widths(&[(1, 4)]),
+        );
+        let mut li = LiveInterval::new(9, 1.0);
+        let v = li.get_next_value(at(2));
+        li.add_segment(Segment::new(at(2), at(8), Some(v)));
+        assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
+    }
+
     /// An instruction that reads the data segment register without naming it
     /// takes it from a range that ends at it: a far array's selector placed in
     /// `ds` was loaded with the stack's, and matmul.bas stored into the stack
@@ -1015,6 +1118,126 @@ mod tests {
         assert_eq!(masks.reg_mask_clobbered(&live(5)), Some([ds].into_iter().collect()), "ends at the instruction");
         assert_eq!(masks.reg_mask_clobbered(&live(8)), Some([ds].into_iter().collect()), "goes on past it");
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
+    }
+
+    /// A selector placed in `ds` over a block an x87 value lives through was
+    /// clobbered: a split or spill stores the value (`fstp`) at the block's
+    /// edge, an instruction that needs the data group, and `datagroup` put
+    /// `mov ds, ss` there. nbody.bas at -O2 (m16) wrote an array through the
+    /// stack segment and printed 4849201 for 4774160.
+    #[test]
+    fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
+        use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+        let _rfp = crate::backend::allocate::RfpOn::set();
+        let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let insn = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| {
+            Arc::new(Insn::new(at, None, Some(what), defines.to_vec(), uses.to_vec()))
+        };
+        let float = Loc::Held(Held { value: 1, width: 10 });
+        let selector = Loc::Held(Held { value: 2, width: 2 });
+        let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let load = || insn(1, what(Operation::FloatLoad, "fld", vec![float.clone()], vec![cell(-8)]), &[1], &[]);
+        let store = || insn(2, what(Operation::FloatStore, "fstp", vec![cell(-16)], vec![float.clone()]), &[], &[1]);
+        let make = || {
+            insn(
+                3,
+                what(
+                    Operation::Move,
+                    "mov",
+                    vec![selector.clone()],
+                    vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
+                ),
+                &[2],
+                &[],
+            )
+        };
+        let read = || insn(4, what(Operation::Move, "mov", vec![cell(-24)], vec![selector.clone()]), &[], &[2]);
+        let jump = |at: i64| insn(at, what(Operation::Jump, "jmp", vec![], vec![]), &[], &[]);
+        let body = |blocks: Vec<Vec<Arc<Insn>>>| {
+            let count = blocks.len();
+            let blocks: Vec<Block> = blocks
+                .into_iter()
+                .enumerate()
+                .map(|(n, insns)| {
+                    let mut b = LirBlock::new(n as i64, insns);
+                    if n + 1 < count {
+                        b.succ = vec![n as i64 + 1].into();
+                    }
+                    Block::from(b)
+                })
+                .collect();
+            LirBody::new("selector", 0, blocks, IndexMap::default(), IndexMap::default())
+        };
+        let order = |value: u32| if value == 2 { vec![RegId::DS, RegId::ES] } else { vec![RegId::EAX] };
+        let placed_in_ds = |body: &LirBody| {
+            let inputs = ShadowInputs {
+                body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: Some(RegId::DS),
+                sets: None,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            decided
+                .placed
+                .iter()
+                .any(|(value, reg)| *value == 2 && crate::model::ir::root(*reg) == crate::model::ir::root(RegId::DS))
+        };
+        // The x87 value dies before the middle block: the selector may take
+        // `ds`.
+        let apart = body(vec![vec![make(), jump(5)], vec![jump(6)], vec![read(), load(), store()]]);
+        assert!(placed_in_ds(&apart), "premise: the selector is placed in ds");
+        // The x87 value lives through the middle block.
+        let through = body(vec![vec![load(), make(), jump(5)], vec![jump(6)], vec![read(), store()]]);
+        assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
+    }
+
+    /// A local range may take the register of a cheaper local one when that one
+    /// can move to a free register (`canReassign`, on in the pin: the subtarget
+    /// answers true). Without it the heavier range took the first register it
+    /// found and the other range, with a single register to go to, was spilled.
+    #[test]
+    fn test_a_local_range_is_evicted_when_it_can_move_to_a_free_register() {
+        let none = || Arc::new(Insn::new(0, None, None, vec![], vec![]));
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        // 1 and 2 are long and lightly used (1 more than 2); 3 is short and
+        // heavy.
+        let mut insns = vec![insn(&[1], &[]), insn(&[2], &[]), insn(&[3], &[])];
+        insns.extend((0..4).map(|_| insn(&[], &[3])));
+        insns.push(insn(&[], &[1]));
+        insns.extend((0..11).map(|_| none()));
+        insns.extend([insn(&[], &[1]), insn(&[], &[1]), insn(&[], &[2])]);
+        let body = LirBody::new(
+            "reassign",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |value: u32| match value {
+            1 => vec![RegId::EAX],
+            2 => vec![RegId::EBX, RegId::ECX],
+            3 => vec![RegId::EAX, RegId::EBX],
+            _ => vec![RegId::EAX],
+        };
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+            sets: None,
+        };
+        let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+        assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
     }
 
     /// A range live at the two ends of a function and not between them was

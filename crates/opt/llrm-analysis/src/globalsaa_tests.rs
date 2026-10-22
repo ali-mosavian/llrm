@@ -567,3 +567,222 @@ fn globals_aa_asks_no_pointer_solve() {
     assert_eq!(crate::alias::value_solves() - values, 0, "a body was solved for what it points to");
     assert_eq!(crate::alias::escape_solves() - escapes, 0, "a body was solved for what escapes");
 }
+
+/// `GlobalsAA` of the one-module program `text`.
+fn globals_of(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A loop summing `@a` that reads it by index, then the same loop after loop
+/// strength reduction: through a pointer phi that steps by 2. `after` adds
+/// `uses` to the second, in the loop (`ret` is its return value, `decl` what
+/// it declares).
+fn indexed_and_stepped(
+    decl: &str,
+    uses: &str,
+    ret: (&str, &str),
+) -> (crate::globalsaa::Globals, crate::globalsaa::Globals) {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@s = internal global [4 x i8] zeroinitializer
+{decl}
+"
+    );
+    let before = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %p = getelementptr inbounds [2 x i8], ptr @a, i16 %i
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  %i.next = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i.next, 64
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {zero}
+}}
+",
+        ty = ret.0,
+        zero = if ret.0 == "ptr" { "null" } else { "0" },
+    );
+    let after = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ @a, %b0 ], [ %p.next, %b1 ]
+  %i = phi i16 [ -256, %b0 ], [ %i.next, %b1 ]
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  {uses}
+  %i.next = add nsw i16 %i, 4
+  %p.next = getelementptr i8, ptr %p, i16 2
+  %c = icmp ne i16 %i.next, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {value}
+}}
+",
+        ty = ret.0,
+        value = ret.1,
+    );
+    (globals_of(&before), globals_of(&after))
+}
+
+/// jpeg-shaped loops after `lsr` read a global through `phi ptr [ @a, ... ]`.
+/// The pin's use scan calls that an escape (no `phi` case in
+/// `AnalyzeUsesOfPointer`), so a held result that tracks `@a` was refused by
+/// `LLRM_CHECK_STALE` as one that "no longer covers the module" with nothing
+/// added but a pointer induction variable (lsr-stale-repro.bas, -m16 -O1).
+#[test]
+fn a_global_read_through_a_stepped_pointer_phi_is_still_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("i16", "0"));
+    let a = GlobalId(0);
+    assert!(before.tracked(a), "reached by name before");
+    assert!(!after.tracked(a), "the pin's scan calls the phi an escape");
+    assert!(before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_passed_to_a_call_is_not_covered() {
+    let (before, after) = indexed_and_stepped("declare void @ext(ptr)", "call void @ext(ptr %p)", ("i16", "0"));
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_stored_as_a_value_is_not_covered() {
+    let (before, after) = indexed_and_stepped(
+        "@keep = internal global [4 x i8] zeroinitializer",
+        "store ptr %p, ptr @keep",
+        ("i16", "0"),
+    );
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_that_is_returned_is_not_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("ptr", "%p"));
+    assert!(!before.covers(&after));
+}
+
+/// Two globals reaching one pointer phi that is passed to a call: both
+/// escape. The joins seen were one set for every candidate, so `@b` found the
+/// phi already seen from `@a` and was judged not to escape (w-7's review). The
+/// held result tracks `@b` only (`@a` is stored in `@hold`), so `@a`'s own
+/// refusal cannot hide it.
+#[test]
+fn a_global_joined_into_a_phi_with_another_that_is_passed_to_a_call_is_not_covered() {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@b = internal global [128 x i8] zeroinitializer
+@hold = internal global [2 x i8] zeroinitializer
+declare void @ext(ptr)
+"
+    );
+    let before = format!(
+        "{head}define i16 @f(i16 %n) {{
+b0:
+  store ptr @a, ptr @hold
+  %w = load i16, ptr @b
+  ret i16 %w
+}}
+"
+    );
+    let after = format!(
+        "{head}define i16 @f(i1 %c) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi ptr [ @a, %b1 ], [ @b, %b2 ]
+  call void @ext(ptr %p)
+  ret i16 0
+}}
+"
+    );
+    let (before, after) = (globals_of(&before), globals_of(&after));
+    assert!(!before.tracked(GlobalId(0)) && before.tracked(GlobalId(1)));
+    assert!(!before.covers(&after));
+}
+
+/// `GlobalsAA` of the one-module program `text` on real mode.
+fn globals_on_dos(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A body that makes a far pointer from `selector`, an `i16`, and reads a
+/// byte through it, beside `@a`, an internal global nobody takes the address
+/// of (`rest` follows).
+fn forged_over_a(
+    selector: &str,
+    rest: &str,
+) -> crate::globalsaa::Globals {
+    globals_on_dos(&format!(
+        "{DOS}@a = internal global [8 x i8] zeroinitializer
+@w = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {{
+b0:
+  %s = inttoptr i16 {selector} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %v = load volatile i8, ptr addrspace(1) %p
+  %w = load i16, ptr @a
+  ret i16 %w
+}}
+{rest}"
+    ))
+}
+
+/// far6.bas: z, a DIM SHARED whose address nobody took, was promoted to a
+/// register (z's loads 4 -> 1) while `DEF SEG = VARSEG(w)` and a POKE at a
+/// scanned offset wrote it: 21257 where BC printed 100. A selector made of an
+/// integer that is no plain number may name the data segment, so no global is
+/// reached by name only; a plain number names a segment no object occupies.
+#[test]
+fn a_selector_forged_from_a_computed_integer_leaves_no_global_tracked() {
+    let a = GlobalId(0);
+    assert!(forged_over_a("-18432", "").tracked(a), "premise: a numeric segment (&HB800) forges nothing");
+    assert!(!forged_over_a("%n", "").tracked(a), "a selector computed from a parameter");
+    let varseg = "ptrtoint (ptr addrspace(2) addrspacecast (ptr @w to ptr addrspace(2)) to i16)";
+    assert!(!forged_over_a(varseg, "").tracked(a), "VARSEG(w): the data segment's own value");
+}
+
+/// The runtime's bodies come `available_externally` and are no forger of the
+/// program's globals (`!llrm.named` is the same trust boundary).
+#[test]
+fn a_runtime_body_that_forges_a_selector_does_not_untrack_the_programs_globals() {
+    let runtime = "
+define available_externally i16 @rt(i16 %n) {
+b0:
+  %s = inttoptr i16 %n to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  %z = zext i8 %v to i16
+  ret i16 %z
+}
+";
+    assert!(forged_over_a("-18432", runtime).tracked(GlobalId(0)));
+}

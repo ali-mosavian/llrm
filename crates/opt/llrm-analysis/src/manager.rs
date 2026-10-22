@@ -258,6 +258,29 @@ impl ModuleAnalysis for GlobalsModRefAnalysis {
     }
 }
 
+/// Whether the module forges a pointer into the data segment
+/// (`forging::forges_selector`): worked out once for the module and read by
+/// `GlobalsAA`.
+pub struct ForgedSelectors;
+
+impl ModuleAnalysis for ForgedSelectors {
+    type Result = bool;
+    const NAME: &'static str = "forged-selectors";
+    /// A held `true` claims more than a fresh `false`, never less.
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        *stale || !*fresh
+    }
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::forging::forges_selector(module, analyses.program().spaces)
+    }
+}
+
 /// Each defined function's memory effects, by name: `alias::summaries` of
 /// the whole module, its globals as `GlobalsAA` finds them and the bodies
 /// other modules define as the cached `ProgramSummaries` says.

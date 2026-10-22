@@ -14,10 +14,9 @@
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
 //! each named where it stood: `SimplifyDemandedInstructionBits`
 //! (`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
-//! `foldIntegerPackFromVector`, `foldOrOfInversions`,
-//! `foldUsingDistributiveLaws`, the `i1` select folds
+//! `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 //! (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-//! `matchBSwapOrBitReverse`, `matchOrConcat`, `foldBinOpShiftWithShift`,
+//! `matchBSwapOrBitReverse`, `matchOrConcat`,
 //! `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
 //! mask fold, `matchSelectFromAndOr` and everything after it.
 //!
@@ -37,11 +36,13 @@ use llrm_mir::opcode::{BinaryOp, Flags};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_funnel::match_funnel_shift;
 use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 
@@ -50,6 +51,7 @@ const FOLDS: &[Fold] = &[
     into_select_or_phi,
     select_binop_select,
     match_funnel_shift,
+    shift_with_shift,
     xor_constant,
     disjoint_mul,
     not_or_decrement,
@@ -72,6 +74,16 @@ fn select_binop_select(
     _: Operand,
 ) -> Option<Visit> {
     Some(c.fold_bin_op_select_bin_op(inst)).filter(|found| !matches!(found, Visit::None))
+}
+
+/// `foldBinOpShiftWithShift`.
+fn shift_with_shift(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    fold_binop_shift_with_shift(c, inst)
 }
 
 /// The integer constant `v` is.
@@ -253,7 +265,10 @@ pub fn visit_or(
     }
     // DEVIATE 2: SimplifyDemandedInstructionBits, foldOrToXor,
     // foldComplexAndOrPatterns, foldIntegerPackFromVector, foldOrOfInversions,
-    // foldUsingDistributiveLaws and the i1 select folds.
+    // and the i1 select folds.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
     let (op0, op1, _) = parts(c, inst);
     if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
         return found;

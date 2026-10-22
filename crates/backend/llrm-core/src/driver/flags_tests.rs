@@ -65,7 +65,8 @@ fn test_only_omax_searches_every_shape() {
 
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc
 /// 573-694) for the passes this compiler has: -O1 the scalar ones and the last
-/// call inlined, -O2 adds inlining, gcse and sibling calls, -O3
+/// call inlined and sibling calls (the pin's TailCallElim also runs at -O1:
+/// PassBuilderPipelines.cpp:1677, #3514), -O2 adds inlining and gcse, -O3
 /// peeling, unswitching, complete copies of loops that grow the code, and the
 /// larger inline threshold. Before, -O1 and -O2 differed by loop copies alone
 /// and -O2 let a complete copy grow the code. Pattern fill is the one
@@ -94,7 +95,7 @@ fn each_level_selects_gcc_s_passes() {
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
     // -O1 inlines as the pin's does (225, #3249).
-    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
+    assert_eq!(row("-O1"), (scalar, true, true, false, true, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
@@ -361,4 +362,15 @@ fn test_disable_lsr_turns_off_the_lsr_slot_alone() {
         assert!(!options.lsr && options.strength, "{arguments:?}");
     }
     assert!(parsed(&["-mllvm", "-nonsense"]).is_err());
+}
+
+/// DEVIATE 1: `-fno-inline=NAME` names a function a source cannot mark
+/// `noinline`; each is kept, in order, and a bare `-fno-inline=` is no name.
+#[test]
+fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
+    let flags = parsed(&["-O2", "-fno-inline=BenchFib", "-fno-inline=Helper"]).unwrap();
+    assert_eq!(flags.no_inline, ["BenchFib", "Helper"]);
+    assert_eq!(flags.pipeline().inline, pipeline(&["-O2"]).inline, "no function is left out of inlining by it");
+    assert!(parsed(&["-fno-inline="]).is_err());
+    assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
 }

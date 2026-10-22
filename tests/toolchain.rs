@@ -726,7 +726,7 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
         String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
     };
     let flat = defines("x86-m32");
-    for told in ["STACK_BYTES=16384", "HEAP_BYTES=16777216", "DOS_OPEN=61", "DOS_INT=33", "DOS_DPMI_ALLOC=1281"] {
+    for told in ["STACK_BYTES=131072", "HEAP_BYTES=16777216", "DOS_OPEN=61", "DOS_INT=33", "DOS_DPMI_ALLOC=1281"] {
         assert!(flat.contains(&told.to_owned()), "{told} in {flat:?}");
     }
     let real = defines("x86-m16");

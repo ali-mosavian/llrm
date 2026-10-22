@@ -105,6 +105,7 @@ fn listing_float_store(
         true,
         false,
         false,
+        false,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -511,7 +512,9 @@ fn test_division_and_variable_shifts() {
 
 /// A variable index is scaled, and an address only accesses read is their
 /// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
-/// so no `ss:` override: it cost a byte and a clock at each access.
+/// so no `ss:` override: it cost a byte and a clock at each access. The
+/// doubled index is made once and both accesses use it (7a574ed3ed: precse
+/// no longer reads a load as touching the flags, so the two `i + i` are one).
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -531,15 +534,12 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
-            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
             "add si, si",
+            "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
-            "pop di",
             "pop si",
             "leave",
             "retf"
@@ -721,7 +721,9 @@ no:
     let got = listing(text, "f");
     // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
     // Greedy's register choice (#2312): the old pin's instructions, memory
-    // operands, prefixes and adjacent dependencies, other registers.
+    // operands, prefixes and adjacent dependencies, other registers. The
+    // extensions and the negate sink into the arm that reads them (a88a614969,
+    // MachineSink outside size builds): the `no` path runs none of them.
     assert_eq!(
         got,
         [
@@ -730,15 +732,16 @@ no:
             "L0_0:",
             "mov cx, word ptr [bp+6]",
             "cmp cx, word ptr [bp+8]",
-            "setl dl",
-            "movzx ax, dl",
-            "neg ax",
+            "setl al",
             "cmp cx, 3",
-            "sete bl",
-            "movzx cx, bl",
-            "and dl, bl",
+            "sete cl",
+            "mov dl, al",
+            "and dl, cl",
             "je L0_8",
             "L0_6:",
+            "movzx ax, al",
+            "neg ax",
+            "movzx cx, cl",
             "add ax, cx",
             "pop bp",
             "retf",
@@ -748,7 +751,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (18, 2));
+    assert_eq!(counts(&got), (19, 2));
 }
 
 #[test]
@@ -1055,6 +1058,35 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     );
     let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
+}
+
+/// QCport render/pal `_pal_install@3` and game/combat `_combat_radius@3`: a
+/// memmove of a few constant bytes whose direction no pass proved stopped the
+/// compile ("a memmove whose direction no pass proved") once MemCpyOpt made one
+/// of a copy chain. It is every load, then every store, as
+/// `getMemmoveLoadsAndStores`: the sides may overlap however they lie.
+#[test]
+fn test_a_small_memmove_of_no_proved_direction_loads_everything_before_it_stores() {
+    for (callee, source) in [("p0.p0", "ptr"), ("p0.p1", "ptr addrspace(1)")] {
+        let text = format!(
+            "declare void @llvm.memmove.{callee}.i16(ptr, {source}, i16, i1)
+define i16 @f(ptr %a, {source} %b) addrspace(1) {{
+  call void @llvm.memmove.{callee}.i16(ptr %a, {source} %b, i16 12, i1 false)
+  ret i16 0
+}}
+"
+        );
+        let lines = listing(&text, "f");
+        let moves: Vec<(usize, &String)> =
+            lines.iter().enumerate().filter(|(_, one)| one.starts_with("mov ") && one.contains("dword ptr")).collect();
+        let is_store = |one: &String| {
+            one.contains("ptr") && one.find("ptr").is_some_and(|at| one.find(',').is_some_and(|c| at < c))
+        };
+        let (stores, loads): (Vec<_>, Vec<_>) = moves.iter().partition(|(_, one)| is_store(one));
+        assert_eq!((loads.len(), stores.len()), (3, 3), "{lines:?}");
+        assert!(loads.iter().all(|(l, _)| stores.iter().all(|(s, _)| l < s)), "{lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep ") || one == "std"), "{lines:?}");
+    }
 }
 
 /// A backward move of constant addresses and a length of whole dwords stepped
@@ -1634,8 +1666,10 @@ b1:
 /// A float phi's constant input is loaded as any float constant is: taken
 /// for an address, it refused `an address of no global` and left deedlines'
 /// CREATEOBJECT and qbdemo's FRACLINE unselected.
-// The constant is made on the edge that reads it (MachineSink): no `fstp st(0)`
-// to drop the other path's.
+// The pin's llc does the same (tools/pairs/pin.py llc -m 32, i486): `fldz`
+// above the compare, `fstp st(0); fld1` on the other path. MachineSink leaves a
+// def that writes the flags where a successor reads them (`SinkInstruction`'s
+// zombie check, fae5196031), so the constant is no longer made on each edge.
 #[test]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
@@ -1655,14 +1689,13 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "cmp word ptr [bp+6], 0",
-            "jle L0_4294967297",
-            "L0_2:",
-            "fld1",
-            "pop bp",
-            "retf",
-            "L0_4294967297:",
             "fldz",
+            "cmp word ptr [bp+6], 0",
+            "jle L0_3",
+            "L0_2:",
+            "fstp st(0)",
+            "fld1",
+            "L0_3:",
             "pop bp",
             "retf"
         ]
@@ -1843,6 +1876,34 @@ other:
     assert!(got[call + 1].starts_with("set") || got[call + 1].starts_with("j"), "{got:?}");
 }
 
+/// A loop whose test is `a && b` is two branches, and each left for the exit
+/// with the whole exit probability: the loop ran 16 trips where the pin's 32
+/// (`_sys_parse_args@3`'s hot block was 64.5 against 505.8). The branches share
+/// the probability as FindMergedConditions does, so the loop block is 32 times
+/// its entry.
+#[test]
+fn test_a_loop_tested_by_a_conjunction_runs_the_trips_one_branch_would() {
+    let text = "define i16 @f(i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %j, %loop ]
+  %j = add i16 %i, 1
+  %c1 = icmp slt i16 %j, %n
+  %c2 = icmp ne i16 %j, 100
+  %both = and i1 %c1, %c2
+  br i1 %both, label %loop, label %exit
+exit:
+  ret i16 %j
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let frequency = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&body);
+    let hottest =
+        (0..body.blocks.len()).map(|block| frequency.get_block_freq_relative_to_entry_block(block)).fold(0.0, f64::max);
+    assert!((hottest - 32.0).abs() < 1.0, "the loop's frequency is {hottest} of 32");
+}
+
 /// A float function no x87 instruction is stays one operation on st(0),
 /// which the frontend's finalizer spells.
 #[test]
@@ -1867,6 +1928,35 @@ define double @f(double %x) addrspace(1) {
         .filter_map(|what| what.name.clone())
         .collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
+}
+
+/// `fexp2` pushes two slots above its operand: with six doubles live the `fld1`
+/// overflowed the stack and reset the loop counter (p_pressure2 printed 40.04
+/// for 44.44). The selector marks the sequence as clobbering the stack's top
+/// slots.
+#[test]
+fn test_a_sequence_that_pushes_above_its_operand_clobbers_the_top_stack_registers() {
+    use llrm_lir::registers::RegId;
+    let text = "declare double @llvm.exp2.f64(double)
+declare double @llvm.log2.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.exp2.f64(double %x)
+  %b = call double @llvm.log2.f64(double %a)
+  ret double %b
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let clobbers = |name: &str| -> Vec<RegId> {
+        let one = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .find(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name))
+            .expect(name);
+        one.clobbers.iter().copied().collect()
+    };
+    assert_eq!(clobbers("fexp2"), [RegId::MM5, RegId::MM6]);
+    assert_eq!(clobbers("flog2"), [RegId::MM6]);
 }
 
 /// A segment's far pointer is offset 0: plasma's element address was
@@ -2431,11 +2521,26 @@ join:
   ret i16 %v
 }
 ";
-    // The byte test reads its cell where it runs: the load crosses the address
-    // arithmetic.
+    // The address arithmetic sinks into the arm that makes the phi's input
+    // (a88a614969, MachineSink outside size builds); bx is defined on both
+    // paths before the load.
     assert_eq!(
-        listing(text, "f")[3..7],
-        ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]
+        listing(text, "f")[3..],
+        [
+            "mov bx, word ptr [bp+6]",
+            "cmp byte ptr [bp+8], 0",
+            "je L0_3",
+            "L0_2:",
+            "add bx, bx",
+            "add bx, offset a",
+            "jmp L0_4",
+            "L0_3:",
+            "mov bx, offset a",
+            "L0_4:",
+            "mov ax, word ptr [bx]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
@@ -3244,6 +3349,43 @@ define i16 @f() addrspace(1) {{
     assert!(!sized(4).contains("stos"), "{}", sized(4));
     assert!(sized(8).contains("rep stosb"), "{}", sized(8));
     assert!(assembled_on("486", &text(22)).contains("rep stosd"));
+}
+
+/// Tuned for size a constant memcpy is inline moves up to four pairs
+/// (`MaxStoresPerMemcpyOptSize`, X86ISelLowering.cpp#L2939), else `rep movs`;
+/// not tuned, eight (#L2938). A 24-byte copy (six dword pairs) was moves at
+/// -Os too.
+#[test]
+fn test_a_memcpy_tuned_for_size_is_moves_only_up_to_four_pairs() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  %b = alloca [{size} x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 {size}, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}}
+"
+        )
+    };
+    let sized = |size: u32, tuned: bool| {
+        let cpu = crate::backend::cpu::tuned("486", tuned).expect("a target");
+        let module = assemble::assembled(
+            &parsed(&text(size)),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(sized(24, true).contains("rep movs dword"), "{}", sized(24, true));
+    assert!(!sized(16, true).contains("movs"), "{}", sized(16, true));
+    assert!(!sized(24, false).contains("movs"), "{}", sized(24, false));
+    assert!(sized(36, false).contains("rep movs dword"), "{}", sized(36, false));
 }
 
 /// A far global is `seg name:offset name`, and a memset of a variable
@@ -5951,6 +6093,21 @@ fn test_an_undef_initializer_is_zero_bytes() {
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }
 
+/// Old: a switch lookup table with `poison` holes (the pin's holes for cases
+/// the guard never reaches) was refused as "a poison initializer": item.c at
+/// every level once a conditional-branch chain became a `switch`. The holes are
+/// zero.
+#[test]
+fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@t = private constant [4 x i8] [i8 1, i8 poison, i8 poison, i8 4]\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
+    assert_eq!(datums, [Datum::Label(Label { name: "t".to_owned() }), Datum::Bytes(vec![1, 0, 0, 4])]);
+}
+
 /// A load only an add reads is the add's memory operand, as `ADD32rm` is
 /// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
 #[test]
@@ -6434,6 +6591,75 @@ define float @f(float %x, float %y) addrspace(1) {
     let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
     assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
+}
+
+/// Two float arguments read again after a call were stored to the frame and
+/// loaded back from it: no float load was a value the spiller could make
+/// again, though `x` and `y` are read from cells nothing writes. Both loads are
+/// now such values (the pin: immutable stack arguments are invariant).
+#[test]
+fn test_float_arguments_read_after_a_call_are_loads_the_spiller_makes_again() {
+    let text = "declare void @g() addrspace(1)
+define double @f(double %x, double %y) addrspace(1) {
+  %a = fmul double %x, %y
+  call addrspace(1) void @g()
+  %b = fadd double %x, %a
+  %c = fmul double %b, %x
+  %e = fadd double %c, %y
+  %d = fmul double %e, %y
+  ret double %d
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let again = crate::backend::spiller::remade_values(&body);
+    let loads: Vec<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::FloatLoad))
+        .flat_map(|one| one.defines.iter().copied())
+        .collect();
+    assert!(!loads.is_empty(), "the premise: float loads");
+    assert!(loads.iter().all(|value| again.contains(value)), "{loads:?} against {again:?}");
+}
+
+/// A float made by `fild` from a frame cell was made again after a call by
+/// another `fild` of that cell, which `b`'s conversion had overwritten:
+/// `long_double_layout.c` printed 11 for `(long)(single * 2) + last` (want 24)
+/// once x87 loads of global cells counted as values the spiller makes again.
+/// Only a load of a global or an argument's cell is; the one of a local cell
+/// is stored and loaded back from its spill cell.
+#[test]
+fn test_a_float_converted_from_a_local_cell_is_not_made_again_from_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "@g = global x86_fp80 zeroinitializer
+@k = global i32 0
+declare void @h(i32) addrspace(1)
+define i32 @f(i16 %n) addrspace(1) {
+  %two = sitofp i16 2 to x86_fp80
+  %a = load x86_fp80, ptr @g
+  %m = fmul x86_fp80 %a, %two
+  %i = fptosi x86_fp80 %m to i32
+  call addrspace(1) void @h(i32 %i)
+  %c = sitofp i16 %n to x86_fp80
+  %d = fmul x86_fp80 %a, %c
+  %j = fptosi x86_fp80 %d to i32
+  call addrspace(1) void @h(i32 %j)
+  %e = fmul x86_fp80 %a, %two
+  %l = fptosi x86_fp80 %e to i32
+  ret i32 %l
+}
+";
+    let asm = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "486", text);
+    let from = asm.find("f proc").or_else(|| asm.find("F proc")).expect("the procedure");
+    let got: Vec<String> = asm[from..]
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.ends_with("endp"))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(!got[call..].iter().any(|line| line.starts_with("fild ")), "{got:#?}");
 }
 
 /// `while (p < big + 20000)` over a huge array stopped at the 64 KB boundary:
