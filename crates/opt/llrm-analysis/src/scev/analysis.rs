@@ -64,6 +64,33 @@ impl Analysis for Scevs {
     ) -> ScevCache {
         ScevCache(RefCell::new(ScalarEvolution::new()))
     }
+
+    /// `ScalarEvolution::verify`: the result equals every other, so the
+    /// expressions it holds are checked against the function as it stands.
+    fn consistent(
+        old: &ScevCache,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        let loops = analyses.get::<Loops>(context, layout, function);
+        let tree = analyses.get::<Dominators>(context, layout, function);
+        let assumptions = analyses.get::<Assumes>(context, layout, function);
+        let outer = Rc::clone(analyses.outer());
+        let cx = Cx {
+            context,
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            function,
+            layout,
+            loops: &loops,
+            tree: &tree,
+            assumptions: &assumptions,
+        };
+        let held = old.0.borrow();
+        held.verify(&cx).is_ok() && held.verify_same(&cx).is_ok()
+    }
 }
 
 /// LLVM's `AssumptionAnalysis`: the `llvm.assume` calls of the function.
