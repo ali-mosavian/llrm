@@ -81,3 +81,27 @@ fn a_node_the_table_has_no_pattern_for_cannot_be_selected() {
 
     assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), weird.node), Outcome::CannotSelect);
 }
+
+#[test]
+fn a_masked_shift_in_an_address_becomes_a_scaled_index_in_our_dag() {
+    // `a + ((x >> 6) & 0x3fc)`: the pin folds it to `[a + ((x >> 8) & 0xff) * 4]`.
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let a = input(&mut dag, 40);
+    let x = input(&mut dag, 41);
+    let six = dag.get_constant(6, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I32, &[x, six]);
+    let mask = dag.get_constant(0x3fc, EVT::I32);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[shifted, mask]);
+    let address = dag.get_node(ISD::Add, EVT::I32, &[a, masked]);
+    let entry = dag.entry_node();
+    let load = dag.get_load(EVT::I32, entry, address, mem_info());
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(Selector::new(table::TABLE).select(&mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, load.node), "MOV32rm");
+    let ops = &dag.nodes()[load.node as usize].ops;
+    assert_eq!(ops[0], a);
+    assert_eq!(dag.constant(ops[1]), Some(4), "scale");
+    assert_eq!(dag.opcode(ops[2]), ISD::And, "(x >> 8) & 0xff");
+}

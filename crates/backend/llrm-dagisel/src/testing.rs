@@ -382,6 +382,12 @@ impl AddrDag for TestDag {
             n.opcode == isd::CopyToReg || (n.opcode == isd::STORE && n.ops.get(1) == Some(&value))
         })
     }
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[SDValue]) -> SDValue {
+        SDValue::new(self.node(opcode, &[vt], ops), 0)
+    }
+    fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue {
+        self.make_constant(value, vt)
+    }
     fn is_non_temporal(&self, _: u32) -> bool {
         false
     }

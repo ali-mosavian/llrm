@@ -506,6 +506,24 @@ impl AddrDag for DagisAdapter<'_> {
             node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
         })
     }
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[PinValue]) -> PinValue {
+        let ops: Vec<SDValue> = ops.iter().copied().map(ours).collect();
+        let isd = match opcode {
+            pin::ADD => ISD::Add,
+            pin::AND => ISD::And,
+            pin::OR => ISD::Or,
+            pin::SHL => ISD::Shl,
+            pin::SRL => ISD::Srl,
+            pin::TRUNCATE => ISD::Truncate,
+            pin::ZERO_EXTEND => ISD::ZeroExtend,
+            pin::ANY_EXTEND => ISD::AnyExtend,
+            other => panic!("the address folds never make pin opcode {other}"),
+        };
+        theirs(self.dag.get_node(isd, our_vt(vt), &ops))
+    }
+    fn get_constant(&mut self, value: i64, vt: Vt) -> PinValue {
+        theirs(self.dag.get_constant(value as u128, our_vt(vt)))
+    }
     fn is_non_temporal(&self, _: u32) -> bool {
         false
     }
