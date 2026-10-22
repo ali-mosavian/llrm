@@ -1,12 +1,17 @@
-"""QCport modules' emitted bytes (OMF LEDATA) at each level for BASE_LLRM and MAIN_LLRM."""
+"""QCport modules' emitted bytes (OMF LEDATA) at each level for BASE_LLRM and MAIN_LLRM.
+
+--expect-base-sha / --expect-sha name the commits the two builds must come from, --allow-dirty accepts a tree with changes (tools/stamp.py)."""
 import subprocess,sys,os,json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 Q=Path(os.environ.get('QCPORT_SRC',os.path.expanduser('~/scratch/qcport/src'))); INC=os.environ.get('QCPORT_INC',os.path.expanduser('~/scratch/qctc/inc'))
 MODS=("host","render","model","game","sound","ui")
 inc=[f for d in (*MODS,"qgl") for f in ("-I",str(Q/d))]+["-I",INC]
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import stamp
+flags,named,allow=stamp.options(sys.argv[1:])
 bins={'base':os.environ['BASE_LLRM'],'main':os.environ['MAIN_LLRM']}
-flags=sys.argv[1:]
+stamp.check(bins['base'],named['base_sha'],allow,'base'); stamp.check(bins['main'],named['sha'],allow,'main')
 jobs=[(n,b,s,l) for n,b in bins.items() for d in MODS for s in sorted((Q/d).glob("*.c")) for l in ("-O1","-O2","-O3","-Os")]
 def emitted(path):
     """Bytes of LEDATA in an OMF object: code and initialised data as emitted."""

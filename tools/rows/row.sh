@@ -6,6 +6,7 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 set -e
 R=$(cd "$(dirname "$0")/../.." && pwd); H=$(echo $R/crates/target/*/vsgcc)
 PROG=$1; VARIANT=$2; export LLRM=$3
+python3 "$R/tools/stamp.py" "$LLRM" >&2 || exit 3  # LLRM_EXPECT_SHA names the commit; LLRM_ALLOW_DIRTY=1 accepts a tree with changes
 BASE=${ROWS_WORK:-$HOME/scratch/rows}
 export VSGCC_WORK=$(mktemp -d "${TMPDIR:-/tmp}/row-XXXXXX"); trap 'rm -rf "$VSGCC_WORK"' EXIT
 eval "$(grep -E '^(gcc -m32 -c|sha256sum) ' $H/run.sh)"
