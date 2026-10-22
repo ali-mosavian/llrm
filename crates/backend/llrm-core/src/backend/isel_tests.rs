@@ -1845,6 +1845,34 @@ other:
     assert!(got[call + 1].starts_with("set") || got[call + 1].starts_with("j"), "{got:?}");
 }
 
+/// A loop whose test is `a && b` is two branches, and each left for the exit
+/// with the whole exit probability: the loop ran 16 trips where the pin's 32
+/// (`_sys_parse_args@3`'s hot block was 64.5 against 505.8). The branches share
+/// the probability as FindMergedConditions does, so the loop block is 32 times
+/// its entry.
+#[test]
+fn test_a_loop_tested_by_a_conjunction_runs_the_trips_one_branch_would() {
+    let text = "define i16 @f(i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %j, %loop ]
+  %j = add i16 %i, 1
+  %c1 = icmp slt i16 %j, %n
+  %c2 = icmp ne i16 %j, 100
+  %both = and i1 %c1, %c2
+  br i1 %both, label %loop, label %exit
+exit:
+  ret i16 %j
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let frequency = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&body);
+    let hottest =
+        (0..body.blocks.len()).map(|block| frequency.get_block_freq_relative_to_entry_block(block)).fold(0.0, f64::max);
+    assert!((hottest - 32.0).abs() < 1.0, "the loop's frequency is {hottest} of 32");
+}
+
 /// A float function no x87 instruction is stays one operation on st(0),
 /// which the frontend's finalizer spells.
 #[test]

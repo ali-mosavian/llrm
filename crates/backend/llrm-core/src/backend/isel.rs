@@ -2264,6 +2264,33 @@ impl Selector<'_, '_, '_> {
             self.function,
         );
         let mut odds = BlockOdds::default();
+        // A branch on a tree of compares is several branches; the probabilities
+        // of the one are shared out among them as FindMergedConditions does,
+        // so that the chain leaves by each target with the probability the
+        // branch gave it.
+        let mut merged: IndexMap<(i64, i64), f64> = IndexMap::default();
+        for block in made.keys() {
+            let terminator = self.function.terminator(*block).expect("a terminator");
+            let Some(merge) = self.merges.get(&terminator) else { continue };
+            let [_, Operand::Block(taken), Operand::Block(otherwise)] =
+                self.function.instruction(terminator).operands[..]
+            else {
+                continue;
+            };
+            let (on_taken, on_otherwise) = (
+                bpi.get_edge_probability_to(self.function, *block, taken).to_f64(),
+                bpi.get_edge_probability_to(self.function, *block, otherwise).to_f64(),
+            );
+            let chain = self.chains.get(&terminator).cloned().unwrap_or_default();
+            merged_odds(
+                merge,
+                block_at[block],
+                [block_at[&taken], block_at[&otherwise]],
+                [on_taken, on_otherwise],
+                &mut chain.iter().copied(),
+                &mut merged,
+            );
+        }
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
@@ -2275,6 +2302,19 @@ impl Selector<'_, '_, '_> {
             for one in chain {
                 if one.succ.len() < 2 {
                     continue;
+                }
+                if one.succ.iter().all(|to| merged.contains_key(&(one.at, *to))) {
+                    let total: f64 = one.succ.iter().map(|to| merged[&(one.at, *to)]).sum();
+                    if total > 0.0 {
+                        for to in &one.succ {
+                            odds.taken.insert(
+                                (one.at, *to),
+                                (merged[&(one.at, *to)] / total * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX))
+                                    as u32,
+                            );
+                        }
+                        continue;
+                    }
                 }
                 let known: f64 = one.succ.iter().filter_map(|to| taken.get(to)).sum();
                 let inner = one.succ.iter().filter(|to| !taken.contains_key(*to)).count();
@@ -7832,6 +7872,43 @@ fn insn(
     what: Semantics,
 ) -> Arc<Insn> {
     Arc::new(insn_of(at, what))
+}
+
+/// The probabilities of the blocks of `merge`, started in `cur`, which goes to
+/// `targets` (taken, otherwise) with `probs`: FindMergedConditions'
+/// ([SelectionDAGBuilder.cpp#L2661](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L2661))
+/// split. `X | Y` gives its first branch A/2 and A/2+B and normalises the same
+/// pair for the second; `X & Y` gives A+B/2 and B/2 and normalises (A, B/2).
+/// What the blocks leave by is added to `out` by edge.
+fn merged_odds(
+    merge: &Merge,
+    cur: i64,
+    [taken, otherwise]: [i64; 2],
+    [on_taken, on_otherwise]: [f64; 2],
+    chain: &mut impl Iterator<Item = i64>,
+    out: &mut IndexMap<(i64, i64), f64>,
+) {
+    let normal = |a: f64, b: f64| if a + b > 0.0 { (a / (a + b), b / (a + b)) } else { (0.5, 0.5) };
+    match merge {
+        Merge::Leaf(_) => {
+            *out.entry((cur, taken)).or_insert(0.0) += on_taken;
+            *out.entry((cur, otherwise)).or_insert(0.0) += on_otherwise;
+        }
+        Merge::Node { conjunction, left, right, .. } => {
+            let next = chain.next().expect("a block for each node");
+            if *conjunction {
+                let first = [on_taken + on_otherwise / 2.0, on_otherwise / 2.0];
+                let (a, b) = normal(on_taken, on_otherwise / 2.0);
+                merged_odds(left, cur, [next, otherwise], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            } else {
+                let first = [on_taken / 2.0, on_taken / 2.0 + on_otherwise];
+                let (a, b) = normal(on_taken / 2.0, on_otherwise);
+                merged_odds(left, cur, [taken, next], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            }
+        }
+    }
 }
 
 /// The predicate of a compare of the flags of `x` against zero that tests

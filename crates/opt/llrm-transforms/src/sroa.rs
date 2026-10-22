@@ -496,8 +496,11 @@ fn build_slices(
             instruction.result.is_none_or(|result| function.users(result).is_empty())
         };
         match &instruction.opcode {
-            // `visitBitCastInst` (L1084).
-            Opcode::Cast(CastOp::BitCast) if used.index == 0 && is_pointer(context, instruction.ty) => {
+            // `visitBitCastInst` (L1084) and `visitAddrSpaceCastInst` (L1091):
+            // the pointer's users are the alloca's.
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                if used.index == 0 && is_pointer(context, instruction.ty) =>
+            {
                 if result_unused(instruction) {
                     mark_dead(&mut found);
                 } else if let Some(result) = instruction.result {
@@ -2390,6 +2393,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// `getNewAllocaSlicePtr` and `getAdjustedPtr`. SROA.cpp#L3396, L2036
+    ///
+    /// The pointer is made in the old pointer's type
+    /// (`CreatePointerBitCastOrAddrSpaceCast(Ptr, PointerTy)`, L2042): a use
+    /// through an `addrspacecast` gets a cast of the new alloca back, so a call
+    /// that takes the pointer still takes the type it declares.
     fn new_alloca_slice_ptr(
         &mut self,
         rewriter: &Rewriter,
@@ -2397,26 +2405,34 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     ) -> Operand {
         let offset = rewriter.new_begin - rewriter.new_alloca_begin;
         let base = Operand::Value(rewriter.new_ai_value);
-        if offset == 0 {
-            return base;
-        }
         let ptr_ty = self.function().instruction(rewriter.new_ai).ty;
-        let space = pointer_space(self.context(), ptr_ty);
-        let index_ty = self.unit.context.types.int(self.unit.layout.pointer(space).index_bits);
-        let byte = self.unit.context.types.int(8);
-        let index = self.int_constant(index_ty, offset as i128);
-        let created = self
-            .unit
-            .function
-            .create_instruction(
-                Opcode::GetElementPtr { source: byte },
-                ptr_ty,
-                vec![base, index],
-                Flags::INBOUNDS,
-                Some("sroa_idx"),
-            );
-        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
-        Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+        let pointer = if offset == 0 {
+            base
+        } else {
+            let space = pointer_space(self.context(), ptr_ty);
+            let index_ty = self.unit.context.types.int(self.unit.layout.pointer(space).index_bits);
+            let byte = self.unit.context.types.int(8);
+            let index = self.int_constant(index_ty, offset as i128);
+            let created = self
+                .unit
+                .function
+                .create_instruction(
+                    Opcode::GetElementPtr { source: byte },
+                    ptr_ty,
+                    vec![base, index],
+                    Flags::INBOUNDS,
+                    Some("sroa_idx"),
+                );
+            self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+            Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+        };
+        let wanted = rewriter.old_ptr.map(|old| self.type_of(old));
+        match wanted {
+            Some(wanted) if wanted != ptr_ty && is_pointer(self.context(), wanted) => {
+                self.build(at, Opcode::Cast(CastOp::AddrSpaceCast), wanted, vec![pointer], Some("sroa_cast"))
+            }
+            _ => pointer,
+        }
     }
 
     /// `getSliceAlign`. SROA.cpp#L3431
@@ -3377,7 +3393,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 Opcode::GetElementPtr { .. } if instruction.flags.contains(Flags::INBOUNDS) => {
                     current = instruction.operands[0];
                 }
-                Opcode::Cast(CastOp::BitCast) => current = instruction.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => current = instruction.operands[0],
                 _ => return None,
             }
         }
@@ -3422,7 +3438,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         changed = true;
                     }
                 }
-                Opcode::Cast(CastOp::BitCast) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                | Opcode::GetElementPtr { .. }
+                | Opcode::Phi
+                | Opcode::Select => {
                     if let Some(result) = instruction.result {
                         enqueue(self.unit.function, &mut queue, &mut visited, result);
                     }
