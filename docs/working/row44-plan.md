@@ -17,7 +17,7 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 | 7 | `run` | #L840 | `sunk` | partial: no `UseBlockFreqInfo` path (#L77), no SinkLoad thresholds (#L91/#L97) |
 | 8 | `ProcessBlock` | #L959 | `process_block` | partial: reverse walk done, cycle candidates missing |
 | 9 | `ProcessDbgInst` | #L1022 | none | n/a: LIR has no debug instructions; note only |
-| 10 | `isWorthBreakingCriticalEdge` | #L1040 | `worth_breaking_critical_edge` | partial: `SplitEdgeProbabilityThreshold` (#L82) needs branch probabilities; DEVIATE M5 in size builds |
+| 10 | `isWorthBreakingCriticalEdge` | #L1040 | `worth_breaking_critical_edge` | blocked: `SplitEdgeProbabilityThreshold` (#L82) needs BranchProbabilityInfo, MachineBranchProbabilityInfo and MBFI (w-5, plan 10-30, code 11-13); DEVIATE M5 in size builds |
 | 11 | `isLegalToBreakCriticalEdge` | #L1111 | `legal_to_break_critical_edge` | done |
 | 12 | `PostponeSplitCriticalEdge` | #L1175 | `postpone_split_critical_edge` | done |
 | 13 | `registerPressureSetExceedsLimit` | #L1242 | none | blocked: region register pressure sets = row 65 piece 2 (w-2, 11-06); M2 stands until then |
@@ -37,5 +37,5 @@ Order is the pin's. Status: done, partial, todo, blocked (blocker, date).
 
 1. 11-02: 20 per-block store cache and thresholds; 7/8 SinkLoad thresholds; 1, 2, 5 where LIR has the input.
 2. 11-06: 13/14/15 after row 65 piece 2 lands; 6/8/21 cycle sinking.
-3. 11-10: 24 PostRAMachineSink; 10 once branch probabilities exist on LIR (blocker: probability source, date set when its owner names one).
+3. 11-10: 24 PostRAMachineSink; 10 and the `UseBlockFreqInfo` path (#L77) after w-5's probabilities and MBFI, 11-13.
 4. Each step: a source test, a premise assertion, and the DEVIATE it retires (M1, M2, M3, M5).
