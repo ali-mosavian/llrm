@@ -135,3 +135,57 @@ fn an_entry_of_another_type_keeps_the_table() {
     let (changed, after) = converted(&text, INPUTS);
     assert!(!changed, "{after}");
 }
+
+/// A function with no call through a table asks no size: where the pass finds
+/// nothing, the manager counts nothing (the cost the pass adds to a compile
+/// with no table).
+#[test]
+fn a_function_without_a_table_call_asks_no_size() {
+    let mut module = parsed(&format!(
+        "{DOS}{}define i16 @f(i16 %n, i16 %x) {{\nentry:\n  %r = call i16 @f0(i16 %x)\n  ret i16 %r\n}}\n",
+        callee("f0", "  %r = add i16 %x, 3\n  ret i16 %r\n")
+    ));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut asked = 0;
+    let changed = super::converted(context, &layout, function, &outer, &mut |_| {
+        asked += 1;
+        Size::Unknown
+    });
+    assert!(!changed);
+    assert_eq!(asked, 0);
+}
+
+/// A table call asks the size of each entry, and an `Unknown` answer converts
+/// nothing: the manager counts and runs the pass again.
+#[test]
+fn an_unknown_size_converts_nothing_and_is_asked() {
+    let mut module = parsed(&format!("{DOS}{}", example("internal constant", "")));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut asked = Vec::new();
+    let changed = super::converted(context, &layout, function, &outer, &mut |id| {
+        asked.push(id);
+        Size::Unknown
+    });
+    assert!(!changed);
+    assert_eq!(asked.len(), 4, "every entry is asked, so one count serves the table");
+}
+
+/// Through the pass manager: the first run asks the sizes, the manager counts
+/// them and runs the pass over @f again, and the table is a switch. Without
+/// the rerun the table stayed a table for every real compile.
+#[test]
+fn the_manager_counts_the_callees_and_runs_the_pass_again() {
+    let mut module = parsed(&format!("{DOS}{}", example("internal constant", "")));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(super::JumpTableToSwitch);
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("a run");
+    let after = printed(&module);
+    assert!(after.contains("switch i16 %i"), "{after}");
+    assert!(!after.contains("call i16 %fn"), "{after}");
+    let want: Vec<_> =
+        INPUTS.iter().map(|input| Val::Int { bits: mask(16) & expected(input) as u128, width: 16 }).collect();
+    assert_eq!(results(&module, INPUTS), want, "{after}");
+}

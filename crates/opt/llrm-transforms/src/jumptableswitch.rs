@@ -198,6 +198,10 @@ fn parse_jump_table(
             let Size::Instructions(defined) = size_of(id) else { return None };
             (target.ty == call_type && defined <= FUNCTION_SIZE).then_some(found)
         })
+        // Every entry is asked before any is refused: the manager counts them
+        // all, once.
+        .collect::<Vec<_>>()
+        .into_iter()
         .collect::<Option<Vec<_>>>()?;
     Some(Table { index: gep.operands[1 + position], functions })
 }
