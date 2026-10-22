@@ -62,7 +62,9 @@ pub fn callees(module: &Module) -> Callees {
         .iter()
         .enumerate()
         .filter_map(|(at, global)| match &global.kind {
-            GlobalKind::Function(function) => Some((GlobalId(at as u32), global_summary(global.name.as_deref(), function))),
+            GlobalKind::Function(function) => {
+                Some((GlobalId(at as u32), global_summary(global.name.as_deref(), function)))
+            }
             GlobalKind::Variable(_) => None,
         })
         .collect()
