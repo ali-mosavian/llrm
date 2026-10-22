@@ -57,6 +57,7 @@
 //!   1  far-indirect-calls       farcall       memory operand for a far call
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
 //!   3  SsaSpill                 ssaspill      spiller route only
+//!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
 //!   5  pressuresink             pressuresink  move a load to its one reader
 //!   6  floatfold                floatfold     float load as memory operand
@@ -141,6 +142,7 @@ pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod coalesce;
+pub mod combiner;
 pub mod comparefold;
 pub mod compares;
 pub mod constpool;
@@ -166,6 +168,8 @@ pub mod fpcopyprop;
 pub mod fpregs;
 pub mod fpstack;
 pub mod frame;
+pub mod frameobjects;
+pub mod framelowering;
 pub mod framefree;
 pub mod funnel;
 pub mod globals;
@@ -204,7 +208,9 @@ pub mod liveness;
 pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
+pub mod cmpsub;
 pub mod machinecp;
+pub mod machinelicm;
 pub mod machinecse;
 pub mod leaopt;
 pub mod machinedce;
@@ -225,9 +231,11 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod fixupbw;
 pub mod fixupsetcc;
 pub mod flagscopy;
 pub mod precse;
+pub mod liverangeshrink;
 pub mod pressuresink;
 pub mod pushfold;
 pub mod prologue;

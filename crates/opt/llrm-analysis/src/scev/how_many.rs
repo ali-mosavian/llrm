@@ -1112,8 +1112,8 @@ impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L2372
     /// `getStrengthenedNoWrapFlagsFromBinOp`: the `(nuw, nsw)` the no-wrap
     /// proofs give the add, sub, mul or shl by a constant `inst`, with the ones
-    /// it has; none if it gains none. (`UseContextForNoWrapFlagInference` is
-    /// off, its `cl::opt` default, so no context instruction.)
+    /// it has; none if it gains none. (`UseContextForNoWrapFlagInference` is on,
+    /// its `cl::opt` default: `inst` is the context.)
     pub fn get_strengthened_no_wrap_flags_from_bin_op(
         &mut self,
         cx: &Cx,
@@ -1153,11 +1153,11 @@ impl ScalarEvolution {
             return None;
         }
 
-        if !has_nuw && self.will_not_overflow(cx, opcode, false, lhs, rhs, None) {
+        if !has_nuw && self.will_not_overflow(cx, opcode, false, lhs, rhs, Some(inst)) {
             nuw = true;
             deduced = true;
         }
-        if can_use_nsw && !has_nsw && self.will_not_overflow(cx, opcode, true, lhs, rhs, None) {
+        if can_use_nsw && !has_nsw && self.will_not_overflow(cx, opcode, true, lhs, rhs, Some(inst)) {
             nsw = true;
             deduced = true;
         }
