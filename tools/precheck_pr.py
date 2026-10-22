@@ -85,7 +85,7 @@ def claude_paths(
     for line in git("diff", "-U0", base, head, cwd=root).splitlines():
         if line.startswith("+++ "):
             path = line[6:]
-        elif line.startswith("+") and CLAUDE_PATH.search(line):
+        elif line.startswith("+") and path not in parity_squash.ASSISTANT_EXEMPT and CLAUDE_PATH.search(line):
             return [f"{path}: an added line names a .claude path: {line[1:80].strip()}"]
     return []
 

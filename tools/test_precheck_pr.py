@@ -137,3 +137,21 @@ def test_a_clean_branch_passes_and_every_failure_is_listed_once(tmp_path, monkey
     assert pc.precheck(root, "docs: c", "Owner: w-8\nRows: none", "parity", subprocess.run) == []
     why = pc.precheck(root, "docs: c", "no lines at all", "parity", subprocess.run)
     assert len(why) == 2 and why[0].startswith("no `Owner:") and why[1].startswith("no `Rows:")
+
+
+def test_the_precheck_tool_and_its_test_may_name_the_pattern_and_no_other_file_may(tmp_path):
+    """The `.claude` rule is written in tools/precheck_pr.py: the runner refused the tool for its own pattern. Only those two paths are exempt, named in the checker."""
+    root = repo(tmp_path)
+    line = "see " + "." + "claude/worktrees/x for it\n"
+    (root / "tools").mkdir()
+    for name in ("tools/precheck_pr.py", "tools/test_precheck_pr.py"):
+        (root / name).write_text(line)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "the tool")
+    assert pc.claude_paths(root, "parity") == []
+    assert pc.parity_squash.assistant_mentions("t", "d", "parity", "HEAD", root) == []
+    (root / "tools" / "other.py").write_text(line)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "another file")
+    assert any("other.py" in why for why in pc.claude_paths(root, "parity"))
+    assert any("other.py" in why for why in pc.parity_squash.assistant_mentions("t", "d", "parity", "HEAD", root))
