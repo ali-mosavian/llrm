@@ -117,7 +117,7 @@ fn if_condition(
         Ending::Branch { inst, on_true, on_false } => {
             // The condition must dominate the block: the other arm has no other
             // way in.
-            if function.predecessors(second).len() != 1 {
+            if function.sole_predecessor(second).is_none() {
                 return None;
             }
             let (if_true, if_false) = if on_true == block && on_false == second {

@@ -125,6 +125,7 @@
 //! [`crate::flow`] (the phase list and its gate) and
 //! The phase map: [`crate::backend`].
 
+pub mod absolute;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
@@ -134,7 +135,6 @@ pub mod arrival;
 pub mod asm;
 pub mod assemble;
 pub mod bitcounts;
-pub mod absolute;
 pub mod bytes;
 pub mod calleefacts;
 pub mod callregs;
@@ -185,6 +185,7 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod booleans;
 pub mod edges;
 pub mod incremental;
 pub mod intbits;
@@ -203,6 +204,7 @@ pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
+pub mod latecleanup;
 pub mod machinedce;
 pub mod machinesink;
 pub mod masm;
@@ -211,6 +213,7 @@ pub mod nearcode;
 pub mod needs;
 pub mod neighbours;
 pub mod objbuild;
+pub mod optimizephis;
 pub mod overlap;
 pub mod parcopy;
 pub mod peep;
@@ -220,6 +223,7 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod fixupsetcc;
 pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
@@ -229,7 +233,11 @@ pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
 pub mod selectconstants;
+pub mod selectiondag;
 pub mod selects;
+pub mod shadow;
+#[cfg(test)]
+mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;

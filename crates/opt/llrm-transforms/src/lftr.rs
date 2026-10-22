@@ -97,6 +97,7 @@ pub fn replaced_in(
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
+        crate::loopfilter::retain(&mut headers);
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
@@ -111,11 +112,7 @@ pub fn replaced_in(
         // form.
         let simple = {
             let cx = run.env.cx(&*run.context, &*run.function);
-            cx.loops
-                .get_loop_for(header)
-                .is_some_and(
-                    |found| found.is_loop_simplify_form(cx.function),
-                )
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
         };
         if simple {
             changed |= run.loop_replaced(header);

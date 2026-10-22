@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -124,13 +125,16 @@ def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, 
     return child.returncode, out
 
 
-def workspace_check(root: Path = ROOT) -> str:
-    """"" when the whole workspace, tests and benches included, compiles; else the first errors. Built before the clock starts, like the unit tests: two halves
-    that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every build)."""
-    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True)
+def workspace_check(root: Path = ROOT, target: Path | None = None) -> str:
+    """"" when the whole workspace, tests and benches included, compiles under `-D warnings` (the fast tier's `build` step); else the first errors. Built before the clock
+    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every
+    build). Under `-D warnings` because the land-time check once lacked it: #3390 landed an unused `mut` that failed the fast tier for everyone. Its own target directory:
+    other RUSTFLAGS would rebuild the shared one."""
+    target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
+    done = subprocess.run(slotted(["cargo", "check", "--workspace", "--all-targets", "-q", "--message-format", "short"]), cwd=root, capture_output=True, text=True, env={**os.environ, "RUSTFLAGS": "-D warnings", "CARGO_TARGET_DIR": str(target)})
     if done.returncode == 0:
         return ""
-    errors = [line for line in done.stderr.splitlines() if "error" in line]
+    errors = [line for line in done.stderr.splitlines() if "error" in line or "warning" in line]
     return " / ".join(errors[:3])[:300] or "cargo check failed"
 
 
@@ -198,6 +202,15 @@ def ratchet_name(command: list[str]) -> str:
 RATCHET_WORKERS = int(os.environ.get("RATCHET_WORKERS", "1"))  # 4 made no gain: each `cargo test -p X --test Y` unifies features differently and rebuilds, the build lock serializes the compiles, and 4 links at load 70 cost 600-750 s a PR
 
 
+def ratchet_entries(
+    command: list[str],
+    output: str,
+) -> list[str]:
+    """The names a failed ratchet is listed by: each test it fails (`ratchet:<name>::<test>`), else the ratchet itself where the output names none. A ratchet is a test
+    binary of many tests: listed whole, one red test hid every other test that went red in it."""
+    return [f"ratchet:{ratchet_name(command)}::{test}" for test in failed_tests(output)] or [f"ratchet:{ratchet_name(command)}"]
+
+
 def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
     """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
     The commands run RATCHET_WORKERS at a time (default 1); the result is in command order."""
@@ -209,7 +222,8 @@ def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[s
     for command, result in zip(commands, done):
         if result.returncode:
             lines = [line for line in (result.stdout + result.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
-            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+            for name in ratchet_entries(command, result.stdout + result.stderr):
+                failed[name] = " / ".join(lines[:2])[:240] or "failed"
     return failed
 
 
@@ -223,7 +237,9 @@ def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     pages = [line for line in lines if line.startswith("docs/")]
     why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
-    return {"ratchet:docs": why[:300]}
+    # one name per output line: docsbuild --check was red on the base with 23 lines, and a 24th hid behind the one `ratchet:docs`
+    named = {f"ratchet:docs {line.replace(': ', ' - ').replace('; ', ' ')[:140]}": why[:300] for line in lines}
+    return named or {"ratchet:docs": why[:300]}
 
 
 def failing_names(line: str) -> list[str]:
@@ -366,9 +382,10 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    for level in ("-O1", "-O2", "-O3", "-Os"):
-        if why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ):
-            return "fail", f"QCport d_faces.c {level}: {why}"
+    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ))}
+    if broken:
+        first = next(iter(broken))
+        return "fail", f"QCport d_faces.c {first}: {broken[first]}", [f"qc_d_faces {level}" for level in broken]
     return "ok", "QCport d_faces.c at 4 levels"
 
 
@@ -383,10 +400,254 @@ def qc_modules(bins: Path) -> tuple[str, str]:
     if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    for module in QC_MODULES:
-        if why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ):
-            return "fail", f"QCport {module} -O2: {why}"
+    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
+    if broken:
+        first = next(iter(broken))
+        return "fail", f"QCport {first} -O2: {broken[first]}", [f"qc_modules {module}" for module in broken]
     return "ok", f"{len(QC_MODULES)} QCport modules at -O2"
+
+
+RUN_FAIL = re.compile(r"^FAIL\s+(\S+ \[[^\]]*\])", re.M)
+
+
+def failing_programs(output: str) -> list[str]:
+    """The `run <program> [<flags>]` of each FAIL line of tools/dosbatch/run_tests.py, once each: a red `run` step is listed by the programs it fails."""
+    return list(dict.fromkeys(f"run {one}" for one in RUN_FAIL.findall(output)))
+
+
+# A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
+# parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
+WHOLE_GROUP_TRIGGERS = (
+    "crates/frontends/llrm-qb/",
+    "crates/frontends/qbfront/",
+    "crates/frontends/llrm-qbruntime/",
+    "runtime/qb/",
+    "crates/target/llrm-x86/",
+    "crates/backend/llrm-core/",
+)
+
+
+def runs_whole_groups(files: list[str] | set[str]) -> bool:
+    """Whether a PR with these changed files runs every tests/run group in the gate."""
+    return any(path.startswith(WHOLE_GROUP_TRIGGERS) for path in files)
+
+
+def group_failures(
+    bins: Path | str,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `run <program> [<flags>]` of every tests/run group (tools/dosbatch/run_groups.py) on `bins`, a launch that was stopped by its group, or `run-groups-did-not-finish`."""
+    done = run([sys.executable, str(ROOT / "tools/dosbatch/run_groups.py")], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(bins)})
+    output = done.stdout + done.stderr
+    names = set(failing_programs(output))
+    names |= {f"run {line.split(']')[0][1:]} launch stopped" for line in output.splitlines() if "LAUNCH STOPPED" in line}
+    if not names and (done.returncode or not re.search(r"^\[\w+\] \d+ programs: ", output, re.M)):
+        names.add("run-groups-did-not-finish")
+    return names
+
+
+def workspace_graph(
+    root: Path = ROOT,
+    metadata: dict | None = None,
+) -> tuple[dict[str, Path], dict[str, set[str]]]:
+    """(package -> its directory, package -> the workspace packages it depends on, dev-dependencies included) from `cargo metadata --no-deps`."""
+    if metadata is None:
+        metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=root, capture_output=True, text=True, check=True).stdout)
+    packages = {one["name"]: Path(one["manifest_path"]).parent for one in metadata["packages"]}
+    return packages, {one["name"]: {dep["name"] for dep in one["dependencies"]} & packages.keys() for one in metadata["packages"]}
+
+
+def touched_packages(files: list[str] | set[str], packages: dict[str, Path], root: Path = ROOT) -> set[str]:
+    """The packages that own a changed file: the longest package directory above it."""
+    owners = {name: directory.relative_to(root).as_posix() for name, directory in packages.items() if directory != root}
+    found = set()
+    for path in files:
+        match = max((name for name, directory in owners.items() if path.startswith(directory + "/")), key=lambda name: len(owners[name]), default=None)
+        if match:
+            found.add(match)
+    return found
+
+
+def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
+    """`touched` and every package that depends on one of them, through any chain: the lib tests a change can turn red."""
+    out = set(touched)
+    while grown := {name for name, deps in graph.items() if deps & out} - out:
+        out |= grown
+    return out
+
+
+# The last `dependants_lib_failures` run: crates, tests passed, a hash of the test names, seconds.
+LAST_LIB: dict = {}
+
+
+def dependants_lib_failures(
+    packages: set[str],
+    root: Path = ROOT,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `unit <package>::<test>` of every lib test of `packages`, run one package at a time and not stopped at the first red, less the tests tools/xfail.toml lists."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import xfail  # noqa: PLC0415
+
+    failed = set()
+    started = time.monotonic()
+    passed, names = 0, []
+    for package in sorted(packages):
+        done = run(slotted(["cargo", "test", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
+        output = done.stdout + done.stderr
+        found = {f"unit {package}::{test}" for test in failed_tests(output)}
+        if done.returncode and not found and "no library targets" not in output and "error: " in output:
+            found = {f"unit {package}::did-not-run"}
+        failed |= found
+        passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
+        names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
+    # What ran, kept for the line the gate prints: a pass that says nothing cannot be told from a gate that never ran.
+    LAST_LIB.clear()
+    LAST_LIB.update(
+        crates=len(packages),
+        passed=passed,
+        names=hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:8],
+        seconds=time.monotonic() - started,
+    )
+    return failed - xfail.load().keys()
+
+
+# Root integration targets (tests/*.rs) the landing gate does not run per PR, with the reason: the nightly run (tools/gate/nightly_integration.py) does.
+NIGHTLY_ONLY = {
+    "turbo": "a Turbo Debugger session over a program: 138 s and needs the debugger's DOS image",
+    "cv4": "30 s of CodeView debug-info checks",
+    "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
+}
+# Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
+SCANNERS = {
+    "block_list_ratchet": "counts a pattern in sources",
+    "build_script_reruns": "reads build scripts",
+    "core_depends_on_no_target": "reads crates' manifests",
+    "core_fixtures_are_for_core_tests": "reads test fixtures",
+    "descriptions_are_read": "reads the target descriptions",
+    "docs_links": "reads markdown",
+    "dosbox_progress": "reads the harness",
+    "no_kill_by_pattern": "scans scripts",
+    "no_local_paths": "scans docs",
+    "no_todo": "scans sources",
+    "tracked_build_products": "lists tracked files",
+}
+TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+
+
+def integration_map(
+    root: Path = ROOT,
+    metadata: dict | None = None,
+) -> dict[str, set[str]]:
+    """target -> the workspace packages whose change can change it, derived and not listed: the crates its source imports (`llrm_x::`), the crates each compiler it
+    runs (`CARGO_BIN_EXE_<bin>`) imports, all four compilers where it drives tools/dosbatch; each with its dependencies, to any depth. A target with no such crate and no
+    entry in SCANNERS is unmapped (test_every_integration_target_is_mapped refuses it)."""
+    if metadata is None:
+        metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=root, capture_output=True, text=True, check=True).stdout)
+    packages, graph = workspace_graph(root, metadata)
+    pattern = re.compile(r"\b(llrm_[a-z0-9_]+|qbfront)::")
+    named = lambda text: {name.replace("_", "-") for name in pattern.findall(text)} & packages.keys()  # noqa: E731
+    bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
+    out = {}
+    for source in sorted((root / "tests").glob("*.rs")):
+        text = source.read_text(errors="replace")
+        used = named(text)
+        for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
+            used |= {name} & bins.keys() and bins[name]
+        if "tools/dosbatch" in text or "run_tests" in text:
+            used |= set().union(*(bins.get(name, set()) for name in TOOL_COMPILERS))
+        reach = set(used)
+        while grown := {dep for one in reach for dep in graph.get(one, set())} - reach:
+            reach |= grown
+        out[source.stem] = reach
+    return out
+
+
+def unmapped_targets(mapping: dict[str, set[str]]) -> list[str]:
+    """The targets with no crate behind them that SCANNERS and NIGHTLY_ONLY do not name."""
+    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY)
+
+
+def integration_targets_for(
+    files: list[str] | set[str],
+    touched: set[str],
+    mapping: dict[str, set[str]],
+) -> list[str]:
+    """The root integration targets a PR runs: those whose crates include a touched one, every scanner, and a target whose own tests/NAME.rs changed; never NIGHTLY_ONLY."""
+    own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
+    chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
+    return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
+
+
+def red_tests(output: str) -> list[str]:
+    """`integration <target>::<test>` of each `test NAME ... FAILED` line, by the `Running tests/TARGET.rs` line above it. The `test result: FAILED. N passed; M failed`
+    summary line of each binary is not a test: counting it read 94 red where 63 were."""
+    target, found = "?", []
+    for line in output.splitlines():
+        if match := re.match(r"\s+Running (?:unittests )?(?:tests/)?(\w+?)(?:\.rs)?\s", line):
+            target = match[1]
+        if match := re.match(r"test (?!result:)(\S+) \.\.\. FAILED", line):
+            found.append(f"integration {target}::{match[1]}")
+    return sorted(dict.fromkeys(found))
+
+
+def integration_failures(
+    targets: list[str],
+    root: Path = ROOT,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `integration <target>::<test>` of the root crate's `targets`, less the tests tools/xfail.toml lists; `integration-did-not-run` if nothing ran."""
+    if not targets:
+        return set()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import xfail  # noqa: PLC0415
+
+    command = ["cargo", "test", "--release", "--no-fail-fast", "-p", "llrm", *[arg for name in targets for arg in ("--test", name)]]
+    # one stream: cargo prints `Running tests/X.rs` on stderr and the test lines on stdout, and stdout + stderr read as two blocks lost which target a test belonged to
+    done = run(slotted(command), cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    found = set(red_tests(done.stdout))
+    if done.returncode and not found:
+        found = {"integration-did-not-run"}
+    return found - xfail.load().keys()
+
+
+def qbrt_failures(
+    bins: Path | str,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `qbrt <program> <target>` of the whole tests/qbrt differential (tools/dosbatch/qbrt_run.py --all: 218 results, 67 s at load 7) on `bins`, a program that
+    did not compile, or `qbrt-did-not-finish`."""
+    work = Path(tempfile.mkdtemp(prefix="qbrt-gate-"))
+    done = run([sys.executable, str(ROOT / "tools/dosbatch/qbrt_run.py"), str(work), "--all"], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(bins)})
+    output = done.stdout + done.stderr
+    names = {f"qbrt {line.split()[1]} {line.split()[2]}" for line in output.splitlines() if line.startswith("NOTPASS ")}
+    names |= {f"qbrt {line.split()[1]} did-not-compile" for line in output.splitlines() if line.startswith("COMPILE-FAIL ")}
+    if not names and (done.returncode or "RESULT " not in output):
+        names.add("qbrt-did-not-finish")
+    return names
+
+
+def touches_the_compiler(files: list[str] | set[str]) -> bool:
+    """Whether a PR changes a crate: any of them can change what a QCport module compiles to, and QCport's `item` stopped compiling at four levels on a mid-end PR
+    (#3422) the gate passed, because it compiled four QCport modules at -O2."""
+    return any(path.startswith("crates/") for path in files)
+
+
+def qcport_failures(
+    bins: Path | str,
+    sweep=None,
+) -> set[str]:
+    """The failing `qc <module> <level>` of every QCport module (all 65) at all four levels on `bins`: 260 compiles, 3 s of wall at 8 at a time. Nothing when the QCport sources are
+    not on this host (the `qc_modules` step says so)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
+    import qcport_sweep  # noqa: PLC0415
+
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not qcport.is_dir() or not include.is_dir():
+        return set()
+    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / "llrm-c", qcport, include)}
 
 
 def run_cases(bins: Path) -> tuple[str, str]:
@@ -397,7 +658,7 @@ def run_cases(bins: Path) -> tuple[str, str]:
     done = subprocess.run([sys.executable, str(ROOT / "tools/dosbatch/run_tests.py"), *names], cwd=ROOT, capture_output=True, text=True, env=env)
     if done.returncode:
         lines = [line for line in (done.stdout + done.stderr).splitlines() if line.strip()]
-        return "fail", " / ".join(lines[-3:])[:300]
+        return "fail", " / ".join(lines[-3:])[:300], failing_programs(done.stdout + done.stderr)
     return "ok", f"{len(names)} programs"
 
 

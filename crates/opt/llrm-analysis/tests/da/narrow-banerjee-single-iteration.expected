@@ -1,0 +1,5 @@
+== --test banerjee-miv --tbaa
+@banerjee_single_iteration
+  none!
+  output [0 0|<]!
+  none!

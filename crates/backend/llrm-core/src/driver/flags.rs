@@ -1,5 +1,13 @@
 //! gcc and clang's optimization and code generation options, which every
 //! frontend accepts: parsed and mapped here, once.
+//!
+//! DEVIATE 1: `-fno-inline=NAME` (repeatable) marks the function NAME
+//! `noinline`; neither gcc nor clang has the flag (the attribute is written in
+//! the source). Why: a BASIC or Nib source cannot carry the attribute, and
+//! the bench must keep a kernel a call without `-fno-inline-functions`, which
+//! since 5bff5e0746 is the pin's OnlyAlwaysInlining and also keeps the runtime
+//! helpers from inlining. Owner: llrm-w-8 (bench). Exit: retire when BASIC and
+//! Nib sources can carry `noinline`. Review: 11-30.
 
 use std::path::PathBuf;
 
@@ -8,9 +16,10 @@ use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
 use crate::abi::machine::Machine;
+use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +100,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("loop-interchange", |options, on| options.interchange = on),
+    ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
@@ -206,6 +216,10 @@ pub struct Flags {
     pub stack_usage: bool,
     /// `-Wstack-usage=N`.
     pub stack_limit: Option<i64>,
+    /// `-fno-inline=NAME`, each: the function NAME is `noinline`.
+    pub no_inline: Vec<String>,
+    /// `--isel=`: the instruction selector.
+    pub isel: Selector,
 }
 
 impl Default for Flags {
@@ -234,6 +248,8 @@ impl Default for Flags {
             object_format: None,
             stack_usage: false,
             stack_limit: None,
+            no_inline: Vec::new(),
+            isel: Selector::default(),
         }
     }
 }
@@ -306,6 +322,7 @@ impl Flags {
                         .round() as i64,
                 );
             }
+            "--isel" => self.isel = Selector::parse(&value("--isel")?)?,
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if Self::mode_flag(flag).is_some() => self.mode = Self::mode_flag(flag),
@@ -322,6 +339,13 @@ impl Flags {
             _ if flag.starts_with("-fobject-format=") => {
                 self.object_format =
                     Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?)
+            }
+            _ if flag.starts_with("-fno-inline=") => {
+                let name = &flag["-fno-inline=".len()..];
+                if name.is_empty() {
+                    return Err("-fno-inline=: expected a function name".to_owned());
+                }
+                self.no_inline.push(name.to_owned());
             }
             "-fwrapv" | "-fno-wrapv" => self.wrapv = flag == "-fwrapv",
             "-fexcess-precision=standard" | "-ffloat-store" => self.float_store = true,
@@ -467,6 +491,8 @@ impl Flags {
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
+            no_inline: self.no_inline.clone(),
+            isel: self.isel,
             abi: self.abi.clone(),
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),

@@ -430,6 +430,16 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
+    // `simplifyCondBranch`'s value comparisons (SimplifyCFG.cpp:8963), before
+    // the compare chain; a `switch` has them in `switchopt`.
+    if function.is_placed(block)
+        && function.terminator(block).is_some_and(|last| {
+            function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 3
+        })
+        && crate::switchvalue::folded(options, context, spec, function, block)
+    {
+        return true;
+    }
     if function.is_placed(block) && icmpchain::folded(context, spec, function, block) {
         return true;
     }
@@ -483,8 +493,8 @@ fn branch_hoisted(
     let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
         return false;
     };
-    function.predecessors(first).len() == 1
-        && function.predecessors(second).len() == 1
+    function.sole_predecessor(first).is_some()
+        && function.sole_predecessor(second).is_some()
         && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
@@ -576,7 +586,7 @@ fn branch_speculated(
     let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
         return false;
     };
-    let alone = |one: BlockId| function.predecessors(one).len() == 1;
+    let alone = |one: BlockId| function.sole_predecessor(one).is_some();
     let jumps_to = |one: BlockId, target: BlockId| {
         function.terminator(one).is_some_and(|jump| function.instruction(jump).operands[..] == [Operand::Block(target)])
     };
@@ -709,7 +719,7 @@ pub fn empty_block_removed(
     if (!killable && !mergeable) || too_many_phi_entries(function, block, successor, sources.len()) {
         return false;
     }
-    let alone = function.predecessors(successor).len() == 1;
+    let alone = function.sole_predecessor(successor).is_some();
     // A phi of `block` read elsewhere than by the successor's phis for this
     // edge keeps `block` (it dominates the successor).
     if !alone {
@@ -788,7 +798,7 @@ fn predecessors_propagate(
     successor: BlockId,
     predecessors: &IdSet<BlockId>,
 ) -> bool {
-    if function.predecessors(successor).len() == 1 {
+    if function.sole_predecessor(successor).is_some() {
         return true;
     }
     let merge =

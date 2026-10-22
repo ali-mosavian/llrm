@@ -199,10 +199,12 @@ fn plan(
             return None;
         }
         if edges::phis(function, at).into_iter().any(|phi| {
-            arms(function, phi).into_iter().any(|(value, source)| {
-                matches!(value, Operand::Value(value) if defined.contains_key(&value))
-                    && !loop_.body.contains(&cfg::id(source))
-            })
+            arms(function, phi)
+                .into_iter()
+                .any(
+                    |(value, source)| matches!(value, Operand::Value(value) if defined.contains_key(&value))
+                        && !loop_.body.contains(&cfg::id(source)),
+                )
         }) {
             return None;
         }

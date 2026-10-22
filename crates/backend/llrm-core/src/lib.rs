@@ -12,6 +12,7 @@ pub mod hir;
 pub mod liveness;
 pub mod model;
 pub mod phielimination;
+pub mod twoaddress;
 pub use llrm_omf as objectfile;
 pub use llrm_support as support;
 #[cfg(any(test, feature = "testing"))]

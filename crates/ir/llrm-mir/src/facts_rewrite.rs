@@ -137,6 +137,7 @@ impl Fact {
             | Fact::NoCallback
             | Fact::Cold
             | Fact::ThreeWayCompare
+            | Fact::FlagsResult
             | Fact::StackCheck
             | Fact::Dereferenceable(_)
             | Fact::Align(_)
@@ -376,6 +377,13 @@ mod tests {
             // proves; `narrowBinOp` keeps an add's or sub's flags only where
             // they still hold.
             "combine_casts.rs",
+            // InstructionCombining.cpp's `tryFactorization` reads the `nsw`/
+            // `nuw` of the instruction and of the two operands it factors
+            // (`OverflowingBinaryOperator`) and gives the factored result
+            // `nuw`/`nsw` only where all three had them, an `add` of `mul`s
+            // `nsw` only for a constant factor that is not INT_MIN; it never
+            // gives one an expansion, and drops the rest.
+            "combine_distribute.rs",
             // Reassociate.cpp's `OverflowTracking` (`mergeFlags`, `applyFlags`)
             // merges the `nuw`/`nsw` of the nodes of a tree so the rewritten
             // tree keeps them only if all had them; `ConvertShiftToMul` and
@@ -433,6 +441,12 @@ mod tests {
             // iteration (the GEP would be poison, the access UB, otherwise);
             // it changes no instruction.
             "loopaccess.rs",
+            // LoopInterchange.cpp's `checkReductionKind` lists the reduction
+            // operations that carry `nsw`/`nuw` (and `ninf`), and the
+            // transform clears them, since a reordered sum may overflow; it
+            // keeps no instruction's promise and grants none.
+            "loopinterchange.rs",
+            "loopinterchange_transform.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

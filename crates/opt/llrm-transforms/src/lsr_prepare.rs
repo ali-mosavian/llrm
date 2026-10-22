@@ -219,10 +219,10 @@ pub fn analyze(
                 }
                 // A possible scaled-address reuse.
                 if is_address_use(cx, other.user, other.operand) {
-                    let _access = get_access_type(cx, other.user, other.operand);
+                    let space = get_access_type(cx, other.user, other.operand).addr_space;
                     let scale = d.sext_value() as i64;
-                    if tti.is_legal_addressing_mode(false, 0, true, scale)
-                        || tti.is_legal_addressing_mode(false, 0, true, scale.wrapping_neg())
+                    if tti.is_legal_addressing_mode_in(space, false, 0, true, scale)
+                        || tti.is_legal_addressing_mode_in(space, false, 0, true, scale.wrapping_neg())
                     {
                         declined = true;
                         break;

@@ -1,0 +1,64 @@
+== 
+@symbolicsiv0
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv1
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv2
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv3
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv4
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv5
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@weaktest
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv6
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicsiv7
+  output [*]!
+  flow [*|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!

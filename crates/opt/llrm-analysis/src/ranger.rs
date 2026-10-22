@@ -498,7 +498,6 @@ pub struct LoopContext<'a, 'u> {
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
     pub graph: &'a [cfg::Block],
-    pub predecessors: &'a llrm_support::graph::Predecessors,
     pub positions: &'a llrm_mir::dense::IdMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
@@ -517,25 +516,12 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         shape: &'a cfg::Shape,
         assumed: &'a crate::assumptions::Assumptions,
         graph: &'a [cfg::Block],
-        predecessors: &'a llrm_support::graph::Predecessors,
         positions: &'a llrm_mir::dense::IdMap<i64, usize>,
         operations: &'a [InstId],
         body: &'a llrm_mir::forest::Body,
         above: &'a dyn Fn(ValueId) -> Option<Interval>,
     ) -> Self {
-        Self {
-            unit,
-            facts,
-            shape,
-            assumed,
-            graph,
-            predecessors,
-            positions,
-            operations,
-            body,
-            above,
-            made: Default::default(),
-        }
+        Self { unit, facts, shape, assumed, graph, positions, operations, body, above, made: Default::default() }
     }
 
     /// The value each operation makes, found when first asked.
@@ -788,8 +774,8 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let mut found = Vec::new();
         let mut above = Some(at).filter(|one| self.ctx.body.contains(one));
         while let Some(one) = above {
-            if let Some(parents) = self.ctx.predecessors.get(&one).filter(|parents| parents.len() == 1)
-                && let Some(&from) = parents.iter().next().and_then(|parent| self.ctx.positions.get(parent))
+            if let [parent] = self.ctx.unit.function.predecessors(cfg::block(one))[..]
+                && let Some(&from) = self.ctx.positions.get(&cfg::id(parent))
             {
                 for (index, &successor) in self.ctx.graph[from].succ.iter().enumerate() {
                     if successor == one {

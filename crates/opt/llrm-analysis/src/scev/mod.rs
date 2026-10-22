@@ -19,6 +19,7 @@ pub mod arith;
 pub mod backedge;
 pub mod cast;
 pub mod compare;
+pub mod compare_predicate;
 pub mod create;
 pub mod create_addrec;
 pub mod create_phi;
@@ -74,6 +75,7 @@ mod trip_tests;
 pub mod values;
 #[cfg(test)]
 mod values_tests;
+pub mod verify;
 pub mod wrap_proof;
 
 use llrm_mir::context::Context;

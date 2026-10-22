@@ -1194,3 +1194,21 @@ fn a_gep_with_a_relocatable_index_stays_an_instruction() {
     let text = "@g = global [4 x i16] zeroinitializer\ndefine void @f() {\nb0:\n  %r = getelementptr i8, ptr @g, i16 ptrtoint (ptr @g to i16)\n  ret void\n}\n";
     assert_eq!(simplified(text, "r"), None);
 }
+
+/// `death_counts[2]` of QCport's client: a load of a constant table at a
+/// constant offset. `simplifyLoadInst` folds it
+/// (`ConstantFoldLoadFromConstPtr`); MIR left it for `Fold`'s table, and the
+/// loop whose bound it was kept "trips 0, max 32766" without it. A volatile
+/// load, and a load of a global that is not constant, stay.
+#[test]
+fn a_load_of_a_constant_table_at_a_constant_offset_is_the_element() {
+    let table = |keyword: &str, load: &str| {
+        format!(
+            "@counts = internal {keyword} [12 x i8] c\"\\0B\\00\\09\\00\\0F\\00\\09\\00\\09\\00\\09\\00\"\n\ndefine i16 @f() {{\nb0:\n  %v = {load}\n  ret i16 %v\n}}\n"
+        )
+    };
+    let at = "load i16, ptr getelementptr inbounds nuw (i8, ptr @counts, i16 4)";
+    assert_eq!(simplified(&table("constant", at), "v").as_deref(), Some("15"));
+    assert_eq!(simplified(&table("constant", &at.replace("load i16", "load volatile i16")), "v"), None);
+    assert_eq!(simplified(&table("global", at), "v"), None);
+}

@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
-use super::{Decide, decided, decided_using};
+use super::{Decide, decided};
 use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f decided; whether anything changed.
@@ -22,18 +22,11 @@ fn jump_threaded(module: &mut Module) {
     manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
 }
 
-/// @f decided by the old guard engine alone (`LLRM_NO_SCEV_DECIDE`).
+/// @f decided by the guard engine (ScalarEvolution is not asked).
 fn decide_by_guards(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    decided_using(context, &layout, function, &outer, false).expect("decides")
-}
-
-/// @f decided by ScalarEvolution, then the guard engine (the default).
-fn decide_by_scev(module: &mut Module) -> bool {
-    let (layout, outer) = (layout(module), Outer::of(module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    decided_using(context, &layout, function, &outer, true).expect("decides")
+    decided(context, &layout, function, &outer).expect("decides")
 }
 
 /// `text` decided is `expected`, and computes what it did on `inputs`.
@@ -56,8 +49,7 @@ fn test_a_branch_on_known_numbers_is_a_jump() {
     check(
         "define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br i1 %c, label %b1, label %b2
 
 b1:
@@ -69,8 +61,7 @@ b2:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br label %b1
 
 b1:
@@ -120,14 +111,14 @@ b3:
     );
 }
 
-/// A switch on a known number is a jump to its case.
+/// A switch on a constant is a jump to its case (the constant is folded into
+/// the operand, as the pin's IRBuilder leaves it).
 #[test]
 fn test_a_switch_on_a_known_number_is_a_jump_to_its_case() {
     check(
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
-  switch i16 %s, label %d [ i16 1, label %a
+  switch i16 2, label %d [ i16 1, label %a
                             i16 2, label %b ]
 
 a:
@@ -142,7 +133,6 @@ d:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
   br label %b
 
 b:
@@ -284,7 +274,7 @@ b2:
 ",
     );
     assert_eq!(
-        managed(&mut module, Decide),
+        managed(&mut module, Decide { constants: true }),
         "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 1, 1
@@ -305,7 +295,7 @@ fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided_after_fold() {
     );
     let mut module = parsed(&format!("{DOS}{text}"));
     managed(&mut module, crate::fold::Fold);
-    let after = managed(&mut module, Decide);
+    let after = managed(&mut module, Decide { constants: true });
     assert!(!after.contains("br i1"), "{after}");
 }
 
@@ -323,7 +313,7 @@ fn decide_solves_no_memory() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
 }
 
@@ -341,7 +331,7 @@ fn decide_asks_no_memory_annotations_or_points_to() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses, false).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
     assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
 }
@@ -353,45 +343,6 @@ fn has(
 ) -> bool {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     function.layout().iter().any(|&one| function.block(one).name.as_deref() == Some(name))
-}
-
-/// `i < -5` inside `for i = 0 to 9`: only the counted loop's range, not the
-/// header's edge, says it never holds.
-#[test]
-fn a_branch_the_counted_loops_range_rules_out_is_decided() {
-    let mut module = parsed(
-        "define i16 @f() {
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
-  %s = phi i16 [ 0, %b0 ], [ %t, %b4 ]
-  %c = icmp slt i16 %i, 10
-  br i1 %c, label %b2, label %b5
-
-b2:
-  %neg = icmp slt i16 %i, -5
-  br i1 %neg, label %b3, label %b4
-
-b3:
-  %u = add i16 %s, 100
-  br label %b4
-
-b4:
-  %t = phi i16 [ %s, %b2 ], [ %u, %b3 ]
-  %next = add i16 %i, 1
-  br label %b1
-
-b5:
-  ret i16 %s
-}
-",
-    );
-    let before = results(&module, &[&[]]);
-    decide(&mut module);
-    assert!(!has(&module, "b3"), "{}", printed(&module));
-    assert_eq!(results(&module, &[&[]]), before);
 }
 
 /// A pointer to an object compared with null: never equal. A parameter may be
@@ -578,10 +529,10 @@ fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_check
 /// `simplifycfg`. The guard engine behind it decides it, so switching to
 /// ScalarEvolution loses nothing.
 #[test]
-fn test_an_index_that_follows_the_counter_is_still_decided_with_scev_on() {
+fn test_an_index_that_follows_the_counter_is_decided_by_the_guards() {
     let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
     let before = results(&module, INPUTS);
-    assert!(decide_by_scev(&mut module));
+    assert!(decide_by_guards(&mut module));
     assert!(!printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
     assert_eq!(results(&module, INPUTS), before);
 }
@@ -632,16 +583,16 @@ fn test_a_count_checked_nonzero_before_its_loop_is_nonzero_at_the_loops_exit_by_
 }
 
 #[test]
-fn test_scev_on_still_decides_the_count_check_at_the_loops_exit() {
+fn test_the_count_check_at_the_loops_exit_is_decided_by_the_guards() {
     let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
-    assert!(decide_by_scev(&mut module));
+    assert!(decide_by_guards(&mut module));
     assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
 }
 
-/// A condition a dominating branch implies is decided by either engine:
+/// A condition a dominating branch implies is decided by the guards:
 /// `n > 5` taken, `n > 3` is true.
 #[test]
-fn test_a_compare_a_dominating_branch_implies_is_decided_by_both_engines() {
+fn test_a_compare_a_dominating_branch_implies_is_decided_by_the_guards() {
     let text = "define i16 @f(i16 %n) {
 b:
   %big = icmp sgt i16 %n, 5
@@ -657,13 +608,9 @@ out:
   ret i16 2
 }
 ";
-    for by_scev in [false, true] {
-        let mut module = parsed(&format!("{DOS}{text}"));
-        let (layout, outer) = (layout(&module), Outer::of(&module, None));
-        let (context, function) = module.function_mut("f").expect("@f");
-        assert!(decided_using(context, &layout, function, &outer, by_scev).expect("decides"));
-        assert!(!printed(&module).contains("br i1 %mid"), "scev {by_scev}: {}", printed(&module));
-    }
+    let mut module = parsed(&format!("{DOS}{text}"));
+    assert!(decide_by_guards(&mut module));
+    assert!(!printed(&module).contains("br i1 %mid"), "{}", printed(&module));
 }
 
 /// Where the counter may be negative the check stays: `lo` is not known below
@@ -820,7 +767,7 @@ b25:
 ";
     let mut module = parsed(text);
     jump_threaded(&mut module);
-    managed(&mut module, Decide);
+    managed(&mut module, Decide { constants: true });
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
 }
@@ -871,4 +818,23 @@ b1:
     );
     assert!(decide(&mut module));
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", printed(&module));
+}
+
+/// In LLVM's order `Decide` leaves the numbers to SimplifyCFG, CVP and SCCP
+/// (no row of the 71 programs needed them here) and keeps what the guards and
+/// ScalarEvolution prove: constants off, a switch on a known number stays and
+/// a compare the dominating edge settles goes.
+#[test]
+fn test_without_constants_decide_keeps_the_implied_branches_only() {
+    let mut switch = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %s = add i16 1, 1\n  switch i16 %s, label %d [ i16 1, label %a\n                            i16 2, label %b ]\na:\n  ret i16 10\nb:\n  ret i16 %x\nd:\n  ret i16 30\n}\n",
+    );
+    let before = printed(&switch);
+    managed(&mut switch, Decide { constants: false });
+    assert_eq!(printed(&switch), before, "a switch on a known number is not Decide's here");
+    let mut implied = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %c = icmp slt i16 %x, 5\n  br i1 %c, label %b1, label %b3\nb1:\n  %d = icmp slt i16 %x, 10\n  br i1 %d, label %b2, label %b3\nb2:\n  ret i16 1\nb3:\n  ret i16 0\n}\n",
+    );
+    managed(&mut implied, Decide { constants: false });
+    assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
 }

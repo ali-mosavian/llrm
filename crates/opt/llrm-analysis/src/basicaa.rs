@@ -30,7 +30,7 @@
 //! # Provides
 //! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
@@ -110,6 +110,40 @@ pub(crate) fn is_identified_function_local(
     BasicAA::new(unit).is_identified_local(operand)
 }
 
+/// `CallBase::getMemoryEffects`: the site's attributes met with the direct
+/// callee's.
+pub(crate) fn call_memory_effects(
+    unit: &Unit,
+    call: llrm_mir::module::InstId,
+) -> MemoryEffects {
+    let function = unit.function;
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+        return MemoryEffects::unknown();
+    };
+    let site = MemoryEffects::of_attrs(&info.attrs);
+    let callee = llrm_mir::memory::callee(unit.context, function, call)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+}
+
+/// `isIdentifiedObject`: an identified local, or a global variable.
+pub(crate) fn is_identified_object(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    let basic = BasicAA::new(unit);
+    basic.is_identified_local(operand) || basic.global_variable(operand)
+}
+
+/// `getUnderlyingObject`: through geps and casts.
+pub(crate) fn underlying_object(
+    unit: &Unit,
+    operand: Operand,
+) -> Operand {
+    BasicAA::new(unit).underlying(operand)
+}
+
 pub struct BasicAA<'a> {
     unit: &'a Unit<'a>,
 }
@@ -135,6 +169,45 @@ impl<'a> BasicAA<'a> {
         if width >= 128 || bits >> (width - 1) & 1 == 0 { bits as i128 } else { (bits | (!0u128 << width)) as i128 }
     }
 
+    /// Whether the cast `one` is one a pointer passes through unchanged in
+    /// what it points into. A selector alone is `segment:0` when cast back to
+    /// far (DEVIATE C1): where an object is below it (`VARSEG(a)`) it is no
+    /// pointer into that object; where only an integer is (a segment word
+    /// loaded from an array's descriptor) it is the pin's pointer from
+    /// `inttoptr`, unless the module forges selectors (`forging`), when it may
+    /// name any object.
+    fn transparent(
+        &self,
+        one: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let selector = one.opcode == Opcode::Cast(CastOp::AddrSpaceCast)
+            && self
+                .unit
+                .space(one.operands[0])
+                .is_some_and(|space| self.unit.layout.has_unstable_representation(space));
+        if !selector {
+            return true;
+        }
+        let mut below = one.operands[0];
+        for _ in 0..MAX_LOOKUP {
+            match self.defining(below) {
+                Some(next) if matches!(next.opcode, Opcode::Cast(_) | Opcode::GetElementPtr { .. }) => {
+                    below = next.operands[0]
+                }
+                Some(next) if matches!(next.opcode, Opcode::Alloca { .. }) => return false,
+                Some(_) => break,
+                None => return !matches!(below, Operand::Constant(_)) && !self.forged(),
+            }
+        }
+        !self.forged()
+    }
+
+    /// Whether the module forges pointers into the data segment; without the
+    /// module's facts it may.
+    fn forged(&self) -> bool {
+        self.unit.globals_aa.is_none_or(|globals| globals.forged())
+    }
+
     /// `stripPointerCastsForAliasAnalysis`: casts only.
     fn strip(
         &self,
@@ -142,11 +215,36 @@ impl<'a> BasicAA<'a> {
     ) -> Operand {
         while let Some(one) = self.defining(operand) {
             match one.opcode {
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
+                    operand = one.operands[0]
+                }
                 _ => break,
             }
         }
         operand
+    }
+
+    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant expression.
+    fn is_gep_operator(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.constant_gep_base(operand).is_some()
+            || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
+    }
+
+    /// The base of a `getelementptr` constant expression, if `operand` is one.
+    fn constant_gep_base(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        match operand {
+            Operand::Constant(id) => match &self.unit.context.get(id).kind {
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => Some(Operand::Constant(operands[0])),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// `getUnderlyingObject`: through geps and casts, `MAX_LOOKUP` steps.
@@ -155,9 +253,14 @@ impl<'a> BasicAA<'a> {
         mut operand: Operand,
     ) -> Operand {
         for _ in 0..MAX_LOOKUP {
+            if let Some(base) = self.constant_gep_base(operand) {
+                operand = base;
+                continue;
+            }
             let Some(one) = self.defining(operand) else { break };
             match one.opcode {
-                Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => {
+                Opcode::GetElementPtr { .. } => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
                 }
                 _ => break,
@@ -188,9 +291,31 @@ impl<'a> BasicAA<'a> {
         DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
+            // A `getelementptr` constant expression is a GEPOperator as well: DecomposeGEPExpression reads it as it reads the instruction.
+            if let Operand::Constant(id) = operand {
+                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) = &self.unit.context.get(id).kind {
+                    found.inbounds &= *inbounds;
+                    found.nuw &= *nuw;
+                    let indices: Vec<Option<i128>> = operands[1..]
+                        .iter()
+                        .map(|&index| {
+                            let index = Operand::Constant(index);
+                            self.unit.int_constant(index).map(|bits| self.signed(index, bits))
+                        })
+                        .collect();
+                    let (constant, variable) = self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
+                    debug_assert!(variable.is_empty(), "a constant expression's indices are constants");
+                    found.offset += constant;
+                    operand = Operand::Constant(operands[0]);
+                    found.base = operand;
+                    continue;
+                }
+            }
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
+                    operand = one.operands[0]
+                }
                 // A phi of one arm, as LCSSA makes.
                 Opcode::Phi if one.operands.len() == 2 => operand = one.operands[0],
                 Opcode::GetElementPtr { source } => {
@@ -588,9 +713,7 @@ impl<'a> BasicAA<'a> {
         o2: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> AliasResult {
-        let is_gep = |operand: Operand| {
-            self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
-        };
+        let is_gep = |operand: Operand| self.is_gep_operator(operand);
         if is_gep(a.ptr) {
             let result = self.alias_gep(a, b, o1, o2, aaqi);
             if result != AliasResult::MayAlias {
@@ -640,12 +763,8 @@ impl<'a> BasicAA<'a> {
                 return AliasResult::MayAlias;
             }
             let joins = |operand| {
-                self.defining(operand).is_some_and(|one| {
-                    matches!(
-                        one.opcode,
-                        Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-                    )
-                })
+                self.is_gep_operator(operand)
+                    || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Phi | Opcode::Select))
             };
             if joins(other.ptr) || joins(underlying1) || joins(underlying2) {
                 return base_objects(self, aaqi);
@@ -986,15 +1105,7 @@ impl AAResults for BasicAA<'_> {
         call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        let function = self.unit.function;
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
-            return MemoryEffects::unknown();
-        };
-        let site = MemoryEffects::of_attrs(&info.attrs);
-        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
-            .and_then(|one| self.unit.globals.get(one.0 as usize))
-            .and_then(|one| one.function());
-        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+        call_memory_effects(self.unit, call)
     }
 
     /// A call against a location is `getModRefInfo(Call, Loc)`; every other
@@ -1437,5 +1548,76 @@ mod tests {
         // Premise: the corpus has tagged accesses.
         assert!(tagged > 0, "no tagged access in the corpus");
         assert!(differ.is_empty(), "{} differ: {:#?}", differ.len(), &differ[..differ.len().min(8)]);
+    }
+
+    /// `DEF SEG = VARSEG(a)`: a far pointer made of `a`'s selector is
+    /// `segment:0`, a pointer into the data segment, not into `a`; stripping
+    /// the casts named `a` as its object and called it NoAlias with every
+    /// other global.
+    #[test]
+    fn a_far_pointer_made_of_a_selector_is_may_alias_with_another_global() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@pa = global [2 x i8] zeroinitializer
+@pb = global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %near = getelementptr i8, ptr @pa, i16 0
+  %far0 = addrspacecast ptr %near to ptr addrspace(1)
+  %sg = addrspacecast ptr addrspace(1) %far0 to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %sg to ptr addrspace(1)
+  %a = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %b = getelementptr i8, ptr @pb, i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(1));
+        let answer = BasicAA::new(&unit).alias(&location("a"), &location("b"), &mut AAQueryInfo::default(), None);
+        assert_eq!(answer, AliasResult::MayAlias);
+    }
+
+    /// bintree.bas: an array element's far pointer is a segment word loaded
+    /// from its descriptor, made a pointer by `inttoptr`. The pin takes it
+    /// for a pointer that cannot be a local whose address never escaped; the
+    /// first selector-cast fix stopped at the cast and lost that (a loop
+    /// variable reloaded around each call, 14 B of the object). Where the
+    /// module forges selectors it can be.
+    #[test]
+    fn a_far_pointer_from_a_segment_word_is_no_alias_with_a_local_unless_the_module_forges() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+declare void @g(ptr nocapture)
+
+define i16 @f(i16 %seg, i16 %n) {
+b0:
+  %slot = alloca i16
+  call void @g(ptr nocapture %slot)
+  %sg = inttoptr i16 %seg to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %sg to ptr addrspace(1)
+  %a = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let answer = |forged: bool| {
+            let mut globals = crate::globalsaa::Globals::default();
+            globals.set_forged(forged);
+            let unit = Unit::of(&module, &layout, function).with_globals_aa(&globals);
+            let location =
+                |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(1));
+            BasicAA::new(&unit).alias(&location("a"), &location("slot"), &mut AAQueryInfo::default(), None)
+        };
+        assert_eq!(answer(false), AliasResult::NoAlias);
+        assert_eq!(answer(true), AliasResult::MayAlias);
     }
 }

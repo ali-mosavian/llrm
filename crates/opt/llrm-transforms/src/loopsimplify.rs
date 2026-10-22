@@ -341,7 +341,12 @@ fn _simplified(
     function: &mut Function,
     mut shape: cfg::Shape,
 ) -> bool {
-    if function.entry().is_none() || !shape.dominance.irreducible(function).is_empty() {
+    // Only a loop out of the form is worth the irreducibility check: with none,
+    // nothing is grouped whether the body is irreducible or not.
+    if function.entry().is_none()
+        || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
+        || !shape.dominance.irreducible(function).is_empty()
+    {
         return false;
     }
     let mut changed = false;

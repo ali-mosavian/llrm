@@ -8,11 +8,10 @@
 //! `rewriters`.
 //!
 //! # DEVIATE 9 (MIR lacks the construct)
-//! * `llvm.usub.sat`, `llvm.uadd.sat`,
-//!   `llvm.start.loop.iterations`, `llvm.annotation`, `llvm.ptr.annotation`,
-//!   `llvm.vscale` and `llvm.loop.decrement.reg` are not MIR intrinsics
-//!   (`Intrinsic::named` is none for them, tested), so a call to one is an
-//!   unknown, as any call is.
+//! * `llvm.usub.sat`, `llvm.uadd.sat`, `llvm.start.loop.iterations`,
+//!   `llvm.annotation`, `llvm.ptr.annotation`, `llvm.vscale` and
+//!   `llvm.loop.decrement.reg` are not MIR intrinsics (`Intrinsic::named` is
+//!   none for them, tested), so a call to one is an unknown, as any call is.
 //! * No `ptrtoaddr` instruction: `ptrtoint` is an unknown, as at the pin.
 //! * Constant expressions are in global initializers only, so a function
 //!   operand is never one; one that is is an unknown.
@@ -331,6 +330,7 @@ impl ScalarEvolution {
         cx: &Cx,
         v: Operand,
     ) -> Scev {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
         // A value that is not an instruction or argument has no entry in the
         // map: it is made at once.
         if !matches!(v, Operand::Value(_)) {

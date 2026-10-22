@@ -211,6 +211,68 @@ b0:
     assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
 }
 
+/// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
+/// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
+/// bound of 25) into ten call sites, +690 bytes. The callee that stays is
+/// refused when its instructions that do not fold cost more code than the call
+/// and its argument pushes; the last call of a local callee, which goes with
+/// it, and a callee smaller than its call are inlined.
+#[test]
+fn an_optsize_caller_inlines_only_what_does_not_grow_the_code_on_x86() {
+    let text = |linkage: &str, body: &str| {
+        format!(
+            "@arr = global [64 x i32] zeroinitializer
+
+define {linkage}i32 @callee(i32 %x) {{
+{body}
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+        )
+    };
+    let looped = "b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %n, %h ]
+  %s = phi i32 [ %x, %b0 ], [ %t, %h ]
+  %p = getelementptr i32, ptr @arr, i32 %i
+  %v = load i32, ptr %p
+  %t = add i32 %s, %v
+  %n = add i32 %i, 1
+  %c = icmp ne i32 %n, 64
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %t";
+    let small = "b0:
+  %a = add i32 %x, 1
+  ret i32 %a";
+    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let held = |text: &str, sole: bool| {
+        let (cost, threshold) = priced_with(text, 0, sole, CallerSize::OptSize, Some(&x86));
+        cost < threshold
+    };
+    let (generic, bound) = priced_with(&text("", looped), 0, false, CallerSize::OptSize, None);
+    assert!(generic < bound, "premise: the pin inlines the loop, cost {generic} threshold {bound}");
+    assert!(!held(&text("", looped), false), "an external loop callee was copied into the caller");
+    assert!(!held(&text("internal ", looped), false), "a local callee with other calls was copied");
+    assert!(held(&text("internal ", looped), true), "the last call of a local callee, which goes, stays");
+    assert!(held(&text("", small), false), "a callee smaller than its call stays");
+    // A call and the push of its argument are bigger than the instructions
+    // they count as: `_savegame_read_block` (28 calls) grew its module by 408
+    // bytes while the call counted as three plain instructions.
+    let three = "b0:
+  %a = add i32 %x, 1
+  %b = xor i32 %a, 85
+  %c = mul i32 %b, 3
+  ret i32 %c";
+    assert!(held(&text("", three), false), "a callee of the size of a far call and its push was kept out");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).
@@ -298,12 +360,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0 };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0 };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -473,11 +535,11 @@ b0:
 
 /// stft_single.bas -Os: a call in front of `unreachable` is held to threshold
 /// 0, and the walk stopped at cost 0; `cost < max(1, threshold)` is
-/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138), so
-/// the 350-instruction benchmark body was copied into `__main` and kept.
+/// `finalizeAnalysis`'s, the verdict is `Cost < Threshold` (InlineCost.h:138),
+/// so the 350-instruction benchmark body was copied into `__main` and kept.
 #[test]
 fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
-    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0 }.is_ok());
-    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0 }.is_ok());
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }

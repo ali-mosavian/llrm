@@ -38,7 +38,12 @@ fn inline_with(
     _threshold: Threshold,
 ) -> bool {
     let layout = DataLayout::default();
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), self_inlining: None, peeling: false };
+    let by = Caller {
+        layout: &layout,
+        recursive: recursive(module).contains(&id(module, caller)),
+        self_inlining: None,
+        peeling: false,
+    };
     let mut changed = false;
     loop {
         let available = every_body(module, &layout);
@@ -565,7 +570,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
             moved: false,
             callee: None,
             self_calls: None,
-                    self_sites: 0,
+            self_sites: 0,
         }
     };
     let available = [(name, itself)].into_iter().collect();
@@ -596,4 +601,44 @@ fn test_copies_of_a_function_in_itself_stop_at_the_size_limit() {
     let copies = (MAX_INLINE_INSNS_RECURSIVE - before) / (before - 1);
     assert!(copies < MAX_INLINE_RECURSIVE_DEPTH as i64, "premise: the size, not the depth, stops it ({copies})");
     assert_eq!(adds as i64, 1 + copies, "copies of down in down, body of {before} insns");
+}
+
+/// A body's `tail` call rests on the body's own frame: inlined at a site that
+/// is not `tail` it is not either. A `tail` call in `place` that took the
+/// caller's array, once inlined, let BasicAA say it touched no slot of the
+/// frame, and DSE deleted the stores the call read (queens -O3 ran 51% longer
+/// on a wrong answer).
+#[test]
+fn a_tail_call_in_an_inlined_body_stays_tail_only_where_the_site_is() {
+    let text = |site: &str| {
+        format!(
+            "declare void @g(ptr)
+
+define void @callee(ptr %p) {{
+b0:
+  tail call void @g(ptr %p)
+  ret void
+}}
+
+define void @f(ptr %q) {{
+b0:
+  {site}call void @callee(ptr %q)
+  ret void
+}}
+"
+        )
+    };
+    let in_f = |site: &str| {
+        let mut module = parsed(&text(site));
+        assert!(inline_into(&mut module, "f", 0), "premise: the call is inlined");
+        let printed = printed(&module);
+        printed[printed.find("define void @f(").expect("@f")..].to_owned()
+    };
+    assert!(!in_f("").contains("tail call void @g"), "{}", in_f(""));
+    assert!(in_f("tail ").contains("tail call void @g"), "{}", in_f("tail "));
+    // A `notail` call stays so (`ChildTCK != TCK_NoTail`).
+    let mut module = parsed(&text("").replace("  tail call void @g", "  notail call void @g"));
+    assert!(inline_into(&mut module, "f", 0));
+    let printed = printed(&module);
+    assert!(printed[printed.find("define void @f(").unwrap()..].contains("notail call void @g"), "{printed}");
 }

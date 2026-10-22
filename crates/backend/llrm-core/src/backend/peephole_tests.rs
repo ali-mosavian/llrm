@@ -2839,6 +2839,27 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
 }
 
 #[test]
+fn test_a_far_load_whose_selector_is_required_in_es_still_folds_into_its_widening_use() {
+    // bench/huge -O2: `mov cx,es:[di]; movsx ecx,cx` ran 40,200 times beside
+    // `movsx ecx,es:[di]`, because the load's requirement of ES refused the
+    // fold.
+    let (cell, narrow, wide) = narrow_load_parts();
+    let mut far = (*narrow).clone();
+    far.requires = vec![(Held { value: 9, width: 2 }, RegId::ES)];
+    let used =
+        plain(2, Operation::Binary, "add", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::EDX, 4)], None);
+    let input = body("far-load-extend", 0, vec![block(0, vec![Arc::new(far), wide, used], vec![]).into()]);
+
+    let result = extensions(rules(), &input);
+    let emitted: Vec<Arc<Insn>> =
+        result.insns().into_iter().filter(|one| one.what.as_ref().unwrap().op != Operation::Nothing).collect();
+
+    assert_eq!(emitted[0].what, Some(sem(Operation::Extend, "movsx", vec![rl(RegId::EDX, 4)], vec![Loc::Mem(cell)])));
+    assert_eq!(emitted[0].requires, [(Held { value: 9, width: 2 }, RegId::ES)], "the selector stays required");
+    assert_eq!(emitted.len(), 2);
+}
+
+#[test]
 fn test_shared_narrow_load_is_not_folded_into_one_widening_use() {
     // The load must remain when another instruction still reads its narrow
     // value.
@@ -3686,6 +3707,87 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
 
     assert_eq!(names(&increments(rules(), &dead).insns())[0], "inc");
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
+}
+
+/// A body of one `lea eax, address` and, where `flags_read`, a `jb` after it.
+fn lea_body(
+    address: AddressRef,
+    flags_read: bool,
+) -> LirBody {
+    let eax = rl(RegId::EAX, 4);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![eax], vec![Loc::Address(address)])),
+        vec![1],
+        vec![1],
+    ));
+    if !flags_read {
+        // A compare writes every flag before anything reads one.
+        let compare = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(8, 4)])),
+            vec![],
+            vec![1],
+        ));
+        return body("lea", 1, vec![block(1, vec![lea, compare], vec![]).into()]);
+    }
+    let branch =
+        Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
+    body("lea", 1, vec![block(1, vec![lea, branch], vec![3]).into(), block(3, vec![], vec![]).into()])
+}
+
+fn sum(
+    through: RegId,
+    index_through: RegId,
+    scale: i64,
+    offset: i64,
+) -> AddressRef {
+    AddressRef { through, index_through, scale, offset, ..AddressRef::new(None) }
+}
+
+/// X86FixupLEAs `optTwoAddrLEA`: `lea eax,[eax+ecx]` is `add eax,ecx`, in
+/// either operand order, where no flag is read after it. Without the pass the
+/// LEA stayed an LEA: 3 bytes for `add`, 3 for `lea`, but the pin's output
+/// differs in 37 IRs.
+#[test]
+fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
+    for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
+        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let what = done.insns()[0].what.clone().unwrap();
+        assert_eq!(what.name.as_deref(), Some("add"));
+        assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
+    }
+}
+
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
+/// `increments` makes `inc`.
+#[test]
+fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
+    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let what = done.insns()[0].what.clone().unwrap();
+    assert_eq!(what.name.as_deref(), Some("add"));
+    assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
+    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    assert_eq!(names(&one.insns())[0], "inc");
+}
+
+/// The pin leaves a three-address or scaled LEA alone: only the two-address
+/// scale-1 forms are the pass's.
+#[test]
+fn test_lea_that_is_not_two_address_stays() {
+    for address in [
+        sum(RegId::ECX, RegId::EDX, 1, 0),
+        sum(RegId::EAX, RegId::ECX, 2, 0),
+        sum(RegId::EAX, RegId::ECX, 1, 4),
+        sum(RegId::ECX, RegId::None, 1, 8),
+    ] {
+        let done = lea_fixed(rules(), &lea_body(address, false));
+        assert_eq!(names(&done.insns())[0], "lea");
+    }
 }
 
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen

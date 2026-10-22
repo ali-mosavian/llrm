@@ -91,6 +91,53 @@ fn a_counter_extended_to_the_index_width_is_that_wide() {
     assert!(after.contains("ult i32"), "{after}");
 }
 
+/// shellsort's gap loops once the gaps are unrolled: the inner counter steps
+/// down by a gap from `i`, its test is `narrow < gap`, and it is read through
+/// `zext`. The extension of the counter's recurrence is distributed when
+/// `isKnownOnEveryIteration` holds; that was a stub that said no, so the 16-bit
+/// counter stayed (`movzx; cmp dx,15` a trip in shellsort -O3 m32).
+const STEPPING_DOWN: &str = "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %buf = alloca [128 x i8]
+  br label %outer
+
+outer:
+  %iv = phi i32 [ 16, %b0 ], [ %iv.next, %outer.latch ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc.out, %outer.latch ]
+  %start = trunc nuw nsw i32 %iv to i16
+  br label %inner
+
+inner:
+  %m = phi i16 [ %start, %outer ], [ %narrow, %inner ]
+  %sum = phi i32 [ %acc, %outer ], [ %sum.next, %inner ]
+  %narrow = sub nuw i16 %m, 16
+  %idx = zext i16 %narrow to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %idx
+  store i8 1, ptr %p
+  %sum.next = add i32 %sum, %idx
+  %done = icmp ult i16 %narrow, 16
+  br i1 %done, label %outer.latch, label %inner
+
+outer.latch:
+  %acc.out = phi i32 [ %sum.next, %inner ]
+  %iv.next = add nuw nsw i32 %iv, 1
+  %ec = icmp ne i32 %iv.next, 64
+  br i1 %ec, label %outer, label %exit
+
+exit:
+  ret i32 %acc.out
+}
+";
+
+#[test]
+fn a_counter_stepping_down_by_a_gap_and_read_through_zext_is_widened() {
+    let (changed, after) = widening(STEPPING_DOWN);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32") && !after.contains("icmp ult i16"), "{after}");
+}
+
 #[test]
 fn a_counter_extended_past_the_index_width_stays() {
     // 16-bit addresses (a segment's offset): `zext` to 32 is no index.
@@ -743,4 +790,135 @@ fn simplify_form_scans(loops: usize) -> usize {
 fn a_loops_simplify_form_is_worked_out_once_in_a_run() {
     assert_eq!(simplify_form_scans(4), 4);
     assert_eq!(simplify_form_scans(16), 16);
+}
+
+/// Two loops, each with the same counter twice, one after the other.
+fn two_loops_of_two_counters() -> String {
+    "define i16 @f(i16 %n) {
+b0:
+  %a = alloca [64 x i16]
+  %b = alloca [64 x i16]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
+  %j = phi i16 [ 0, %b0 ], [ %j.next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %c0
+
+b2:
+  %io = mul i16 %i, 2
+  %ia = getelementptr i8, ptr %a, i16 %io
+  store i16 %i, ptr %ia
+  %jo = mul i16 %j, 2
+  %jb = getelementptr i8, ptr %b, i16 %jo
+  store i16 %j, ptr %jb
+  %i.next = add i16 %i, 1
+  %j.next = add i16 %j, 1
+  br label %b1
+
+c0:
+  br label %c1
+
+c1:
+  %k = phi i16 [ 0, %c0 ], [ %k.next, %c2 ]
+  %l = phi i16 [ 0, %c0 ], [ %l.next, %c2 ]
+  %cgo = icmp slt i16 %k, %n
+  br i1 %cgo, label %c2, label %c3
+
+c2:
+  %ko = mul i16 %k, 2
+  %ka = getelementptr i8, ptr %a, i16 %ko
+  store i16 %k, ptr %ka
+  %lo = mul i16 %l, 2
+  %lb = getelementptr i8, ptr %b, i16 %lo
+  store i16 %l, ptr %lb
+  %k.next = add i16 %k, 1
+  %l.next = add i16 %l, 1
+  br label %c1
+
+c3:
+  %x = load i16, ptr %a
+  %y = load i16, ptr %b
+  %z = add i16 %x, %y
+  ret i16 %z
+}
+"
+    .to_owned()
+}
+
+/// Phis in the header of each of the two loops, in program order.
+fn both_header_phis(module: &mut Module) -> Vec<usize> {
+    let function = f(module);
+    let mut all = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+    all.sort_by_key(|one| one.header);
+    all.iter()
+        .map(|one| {
+            function
+                .iter_block(cfg::block(one.header))
+                .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .count()
+        })
+        .collect()
+}
+
+/// The loop pass manager hands the loops a full unroll made to the passes after
+/// it: `IndVarsOnCreated` runs on those loops and no others, and on none when
+/// the unroll made none (the whole-function slot it replaces would run on
+/// both).
+#[test]
+fn indvars_on_the_created_loops_runs_on_those_loops_alone() {
+    let mut module = parsed(&two_loops_of_two_counters());
+    let second = {
+        let function = f(&mut module);
+        let mut all = loops::loops(&cfg::graph(function), function.entry().map(cfg::id));
+        all.sort_by_key(|one| one.header);
+        cfg::block(all[1].header)
+    };
+    let created = Rc::new(std::cell::RefCell::new(Vec::new()));
+    managed(&mut module, super::IndVarsOnCreated { created: Rc::clone(&created) });
+    assert_eq!(both_header_phis(&mut module), vec![2, 2], "nothing made: nothing runs");
+    *created.borrow_mut() = vec![second];
+    managed(&mut module, super::IndVarsOnCreated { created: Rc::clone(&created) });
+    assert_eq!(both_header_phis(&mut module), vec![2, 1], "{}", printed(&module));
+    assert!(created.borrow().is_empty(), "the run took the list");
+}
+
+/// `i < -5` inside `for i = 0 to 9`: the counted loop's range says it never
+/// holds. `decide` answered this from ScalarEvolution; the pin's IndVars does,
+/// in `eliminateIVComparison`, on every loop including the ones an unroll made.
+#[test]
+fn a_compare_the_counted_loops_range_rules_out_is_folded_by_indvars() {
+    let text = "define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b4 ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %neg = icmp slt i16 %i, -5
+  br i1 %neg, label %b3, label %b4
+
+b3:
+  %u = add i16 %s, 100
+  br label %b4
+
+b4:
+  %t = phi i16 [ %s, %b2 ], [ %u, %b3 ]
+  %next = add i16 %i, 1
+  br label %b1
+
+b5:
+  ret i16 %s
+}
+";
+    let mut module = parsed(text);
+    let before = results(&module, &[&[]]);
+    managed(&mut module, IndVars { lftr: true });
+    assert!(!printed(&module).contains("icmp slt i16 %i, -5"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[]]), before);
 }

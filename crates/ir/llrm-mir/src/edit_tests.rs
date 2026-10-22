@@ -555,6 +555,38 @@ fn a_terminators_successors_and_a_blocks_predecessors_are_listed_once_each_in_or
     }
 }
 
+/// `sole_predecessor` is `predecessors` of exactly one block, said without the
+/// list: a switch naming a block twice and a phi naming its predecessor are
+/// still one; two terminators are two; none is none.
+#[test]
+fn a_block_has_a_sole_predecessor_when_one_block_names_it() {
+    let text = "define i32 @f(i32 %a) {
+entry:
+  switch i32 %a, label %twice [ i32 1, label %twice
+                                i32 2, label %join ]
+twice:
+  br label %join
+join:
+  %p = phi i32 [ 1, %entry ], [ 2, %twice ]
+  ret i32 %p
+orphan:
+  ret i32 0
+}
+";
+    let mut m = module(text);
+    let f = function(&mut m);
+    let block =
+        |name: &str| f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some(name)).expect(name);
+    let (entry, twice, join, orphan) = (block("entry"), block("twice"), block("join"), block("orphan"));
+    assert_eq!(f.sole_predecessor(twice), Some(entry), "two cases of one switch name it");
+    assert_eq!(f.sole_predecessor(join), None, "the entry and `twice` name it");
+    assert_eq!(f.sole_predecessor(entry), None, "no terminator names the entry");
+    assert_eq!(f.sole_predecessor(orphan), None);
+    for b in [entry, twice, join, orphan] {
+        assert_eq!(f.sole_predecessor(b).is_some(), f.predecessors(b).len() == 1);
+    }
+}
+
 /// A value read by many places goes to another in one step, and a phi of many
 /// inputs is cleared in one: the use lists agree with the operands after both.
 /// (A scan of the list for each use made the first U^2 and, over the dead phis

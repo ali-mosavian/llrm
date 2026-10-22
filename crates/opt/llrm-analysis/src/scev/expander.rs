@@ -267,10 +267,12 @@ impl Expander {
             function.erase(inst).expect("a dead instruction");
         }
         self.inserted.retain(|inst| !deleted.contains(inst));
-        self.expressions.retain(|_, value| !matches!(value, Operand::Value(v) if match function.value(*v).def {
-            llrm_mir::module::ValueDef::Instruction(inst) => deleted.contains(&inst),
-            _ => false,
-        }));
+        self.expressions.retain(|_, value| {
+            !matches!(
+                value,
+                Operand::Value(v) if match function.value(*v).def { llrm_mir::module::ValueDef::Instruction(inst) => deleted.contains(&inst), _ => false, }
+            )
+        });
     }
 
     /// `getAllInsertedInstructions`: what the expander made, in order, less

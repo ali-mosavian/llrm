@@ -5,14 +5,35 @@
 R=${R:-ali-mosavian/llrm}; HERE=$(cd "$(dirname "$0")" && pwd)
 PRIORITY=${PRIORITY:-$HERE/priority.txt}; WAITS=${WAITS:-$HERE/waits.txt}
 nums() { sed 's/#.*//' "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$'; }
-ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-")"') || exit 1
+ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body,headRefOid -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-") \(.headRefOid // "-")"') || exit 1
+# a PR the last landing refused is not tried again until its head or feat/parity moves (refused.state, written by land.sh): the runner re-queued it every second
+STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
+parity=$(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha 2>/dev/null)
+ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STATE" 2>/dev/null || echo "$n $m $o $h"; done)
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch
 echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity (push rejected? git pull --no-rebase, then push; never force)\n", $1, $3}' >&2
 # Owner: <session> in the PR body names who to tell; a PR without it is refused (REQUIRE_OWNER= switches the rule off)
 REQUIRE_OWNER=${REQUIRE_OWNER-1}
 [ -n "$REQUIRE_OWNER" ] && echo "$ready" | awk '$2!="CONFLICTING" && $3=="-"{printf "%s: REFUSED: no `Owner: <session>` line in the description\n", $1}' >&2
+heads="$ready"
 ready=$(echo "$ready" | awk -v req="$REQUIRE_OWNER" '$2!="CONFLICTING" && !(req!="" && $3=="-"){print $1}')
 waiting=$(nums "$WAITS")
-for n in $(nums "$PRIORITY") $(echo "$ready" | sort -n); do
+queue=$(for n in $(nums "$PRIORITY") $(echo "$ready" | sort -n); do
   echo "$ready" | grep -qx "$n" && ! echo "$waiting" | grep -qx "$n" && echo "$n"
-done | awk '!seen[$0]++'
+done | awk '!seen[$0]++')
+# serialize a fresh push: a PR refused before whose head has moved since (its owner just merged feat/parity and pushed) lands next, alone, for GRACE seconds
+# from the moment its new head is first seen (default 10 min, then the normal order resumes: a dead owner cannot block the queue). Other landings in between
+# are what made the head stale again, five times for #3344.
+SEEN=${SEEN_STATE:-${LAND_TMP:-/tmp/landing}/head-seen.state}; GRACE=${GRACE:-600}; NOW=${NOW:-$(date +%s)}; touch "$SEEN"
+fresh=""
+for n in $queue; do
+  cur=$(echo "$heads" | awk -v n="$n" '$1==n{print $4}'); old=$(awk -v n="$n" '$1==n{print $2}' "$STATE" 2>/dev/null | tail -1)
+  [ -n "$old" ] && [ "$old" != "$cur" ] || continue
+  first=$(awk -v n="$n" -v h="$cur" '$1==n && $2==h{print $3}' "$SEEN" | tail -1)
+  [ -n "$first" ] || { first=$NOW; echo "$n $cur $NOW" >> "$SEEN"; }
+  [ $((NOW - first)) -lt "$GRACE" ] && fresh="$fresh $n"
+done
+if [ -n "$fresh" ]; then
+  echo "HOLD: landing${fresh} alone for up to ${GRACE}s from their new head (others wait one cycle): $(echo "$queue" | tr '\n' ' ')" >&2
+  for n in $fresh; do echo "$n"; done
+else echo "$queue"; fi

@@ -182,8 +182,18 @@ pub fn physical(
     };
     let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
         let mut defined = defined;
-        for effect in &effects[&at] {
+        let block = body.blocks.iter().find(|block| block.at == at).expect("a block of the body");
+        for (one, effect) in block.insns.iter().zip(&effects[&at]) {
             match effect {
+                // `movzx ebx, bx` zeroes the upper half and hands the word on
+                // as it is: an undefined word stays undefined, and is not
+                // read (the preheader's copy for a loop that writes the word,
+                // `upperzero::established`).
+                Some(effect) if _widened_word(one).is_some() => {
+                    let word = _lanes(regs, _widened_word(one).expect("tested"));
+                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&word));
+                    defined = defined.or(&effect.writes.minus(&word.minus(&defined)));
+                }
                 // An instruction nothing is known of may write anything.
                 None => defined = everything,
                 Some(effect) => {
@@ -241,6 +251,21 @@ pub fn physical(
         body.name,
         names.join(", ")
     )]
+}
+
+/// The word register of `movzx r32, r16` on one register: its low word is not
+/// an input but passed through.
+fn _widened_word(one: &crate::model::lir::Insn) -> Option<RegId> {
+    use crate::model::ir::Loc;
+    let what = one.what.as_ref().filter(|what| what.name.as_deref() == Some("movzx"))?;
+    match (what.dests.as_slice(), what.sources.as_slice()) {
+        ([Loc::Reg(wide)], [Loc::Reg(word)])
+            if wide.width == 4 && word.width == 2 && wide.register.full_register() == word.register.full_register() =>
+        {
+            Some(word.register)
+        }
+        _ => None,
+    }
 }
 
 /// Once instruction selection has tagged them, every frame cell names the slot
@@ -757,6 +782,30 @@ mod tests {
             vec![],
         );
         let said = physical(&physical_body(vec![read]), &BTreeSet::new());
+        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
+    }
+
+    /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,
+    /// LLRM_VERIFY=1 refused a valid program): the word is passed on, not read,
+    /// so only a later read of it complains.
+    #[test]
+    fn test_a_widening_of_an_undefined_word_is_not_a_read_of_it() {
+        let widen = Insn::new(
+            1,
+            Some((1, 1)),
+            Some(semantics(Operation::Extend, "movzx", vec![register(RegId::BX, 4)], vec![register(RegId::BX, 2)])),
+            vec![],
+            vec![],
+        );
+        let mov = |at: i64, to: Loc, from: Loc| {
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, "mov", vec![to], vec![from])), vec![], vec![])
+        };
+        let one = Loc::Imm(ir::Imm { value: 1, width: 2, address: None });
+        let writes = mov(2, register(RegId::BX, 2), one);
+        let reads = mov(3, register(RegId::AX, 2), register(RegId::BX, 2));
+        let none = BTreeSet::new();
+        assert!(physical(&physical_body(vec![widen.clone(), writes]), &none).is_empty());
+        let said = physical(&physical_body(vec![widen, reads]), &none);
         assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
     }
 

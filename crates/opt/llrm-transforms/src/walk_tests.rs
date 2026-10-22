@@ -230,7 +230,68 @@ b0:
     let text = llrm_mir::print::module(&module);
     let calls = text.matches("call i32 @fib").count();
     assert!(calls > 3, "fib was not copied into itself, {calls} calls of it:\n{text}");
-    assert!(calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize, "fib was copied past gcc's limit, {calls} calls of it");
+    assert!(
+        calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize,
+        "fib was copied past gcc's limit, {calls} calls of it"
+    );
+}
+
+/// The Simplify list runs GVN before its jump threading, and the copies of a
+/// recursion in itself join their paths only in the threading: run once, each
+/// copy repeated the calls of the ones that dominate it (fib -O2, i486 rows:
+/// 154398 clocks once, 14802 with the list run again). A body with copies runs
+/// the list twice, one without once.
+#[test]
+fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
+    use llrm_mir::program::ProgramPass;
+    let runs = |text: &str| {
+        let mut module = parsed(text);
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = std::rc::Rc::clone(&seen);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut analyses = Default::default();
+                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                walk.run(program, &mut analyses)?;
+                let mut modules = super::managers(program, &mut analyses);
+                let mut late = crate::walk::SelfInline {
+                    simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
+                    for_size: false,
+                };
+                late.apply(program, &mut modules)
+            },
+        )
+        .and_then(|done| done)
+        .expect("the late step runs");
+        seen.get()
+    };
+    let fib = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+    assert_eq!(runs(fib), 2, "fib has copies");
+    assert_eq!(runs(LINEAR), 0, "a count-down waits for nothing");
 }
 
 /// A tail-recursive function called once: tail-call elimination makes its
@@ -754,4 +815,139 @@ b0:
     );
     let copies = top.matches("urem i32 %x").count();
     assert!(copies <= 24, "{copies} copies of down in top:\n{top}");
+}
+
+/// A callee that loops on two values read through pointers: `parity(count,
+/// seed)` as `loop.bas` has it, public so that nothing deletes it.
+const BY_REFERENCE: &str = "define i32 @parity(ptr %count, ptr %seed) {
+b1:
+  %s0 = load i16, ptr %seed
+  %seed.w = sext i16 %s0 to i32
+  br label %head
+
+head:
+  %total = phi i32 [ %seed.w, %b1 ], [ %next, %body ]
+  %i = phi i16 [ 0, %b1 ], [ %i.next, %body ]
+  %n = load i16, ptr %count
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %out
+
+body:
+  %i.w = sext i16 %i to i32
+  %m = mul i32 %i.w, %seed.w
+  %t = add i32 %total, %m
+  %next = add i32 %t, 3
+  %i.next = add i16 %i, 1
+  br label %head
+
+out:
+  ret i32 %total
+}
+";
+
+/// `@top` after the pipeline sized for bytes over `parity` and a caller that
+/// stores `count` and `seed` to stack slots (`first` and `second`: the values
+/// it stores) and calls it twice.
+fn sized_top(
+    count: i16,
+    seed: i16,
+    constant: bool,
+) -> String {
+    let stores = if constant {
+        format!(
+            "  store i16 {count}, ptr %a\n  store i16 {seed}, ptr %b\n  store i16 {seed}, ptr %c\n  store i16 {count}, ptr %d\n"
+        )
+    } else {
+        "  store i16 %x, ptr %a\n  store i16 %y, ptr %b\n  store i16 %y, ptr %c\n  store i16 %x, ptr %d\n".to_owned()
+    };
+    let mut module = parsed(&format!(
+        "{BY_REFERENCE}
+define i32 @top(i16 %x, i16 %y) {{
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  %d = alloca i16
+{stores}  %p = call i32 @parity(ptr %a, ptr %b)
+  %q = call i32 @parity(ptr %d, ptr %c)
+  %r = add i32 %p, %q
+  ret i32 %r
+}}
+"
+    ));
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    text.split("define").find(|one| one.contains("@top(")).expect("@top").to_owned()
+}
+
+/// `parity(7, 5)` is a constant once the call is inlined (the loop runs seven
+/// times on known values) and the call to it costs more bytes than the
+/// constant; the cost model sees the loop and two loads through pointers, 40
+/// against the -Os bound of 25, so the call stayed (`loop.bas`, 247 bytes
+/// against 159).
+#[test]
+fn test_an_os_call_whose_stack_arguments_make_the_loop_a_constant_is_inlined() {
+    let top = sized_top(7, 5, true);
+    assert!(!top.contains("call"), "the call to parity stayed:\n{top}");
+}
+
+/// The same call with values the caller does not know folds nothing: the
+/// trial finds the copy no smaller, and the call stays.
+#[test]
+fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
+    let top = sized_top(7, 5, false);
+    assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
+}
+
+/// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
+/// differ from a fresh listing` of 26 programs: what `post_order` stated of a
+/// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
+/// held `Declarations` was not looked at again, so the next body's callers
+/// priced the callee by the attributes it had before.
+#[test]
+fn a_callee_the_walk_states_attributes_of_is_held_with_them_for_the_next_body() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal void @w(ptr %p) {
+b0:
+  store i16 1, ptr %p
+  ret void
+}
+
+define void @c(ptr %p) {
+b0:
+  call void @w(ptr %p)
+  ret void
+}
+",
+    );
+    let stale = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = std::rc::Rc::clone(&stale);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        move |program: &mut llrm_mir::program::Program| {
+            let seen = std::rc::Rc::clone(&seen);
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { limit: 0, ..Default::default() },
+                simplify: Box::new(move |module, analyses, _, _| {
+                    let held = analyses.get::<llrm_mir::passes::Declarations>(module);
+                    if *held != module.declarations() {
+                        seen.set(true);
+                    }
+                }),
+            };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    assert!(!stale.get(), "the held declarations differ from a fresh listing");
 }

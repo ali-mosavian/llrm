@@ -50,10 +50,10 @@
 //! `RegAlloc::transform` first changes the body so that the greedy loop can
 //! treat every value alike, in this order:
 //!
-//! 1. `constrain::distinct_roles` and `distinct_classes` copy a value that
-//!    needs two incompatible register sets at once (a word that is both base
-//!    and index of one address, or both a byte and an index) into one value per
-//!    role.
+//! 1. `constrain::distinct_classes` copies a value that needs two incompatible
+//!    register sets at once (both a byte and an index) into one value per role;
+//!    isel already gives a word that is both base and index of one address two
+//!    values.
 //! 2. `explicit_selectors` reaches a far cell through ES where its selector is
 //!    also read as a number.
 //! 3. A pin outside the value's class is dropped where an instruction delivers
@@ -1542,12 +1542,18 @@ pub fn greedy_rewritten(
     let empty = BTreeSet::new();
     let mut unspill: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
     unspill.extend(protected.unwrap_or(&empty).iter().copied());
+    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+        eprintln!("greedy-entry {} phis={}", body.name, body.blocks.iter().any(|block| !block.phis.is_empty()));
+    }
     let mut current = body.clone();
     let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
-    let mut floor = splitkit::_next_value(&current);
+    let mut floor = current.next_value();
     // The spills are written into the function as the allocation goes
     // (`InlineSpiller`); the rounds below are the fallback.
-    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
+    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS")
+        && !llrm_support::env_flag!("LLRM_FORCE_FALLBACK")
+        && body.blocks.iter().all(|block| block.phis.is_empty())
+    {
         let kept = frame.saved();
         // The classes are all the greedy allocator reads of `Facts`, as
         // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
@@ -1661,7 +1667,7 @@ pub fn greedy_rewritten(
             sets: Some(&sets),
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
-        if decided.report.stats.failed > 0 {
+        if decided.report.stats.failed > 0 || llrm_support::env_flag!("LLRM_FORCE_FALLBACK") {
             break;
         }
         let to_spill: BTreeSet<u32> = decided.spilled.iter().copied().collect();
@@ -1684,7 +1690,7 @@ pub fn greedy_rewritten(
             ));
         }
         let (moved, made) = spiller::spilled_from(&current, &to_spill, Some(frame), floor, classes)?;
-        floor = floor.max(splitkit::_next_value(&moved));
+        floor = floor.max(moved.next_value());
         unspill.extend(made);
         spilled_all.extend(to_spill);
         current = moved;
@@ -2273,7 +2279,7 @@ fn _allocated(
         }
     }
     // Every value this allocation has known: a new one is numbered above them.
-    let mut floor = splitkit::_next_value(&body);
+    let mut floor = body.next_value();
     let mut fixed: IndexMap<u32, RegId> = pinned.cloned().unwrap_or_default();
     let mut required_seen: Option<crate::analysis::facts::Stamp> = None;
     // Values a split made or left behind, never split again: LLVM's `RS_Split2`
@@ -4104,7 +4110,7 @@ impl RegAlloc {
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
         if crate::support::debug::enabled("regclass") {
-            let skip = crate::backend::ssaspill::untouchable(&body);
+            let skip = crate::backend::regclass::untouchable(&body);
             let found = crate::backend::regclass::violations(&body, &segments, &self.classes, &skip);
             let crowded =
                 found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
@@ -4118,8 +4124,7 @@ impl RegAlloc {
             );
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body =
-            constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments, &self.classes);
+        let mut body = constrain::distinct_classes(&body, floor, &segments, &self.classes);
         body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
         let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
         let incompatible: BTreeSet<u32> = self
@@ -4151,7 +4156,7 @@ impl RegAlloc {
         let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
-        body = constrained_body;
+        body = constrain::hoisted(&constrained_body, &fixed);
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
@@ -4192,7 +4197,7 @@ impl RegAlloc {
             };
             let read_at_use = spiller::_folded_reads(&body, &wanted);
             if !read_at_use.is_empty() {
-                let floor = splitkit::_next_value(&body);
+                let floor = body.next_value();
                 let (moved, made) =
                     spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
                 body = moved;
@@ -6397,9 +6402,9 @@ mod tests {
             body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
 
-        let before = splitkit::_next_value(&body);
+        let before = body.next_value();
         let after = through(body, phases).expect("allocates");
-        let made = splitkit::_next_value(&after) - before;
+        let made = after.next_value() - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }
 

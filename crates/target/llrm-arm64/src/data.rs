@@ -50,7 +50,7 @@ pub fn globals(
         let mut relocs = Vec::new();
         let writer = Writer { module, layout, platform };
         writer.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
-        let align = layout.global_align(types, variable.ty, variable.align, false, true) as usize;
+        let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
         out.push(Placed {
             public: !matches!(global.linkage, Linkage::Internal | Linkage::Private),

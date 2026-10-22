@@ -72,11 +72,17 @@ pub enum Event {
     /// A register's operand list edited, an instruction's operands taken out
     /// or put in (`LiveIntervals::remove_operands`, `add_operands`).
     LirOperandListEdits,
+    /// A SCEV expression made for a value (`create_scev_iter`).
+    ScevNodes,
+    /// A phi `exitsink` looked at as a candidate.
+    ExitSinkPhis,
+    /// The edges leaving a loop found (`Around::exits`).
+    LoopExitScans,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 22] = [
+const NAMES: [&str; 25] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -99,6 +105,9 @@ const NAMES: [&str; 22] = [
     "lir_rename_rebuilds",
     "lir_rewrites",
     "lir_operand_list_edits",
+    "scev_nodes",
+    "exitsink_phis",
+    "loop_exit_scans",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -115,7 +124,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 22] = const { [const { Cell::new(0) }; 22] };
+    static EVENTS: [Cell<u64>; 25] = const { [const { Cell::new(0) }; 25] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

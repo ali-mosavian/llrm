@@ -33,7 +33,17 @@
 //!    operations; `simplifyFMAFMul`'s `computeKnownFPClass` of a value, `FMA`,
 //!    `FCmp`, `AndOrOfFCmps`, `Ldexp`, constrained calls and `bitcast (uitofp
 //!    X)` remain: #2246.
-//! 4. Loads, pointer compares, `addrspacecast`: #2247.
+//! 4. Pointer compares, `addrspacecast`: #2247.
+//! 4a. `simplifyLoadInst`
+//!    ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702))
+//!    is `simplify_load`, whose fold is `ConstantFoldLoadFromConstPtr`
+//!    ([L898](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L898)):
+//!    a non-volatile load of a constant address. The half for an address that
+//!    is an instruction over a constant global (`getUnderlyingObject`,
+//!    `stripAndAccumulateConstantOffsets`, uniform initializers) is not
+//!    translated. Reason: the constant-address half is what the client loop
+//!    needed; the other needs a value-level underlying-object walk. Owner:
+//!    w-3, with #2247. Exit: translated, 2026-11-06.
 //! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
 //!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
@@ -4213,6 +4223,25 @@ fn simplify_gep(
 
 /// `simplifyInstruction`
 /// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741),
+/// `simplifyLoadInst`
+/// ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702)):
+/// the value a non-volatile load of a constant address reads from a constant
+/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`). DEVIATE
+/// 4a of the header: the half for an address that is an instruction is not
+/// translated.
+fn simplify_load(
+    q: &Query,
+    volatile: bool,
+    ptr: Operand,
+    ty: TypeId,
+) -> Option<Operand> {
+    if volatile {
+        return None;
+    }
+    let Operand::Constant(ptr) = ptr else { return None };
+    constantfolding::constant_fold_load_from_const_ptr(q.context, q.layout, q.globals, ptr, ty).map(Operand::Constant)
+}
+
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
 pub fn simplify_instruction(
     context: &Context,
@@ -4285,6 +4314,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
+        Opcode::Load { volatile, .. } => simplify_load(q, *volatile, operands[0], instruction.ty),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
         Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
@@ -4322,6 +4352,24 @@ pub fn simplify_binop_at(
     rhs: Operand,
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
+}
+
+/// `simplifyBinOp(Opcode, LHS, RHS,
+/// SQ.getWithInstruction(&cxt).getWithoutUndef())`: `simplify_binop_at` where
+/// an `undef` operand is not read as a value of the caller's choosing.
+pub fn simplify_binop_at_without_undef(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: false };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, Flags::default(), RECURSION_LIMIT)
 }
 

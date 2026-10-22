@@ -65,7 +65,8 @@ fn test_only_omax_searches_every_shape() {
 
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc
 /// 573-694) for the passes this compiler has: -O1 the scalar ones and the last
-/// call inlined, -O2 adds inlining, gcse and sibling calls, -O3
+/// call inlined and sibling calls (the pin's TailCallElim also runs at -O1:
+/// PassBuilderPipelines.cpp:1677, #3514), -O2 adds inlining and gcse, -O3
 /// peeling, unswitching, complete copies of loops that grow the code, and the
 /// larger inline threshold. Before, -O1 and -O2 differed by loop copies alone
 /// and -O2 let a complete copy grow the code. Pattern fill is the one
@@ -93,9 +94,8 @@ fn each_level_selects_gcc_s_passes() {
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
-    // -O1 has gcc's `-finline-functions-called-once` and no
-    // `-finline-small-functions`.
-    assert_eq!(row("-O1"), (scalar, true, false, false, false, true, false, false, false, true));
+    // -O1 inlines as the pin's does (225, #3249).
+    assert_eq!(row("-O1"), (scalar, true, true, false, true, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
@@ -115,7 +115,7 @@ fn each_level_selects_gcc_s_passes() {
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
-        (0, 225, 250)
+        (225, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
@@ -324,17 +324,30 @@ fn omax_unswitches_loops() {
     assert!(!pipeline(&["-Omax", "-fno-unswitch-loops"]).unswitch);
 }
 
-/// gcc turns `-floop-interchange` on at -O3 and no lower (opts.cc:677);
-/// -Omax is everything.
+/// The pin's default pipelines hold `LoopInterchange` at every level but -O0
+/// (`enable-loopinterchange`, PassBuilderPipelines.cpp#L219); it was on at -O3
+/// and -Omax only, gcc's choice.
 #[test]
-fn only_o3_and_omax_interchange_loops_and_the_flag_overrides_it() {
-    assert!(pipeline(&["-Omax"]).interchange);
-    for level in ["-O1", "-O2", "-Os"] {
-        assert!(!pipeline(&[level]).interchange, "{level}");
-        assert!(pipeline(&[level, "-floop-interchange"]).interchange, "{level}");
+fn every_optimized_level_interchanges_loops_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os", "-O3", "-Omax"] {
+        assert!(pipeline(&[level]).interchange, "{level}");
+        assert!(!pipeline(&[level, "-fno-loop-interchange"]).interchange, "{level}");
     }
-    assert!(pipeline(&["-O3"]).interchange);
-    assert!(!pipeline(&["-O3", "-fno-loop-interchange"]).interchange);
+}
+
+/// The pin's default pipelines have `LoopUnrollAndJam` off
+/// (`enable-unroll-and-jam`); llrm runs it at -O3 and -Omax (DEVIATE D1 of its
+/// parity row), and `-floop-unroll-and-jam` overrides either way.
+#[test]
+fn only_o3_and_omax_unroll_and_jam_and_the_flag_overrides_it() {
+    for level in ["-O1", "-O2", "-Os"] {
+        assert!(!pipeline(&[level]).unroll_and_jam, "{level}");
+        assert!(pipeline(&[level, "-floop-unroll-and-jam"]).unroll_and_jam, "{level}");
+    }
+    for level in ["-O3", "-Omax"] {
+        assert!(pipeline(&[level]).unroll_and_jam, "{level}");
+        assert!(!pipeline(&[level, "-fno-loop-unroll-and-jam"]).unroll_and_jam, "{level}");
+    }
 }
 
 /// `-disable-lsr` (LLVM's TargetPassConfig option, also `-mllvm -disable-lsr`)
@@ -349,4 +362,25 @@ fn test_disable_lsr_turns_off_the_lsr_slot_alone() {
         assert!(!options.lsr && options.strength, "{arguments:?}");
     }
     assert!(parsed(&["-mllvm", "-nonsense"]).is_err());
+}
+
+/// DEVIATE 1: `-fno-inline=NAME` names a function a source cannot mark
+/// `noinline`; each is kept, in order, and a bare `-fno-inline=` is no name.
+#[test]
+fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
+    let flags = parsed(&["-O2", "-fno-inline=BenchFib", "-fno-inline=Helper"]).unwrap();
+    assert_eq!(flags.no_inline, ["BenchFib", "Helper"]);
+    assert_eq!(flags.pipeline().inline, pipeline(&["-O2"]).inline, "no function is left out of inlining by it");
+    assert!(parsed(&["-fno-inline="]).is_err());
+    assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
+}
+
+/// `--isel=` takes `old` (the default) and `dag`, inline or as the next
+/// argument; anything else is an error.
+#[test]
+fn test_isel_names_the_selector() {
+    assert_eq!(parsed(&[]).unwrap().isel, Selector::Old);
+    assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Selector::Dag);
+    assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);
+    assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
 }

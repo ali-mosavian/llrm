@@ -56,9 +56,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
 /// gains one, `create_scev` must translate it.
 #[test]
 fn test_the_intrinsics_createscev_models_and_mir_lacks_are_not_mir_intrinsics() {
-    for name in
-        ["llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"]
-    {
+    for name in ["llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"] {
         assert!(llrm_mir::intrinsics::Intrinsic::named(name).is_none(), "{name} is a MIR intrinsic now: translate it");
     }
 }

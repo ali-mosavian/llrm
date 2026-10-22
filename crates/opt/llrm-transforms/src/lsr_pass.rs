@@ -270,8 +270,8 @@ pub fn reduced_with(
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
         for _ in 0..6 {
-            // What the edits since changed is no longer what the expressions say;
-            // the rest of them stay, as they do in LLVM.
+            // What the edits since changed is no longer what the expressions
+            // say; the rest of them stay, as they do in LLVM.
             session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
             mark = function.mark();
             let split;

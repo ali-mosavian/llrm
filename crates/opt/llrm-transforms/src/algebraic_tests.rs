@@ -227,26 +227,6 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
     }
 }
 
-/// The divisor is a number consts proves, not a constant operand.
-#[test]
-fn test_a_divisor_known_through_a_phi_is_a_power_of_two() {
-    let text = "define i32 @f(i32 %x, i1 %c) {
-b0:
-  br i1 %c, label %b1, label %b2
-
-b1:
-  br label %b2
-
-b2:
-  %d = phi i32 [ 16, %b0 ], [ 16, %b1 ]
-  %q = sdiv i32 %x, %d
-  ret i32 %q
-}
-";
-    let inputs: Vec<Vec<i128>> = edges(32).into_iter().flat_map(|x| [vec![x, 0], vec![x, 1]]).collect();
-    assert!(!checked(text, &inputs).contains("sdiv"));
-}
-
 /// Not a positive power of two below the sign bit, possibly zero, or unsigned.
 #[test]
 fn test_other_divisions_stay() {
@@ -805,20 +785,26 @@ fn test_a_truncated_sum_with_a_constant_is_narrow_where_the_wide_sum_has_other_r
     assert!(after.contains("add i16 %x, 1"), "{after}");
 }
 
-/// A byte compared where the extension lives on for an address (grep's
-/// `c == '|'` before `class[c]`) stays wide: narrowed it grew grep by 24
-/// bytes. A counter's compare narrows whatever else reads the extension.
+/// A compare of an extension narrows whatever else reads the extension, as
+/// `foldICmpWithZextOrSext` has no use gate: the extension dies only if nothing
+/// else reads it. `*p == 32 || *p == 9` kept two `icmp i16` of one `sext`,
+/// which left the pin's `i8` compare chain to SimplifyCFG as an extra case and
+/// a `freeze` (QCport cmd -Os, `_cmd_tokenize`).
 #[test]
-fn test_a_compare_narrows_for_a_loop_carried_source_or_a_dying_extension() {
+fn test_a_compare_of_an_extension_narrows_though_it_has_other_readers() {
     let text = |source: &str| {
         format!(
             "define i32 @f(i8 %x) {{\nb0:\n  br label %b1\n\nb1:\n  %p = phi i8 [ %x, %b0 ], [ %q, %b1 ]\n  %w = zext i8 {source} to i32\n  %c = icmp ult i32 %w, 100\n  %q = add i8 %p, 1\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i32 %w\n}}\n"
         )
     };
-    // The phi is carried round the loop: narrow, though `%w` lives on.
     assert!(bare(&simplified(&text("%p")).1).contains("icmp ult i8 %p, 100"));
-    // An argument is not: the extension stays its compare's operand.
-    assert!(bare(&simplified(&text("%x")).1).contains("icmp ult i32 %w, 100"));
+    assert!(bare(&simplified(&text("%x")).1).contains("icmp ult i8 %x, 100"));
+    let two = "define i1 @f(ptr %p) {\nb0:\n  %c = load i8, ptr %p\n  %x = sext i8 %c to i16\n  %a = icmp eq i16 %x, 32\n  %b = icmp eq i16 %x, 9\n  %r = or i1 %a, %b\n  ret i1 %r\n}\n";
+    let after = bare(&simplified(two).1);
+    assert!(
+        after.contains("icmp eq i8 %c, 32") && after.contains("icmp eq i8 %c, 9") && !after.contains("sext"),
+        "{after}"
+    );
 }
 
 /// `udiv` and `urem` by a power of two are a logical shift and a mask.

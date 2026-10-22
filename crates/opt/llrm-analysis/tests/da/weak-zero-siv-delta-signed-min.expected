@@ -1,0 +1,18 @@
+== --tbaa
+@weak_zero_src_siv_large_btc
+  output [S]!
+  output [*|<]!
+  none!
+@weak_zero_dst_siv_large_btc
+  none!
+  output [*|<]!
+  output [S]!
+== --test weak-zero-siv --tbaa
+@weak_zero_src_siv_large_btc
+  output [S]!
+  output [*|<]!
+  output [*]!
+@weak_zero_dst_siv_large_btc
+  output [*]!
+  output [*|<]!
+  output [S]!

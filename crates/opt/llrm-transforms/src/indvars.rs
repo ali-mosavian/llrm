@@ -102,7 +102,7 @@
 //! LLVM `IndVarSimplify.cpp`. Tests: `indvars_tests.rs`.
 
 use llrm_analysis::cfg;
-use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 use crate::dead;
@@ -133,8 +133,50 @@ fn settled(
     if changed {
         session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, *mark);
         *mark = unit.function.mark();
+        // The pin's `SE.verify()` after a pass that kept it: what is kept is
+        // what a new one would work out.
+        if llrm_support::debug::verifying()
+            && let Err(why) = session.verify(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function)
+        {
+            panic!("indvars left a stale expression: {why}");
+        }
     }
     changed
+}
+
+/// `IndVarSimplifyPass` on the loops the last `LoopFullUnroll` made, where the
+/// loop pass manager's worklist hands them to the passes after it (LPM2 in
+/// `buildFunctionSimplificationPipeline`, `LPMUpdater::addSiblingLoops`).
+/// Nothing runs when it made none.
+pub struct IndVarsOnCreated {
+    pub created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>>,
+}
+
+impl FunctionPass for IndVarsOnCreated {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &'static str {
+        "indvars"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("indvars")
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let headers = std::mem::take(&mut *self.created.borrow_mut());
+        if headers.is_empty() {
+            return PreservedAnalyses::all();
+        }
+        let _scope = crate::loopfilter::only(&headers);
+        IndVars { lftr: lftr_default() }.run(unit, analyses)
+    }
 }
 
 impl FunctionPass for IndVars {
@@ -161,6 +203,10 @@ impl FunctionPass for IndVars {
         // A step that changed the body drops the expressions its edits touched;
         // the blocks and edges stay, so the tree and the loops do not.
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
+        // The expressions of the pass before, as the pin keeps one SE for the
+        // loop passes; handed back below, current.
+        let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
+        session.adopt(held.take());
         let mut mark = unit.function.mark();
         let compared = crate::simplifyindvar::simplified_and_extended_in(
             &mut session,
@@ -222,9 +268,12 @@ impl FunctionPass for IndVars {
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
+        // The edits after the last step (lftr, the sinking, the dead code).
+        session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, mark);
+        held.put(session.into_scev());
         if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
             // Blocks and edges are as they were.
-            PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
+            PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>().preserve::<Scevs>()
         } else {
             PreservedAnalyses::all()
         }

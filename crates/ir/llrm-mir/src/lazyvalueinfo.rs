@@ -2626,12 +2626,20 @@ impl SharedLvi {
     }
 }
 
+/// All caches are equal: `PartialEq` cannot see the function. A held cache is
+/// judged by its answers, in `LviCache::audit` (`LLRM_CHECK_CAPTURES`), and
+/// kept true by the passes that edit (`forget_value`, `erase_block`,
+/// `thread_edge`) and by dropping it when a pass does not preserve it, as
+/// LLVM's `LazyValueInfo::invalidate` does
+/// (`LazyValueInfo.cpp:1987`).
+/// Compared by identity with a fresh, empty cache, every cache a pass left
+/// standing was stale (6 Nib programs, `fixednarrow left lvi held but stale`).
 impl PartialEq for SharedLvi {
     fn eq(
         &self,
-        other: &Self,
+        _: &Self,
     ) -> bool {
-        std::rc::Rc::ptr_eq(&self.0, &other.0)
+        true
     }
 }
 
@@ -2659,9 +2667,44 @@ impl crate::passes::Analysis for LviCache {
     ) -> SharedLvi {
         SharedLvi(Default::default())
     }
+
+    const AUDITED: bool = true;
+
+    /// Every `(value, block)` the cache holds answers as a fresh one does:
+    /// fewer entries is laziness, a different answer is one an edit left
+    /// behind without `forget_value`.
+    fn audit(
+        result: &SharedLvi,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut crate::passes::Analyses,
+    ) {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        let mut scratch = context.clone();
+        let mut env = Env::new(&mut scratch, &outer.globals, &outer.metadata, function, layout, &assumptions);
+        let stale = result.0.borrow_mut().disagreements(&mut env);
+        assert!(stale.is_empty(), "lvi held but stale: {stale:?}");
+    }
 }
 
 impl LazyValueInfo {
+    /// The memoised `(block, value)` pairs whose answer a fresh
+    /// `LazyValueInfo` gives differently.
+    pub fn disagreements(
+        &mut self,
+        env: &mut Env,
+    ) -> Vec<(BlockId, Operand)> {
+        let Some(imp) = self.get_impl() else { return Vec::new() };
+        let held = imp.memoised();
+        let mut fresh = LazyValueInfo::new();
+        held.into_iter()
+            .filter(|(bb, v, answer)| fresh.get_or_create_impl(env).get_value_in_block(env, *v, *bb, None) != *answer)
+            .map(|(bb, v, _)| (bb, v))
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -3071,6 +3114,18 @@ impl LazyValueInfo {
 }
 
 impl LazyValueInfoImpl {
+    /// What the cache holds: each block's solved values and overdefined ones.
+    fn memoised(&self) -> Vec<(BlockId, Operand, Lattice)> {
+        let mut held = Vec::new();
+        for (number, entry) in self.the_cache.block_cache.iter().enumerate() {
+            let Some(entry) = entry else { continue };
+            let bb = BlockId(number as _);
+            held.extend(entry.lattice_elements.iter().map(|(v, answer)| (bb, *v, answer.clone())));
+            held.extend(entry.over_defined.iter().map(|v| (bb, *v, Lattice::get_overdefined())));
+        }
+        held
+    }
+
     /// Complete flush all previously computed values
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L497>
