@@ -58,13 +58,21 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 9] = [
-    "Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE", "OptimizePHIs",
+const UNOPTIMIZED: [&str; 10] = [
+    "Peephole",
+    "LoopSlots",
+    "Scheduler",
+    "Coalescer",
+    "PressureSink",
+    "MachineSink",
+    "MachineCSE",
+    "OptimizePHIs",
+    "LateCleanup",
     "FixupSetCC",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 22] = [
+const SLOTS: [(&str, &str); 23] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -83,6 +91,7 @@ const SLOTS: [(&str, &str); 22] = [
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
     ("Prologue", "prologue@13"),
+    ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
@@ -175,6 +184,9 @@ pub fn machine_with<'a>(
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
+        // After frame finalization, as the pin: a constant loaded again where
+        // the allocator or rematerialization left it.
+        Box::new(crate::backend::latecleanup::LateCleanup),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),
             target,
