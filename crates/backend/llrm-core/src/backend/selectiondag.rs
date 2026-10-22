@@ -87,6 +87,7 @@ pub mod function_lowering;
 pub mod isd;
 pub mod lowering;
 pub mod mvt;
+pub mod switchcg;
 pub mod x86isd;
 
 pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, SDNode, SDNodeFlags, SDValue, SelectionDAG};
