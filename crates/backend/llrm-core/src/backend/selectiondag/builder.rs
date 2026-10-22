@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
@@ -66,7 +67,7 @@ pub fn build_block(
         target,
         info,
         dag: SelectionDAG::new(target.dag),
-        node_map: HashMap::new(),
+        node_map: IdMap::new(),
         pending_loads: Vec::new(),
         pending_exports: Vec::new(),
         constants_out: HashMap::new(),
@@ -91,7 +92,7 @@ struct Builder<'a> {
     target: &'a BuilderTarget,
     info: &'a mut FunctionLoweringInfo,
     dag: SelectionDAG,
-    node_map: HashMap<ValueId, SDValue>,
+    node_map: IdMap<ValueId, SDValue>,
     pending_loads: Vec<SDValue>,
     pending_exports: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
