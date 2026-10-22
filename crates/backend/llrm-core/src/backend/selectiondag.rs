@@ -66,7 +66,7 @@
 //! `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 //! Owner sdag-a. Review 2026-11-13.
 //!
-//! DEVIATE SD20: a call's `TargetGlobalAddress` carries no relocation flag
+//! DEVIATE SD44: a call's `TargetGlobalAddress` carries no relocation flag
 //! (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 //! Exit: none. Owner sdag-a.
 //!
