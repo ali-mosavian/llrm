@@ -295,10 +295,10 @@ impl<D: AddrDag> Matcher<'_, D> {
         let shift = self.operand(n, 0);
         let mask = self.constant(self.operand(n, 1)).expect("an AND with a constant");
         // The pin also looks through an `any_extend` of i32 to i64: not at 32 bits (SD35).
-        let Some(amount) = self.constant(self.operand(shift, 1)) else { return true };
         if self.opcode(shift) != isd::SHL || !self.dag.has_one_use(n) || !self.dag.has_one_use(shift) {
             return true;
         }
+        let Some(amount) = self.constant(self.operand(shift, 1)) else { return true };
         if !(1..=3).contains(&amount) {
             return true;
         }

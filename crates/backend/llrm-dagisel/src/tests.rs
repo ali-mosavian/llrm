@@ -1183,3 +1183,25 @@ mod divrem {
         assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::IDIV32r) && !m.contains(&x86::CDQ), "{m:?}");
     }
 }
+
+mod masked_operand_that_is_not_a_shift {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
+
+    /// `a + (zext(b) & 0xff)` in an address: the AND's first operand has one operand, not a shift.
+    /// The mask fold read operand 1 of that register before checking it was a shift, and panicked
+    /// (x_primes and x_rle crashed the shadow).
+    #[test]
+    fn an_and_of_a_unary_node_does_not_read_a_shift_amount() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i8));
+        let x = SDValue::new(dag.node(isd::ZERO_EXTEND, &[mvt::i32], &[b]), 0);
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let masked = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[x, mask]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, masked]), 0);
+        let mut am = AddressMode::default();
+
+        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
+    }
+}
