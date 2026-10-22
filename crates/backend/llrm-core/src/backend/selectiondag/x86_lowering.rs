@@ -17,7 +17,7 @@
 //! target address); the GOT, PIC, DLL-import and TLS forms are not here, and
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
-//! DEVIATE SD42: not translated yet, so the nodes are the plain forms: the
+//! DEVIATE SD44: not translated yet, so the nodes are the plain forms: the
 //! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
 //! `ADD`/`AND` as flags, the `SUB 0, x` and `XOR` forms of `EmitCmp`), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
@@ -37,6 +37,7 @@
 
 use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
+use super::dag_combiner::{CombineHooks, CombineLevel};
 use super::legalize_dag::Hooks;
 use super::mvt::EVT;
 
@@ -49,6 +50,8 @@ pub mod x86isd {
     pub const BRCOND: ISD = ISD::Target(493);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
+    /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
+    pub const MUL_IMM: ISD = ISD::Target(694);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SUB: ISD = ISD::Target(762);
@@ -75,6 +78,19 @@ pub mod cond {
 /// The custom lowerings, for a CPU with or without CMOV.
 pub struct X86Lowering {
     pub cmov: bool,
+}
+
+impl CombineHooks for X86Lowering {
+    fn has_target_combine(&self, op: ISD) -> bool {
+        op == ISD::Mul
+    }
+
+    fn perform_dag_combine(&mut self, dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Option<SDValue> {
+        match dag.opcode(node) {
+            ISD::Mul => combine_mul(dag, node, level),
+            _ => None,
+        }
+    }
 }
 
 impl Hooks for X86Lowering {
@@ -272,4 +288,137 @@ fn lower_global_address(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue
         let delta = dag.get_constant(rest as u128, vt);
         dag.get_node(ISD::Add, vt, &[wrapped, delta])
     })
+}
+
+fn is_pow2(value: u128) -> bool {
+    value != 0 && value & (value - 1) == 0
+}
+
+fn log2(value: u128) -> u128 {
+    u128::from(127 - value.leading_zeros())
+}
+
+/// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
+/// shift or an add.
+fn combine_mul_special(dag: &mut SelectionDAG, x: SDValue, amount: u128, vt: EVT) -> Option<SDValue> {
+    let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
+        let by = dag.get_constant(mult, vt);
+        let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
+        let amount = dag.get_constant(shift, EVT::I8);
+        let shifted = dag.get_node(ISD::Shl, vt, &[product, amount]);
+        dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x])
+    };
+    let mul_mul_add = |dag: &mut SelectionDAG, first: u128, second: u128| {
+        let a = dag.get_constant(first, vt);
+        let once = dag.get_node(x86isd::MUL_IMM, vt, &[x, a]);
+        let b = dag.get_constant(second, vt);
+        let twice = dag.get_node(x86isd::MUL_IMM, vt, &[once, b]);
+        dag.get_node(ISD::Add, vt, &[twice, x])
+    };
+    match amount {
+        11 => return Some(shl_add_or_sub(dag, 5, 1, true)),
+        21 => return Some(shl_add_or_sub(dag, 5, 2, true)),
+        41 => return Some(shl_add_or_sub(dag, 5, 3, true)),
+        22 => {
+            let inner = shl_add_or_sub(dag, 5, 2, true);
+            return Some(dag.get_node(ISD::Add, vt, &[x, inner]));
+        }
+        19 => return Some(shl_add_or_sub(dag, 9, 1, true)),
+        37 => return Some(shl_add_or_sub(dag, 9, 2, true)),
+        73 => return Some(shl_add_or_sub(dag, 9, 3, true)),
+        13 => return Some(shl_add_or_sub(dag, 3, 2, true)),
+        23 => return Some(shl_add_or_sub(dag, 3, 3, false)),
+        26 => return Some(mul_mul_add(dag, 5, 5)),
+        28 => return Some(mul_mul_add(dag, 9, 3)),
+        29 => {
+            let inner = mul_mul_add(dag, 9, 3);
+            return Some(dag.get_node(ISD::Add, vt, &[x, inner]));
+        }
+        _ => {}
+    }
+    // Two shifts added: `x * (2^a + 2^b)` with the lower one a scale.
+    if is_pow2(amount & (amount - 1)) {
+        let scale_shift = u128::from(amount.trailing_zeros());
+        if (1..4).contains(&scale_shift) {
+            let high = log2(amount & (amount - 1));
+            let (ha, sa) = (dag.get_constant(high, EVT::I8), dag.get_constant(scale_shift, EVT::I8));
+            let (first, second) = (dag.get_node(ISD::Shl, vt, &[x, ha]), dag.get_node(ISD::Shl, vt, &[x, sa]));
+            return Some(dag.get_node(ISD::Add, vt, &[first, second]));
+        }
+    }
+    None
+}
+
+/// `combineMul`, the scalar integer part: `x * c` as `lea`s, shifts, adds.
+fn combine_mul(dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 {
+        return None;
+    }
+    let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let bits = dag.constant(rhs)?;
+    let width = vt.size_in_bits();
+    if bits == 0 {
+        return Some(dag.get_constant(0, vt));
+    }
+    if bits == super::fold::mask(width) {
+        return Some(dag.get_negative(x, vt));
+    }
+    if is_pow2(bits) || level == CombineLevel::BeforeLegalizeTypes {
+        return None;
+    }
+    let signed = i128::from(bits as u32 as i32);
+    let abs = signed.unsigned_abs();
+    let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
+        let by = dag.get_constant(by, EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
+        let by = dag.get_constant(by, vt);
+        dag.get_node(x86isd::MUL_IMM, vt, &[value, by])
+    };
+    if matches!(abs, 3 | 5 | 9) {
+        let product = mul_imm(dag, x, abs);
+        return Some(negate(dag, product));
+    }
+    let (mut first, mut second) = (0u128, 0u128);
+    for divisor in [9u128, 5, 3] {
+        if abs % divisor == 0 {
+            first = divisor;
+            second = abs / divisor;
+            break;
+        }
+    }
+    let mut new_mul;
+    if second != 0 && (is_pow2(second) || (signed >= 0 && matches!(second, 3 | 5 | 9))) {
+        let single_add_user = dag.users(node).count() == 1 && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
+        if is_pow2(second) && !(signed >= 0 && single_add_user) {
+            std::mem::swap(&mut first, &mut second);
+        }
+        let mut value = if is_pow2(first) { shift(dag, x, log2(first)) } else { mul_imm(dag, x, first) };
+        value = if is_pow2(second) { shift(dag, value, log2(second)) } else { mul_imm(dag, value, second) };
+        new_mul = Some(negate(dag, value));
+    } else {
+        new_mul = combine_mul_special(dag, x, bits & super::fold::mask(width), vt);
+    }
+    if new_mul.is_none() {
+        if is_pow2(abs - 1) {
+            let shifted = shift(dag, x, log2(abs - 1));
+            let sum = dag.get_node(ISD::Add, vt, &[x, shifted]);
+            new_mul = Some(negate(dag, sum));
+        } else if is_pow2(abs + 1) {
+            let shifted = shift(dag, x, log2(abs + 1));
+            new_mul = Some(if signed < 0 { dag.get_node(ISD::Sub, vt, &[x, shifted]) } else { dag.get_node(ISD::Sub, vt, &[shifted, x]) });
+        } else if signed >= 0 && abs > 2 && is_pow2(abs - 2) {
+            let shifted = shift(dag, x, log2(abs - 2));
+            let twice = dag.get_node(ISD::Add, vt, &[x, x]);
+            new_mul = Some(dag.get_node(ISD::Add, vt, &[shifted, twice]));
+        } else if signed >= 0 && is_pow2(abs + 2) {
+            let shifted = shift(dag, x, log2(abs + 2));
+            let twice = dag.get_node(ISD::Add, vt, &[x, x]);
+            new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
+        }
+    }
+    new_mul
 }
