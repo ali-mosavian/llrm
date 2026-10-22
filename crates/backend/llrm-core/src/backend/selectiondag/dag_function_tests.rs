@@ -24,7 +24,7 @@ fn names(text: &str) -> Result<Vec<String>, String> {
         .body
         .insns()
         .iter()
-        .map(|i| i.what.as_ref().and_then(|w| w.name.clone()).unwrap_or_default())
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect())
 }
 
