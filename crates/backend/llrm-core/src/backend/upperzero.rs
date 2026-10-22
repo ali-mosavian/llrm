@@ -612,9 +612,13 @@ pub fn established(body: &LirBody) -> LirBody {
         }
         if std::mem::take(&mut preheaders) {
             let mut wanted: IndexMap<i64, Roots> = IndexMap::default();
+            // Each root has its own outermost loop that leaves it alone: one
+            // the counter in edx disturbs must not keep ebp in the inner loop.
             for (at, _, roots) in &missing {
-                if let Some(header) = outermost(*at, *roots) {
-                    *wanted.entry(header).or_default() |= roots;
+                for root in (0..Roots::BITS).map(|shift| 1 << shift).filter(|bit| roots & bit != 0) {
+                    if let Some(header) = outermost(*at, root) {
+                        *wanted.entry(header).or_default() |= root;
+                    }
                 }
             }
             if !wanted.is_empty() {
