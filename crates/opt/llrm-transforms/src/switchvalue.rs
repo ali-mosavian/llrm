@@ -49,10 +49,10 @@
 //! |---|---|
 //! | D1 | No branch weights, no `DomTreeUpdater`. |
 //! | D2 | A pointer compared with `inttoptr` of a constant is not a value comparison (`getConstantInt`'s `inttoptr` arm); `null` is. |
+//! | D3 | The calls from `simplifyCondBranch` ([L8963](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8963)) are not made: only a `switch` is rewritten, a conditional branch is only read as a predecessor. Exit: call them from `simplifycfg::block_simplified` (llrm-w-4, 2026-10-27). |
 //!
 //! # Used by
-//! `switchopt::simplified`, the first step, and `simplifycfg::block_simplified`
-//! for a conditional branch (`simplifyCondBranch`'s value comparisons).
+//! `switchopt::simplified`, the first step.
 
 use std::collections::BTreeMap;
 
@@ -278,14 +278,6 @@ fn only_predecessor_simplified(
         // switch are dead.
         if !values_overlap(&pred_cases, &this_cases) {
             return false;
-        }
-        if function.instruction(switch).opcode == Opcode::Br {
-            // Okay, one of the successors of this condbr is dead: it becomes a
-            // jump to the default, and the dead edge loses its phi input.
-            assert_eq!(this_cases.len(), 1, "a branch has one case");
-            function.predecessor_removed(context, this_cases[0].dest, pred_default, false);
-            jump_made(context, spec, function, switch, this_default);
-            return true;
         }
         let dead: HashSet<u128> = pred_cases.iter().map(|case| case.value).collect();
         let mut operands = function.instruction(switch).operands.clone();
@@ -680,27 +672,16 @@ pub fn folded(
     {
         return true;
     }
-    // `simplifySwitchOnSelect` is a step of `simplifySwitch` alone.
     let select = defining(function, function.instruction(switch).operands[0])
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Select)
-        .filter(|_| function.instruction(switch).opcode == Opcode::Switch);
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Select);
     if let Some(select) = select
         && switch_on_select_simplified(context, spec, function, block, switch, select)
     {
         return true;
     }
-    // A block of only the terminator, and for a branch the compare it reads,
-    // folds into its predecessors.
-    let condition = defining(function, function.instruction(switch).operands[0]);
-    let empty = {
-        let mut instructions = function.iter_block(block);
-        match instructions.next() {
-            Some(first) if first == switch => true,
-            Some(first) => Some(first) == condition && instructions.next() == Some(switch),
-            None => false,
-        }
-    };
-    empty && folded_into_predecessors(context, spec, function, block, switch, value)
+    // A block of only the switch folds into its predecessors.
+    function.iter_block(block).next() == Some(switch)
+        && folded_into_predecessors(context, spec, function, block, switch, value)
 }
 
 #[cfg(test)]
