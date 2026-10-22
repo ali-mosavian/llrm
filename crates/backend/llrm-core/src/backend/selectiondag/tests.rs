@@ -469,6 +469,21 @@ mod builder {
         }
     }
 
+    /// `llvm.memcpy`/`llvm.memset`: the libcall (variable or large size) and
+    /// `REP_MOVS`/`REP_STOS` (constant size up to 128 bytes at alignment 4)
+    /// are the pin's. An intrinsic call was refused.
+    #[test]
+    fn memory_intrinsics_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/mem.ll");
+        let pin = pin_blocks(include_str!("golden/mem.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 6);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");

@@ -148,12 +148,14 @@ pub struct SelectionDAG {
     /// Names the dump prints for `Global`/`Block` payloads, by id.
     pub global_names: Vec<String>,
     pub block_names: Vec<String>,
+    /// Names of external symbols, by id.
+    pub symbol_names: Vec<String>,
 }
 
 impl SelectionDAG {
     pub fn new(config: DagConfig) -> SelectionDAG {
         let zero = SDValue { node: 0, res: 0 };
-        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
+        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new(), symbol_names: Vec::new() };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
         dag
@@ -516,6 +518,26 @@ impl SelectionDAG {
 
     /// A call's `RegisterMask` operand: the registers the callee preserves
     /// are the allocator's to know, so the node carries none.
+    fn symbol_id(&mut self, name: &str) -> u32 {
+        match self.symbol_names.iter().position(|one| one == name) {
+            Some(at) => at as u32,
+            None => {
+                self.symbol_names.push(name.to_string());
+                self.symbol_names.len() as u32 - 1
+            }
+        }
+    }
+
+    pub fn get_external_symbol(&mut self, vt: EVT, name: &str) -> SDValue {
+        let id = self.symbol_id(name);
+        self.intern(ISD::ExternalSymbol, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
+    pub fn get_target_external_symbol(&mut self, vt: EVT, name: &str) -> SDValue {
+        let id = self.symbol_id(name);
+        self.intern(ISD::TargetExternalSymbolNode, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
     pub fn get_jump_table(&mut self, vt: EVT, index: u32) -> SDValue {
         self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
     }

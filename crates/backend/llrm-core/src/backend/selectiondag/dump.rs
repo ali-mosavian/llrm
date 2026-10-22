@@ -91,6 +91,12 @@ impl SelectionDAG {
                     write!(text, " {offset}").ok();
                 }
             }
+            NodeData::ValueType(vt) => {
+                write!(text, ":{}", type_text(vt)).ok();
+            }
+            NodeData::Symbol(id) => {
+                write!(text, "'{}'", self.symbol_names[id as usize]).ok();
+            }
             NodeData::JumpTable(index) => {
                 write!(text, "<{index}>").ok();
             }

@@ -11,6 +11,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+mod memops;
 mod switch;
 
 use crate::backend::isel::{Convention, Parameter, convention_for};
@@ -373,18 +374,17 @@ impl Builder<'_> {
             },
             _ => None,
         };
-        if direct.is_some_and(|global| self.module.global(global).intrinsic().is_some()) {
-            return Err(Refused("intrinsic call"));
+        if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
+            return self.visit_intrinsic(instruction, info, &intrinsic);
         }
-        let types = &self.module.context.types;
         let mut arg_types = Vec::new();
         for argument in arguments {
             arg_types.push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
         let first = self.arch.first_argument_offset(false);
-        let plan = convention_for(self.module, self.layout, self.arch, first, info.calling_convention, info.function_type, &arg_types, &info.argument_attrs)
+        let (result_type, _, variadic) = self.module.signature(info.function_type);
+        let plan = convention_for(self.module, self.layout, self.arch, first, info.calling_convention, result_type, variadic, &arg_types, &info.argument_attrs)
             .map_err(|_| Refused("call the convention does not describe"))?;
-        let (result_type, _, _) = self.module.signature(info.function_type);
         // Evaluate the callee and the arguments before the call sequence starts.
         let called = self.get_value(*callee)?;
         let callee_node = match direct {
@@ -399,6 +399,21 @@ impl Builder<'_> {
             }
             values.push(value);
         }
+        let attrs = |at: usize| info.argument_attrs.get(at).map_or(&[][..], Vec::as_slice);
+        let extends: Vec<ISD> = (0..values.len())
+            .map(|at| if llrm_mir::memory::has(attrs(at), "signext") { ISD::SignExtend } else if llrm_mir::memory::has(attrs(at), "zeroext") { ISD::ZeroExtend } else { ISD::AnyExtend })
+            .collect();
+        let result = self.lower_call(callee_node, values, &extends, &plan, first, result_type)?;
+        if let (Some(value), Some(result)) = (instruction.result, result) {
+            self.set_value(value, result);
+        }
+        Ok(())
+    }
+
+    /// `LowerCall` for arguments already evaluated: the sequence from
+    /// `callseq_start` to the result read back; the result, if any.
+    pub(super) fn lower_call(&mut self, callee_node: SDValue, values: Vec<SDValue>, extends: &[ISD], plan: &Convention, first: i64, result_type: TypeId) -> Result<Option<SDValue>, Refused> {
+        let types = &self.module.context.types;
         let bytes = (plan.stack_arguments - first).max(0) as u64;
         let root = self.root();
         let start = self.dag.get_callseq_start(root, bytes);
@@ -406,9 +421,17 @@ impl Builder<'_> {
         let mut stores = Vec::new();
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
-        for (value, parameter) in values.iter().zip(&plan.parameters) {
+        for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
             match parameter {
                 Parameter::Cell(displacement) => {
+                    // a narrow argument fills its stack slot (`CCPromoteToType`)
+                    let slot = EVT::integer(self.arch.stack_slot_bytes() as u32 * 8);
+                    let narrow = self.dag.value_type(*value);
+                    let value = &if narrow.is_integer() && narrow.bits_lt(slot) {
+                        self.dag.get_node(extends.get(at).copied().unwrap_or(ISD::AnyExtend), slot, &[*value])
+                    } else {
+                        *value
+                    };
                     let sp = *stack_pointer.get_or_insert_with(|| {
                         let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
@@ -444,7 +467,7 @@ impl Builder<'_> {
         let glue = SDValue { node: end.node, res: 1 };
         if types.is_void(result_type) {
             self.dag.set_root(chain);
-            return Ok(());
+            return Ok(None);
         }
         let vt = self.type_of(result_type)?;
         if vt.is_floating_point() {
@@ -458,10 +481,7 @@ impl Builder<'_> {
         let result = self.dag.get_copy_from_phys_reg(chain, reg, vt, glue);
         chain = SDValue { node: result.node, res: 1 };
         self.dag.set_root(chain);
-        if let Some(value) = instruction.result {
-            self.set_value(value, result);
-        }
-        Ok(())
+        Ok(Some(result))
     }
 
     /// The convention names a result register by its widest view; the DAG
