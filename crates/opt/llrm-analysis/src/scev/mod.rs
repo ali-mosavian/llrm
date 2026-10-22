@@ -54,6 +54,8 @@ pub mod guards;
 mod guards_tests;
 #[cfg(test)]
 mod range_factoring_tests;
+#[cfg(test)]
+mod range_recurrence_tests;
 pub mod how_many;
 pub mod implied;
 pub mod invariant;

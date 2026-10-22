@@ -10,6 +10,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
+use super::x86_lowering::X86Lowering;
 use super::emit::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
@@ -84,16 +85,16 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let cells =
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
-    let ctx = EmitContext { frame: &frame, map: &map, names: &names };
+    let ctx = EmitContext { frame: &frame, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32, map: &map, names: &names };
     let mut info = FunctionLoweringInfo::new(function);
     let mut out = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(&module, function, &layout, &target, &machine, &convention, &mut info, block)
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
-        let blocks = select_block(&mut built.dag, &tli, &selector, &mut hooks(), &Info, &ctx)
+        let emitted = select_block(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &selector, &mut hooks(), &Info, &ctx)
             .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
-        for b in blocks {
+        for b in emitted.blocks {
             out.push(
                 b.insns
                     .iter()
@@ -118,4 +119,33 @@ fn a_sum_of_two_arguments_goes_through() {
     assert_eq!(names, ["mov", "add", "mov"], "{blocks:#?}");
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
     assert!(blocks[0][2].starts_with("[Reg(Reg { register: EAX"), "the sum is returned in EAX: {blocks:#?}");
+}
+
+/// `x * 5` reaches selection with no `MUL` node: the combiner ran between
+/// the legalizers. Without the `Combine` calls the multiply by a constant
+/// is selected as `IMUL32rmi`, which the pin turns into a `lea`.
+#[test]
+fn the_combiner_runs_between_the_legalizers() {
+    use super::isd::ISD;
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %a) {\nentry:\n  %m = mul i32 %a, 5\n  ret i32 %m\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
+    let machine = llrm_x86_m32::M32;
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let block = function.layout()[0];
+    let mut built = build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block).expect("builds");
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }).expect("legalizes");
+    let root = built.dag.get_root();
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![root.node];
+    while let Some(n) = work.pop() {
+        if seen.insert(n) {
+            let node = built.dag.node(super::SDValue { node: n, res: 0 });
+            assert_ne!(node.opcode, ISD::Mul, "the multiply by 5 was combined");
+            work.extend(node.ops.iter().map(|op| op.node));
+        }
+    }
 }

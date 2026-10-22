@@ -476,6 +476,17 @@ def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
     return out
 
 
+# Lib tests that exist only with a feature, which no layer enabled (llrm-c's `toolchain`: the call-boundary and compile listings; an interrupt handler refused for four days, #2936): the
+# features each package's lib run turns on. 12 s on a warm target for llrm-c.
+LIB_FEATURES: dict[str, tuple[str, ...]] = {"llrm-c": ("toolchain",)}
+
+
+def lib_command(package: str, *extra: str) -> list[str]:
+    """`cargo test --no-fail-fast -p PACKAGE --lib [--features ...]`: the one command the lib layers and the baseline run."""
+    features = LIB_FEATURES.get(package)
+    return ["cargo", "test", "--no-fail-fast", "-p", package, "--lib", *(["--features", ",".join(features)] if features else []), *extra]
+
+
 # The last `dependants_lib_failures` run: crates, tests passed, a hash of the test names, seconds.
 LAST_LIB: dict = {}
 
@@ -493,7 +504,7 @@ def dependants_lib_failures(
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
-        done = run(slotted(["cargo", "test", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
+        done = run(slotted(lib_command(package)), cwd=root, capture_output=True, text=True)
         output = done.stdout + done.stderr
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:

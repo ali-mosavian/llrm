@@ -50,6 +50,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
+use llrm_dagisel::x86_addr::AddrMode;
+use llrm_dagisel::x86_classes::{Role, class_tag};
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -83,6 +85,9 @@ pub trait FrameMap {
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
     pub frame: &'a dyn FrameMap,
+    /// How addresses are formed: real mode constrains a base and an index to
+    /// their register classes (SD4).
+    pub address_mode: AddrMode,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
 }
@@ -108,6 +113,17 @@ struct Emitter<'a, 'd> {
     at: i64,
     /// The blocks so far; the last is where the next instruction goes.
     blocks: Vec<EmitBlock>,
+    /// The register tag each address component's value is constrained to
+    /// (`constrainRegClass`).
+    classes: Vec<(u32, &'static str)>,
+}
+
+/// What [`emit`] makes: the blocks, and the register tags (`registers.regs`)
+/// that address components are confined to, by value.
+#[derive(Clone, Debug, Default)]
+pub struct Emitted {
+    pub blocks: Vec<EmitBlock>,
+    pub classes: Vec<(u32, &'static str)>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -116,7 +132,7 @@ pub fn emit(
     dag: &SelectionDAG,
     units: &[Unit],
     ctx: &EmitContext<'_>,
-) -> Result<Vec<EmitBlock>, EmitError> {
+) -> Result<Emitted, EmitError> {
     let mut emitter = Emitter {
         dag,
         ctx,
@@ -125,13 +141,14 @@ pub fn emit(
         next_value: 1,
         at: 1,
         blocks: vec![EmitBlock::default()],
+        classes: Vec::new(),
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             emitter.node(node)?;
         }
     }
-    Ok(emitter.blocks)
+    Ok(Emitted { blocks: emitter.blocks, classes: emitter.classes })
 }
 
 /// `X86::CondCode` order, the jump on each.
@@ -333,11 +350,11 @@ impl Emitter<'_, '_> {
         ) {
             return self.frame_cell(group, cell_width);
         }
-        let base = self.address_register(group[0])?;
+        let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
-        let index = self.address_register(group[2])?;
+        let index = self.address_register(group[2], Role::Index)?;
         let disp = self.constant(group[3])?;
-        if self.address_register(group[4])?.is_some() {
+        if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
@@ -352,7 +369,7 @@ impl Emitter<'_, '_> {
         let NodeData::FrameIndex(index) = self.dag.node(group[0]).data else {
             return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
         };
-        if self.address_register(group[2])?.is_some() || self.address_register(group[4])?.is_some() {
+        if self.address_register(group[2], Role::Index)?.is_some() || self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("an indexed or segment-overridden frame cell".to_owned()));
         }
         let disp = self.constant(group[3])?;
@@ -368,13 +385,19 @@ impl Emitter<'_, '_> {
     fn address_register(
         &mut self,
         value: SDValue,
+        role: Role,
     ) -> Result<Option<Held>, EmitError> {
         // `$noreg` is virtual register 0.
         if self.dag.node(value).data == NodeData::Register(0) {
             return Ok(None);
         }
         match self.operand(value)? {
-            Loc::Held(held) => Ok(Some(held)),
+            Loc::Held(held) => {
+                if let Some(tag) = class_tag(self.ctx.address_mode, role) {
+                    self.classes.push((held.value, tag));
+                }
+                Ok(Some(held))
+            }
             other => Err(EmitError::Unsupported(format!("address component {other:?}"))),
         }
     }

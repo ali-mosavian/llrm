@@ -1,15 +1,17 @@
 //! The DAG path of one block: legalize, select, schedule, emit.
 //!
 //! # How it works
-//! [`select_block`] runs the type legalizer and the DAG legalizer over a
-//! built block, then `DoInstructionSelection`: every node the root reaches,
+//! [`select_block`] runs the pin's `CodeGenAndEmitDAG` order over a built
+//! block: combine, legalize types, combine, legalize the DAG, combine, then
+//! `DoInstructionSelection`: every node the root reaches,
 //! last created first, goes to `llrm_dagisel::x86_select::select_node`
 //! (the pin's `Select` hand matchers, then the generated table). The
 //! machine DAG is scheduled ([`super::schedule`]) and emitted
 //! ([`super::emit`]) as LIR blocks.
 //!
 //! ```text
-//! built DAG -> TypeLegalizer -> DagLegalizer -> select_node (reverse) -> schedule -> emit
+//! built DAG -> combine -> TypeLegalizer -> combine -> DagLegalizer -> combine
+//!   -> select_node (reverse) -> schedule -> emit
 //! ```
 //!
 //! # Example
@@ -33,11 +35,13 @@ use llrm_dagisel::x86_select::select_node;
 
 use super::actions::TargetLowering;
 use super::dagisel_adapter::DagisAdapter;
-use super::emit::{EmitBlock, EmitContext, emit};
+use super::dag_combiner::{CombineLevel, DagCombiner};
+use super::emit::{EmitContext, Emitted, emit};
 use super::isd::ISD;
-use super::legalize_dag::{DagLegalizer, NoHooks};
+use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
 use super::schedule::{SchedInfo, schedule};
+use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
 /// Why a block did not get through the DAG path.
@@ -53,17 +57,32 @@ pub enum Refusal {
 pub fn select_block(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
+    lowering: &mut X86Lowering,
     selector: &Selector,
     hooks: &mut X86Hooks,
     info: &dyn SchedInfo,
     ctx: &EmitContext<'_>,
-) -> Result<Vec<EmitBlock>, Refusal> {
-    TypeLegalizer::new(dag, tli).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
-    DagLegalizer::new(dag, tli, &mut NoHooks).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+) -> Result<Emitted, Refusal> {
+    legalized(dag, tli, lowering)?;
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
     emit(dag, &units, ctx).map_err(Refusal::Emit)
+}
+
+/// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels
+/// around the two legalizers. The select shadow calls this same function.
+pub fn legalized(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    lowering: &mut X86Lowering,
+) -> Result<(), Refusal> {
+    DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).run();
+    TypeLegalizer::new(dag, tli).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).run();
+    DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).run();
+    Ok(())
 }
 
 /// `DoInstructionSelection`: the nodes the root reaches, last created first.
