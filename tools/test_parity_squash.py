@@ -757,3 +757,17 @@ def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_
     assert asked["packages"] == {"llrm-transforms"}
     assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
     assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+
+
+def test_a_passing_batch_prints_what_the_lib_layer_ran(capsys):
+    """A gate silent on a pass cannot be told from one that never ran: the layer prints crates, tests passed, a hash of the test names and the seconds, on a pass too."""
+    smoke = ps.parity_smoke_module()
+
+    def on_merged(packages):
+        smoke.LAST_LIB.update(crates=len(packages), passed=940, names="abcd1234", seconds=11.6)
+        return set()
+
+    assert ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 1 crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 0 crates, 0 tests passed (no crate changed)" in capsys.readouterr().out
