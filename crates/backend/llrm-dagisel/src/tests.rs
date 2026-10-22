@@ -562,6 +562,9 @@ mod real_mode_addresses {
         assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
 
         assert_eq!((am.disp, am.index_reg), (65535, None));
+    }
+}
+
 mod instr_desc {
     use super::*;
     use crate::generated::ids::x86;
@@ -606,5 +609,66 @@ mod instr_desc {
     #[test]
     fn an_opcode_the_tables_never_emit_has_no_descriptor() {
         assert!(desc(0xfff0).is_none());
+    }
+}
+
+mod far_pointer_loads {
+    use super::*;
+    use crate::generated::ids::x86isd;
+    use crate::generated::x86_m16;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_addr::AddrMode;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn hooks(cpu: Cpu, mode: AddrMode) -> X86Hooks {
+        X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: mode })
+    }
+
+    /// `X86ISD::LES chain, p`: the offset half of a far pointer loaded through `p`.
+    fn far_load(opcode: u16) -> (TestDag, u32, SDValue) {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i16);
+        let node = dag.add(Node {
+            opcode,
+            vts: vec![mvt::i16, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p],
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        (dag, node, p)
+    }
+
+    fn name_in(table: &[(u16, &'static str)], dag: &TestDag, node: u32) -> &'static str {
+        let opcode = dag.nodes[node as usize].machine.expect("not selected");
+        table.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
+    }
+
+    #[test]
+    fn a_far_load_through_a_near_pointer_is_les_with_the_pointer_as_base() {
+        let (mut dag, node, p) = far_load(x86isd::LES);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), "LES16rm");
+        assert_eq!(dag.nodes[node as usize].ops[0], p);
+    }
+
+    #[test]
+    fn lds_is_selected_the_same_way() {
+        let (mut dag, node, _) = far_load(x86isd::LDS);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), "LDS16rm");
+    }
+
+    #[test]
+    fn the_pins_own_table_has_no_pattern_for_a_far_load() {
+        let (mut dag, node, _) = far_load(x86isd::LES);
+        let mut hooks = hooks(Cpu::I486, AddrMode::Flat32);
+
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, node), Outcome::CannotSelect);
     }
 }

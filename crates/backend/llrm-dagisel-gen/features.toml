@@ -6,6 +6,10 @@
 [cpu.i486]
 features = ["X87"]
 
+# Real mode on a 386: the pin's `Proc<"i386", [FeatureX87]>` (L1912).
+[cpu.m16]
+features = ["X87"]
+
 [cpu.p5]
 features = ["X87", "CX8"]
 

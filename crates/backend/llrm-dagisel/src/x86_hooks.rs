@@ -21,7 +21,7 @@
 
 use crate::dag::{Hooks, PatternContext, SDValue};
 use crate::generated::ids::{isd, mvt, x86isd};
-use crate::generated::{x86_i486, x86_p5};
+use crate::generated::{x86_i486, x86_m16, x86_p5};
 use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, AddrMode, Matcher};
 
@@ -30,6 +30,8 @@ use crate::x86_addr::{AddrDag, AddrMode, Matcher};
 pub enum Cpu {
     I486,
     P5,
+    /// Real mode: the pin's table with `m16.td` on top (C2).
+    M16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -86,6 +88,7 @@ fn complex_function(cpu: Cpu, id: u8) -> &'static str {
     let patterns = match cpu {
         Cpu::I486 => x86_i486::COMPLEX_PATTERNS,
         Cpu::P5 => x86_p5::COMPLEX_PATTERNS,
+        Cpu::M16 => x86_m16::COMPLEX_PATTERNS,
     };
     patterns.iter().find(|(n, _, _)| *n == id).map_or("", |(_, name, _)| name)
 }
@@ -279,6 +282,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         match self.options.cpu {
             Cpu::I486 => x86_i486::pattern_predicate(self, predicate),
             Cpu::P5 => x86_p5::pattern_predicate(self, predicate),
+            Cpu::M16 => x86_m16::pattern_predicate(self, predicate),
         }
     }
 
@@ -286,6 +290,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         match self.options.cpu {
             Cpu::I486 => x86_i486::node_predicate(dag, self, value, predicate),
             Cpu::P5 => x86_p5::node_predicate(dag, self, value, predicate),
+            Cpu::M16 => x86_m16::node_predicate(dag, self, value, predicate),
         }
     }
 
@@ -322,15 +327,22 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         let width = bits(dag, value);
         let constant = dag.constant(value).expect("an xform of a constant") as u64;
         let masked = if width == 64 { constant } else { constant & ((1u64 << width) - 1) };
-        match xform {
-            // The XFORMS of the table: the lowest set bit, the low 32 bits, the lowest clear bit,
-            // and two condition-code complements.
-            2 => dag.target_constant(i64::from(if masked == 0 { width } else { masked.trailing_zeros() } as u8), mvt::i64),
-            5 => dag.target_constant(i64::from(masked as u32), mvt::i32),
-            8 => dag.target_constant(i64::from(trailing_ones(masked, width) as u8), mvt::i64),
-            26 => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
-            33 => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
-            other => panic!("node transform {other} is not in the table"),
+        // The table numbers its transforms; the pin's C++ call says what each is.
+        let table = match self.options.cpu {
+            Cpu::I486 => x86_i486::XFORMS,
+            Cpu::P5 => x86_p5::XFORMS,
+            Cpu::M16 => x86_m16::XFORMS,
+        };
+        let call = table.iter().find(|(n, _)| *n == xform).unwrap_or_else(|| panic!("node transform {xform} is not in the table")).1;
+        match call {
+            c if c.contains("countr_zero()") => {
+                dag.target_constant(i64::from(if masked == 0 { width } else { masked.trailing_zeros() } as u8), mvt::i64)
+            }
+            c if c.starts_with("getI32Imm((uint32_t)N->getZExtValue()") => dag.target_constant(i64::from(masked as u32), mvt::i32),
+            c if c.contains("countr_one()") => dag.target_constant(i64::from(trailing_ones(masked, width) as u8), mvt::i64),
+            "getI8Imm(Imm ^ 0x0f, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
+            "getI8Imm(Imm ^ 0x03, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
+            other => panic!("node transform `{other}` is not translated"),
         }
     }
 
