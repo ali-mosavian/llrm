@@ -1,0 +1,123 @@
+use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use super::super::x86_lowering::{X86Lowering, x86isd};
+use super::*;
+use crate::backend::selectiondag::{MemBase, MemInfo};
+
+fn load(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    slot: i32,
+) -> SDValue {
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+    dag.get_load(vt, chain, ptr, info)
+}
+
+fn mul_by(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    c: u128,
+) -> SDValue {
+    let c = dag.get_constant(c, EVT::I32);
+    dag.get_node(ISD::Mul, EVT::I32, &[x, c])
+}
+
+fn generic(dag: &mut SelectionDAG) {
+    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+}
+
+fn x86(
+    dag: &mut SelectionDAG,
+    level: CombineLevel,
+) {
+    DagCombiner::new(dag, &mut X86Lowering { cmov: false }, level).run();
+}
+
+/// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
+/// (A0: identity folds are the combiner's), so a matcher sees an `imul`.
+#[test]
+fn multiply_by_one_and_by_a_power_of_two() {
+    let mut dag = dag();
+    let x = load(&mut dag, EVT::I32, 1);
+    let one = mul_by(&mut dag, x, 1);
+    dag.set_root(one);
+    generic(&mut dag);
+    assert_eq!(dag.get_root(), x);
+
+    let eight = mul_by(&mut dag, x, 8);
+    dag.set_root(eight);
+    generic(&mut dag);
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Shl);
+    let amount = dag.operand(root, 1);
+    assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(3), EVT::I8));
+}
+
+/// `x * -8` is `0 - (x << 3)`.
+#[test]
+fn multiply_by_a_negated_power_of_two() {
+    let mut dag = dag();
+    let x = load(&mut dag, EVT::I32, 1);
+    let product = mul_by(&mut dag, x, (-8i32) as u32 as u128);
+    dag.set_root(product);
+    generic(&mut dag);
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Sub);
+    assert!(dag.is_null_constant(dag.operand(root, 0)));
+    assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Shl);
+}
+
+/// The worklist revisits what a rewrite made: `(x * 2) * 3` is
+/// `(x << 1) * 3`, then `x * 6`.
+#[test]
+fn a_rewrite_is_combined_again() {
+    let mut dag = dag();
+    let x = load(&mut dag, EVT::I32, 1);
+    let twice = mul_by(&mut dag, x, 2);
+    let thrice = mul_by(&mut dag, twice, 3);
+    dag.set_root(thrice);
+    generic(&mut dag);
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Mul);
+    assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(6)));
+}
+
+/// Before types are legal the target leaves a multiply alone (the pin's
+/// `isBeforeLegalize`); after, `x * 5` is `MUL_IMM`, one `lea`. The shadow
+/// found `x * 5` as an `imul` where the pin has `lea`.
+#[test]
+fn multiply_by_five_is_a_lea_after_types_are_legal() {
+    let mut dag = dag();
+    let x = load(&mut dag, EVT::I32, 1);
+    let five = mul_by(&mut dag, x, 5);
+    dag.set_root(five);
+    x86(&mut dag, CombineLevel::BeforeLegalizeTypes);
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+    x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), x86isd::MUL_IMM);
+    assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(5)));
+}
+
+/// The other constants (root and first operand): 15 is `(x*5)*3`, 10 is
+/// `(x<<1)*5`, 11 is `(x*5 << 1) + x`, -5 is `0 - x*5`, 7 is `(x << 3)
+/// - x`.
+#[test]
+fn multiply_by_other_constants_is_leas_shifts_and_adds() {
+    let shape = |c: i32| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let product = mul_by(&mut dag, x, c as u32 as u128);
+        dag.set_root(product);
+        x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+        let root = dag.get_root();
+        let opcodes = |dag: &SelectionDAG, v: SDValue| (dag.opcode(v), dag.opcode(dag.operand(v, 0)));
+        opcodes(&dag, root)
+    };
+    assert_eq!(shape(15), (x86isd::MUL_IMM, x86isd::MUL_IMM));
+    assert_eq!(shape(10), (x86isd::MUL_IMM, ISD::Shl));
+    assert_eq!(shape(11), (ISD::Add, ISD::Shl));
+    assert_eq!(shape(-5).0, ISD::Sub);
+    assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+}

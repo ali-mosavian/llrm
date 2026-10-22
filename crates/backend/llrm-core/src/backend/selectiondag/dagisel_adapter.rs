@@ -154,8 +154,13 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         RegisterMask => pin::RegisterMask,
         LifetimeStart => pin::LIFETIME_START,
         LifetimeEnd => pin::LIFETIME_END,
-        // The pin's X86ISD numbers.
-        Target(code) => code,
+        // sdag-a's codes are private and named (`x86isd::name`), the pin's
+        // number comes from the name; sdag-b's lowering writes the pin's
+        // numbers, which `name` does not know.
+        Target(code) => match super::x86isd::name(code).strip_prefix("X86ISD::") {
+            Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
+            None => code,
+        },
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }
@@ -569,6 +574,17 @@ impl Dag for DagisAdapter<'_> {
         let mut ops = vec![ours(chain), reg, ours(value)];
         ops.extend(glue.map(ours));
         self.dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops).node
+    }
+    fn copy_from_reg(
+        &mut self,
+        chain: PinValue,
+        register: u16,
+        vt: Vt,
+        glue: PinValue,
+    ) -> u32 {
+        let vt = our_vt(vt);
+        let reg = self.dag.get_register(vt, u32::from(register));
+        self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
     }
     fn token_factor(
         &mut self,
