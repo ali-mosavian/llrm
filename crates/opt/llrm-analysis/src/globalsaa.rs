@@ -360,6 +360,33 @@ pub struct Bodies {
     per: IndexMap<GlobalId, (Mark, Rc<Contribution>)>,
 }
 
+/// The variables of `module` no outside code reaches by name: not exported by
+/// the program, defined in it and not let escape by another module. The
+/// runtime module's `!llrm.named` globals (b$seg) are such: it names them and
+/// never hands their address out.
+pub fn unexported(
+    module: &Module,
+    analyses: &mut ModuleAnalyses,
+) -> BTreeSet<GlobalId> {
+    let program = Rc::clone(analyses.program());
+    let elsewhere = match program.cached::<ProgramGlobals>() {
+        Some(all) => Result::as_ref(&*all).map(|all| all[program.module].clone()).unwrap_or_default(),
+        None => Elsewhere::default(),
+    };
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(at, global)| {
+            matches!(global.kind, GlobalKind::Variable(_))
+                && !program.exports.exported(global)
+                && (defines(global) || elsewhere.defined.contains(&GlobalId(*at as u32)))
+                && !elsewhere.escaped.contains(&GlobalId(*at as u32))
+        })
+        .map(|(at, _)| GlobalId(at as u32))
+        .collect()
+}
+
 /// `module`'s, each body's shape from its manager in `analyses` and the
 /// other modules as the cached `ProgramGlobals` finds them.
 pub fn analysis(
