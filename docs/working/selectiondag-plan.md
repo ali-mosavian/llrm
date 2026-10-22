@@ -211,6 +211,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
 
 | SD42 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
