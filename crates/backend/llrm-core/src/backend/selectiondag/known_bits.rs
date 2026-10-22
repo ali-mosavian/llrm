@@ -1,5 +1,6 @@
-//! Which bits of a value are known (the pin's `SelectionDAG::computeKnownBits`),
-//! for the nodes the combiner's folds ask about.
+//! Which bits of a value are known (the pin's
+//! `SelectionDAG::computeKnownBits`), for the nodes the combiner's folds ask
+//! about.
 //!
 //! # How it works
 //! [`known_bits`] returns the bits known zero and known one. It walks the
@@ -36,7 +37,10 @@ impl KnownBits {
         KnownBits { zero: 0, one: 0, width }
     }
 
-    pub fn constant(value: u128, width: u32) -> KnownBits {
+    pub fn constant(
+        value: u128,
+        width: u32,
+    ) -> KnownBits {
         let all = mask(width);
         KnownBits { zero: !value & all, one: value & all, width }
     }
@@ -46,17 +50,27 @@ impl KnownBits {
         (self.zero | self.one) == mask(self.width)
     }
 
-    fn intersect(self, other: KnownBits) -> KnownBits {
+    fn intersect(
+        self,
+        other: KnownBits,
+    ) -> KnownBits {
         KnownBits { zero: self.zero & other.zero, one: self.one & other.one, width: self.width }
     }
 }
 
 /// `computeKnownBits`.
-pub fn known_bits(dag: &SelectionDAG, value: SDValue) -> KnownBits {
+pub fn known_bits(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> KnownBits {
     walk(dag, value, 0)
 }
 
-fn walk(dag: &SelectionDAG, value: SDValue, depth: u32) -> KnownBits {
+fn walk(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: u32,
+) -> KnownBits {
     let vt = dag.value_type(value);
     if !vt.is_integer() {
         return KnownBits::unknown(1);
@@ -86,7 +100,11 @@ fn walk(dag: &SelectionDAG, value: SDValue, depth: u32) -> KnownBits {
         }
         ISD::Xor => {
             let (rhs, lhs) = (operand(1), operand(0));
-            KnownBits { zero: (lhs.zero & rhs.zero) | (lhs.one & rhs.one), one: (lhs.zero & rhs.one) | (lhs.one & rhs.zero), width }
+            KnownBits {
+                zero: (lhs.zero & rhs.zero) | (lhs.one & rhs.one),
+                one: (lhs.zero & rhs.one) | (lhs.one & rhs.zero),
+                width,
+            }
         }
         ISD::Select => operand(1).intersect(operand(2)),
         ISD::ZeroExtend => {
@@ -101,7 +119,11 @@ fn walk(dag: &SelectionDAG, value: SDValue, depth: u32) -> KnownBits {
         ISD::Srl => match dag.constant(dag.operand(value, 1)) {
             Some(by) if by < u128::from(width) => {
                 let inner = operand(0);
-                KnownBits { zero: ((inner.zero >> by) | (all & !(all >> by))) & all, one: (inner.one >> by) & all, width }
+                KnownBits {
+                    zero: ((inner.zero >> by) | (all & !(all >> by))) & all,
+                    one: (inner.one >> by) & all,
+                    width,
+                }
             }
             _ => KnownBits::unknown(width),
         },
