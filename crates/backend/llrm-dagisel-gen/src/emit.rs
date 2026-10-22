@@ -288,10 +288,12 @@ pub fn render_instr_info(lines: &str, ids: &Ids, emitted: &BTreeSet<u16>) -> Res
     for line in lines.lines() {
         let mut parts = line.split(' ');
         let mut next = || parts.next().ok_or_else(|| format!("short instrinfo line `{line}`"));
-        let opcode: u32 = next()?.parse().map_err(|_| format!("bad opcode in `{line}`"))?;
+        let name = next()?;
+        let Some(&opcode) = ids.0.get(&format!("X86::{name}")) else { continue };
         if !emitted.contains(&(opcode as u16)) {
             continue;
         }
+        let opcode = opcode as u32;
         let (num_ops, num_defs, size) = (next()?, next()?, next()?);
         let flags = next()?;
         let (uses, defs) = (regs(next()?)?, regs(next()?)?);

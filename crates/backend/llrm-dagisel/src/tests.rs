@@ -712,3 +712,115 @@ mod pointer_classes {
         assert_eq!(class_tag(AddrMode::Flat32, Role::Base), None, "any general register at 32 bits");
     }
 }
+
+mod string_instructions {
+    use super::*;
+    use crate::dag::Dag;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::generated::x86_m16;
+    use crate::testing::TestDag;
+    use crate::x86_addr::AddrMode;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn hooks(cpu: Cpu) -> X86Hooks {
+        let address_mode = if cpu == Cpu::M16 { AddrMode::Real16 } else { AddrMode::Flat32 };
+        X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode })
+    }
+
+    /// `rep movs` of `unit`-typed elements, after the count register is set.
+    fn rep(opcode: u16, unit: crate::matcher::Vt) -> (TestDag, u32) {
+        let mut dag = TestDag::new();
+        let count = dag.input(1, mvt::i16);
+        let copy = dag.copy_to_reg(SDValue::new(0, 0), x86::CX, count, None);
+        let vt = dag.make_value_type_node(unit);
+        let node = dag.node(opcode, &[mvt::Other, mvt::Glue], &[SDValue::new(copy, 0), vt, SDValue::new(copy, 1)]);
+        (dag, node)
+    }
+
+    fn name(table: &[(u16, &'static str)], dag: &TestDag, node: u32) -> &'static str {
+        let opcode = dag.nodes[node as usize].machine.expect("not selected");
+        table.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
+    }
+
+    #[test]
+    fn rep_movs_of_words_uses_si_di_cx_in_real_mode() {
+        let (mut dag, node) = rep(x86isd::REP_MOVS, mvt::i16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks(Cpu::M16), node), Outcome::Selected);
+
+        assert_eq!(name(x86_m16::MACHINE_OPCODES, &dag, node), "REP_MOVSW_16");
+    }
+
+    #[test]
+    fn rep_stos_of_bytes_is_the_16_bit_form_too() {
+        let (mut dag, node) = rep(x86isd::REP_STOS, mvt::i8);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks(Cpu::M16), node), Outcome::Selected);
+
+        assert_eq!(name(x86_m16::MACHINE_OPCODES, &dag, node), "REP_STOSB_16");
+    }
+
+    #[test]
+    fn the_flat_table_still_picks_the_32_bit_form() {
+        let (mut dag, node) = rep(x86isd::REP_MOVS, mvt::i16);
+
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks(Cpu::I486), node), Outcome::Selected);
+
+        assert_eq!(name(table::MACHINE_OPCODES, &dag, node), "REP_MOVSW_32");
+    }
+}
+
+mod segment_overrides {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::generated::ids::x86;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_addr::AddrMode;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn load_through(segment: Option<u16>) -> (TestDag, u32, SDValue) {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i16);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i16], &[]), 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i16, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i16),
+            segment,
+            ..Node::default()
+        });
+        (dag, load, p)
+    }
+
+    fn select(dag: &mut TestDag, load: u32) {
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: AddrMode::Real16,
+        });
+        assert_eq!(Selector::new(crate::generated::x86_m16::TABLE).select(dag, &mut hooks, load), Outcome::Selected);
+    }
+
+    #[test]
+    fn a_load_through_es_has_es_as_its_segment_operand() {
+        let (mut dag, load, _) = load_through(Some(x86::ES));
+        select(&mut dag, load);
+
+        let segment = dag.nodes[load as usize].ops[4];
+        assert_eq!(dag.nodes[segment.node as usize].register, Some(x86::ES));
+    }
+
+    #[test]
+    fn a_load_with_no_override_leaves_the_segment_empty() {
+        let (mut dag, load, _) = load_through(None);
+        select(&mut dag, load);
+
+        let segment = dag.nodes[load as usize].ops[4];
+        assert_eq!(dag.nodes[segment.node as usize].register, Some(0), "register 0 is no segment");
+    }
+}

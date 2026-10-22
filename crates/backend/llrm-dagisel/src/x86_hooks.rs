@@ -225,7 +225,7 @@ impl X86Hooks {
             return None;
         }
         let ptr = dag.operand(n.node, 1);
-        Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }.select_addr(ptr)
+        Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }.select_addr_of(Some(n.node), ptr)
     }
 
     /// `hasNoCarryFlagUses` ([L3650][carry]); SD36.
@@ -298,14 +298,14 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         &mut self,
         dag: &mut D,
         _root: u32,
-        _parent: Option<u32>,
+        parent: Option<u32>,
         value: SDValue,
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
         let mut matcher = Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode };
         let operands = match complex_function(self.options.cpu, pattern) {
-            "selectAddr" => matcher.select_addr(value),
+            "selectAddr" => matcher.select_addr_of(parent, value),
             "selectLEAAddr" => matcher.select_lea_addr(value),
             "selectRelocImm" => {
                 // `Wrapper sym` as an immediate; the truncated form needs absolute symbols (SD35).
