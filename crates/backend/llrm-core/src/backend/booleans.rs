@@ -200,7 +200,6 @@ pub fn branched(
             // (qcport console -Os: `c > 96 && c < 123 && d`).
             let feeds_a_branch = function
                 .users(result)
-                .snapshot()
                 .iter()
                 .any(
                     |used| matches!(

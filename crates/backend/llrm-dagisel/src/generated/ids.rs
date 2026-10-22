@@ -154,6 +154,7 @@ pub mod isd {
     pub const UMIN: u16 = 189;
     pub const UNDEF: u16 = 53;
     pub const USUBSAT: u16 = 88;
+    pub const VALUETYPE: u16 = 8;
     pub const VECTOR_COMPRESS: u16 = 178;
     pub const VSELECT: u16 = 220;
     pub const XOR: u16 = 195;
@@ -349,6 +350,8 @@ pub mod x86isd {
     pub const LCMPXCHG16_DAG: u16 = 659;
     pub const LCMPXCHG8_DAG: u16 = 660;
     pub const LCMPXCHG_DAG: u16 = 661;
+    pub const LDS: u16 = 24577;
+    pub const LES: u16 = 24576;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -665,10 +668,16 @@ pub mod x86 {
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const CS: u16 = 12;
+    pub const CX: u16 = 13;
     pub const DEC16m: u16 = 1511;
     pub const DEC32m: u16 = 1522;
     pub const DEC8m: u16 = 1543;
+    pub const DS: u16 = 20;
     pub const EFLAGS: u16 = 28;
+    pub const ES: u16 = 31;
+    pub const FS: u16 = 36;
+    pub const GS: u16 = 38;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
@@ -690,6 +699,7 @@ pub mod x86 {
     pub const SBB32mr: u16 = 4196;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
     pub const SUB32mi: u16 = 4785;

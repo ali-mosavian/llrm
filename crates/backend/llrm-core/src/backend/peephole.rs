@@ -379,6 +379,7 @@ impl Peephole {
         ));
         let body = tested_lone_masks(self.rules, &tested_masks(self.rules, &body));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = byte_word_fixup(self.rules, &body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
@@ -677,6 +678,16 @@ pub fn narrowed_moves(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.narrowed_moves, body, &Facts::new(body, None))
+}
+
+/// A byte or word load, copy or extension whose register's other bytes are dead
+/// is the dword form (`peephole.peep`): `X86FixupBWInsts`.
+pub fn byte_word_fixup(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    peep::rewritten(rules.byte_word_fixup, body, &Facts::new(body, Some(cpu)))
 }
 
 /// Use a saved accumulator in place for commutative two-address operations

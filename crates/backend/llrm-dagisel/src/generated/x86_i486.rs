@@ -15225,11 +15225,11 @@ pub const XFORMS: &[(u8, &str)] = &[
 /// The machine opcodes the table emits, with the pin's names (`X86::` and `TargetOpcode::`).
 pub const MACHINE_OPCODES: &[(u16, &str)] = &[
     (8, "EXTRACT_SUBREG"),
-    (9, "INSERT_SUBREG|sub_xmm"),
-    (10, "IMPLICIT_DEF|VK1RegClassID|sub_ymm"),
-    (12, "SUBREG_TO_REG|VK2RegClassID"),
-    (13, "COPY_TO_REGCLASS|CX|VK4RegClassID"),
-    (20, "COPY|SEGMENT_REGRegClassID"),
+    (9, "INSERT_SUBREG"),
+    (10, "IMPLICIT_DEF"),
+    (12, "SUBREG_TO_REG"),
+    (13, "COPY_TO_REGCLASS"),
+    (20, "COPY"),
     (335, "ADD16ri_DB"),
     (336, "ADD16rr_DB"),
     (337, "ADD32ri_DB"),
