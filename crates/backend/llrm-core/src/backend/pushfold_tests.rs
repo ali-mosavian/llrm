@@ -44,7 +44,15 @@ fn load(
     base: u32,
     offset: i64,
 ) -> Arc<Insn> {
-    insn(at, Operation::Move, "mov", vec![Loc::Held(held(value))], vec![Loc::Mem(cell(base, offset))], vec![value], vec![base])
+    insn(
+        at,
+        Operation::Move,
+        "mov",
+        vec![Loc::Held(held(value))],
+        vec![Loc::Mem(cell(base, offset))],
+        vec![value],
+        vec![base],
+    )
 }
 
 fn push(
@@ -83,7 +91,8 @@ fn test_a_value_read_twice_keeps_its_load() {
 
 #[test]
 fn test_a_store_between_the_load_and_the_push_keeps_the_load() {
-    let store = insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
+    let store =
+        insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
     let before = body(vec![load(1, 2, 1, 8), store, push(3, 2)]);
     assert_eq!(names(&folded(&before)), ["mov", "mov", "push"]);
 }
@@ -131,9 +140,9 @@ fn add(
     )
 }
 
-/// `a + [m]` and `[m] + a`: `reassociate@696` (#3026) put the load first and the
-/// post-allocation fold wanted it second, so `mov ecx, [esp+4]; add ecx, eax`
-/// stayed where `add eax, [esp+4]` was listed: 8 instructions, was 6.
+/// `a + [m]` and `[m] + a`: `reassociate@696` (#3026) put the load first and
+/// the post-allocation fold wanted it second, so `mov ecx, [esp+4]; add ecx,
+/// eax` stayed where `add eax, [esp+4]` was listed: 8 instructions, was 6.
 #[test]
 fn test_a_load_is_the_memory_operand_of_an_add_whichever_operand_it_is() {
     let second = folded(&body(vec![load(1, 2, 1, 8), add(2, 3, 9, 2, "add")]));
@@ -159,7 +168,8 @@ fn test_a_load_as_the_first_operand_of_a_subtraction_stays_a_register() {
 fn test_a_load_read_twice_or_past_a_store_is_not_an_operand() {
     let twice = folded(&body(vec![load(1, 2, 1, 8), add(2, 3, 9, 2, "add"), add(3, 4, 3, 2, "add")]));
     assert_eq!(names(&twice), ["mov", "add", "add"]);
-    let store = insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
+    let store =
+        insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
     let blocked = folded(&body(vec![load(1, 2, 1, 8), store, add(3, 3, 9, 2, "add")]));
     assert_eq!(names(&blocked), ["mov", "mov", "add"]);
 }

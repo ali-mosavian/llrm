@@ -1,6 +1,6 @@
 //! A value that a load made and nothing else reads is read from memory where it
-//! is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1`
-//! with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a
+//! is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0,
+//! v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a
 //! commutative operation the load is. Translated from
 //! [X86CallFrameOptimization.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp)
 //! (`canFoldIntoRegPush`, and the `PUSH32rmm` branch of `adjustCallSequence`).
@@ -58,8 +58,8 @@
 //! Twice. As `LoadFold` first of the machine phases, after selection: the pin's
 //! DAG selection folds a once-read load into `ADD32rm` before MachineCombiner
 //! runs, and a load folded after it let the combiner rebuild a chain as a tree.
-//! As `PushFold`, a machine phase after `floatfold`, before the register classes
-//! are decided,
+//! As `PushFold`, a machine phase after `floatfold`, before the register
+//! classes are decided,
 //! once per function, at every -O level but -O0 (the pin's pass is
 //! `-no-x86-call-frame-opt`-switchable only, and runs at -O0 too; ours does not
 //! at -O0, where nothing improves after selection).
@@ -72,11 +72,10 @@
 
 use std::sync::Arc;
 
+use llrm_lir::Held;
 use llrm_lir::registers::RegId;
 
 use crate::backend::storedhomes::may_write;
-use llrm_lir::Held;
-
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -165,7 +164,9 @@ pub fn folded(body: &LirBody) -> LirBody {
             };
             let mut what = consumer.what.clone().expect("a consumer");
             what.sources = match what.sources.as_slice() {
-                // A push reads the cell; a commutative two-operand operation keeps its other operand first, as the memory form of the instruction has it.
+                // A push reads the cell; a commutative two-operand operation
+                // keeps its other operand first, as the memory form of the
+                // instruction has it.
                 [Loc::Held(_)] => vec![Loc::Mem(cell)],
                 [first, second] => {
                     let other = if matches!(second, Loc::Held(h) if h.value == value) { first } else { second };
@@ -178,7 +179,8 @@ pub fn folded(body: &LirBody) -> LirBody {
             };
             let mut fused = (*consumer).clone();
             fused.what = Some(what);
-            fused.uses = consumer.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
+            fused.uses =
+                consumer.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
             fused.uses.dedup();
             fused.widths = consumer
                 .widths
@@ -208,15 +210,23 @@ fn candidate(
 ) -> Option<(usize, u32)> {
     let push = &insns[at];
     let what = push.what.as_ref()?;
-    // The value a push or a two-operand operation reads from a load: the push's only source, the second of `add`/`sub`/`and`/`or`/`xor` or the first of a commutative one.
+    // The value a push or a two-operand operation reads from a load: the push's
+    // only source, the second of `add`/`sub`/`and`/`or`/`xor` or the first of a
+    // commutative one.
     let held = match (what.op, what.sources.as_slice()) {
         (Operation::Push, [Loc::Held(held)]) if what.dests.is_empty() => *held,
         (Operation::Binary, [Loc::Held(first), Loc::Held(second)]) if what.dests.len() == 1 => {
             let name = what.name.as_deref().unwrap_or_default();
             let commutative = matches!(name, "add" | "and" | "or" | "xor");
-            let loaded = |held: &Held| reads.get(&held.value) == Some(&1) && insns[..at].iter().any(|one| defines(one, held.value));
+            let loaded = |held: &Held| {
+                reads.get(&held.value) == Some(&1) && insns[..at].iter().any(|one| defines(one, held.value))
+            };
             let Loc::Held(dest) = &what.dests[0] else { return None };
-            if !matches!(name, "add" | "sub" | "and" | "or" | "xor") || first.value == second.value || dest.width != first.width || dest.width != second.width {
+            if !matches!(name, "add" | "sub" | "and" | "or" | "xor")
+                || first.value == second.value
+                || dest.width != first.width
+                || dest.width != second.width
+            {
                 return None;
             }
             if loaded(second) {
@@ -238,12 +248,16 @@ fn candidate(
     if !plain || !matches!(held.width, 2 | 4) || reads.get(&held.value) != Some(&1) {
         return None;
     }
-    let home = (0..at).rev().find(|&back| {
-        insns[back]
-            .what
-            .as_ref()
-            .is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == held.value)))
-    })?;
+    let home = (0..at)
+        .rev()
+        .find(
+            |&back| insns[back]
+                .what
+                .as_ref()
+                .is_some_and(
+                    |made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == held.value)),
+                ),
+        )?;
     let load = &insns[home];
     let made = load.what.as_ref()?;
     let [Loc::Held(defined)] = made.dests.as_slice() else { return None };
@@ -265,15 +279,17 @@ fn candidate(
     {
         return None;
     }
-    let blocked = insns[home + 1..at].iter().any(|between| {
-        between.volatile
-            || between.call.is_some()
-            || may_write(between, cell, false)
-            || between
-                .what
-                .as_ref()
-                .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
-    });
+    let blocked = insns[home + 1..at]
+        .iter()
+        .any(
+            |between| between.volatile
+                || between.call.is_some()
+                || may_write(between, cell, false)
+                || between
+                    .what
+                    .as_ref()
+                    .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)),
+        );
     (!blocked).then_some((home, held.value))
 }
 
@@ -282,7 +298,9 @@ fn defines(
     one: &Insn,
     value: u32,
 ) -> bool {
-    one.what.as_ref().is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == value)))
+    one.what
+        .as_ref()
+        .is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == value)))
 }
 
 #[cfg(test)]
