@@ -43,7 +43,11 @@ Base = parity 3b70c16822, head = 1988d65aff (parity merged into the change); bot
 
 | row | module | level | main B | parity B | with change B | owner, date |
 |---|---|---|---|---|---|---|
-| QO-1 | host/demo | -Os | 5673 | 5817 | 5852 (+35) | splitkit (parity is +144 over main), evidence w-1 |
-| QO-13 | render/dl | -O2 | see qcport-vs-main | 5164 | 5193 (+29) | splitkit, evidence w-1 |
+| QO-1 | host/demo | -Os | 5673 | 5817 | 5852 (+35, 0.60%) | exit QO-13b, splitkit, 2026-10-30 |
+| QO-13 | render/dl | -O2 | see qcport-vs-main | 5164 | 5193 (+29, 0.56%) | exit QO-13b, splitkit, 2026-10-30 |
+
+Instructions (from the -S listings, parity 3b70c16822 vs head 62c12c1305): host/demo -Os 1984 -> 1993 (+9, 0.45%, all in `_demo_snapshot_apply`), render/dl -O2 1637 -> 1651 (+14 in 5 functions). The pin's llc on the same MIR: demo 2003 instructions (at or above ours, taken at the `addresssink` stage), dl 1508 (below ours).
+
+QO-13b: the extra copies are phi copies of the translated PHIElimination (+7 in `dl_muzzle`, the coalescer joins 3, 4 survive: splitkit's ISEL_DUMP counts, ~/scratch/qo13/); the pin's coalescer tools for them (`adjustCopiesBackFrom`, `removeCopyByCommutingDef`, `removePartialRedundancy`) are DEVIATE C4 of the coalescer. Both rows are re-measured when those land. Not verified: that the survivors are segment-class copies.
 
 QO-6 (render/d_alias) is now smaller with the change (-27 at -Os, -13 at -O2). The earlier rows' numbers above were taken on older parities and are kept as history.
