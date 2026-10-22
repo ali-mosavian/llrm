@@ -355,3 +355,43 @@ done:
     // 14 copies of the float test remain, against constants.
     assert_eq!(after.matches("fcmp olt float").count(), 14, "{after}");
 }
+
+/// QCport's `pl_death_tick` loop with its count read from a constant table
+/// (`death_counts[set]`, `set` known): the integer exit's bound is a load.
+/// Fold's `_numbers` table folded it; with that switched off the loop kept
+/// "trips 0, max 32766" because MIR had no `simplifyLoadInst`. InstSimplify
+/// folds the load and the loop unrolls by the table's value.
+#[test]
+fn a_loop_bounded_by_a_constant_table_unrolls_once_instsimplify_folds_the_load() {
+    let text = "@counts = internal constant [12 x i8] c\"\\0B\\00\\09\\00\\0F\\00\\09\\00\\09\\00\\09\\00\"
+
+define i16 @f(float %limit) {
+b0:
+  %n = load i16, ptr getelementptr inbounds nuw (i8, ptr @counts, i16 4)
+  %bound = add nsw i16 %n, -1
+  br label %b1
+
+b1:
+  %frame = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %t = phi float [ 0.000000e+00, %b0 ], [ %tn, %b2 ]
+  %more = fcmp olt float %t, %limit
+  br i1 %more, label %b2, label %done
+
+b2:
+  %next = add nuw nsw i16 %frame, 1
+  %tn = fadd float %t, 0x3FB99999A0000000
+  %again = icmp ne i16 %frame, %bound
+  br i1 %again, label %b1, label %done
+
+done:
+  %r = phi i16 [ %frame, %b1 ], [ %next, %b2 ]
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(!unrolled(&mut module.clone()), "premise: with the load in the bound the loop stays rolled");
+    crate::testing::managed(&mut module, crate::instsimplify::InstSimplify);
+    assert!(unrolled(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("fadd"), "the float chain folded into constants: {after}");
+}

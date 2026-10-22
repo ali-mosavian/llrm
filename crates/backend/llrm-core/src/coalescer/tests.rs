@@ -645,3 +645,26 @@ fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
     );
     assert_consistent(&lis, &was, 2);
 }
+
+/// A store of a register to memory, the other half of a spill: not a copy.
+fn store(v: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".to_owned()),
+        dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
+        sources: vec![held(v)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![], vec![v]))
+}
+
+/// The probe behind `LLRM_COALESCE_WHY` counted a store of a register to memory
+/// as a left copy: nightmare_selftest read 68 left copies where the pin's 19
+/// were the thing to match, and 13 were copies.
+#[test]
+fn test_a_store_of_a_register_is_no_left_copy() {
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
+    let was = body(&[(&[a, c, b, r1, r2, store(1), store(2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    run(&mut lis, &AnyClass, &[0]);
+    assert_eq!(super::env::why_left(&mut lis, &AnyClass), vec!["conflict (deferred)"]);
+}
