@@ -314,7 +314,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
-    // Runs in the strength slot, before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    // Runs in the strength slot,
+    // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
@@ -377,6 +378,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "branch-folder, block-placement, tailduplication",
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
+    entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
