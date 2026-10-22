@@ -894,7 +894,7 @@ fn spilled_and_allocated(
             run: Default::default(),
         }),
         Box::new(PhiElimination::default()),
-        Box::new(TwoAddress),
+        Box::new(TwoAddress::default()),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
         Box::new(RegAlloc::new(
             None,
@@ -1249,7 +1249,7 @@ fn test_two_address_fixing_builds_no_set_of_the_live_values() {
     use crate::backend::allocate::SETS_BUILT;
     let (plain, _) = body(3, &Shape { pool: 12, ops: 14 });
     SETS_BUILT.with(|one| one.set(0));
-    let _ = crate::backend::twoaddr::tied(&plain);
+    let _ = crate::backend::twoaddr::tied(&plain, false);
     let built = SETS_BUILT.with(|one| one.get());
     assert_eq!(built, 0, "{built} sets of the live values built");
 }

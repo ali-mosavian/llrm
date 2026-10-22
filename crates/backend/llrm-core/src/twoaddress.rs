@@ -3,7 +3,7 @@
 //! Translated from llvm/lib/CodeGen/TwoAddressInstructionPass.cpp at
 //! d1106deb71cc (`isRevCopyChain`, `noUseAfterLastDef`, `isCopyToReg`,
 //! `isPlainlyKilled`, `isKilled`, `isProfitableToCommute`, `commuteInstruction`,
-//! `tryInstructionCommute`).
+//! `tryInstructionCommute`, `isProfitableToConv3Addr`, `convertInstTo3Addr`).
 //!
 //! # How it works
 //! A block is walked in order with a distance map (`DistanceMap`: the position
@@ -33,6 +33,21 @@
 //! commutative `Binary` `add`, `and`, `or`, `xor` and `Multiply` `imul`
 //! of three values of one width are candidates, as `_swappable` finds them.
 //!
+//! A tied `add` or `sub` of a dword, whose first source lives on past it and
+//! whose flags nothing reads, is made three-address: `d := lea [a + k]` or
+//! `d := lea [a + b]` (`convertInstTo3Addr`, x86 `convertToThreeAddress`,
+//! TwoAddressInstructionPass.cpp#L801, #L1402): no copy of `a` is made, so the
+//! result can join a loop's register while `a` stays in its own.
+//!
+//! DEVIATE TA-4 (exit: B2, the 16-bit address forms under the upper-zero
+//! proof of `peep/upperzero.rs`): only a target whose addresses read whole
+//! registers converts; at m16 the post-RA peephole fuses `mov z,y; add z,x` into
+//! a `lea` where the registers allow, as before.
+//!
+//! DEVIATE TA-5 (exit: `isProfitableToConv3Addr` needs the register maps of
+//! piece 4): a source that dies is never converted; the pin also converts one
+//! that dies when the destination is mapped to another register.
+//!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
 //! `v3` dies at the add and `v1` does not, so the add is `v4 := add v3, v1`
@@ -54,7 +69,7 @@ use crate::support::hash::HashMap;
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
-/// The intervals the commuting asks of: the sources of each commutative instruction and, for
+/// The intervals the commuting and the three-address conversion ask of: the sources of each commutative instruction, the tied source of each convertible add and, for
 /// `isKilled`, the sources of the copies that define them. The pin has every interval at hand;
 /// computing these alone is what keeps the pass off the cost of all of them.
 pub fn prepare(
@@ -65,6 +80,12 @@ pub fn prepare(
     for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
         if let Some((_, first, second)) = crate::backend::twoaddr::swappable_held(one) {
             todo.extend([first.value, second.value]);
+        }
+        // `convertInstTo3Addr` asks whether the tied source dies.
+        if three_address(one).is_some()
+            && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
+        {
+            todo.push(base.value);
         }
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -81,6 +102,77 @@ pub fn prepare(
             todo.push(src.value);
         }
     }
+}
+
+/// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
+/// instruction is not such an add or sub of dwords: the instruction
+/// `convertToThreeAddress` makes of an `ADD32ri`, `ADD32rr` or `SUB32ri`.
+pub fn three_address(one: &Insn) -> Option<Arc<Insn>> {
+    use crate::model::ir::{Imm, Mem, Operation};
+    let what = one.what.as_ref()?;
+    if what.op != Operation::Binary
+        || !matches!(what.name.as_deref(), Some("add" | "sub"))
+        || what.dests.len() != 1
+        || what.sources.len() != 2
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+    {
+        return None;
+    }
+    let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0]) else { return None };
+    if into.width != 4 || base.width != 4 || into.value == base.value {
+        return None;
+    }
+    let cell = match (&what.sources[1], what.name.as_deref()) {
+        (Loc::Imm(Imm { value, address: None, .. }), name) => {
+            let step = if name == Some("sub") { value.checked_neg()? } else { *value };
+            Mem { base: Some(*base), offset: step, ..Mem::new(None, 4) }
+        }
+        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => Mem {
+            base: Some(*base),
+            index: Some(*index),
+            scale: 1,
+            offset: 0,
+            disp_width: 2,
+            ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+        },
+        _ => return None,
+    };
+    let mut made = one.clone();
+    made.what = Some(Semantics {
+        op: Operation::Address,
+        name: Some("lea".to_owned()),
+        dests: vec![Loc::Held(*into)],
+        sources: vec![Loc::Mem(cell)],
+        ..Semantics::new(Operation::Address)
+    });
+    Some(Arc::new(made))
+}
+
+/// Whether the flags `insns[index]` writes are written again, in its block,
+/// before anything reads them; a block that ends first leaves them live (the
+/// pin reads the instruction's `implicit dead $eflags`).
+pub fn flags_dead_after(
+    insns: &[Arc<Insn>],
+    index: usize,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+) -> bool {
+    use crate::backend::liveness;
+    let flags = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
+    for later in &insns[index + 1..] {
+        let Some(effect) = liveness::effect(regs, bits, later) else { return false };
+        if flags(&effect.all_reads()) {
+            return false;
+        }
+        if flags(&effect.writes) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The state of one block's walk: the intervals, the registers values are
@@ -306,6 +398,15 @@ impl<'a> Commuter<'a> {
         // Neither is used in between: the one defined later has the shorter
         // interval.
         last_def_b != 0 && last_def_c != 0 && last_def_c > last_def_b
+    }
+
+    /// Whether `isKilled` says `reg` dies at the instruction.
+    pub fn killed_at(
+        &self,
+        one: &Insn,
+        reg: u32,
+    ) -> bool {
+        self.is_killed(one.id(), reg)
     }
 
     /// `tryInstructionCommute` for the instruction `one` (at `dist`): the
