@@ -36,6 +36,19 @@ Open: loop_fusion is -Omax only.
 
 The x_fir coefficient table is an array global of 16 elements stored by constant stores and read by 16 unrolled loads. LLVM's GlobalOpt splits an array global of up to 16 elements into one global per element (SRAGlobal) and replaces a global stored once by a constant (optimizeOnceStoredGlobal); our GlobalOpt only marks a never-stored global constant. So after the GVN forwarding fix, the second GlobalOpt slot needs SRA of small arrays and the once-stored fold, not only `never_stored`.
 
+## What `_numbers` still changes in QCport (2026-10-22, 41febda30, `FOLD_NO_NUMBERS=1` vs not, same binary; 260 compiles: 65 modules x -O1/-O2/-O3/-Os, 0 failed)
+19 objects differ, 11 modules. Bigger without `_numbers`: host/savegame (+44/+81/+83/+18 B at O1/O2/O3/Os), game/mdl_ai O1 +71, game/ent O2/O3 +14, game/weapons O1 +7, sound/snd_mix O1/Os +5/+1, ui/sbar O1/O2 +5/+2, render/dl O1 +2. Smaller without it (`_numbers` makes them bigger): host/cmd O1 -17, host/keybind O1/O2/O3/Os -15/-15/-5/-5, render/d_alias O1 -11. These 11 modules are the deletion list for `_numbers`; savegame is ours-only (the pin does not get it). Script: `numbers-corpus.py` (not in git).
+
+## Deletion list for `_numbers` (2026-10-22, 41febda30, vsgcc corpus + QCport, `FOLD_NO_NUMBERS=1` vs not, same binary)
+vsgcc (568 compiles, 0 failed): 13 objects change, all bigger without `_numbers`: x_fir m32/m16 O2,O3 (+558/+1385 B; GVN forwarding of the coefficient loads, #3569, then GlobalOpt SRA and once-stored fold), nbody_fixed O2,O3 m32/m16 (+287..+406 B), x_cordic O3 m32/m16 (+50/+110 B), lru m16 O2,O3,Os (+82 B). QCport: the list above (savegame is ours-only). Unattributed objects: nbody_fixed, x_cordic, lru m16, and the QCport modules other than savegame; each needs its pin pass named (as for x_fir) before it can be a PR.
+
+| step | date |
+|---|---|
+| name the pin pass for nbody_fixed, x_cordic, lru m16, mdl_ai, ent, weapons, snd_mix, sbar, dl | 10-29 |
+| GVN forwarding (#3569) and GlobalOpt SRA of small arrays plus the once-stored fold | 10-30 |
+| the objects still changed get a fix or a numbered row each; savegame is a row (ours-only gain) | 11-01 |
+| delete `_numbers`, then `writes` with its last caller, then floatfold into combine | 11-02 |
+
 ## Dates
 
 - 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).

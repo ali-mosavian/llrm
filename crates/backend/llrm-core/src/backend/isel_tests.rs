@@ -512,7 +512,9 @@ fn test_division_and_variable_shifts() {
 
 /// A variable index is scaled, and an address only accesses read is their
 /// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
-/// so no `ss:` override: it cost a byte and a clock at each access.
+/// so no `ss:` override: it cost a byte and a clock at each access. The
+/// doubled index is made once and both accesses use it (7a574ed3ed: precse
+/// no longer reads a load as touching the flags, so the two `i + i` are one).
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -532,15 +534,12 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
-            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
             "add si, si",
+            "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
-            "pop di",
             "pop si",
             "leave",
             "retf"
@@ -1059,6 +1058,35 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     );
     let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
+}
+
+/// QCport render/pal `_pal_install@3` and game/combat `_combat_radius@3`: a
+/// memmove of a few constant bytes whose direction no pass proved stopped the
+/// compile ("a memmove whose direction no pass proved") once MemCpyOpt made one
+/// of a copy chain. It is every load, then every store, as
+/// `getMemmoveLoadsAndStores`: the sides may overlap however they lie.
+#[test]
+fn test_a_small_memmove_of_no_proved_direction_loads_everything_before_it_stores() {
+    for (callee, source) in [("p0.p0", "ptr"), ("p0.p1", "ptr addrspace(1)")] {
+        let text = format!(
+            "declare void @llvm.memmove.{callee}.i16(ptr, {source}, i16, i1)
+define i16 @f(ptr %a, {source} %b) addrspace(1) {{
+  call void @llvm.memmove.{callee}.i16(ptr %a, {source} %b, i16 12, i1 false)
+  ret i16 0
+}}
+"
+        );
+        let lines = listing(&text, "f");
+        let moves: Vec<(usize, &String)> =
+            lines.iter().enumerate().filter(|(_, one)| one.starts_with("mov ") && one.contains("dword ptr")).collect();
+        let is_store = |one: &String| {
+            one.contains("ptr") && one.find("ptr").is_some_and(|at| one.find(',').is_some_and(|c| at < c))
+        };
+        let (stores, loads): (Vec<_>, Vec<_>) = moves.iter().partition(|(_, one)| is_store(one));
+        assert_eq!((loads.len(), stores.len()), (3, 3), "{lines:?}");
+        assert!(loads.iter().all(|(l, _)| stores.iter().all(|(s, _)| l < s)), "{lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep ") || one == "std"), "{lines:?}");
+    }
 }
 
 /// A backward move of constant addresses and a length of whole dwords stepped
@@ -3321,6 +3349,43 @@ define i16 @f() addrspace(1) {{
     assert!(!sized(4).contains("stos"), "{}", sized(4));
     assert!(sized(8).contains("rep stosb"), "{}", sized(8));
     assert!(assembled_on("486", &text(22)).contains("rep stosd"));
+}
+
+/// Tuned for size a constant memcpy is inline moves up to four pairs
+/// (`MaxStoresPerMemcpyOptSize`, X86ISelLowering.cpp#L2939), else `rep movs`;
+/// not tuned, eight (#L2938). A 24-byte copy (six dword pairs) was moves at
+/// -Os too.
+#[test]
+fn test_a_memcpy_tuned_for_size_is_moves_only_up_to_four_pairs() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  %b = alloca [{size} x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 {size}, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}}
+"
+        )
+    };
+    let sized = |size: u32, tuned: bool| {
+        let cpu = crate::backend::cpu::tuned("486", tuned).expect("a target");
+        let module = assemble::assembled(
+            &parsed(&text(size)),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(sized(24, true).contains("rep movs dword"), "{}", sized(24, true));
+    assert!(!sized(16, true).contains("movs"), "{}", sized(16, true));
+    assert!(!sized(24, false).contains("movs"), "{}", sized(24, false));
+    assert!(sized(36, false).contains("rep movs dword"), "{}", sized(36, false));
 }
 
 /// A far global is `seg name:offset name`, and a memset of a variable
