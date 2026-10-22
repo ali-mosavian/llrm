@@ -28,6 +28,13 @@
 //! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
 //! that nothing joins away. Under RFP the phis are lowered like any other.
 //!
+//! DEVIATE P5 (exit: isel gives every value a class, CF-3 in
+//! docs/working/vreg-class-field-plan.md): a temporary is made in the class
+//! its result has by `regclass::classes` at this pass (the field
+//! `LirBody::classes`), where the pin reads the result's register class, which
+//! the type gave it when it was created. A far pointer's selector read through
+//! ES is the case (render/dl).
+//!
 //! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
 //! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
 //! translated.
@@ -119,6 +126,15 @@ fn edges_to_split(
 
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
+    lowered_with(body, &IndexMap::default())
+}
+
+/// `lowered`, a phi's temporary made in the class of its result where `confined` has one
+/// (`createVirtualRegister(getRegClass(DestReg))`, PHIElimination.cpp#L414-L415).
+pub fn lowered_with(
+    body: &LirBody,
+    confined: &crate::backend::regclass::Classes,
+) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
         return Ok(body.clone());
     }
@@ -150,6 +166,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
+    let mut born: IndexMap<u32, std::collections::BTreeSet<llrm_lir::registers::RegId>> = IndexMap::default();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
         for &to in block.succ.iter() {
@@ -190,6 +207,11 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             if all_critical && reused.is_none() {
                 lowered_phis.insert(key, incoming);
             }
+            if reused.is_none()
+                && let Some(class) = confined.get(&phi.result)
+            {
+                born.insert(incoming, class.clone());
+            }
             // The copy at the top of the block, after any remaining phis.
             head.entry(block.at).or_default().push(phielim::_copy(block, phi.result, incoming, None, width));
             if reused.is_some() {
@@ -208,6 +230,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         left.insert(block.at, stays);
     }
     let mut out = body.clone();
+    if !born.is_empty() {
+        Arc::make_mut(&mut out.classes).extend(born);
+    }
     for block in &mut out.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let first = block.insns.iter().position(|one| !one.arrival()).unwrap_or(block.insns.len());

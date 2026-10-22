@@ -1037,6 +1037,11 @@ pub struct LirBody {
     pub blocks: Vec<Block>,
     pub origin: IndexMap<u32, RegId>,
     pub pins: IndexMap<u32, RegId>,
+    /// The registers a value made after instruction selection is confined to,
+    /// set where the pin's `createVirtualRegister` gives it a class (a phi's
+    /// temporary: PHIElimination.cpp#L414-L415). A value with no entry has the
+    /// class its uses give it (`regclass::classes`).
+    pub classes: Arc<IndexMap<u32, BTreeSet<RegId>>>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,
     pub ordered: bool,
@@ -1248,6 +1253,7 @@ impl LirBody {
             blocks,
             origin,
             pins,
+            classes: Arc::default(),
             inputs: BTreeSet::new(),
             loop_trip_counts: Vec::new(),
             ordered: false,
@@ -1311,6 +1317,7 @@ impl LirBody {
             blocks,
             origin: self.origin.clone(),
             pins: self.pins.clone(),
+            classes: Arc::clone(&self.classes),
             inputs: self.inputs.clone(),
             loop_trip_counts: self.loop_trip_counts.clone(),
             ordered: self.ordered,

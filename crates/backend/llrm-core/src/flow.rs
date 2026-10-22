@@ -131,7 +131,11 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
-        Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
+        Box::new(phielim::PhiElimination {
+            prices: phielim::EdgePrices::of(target),
+            segments: Some(segments.clone()),
+            classes: Some(Rc::clone(classes)),
+        }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
             segments: segments.clone(),

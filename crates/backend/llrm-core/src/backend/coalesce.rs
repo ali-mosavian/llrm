@@ -147,7 +147,12 @@ impl Coalescer {
         pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
         let pins: IndexMap<u32, RegId> =
             pins.into_iter().map(|(value, register)| (value, body.regs().root(register))).collect();
-        let where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        let mut where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        // A value made with a class of its own (a phi's temporary) has it where
+        // its uses give it none.
+        for (value, class) in body.classes.iter() {
+            where_of.entry(*value).or_insert_with(|| class.clone());
+        }
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
         let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
         for block in &body.blocks {

@@ -193,6 +193,10 @@ const EDGE_MARGIN: f64 = 0.9;
 #[derive(Default)]
 pub struct PhiElimination {
     pub prices: Option<EdgePrices>,
+    /// What a phi's temporary needs to be made in its result's class: the
+    /// target's segments and register classes. Without them it has none.
+    pub segments: Option<crate::backend::target::Segments>,
+    pub classes: Option<std::rc::Rc<crate::backend::classes::RegisterClasses>>,
 }
 
 impl LIRTransform for PhiElimination {
@@ -209,7 +213,13 @@ impl LIRTransform for PhiElimination {
         body: LirBody,
     ) -> Result<LirBody, String> {
         if !OLD_LOWERING.with(std::cell::Cell::get) && !llrm_support::env_flag!("LLRM_NO_PHIELIM_LLVM") {
-            let lowered = crate::phielimination::lowered(&body)?;
+            let confined = match (&self.segments, &self.classes) {
+                (Some(segments), Some(classes)) if body.blocks.iter().any(|block| !block.phis.is_empty()) => {
+                    crate::backend::regclass::classes(&body, &std::collections::BTreeSet::new(), segments, classes)
+                }
+                _ => Default::default(),
+            };
+            let lowered = crate::phielimination::lowered_with(&body, &confined)?;
             // What it leaves (x87 values, entangled phis, edges from outside)
             // is this pass's own; with none left there is nothing to price.
             if lowered.blocks.iter().all(|block| block.phis.is_empty()) {
@@ -2125,7 +2135,7 @@ mod tests {
         );
         use crate::model::passes::LIRTransform;
         super::OLD_STAGE.with(|runs| runs.set(0));
-        let done = super::PhiElimination { prices: None }.transform(join).expect("lowers");
+        let done = super::PhiElimination { prices: None, segments: None, classes: None }.transform(join).expect("lowers");
         assert!(done.blocks.iter().all(|block| block.phis.is_empty()), "the premise: no phi is left");
         assert_eq!(super::OLD_STAGE.with(std::cell::Cell::get), 0);
     }
