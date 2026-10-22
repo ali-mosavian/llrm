@@ -35,10 +35,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::actions::TargetLowering;
-use super::dag::{BooleanContents, NodeData, Rauw, SDValue, SelectionDAG};
+use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::lowering::TypeAction;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
+use super::x86_lowering::{x86isd, ES};
 
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -439,6 +440,16 @@ impl<'a> TypeLegalizer<'a> {
                 let lo = self.dag.get_constant_with(bits, half, false, self.dag.is_opaque(value));
                 let hi = self.dag.get_constant_with(bits >> width, half, false, self.dag.is_opaque(value));
                 (lo, hi)
+            }
+            ISD::Load if vt == EVT::Simple(MVT::Far) => {
+                // A far pointer is `les`: the offset, with the selector left in
+                // `ES` and read back on the chain (SD2).
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+                let les = self.dag.intern(x86isd::LES, &[half, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+                let selector = self.dag.get_copy_from_reg(SDValue { node: les.node, res: 1 }, ES, half);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
+                (les, selector)
             }
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
