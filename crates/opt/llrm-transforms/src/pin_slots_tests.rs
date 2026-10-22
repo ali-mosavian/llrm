@@ -283,8 +283,8 @@ const ROWS: &[Disposition] = &[
     row(
         Module,
         "ipsccp",
-        Why::Executed,
-        "ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's",
+        Why::Deviate,
+        "DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program",
         "",
     ),
     row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", UNASSIGNED),
@@ -299,7 +299,13 @@ const ROWS: &[Disposition] = &[
         "",
     ),
     row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", UNASSIGNED),
-    row(Module, "deadargelim", Why::Executed, "ipo-early (walk::ModuleIpo: ipa-deadargs)", ""),
+    row(
+        Module,
+        "deadargelim",
+        Why::Deviate,
+        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block",
+        "",
+    ),
     row(
         Module,
         "argpromotion",
