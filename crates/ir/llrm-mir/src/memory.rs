@@ -62,22 +62,27 @@ pub fn callees(module: &Module) -> Callees {
         .iter()
         .enumerate()
         .filter_map(|(at, global)| match &global.kind {
-            GlobalKind::Function(function) => {
-                let named = |prefix: &str| global.name.as_deref().is_some_and(|name| name.starts_with(prefix));
-                Some((
-                    GlobalId(at as u32),
-                    Summary {
-                        memset: named("llvm.memset."),
-                        pattern: named("llvm.experimental.memset.pattern."),
-                        lifetime: named("llvm.lifetime."),
-                        expect: named("llvm.expect."),
-                        ..summary(function)
-                    },
-                ))
-            }
+            GlobalKind::Function(function) => Some((GlobalId(at as u32), global_summary(global.name.as_deref(), function))),
             GlobalKind::Variable(_) => None,
         })
         .collect()
+}
+
+/// What a function named `name` does to memory: its attributes, and the
+/// intrinsic its name says it is. A declaration made during a pass run gets
+/// its summary the same way the module's do.
+pub fn global_summary(
+    name: Option<&str>,
+    function: &Function,
+) -> Summary {
+    let named = |prefix: &str| name.is_some_and(|name| name.starts_with(prefix));
+    Summary {
+        memset: named("llvm.memset."),
+        pattern: named("llvm.experimental.memset.pattern."),
+        lifetime: named("llvm.lifetime."),
+        expect: named("llvm.expect."),
+        ..summary(function)
+    }
 }
 
 pub fn summary(function: &Function) -> Summary {
