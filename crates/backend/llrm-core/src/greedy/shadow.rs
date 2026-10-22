@@ -438,7 +438,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             self.tables.float_bytes.borrow_mut().insert(to, bytes);
         }
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: to, width })],
             sources: vec![Loc::Held(Held { value: from, width })],
             ..Semantics::new(Operation::Move)
@@ -980,7 +980,7 @@ mod tests {
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -1164,7 +1164,7 @@ mod tests {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
         let _rfp = crate::backend::allocate::RfpOn::set();
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)
@@ -1427,7 +1427,7 @@ mod tests {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 4 })],
             sources: vec![Loc::Held(Held { value: 2, width: 4 })],
             ..Semantics::new(Operation::Move)
@@ -1458,7 +1458,7 @@ mod tests {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 2 })],
             sources: vec![Loc::Held(Held { value: 2, width: 2 })],
             ..Semantics::new(Operation::Move)
@@ -1491,13 +1491,13 @@ mod tests {
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
         let held = |value| Loc::Held(Held { value, width: 4 });
         let literal = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(1)],
             sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
         };
         let add = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(1)],
             sources: vec![held(1), held(2)],
             ..Semantics::new(Operation::Binary)
@@ -1520,7 +1520,7 @@ mod tests {
         // A load still needs the register's facts (D-I): nothing says the cell
         // is unchanged at the split.
         let load = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(1)],
             sources: vec![Loc::Mem(Mem {
                 addr: None,
@@ -1554,7 +1554,7 @@ mod tests {
         let (base, word) = (1u32, 2u32);
         let held = |value| Loc::Held(Held { value, width: 2 });
         let what = |op, name: &str, dests, sources| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)

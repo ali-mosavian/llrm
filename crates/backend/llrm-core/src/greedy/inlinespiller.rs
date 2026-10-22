@@ -1322,7 +1322,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         // A copy made by a split claims no bytes.
         let covers = if op == Operation::Move { (at, at) } else { (at, at + 1) };
         Arc::new(Insn::new(at, Some(covers), Some(what), defines, uses))

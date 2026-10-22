@@ -146,7 +146,7 @@ fn _integer_chain(
     store_at: usize,
     definitions: &Definitions,
     users: &IndexMap<u32, i64>,
-) -> Option<(usize, usize, Mem, Loc, String)> {
+) -> Option<(usize, usize, Mem, Loc, std::sync::Arc<str>)> {
     let store = &insns[store_at];
     let (cell, result) = match &store.what {
         Some(what)
@@ -184,7 +184,7 @@ fn _integer_chain(
         }
         _ => return None,
     };
-    if !_MEMORY_BINARY.contains(name.as_str())
+    if !_MEMORY_BINARY.contains(&*name)
         || made != result
         || operation.defines != [result.value]
         || operation.symbol == Some(true)
@@ -195,7 +195,7 @@ fn _integer_chain(
     }
 
     let mut candidates: Vec<(Held, Loc)> = vec![(left, right.clone())];
-    if _COMMUTATIVE.contains(name.as_str()) {
+    if _COMMUTATIVE.contains(&*name) {
         if let Loc::Held(right) = &right {
             candidates.push((*right, Loc::Held(left)));
         }
@@ -264,7 +264,7 @@ fn _fold_byte(
         let Some(what) = &store.what else { panic!("AssertionError") };
         let Loc::Mem(cell) = &what.dests[0] else { panic!("AssertionError") };
         let what = Semantics {
-            name: Some("or".to_owned()),
+            name: Some("or".into()),
             dests: vec![Loc::Mem(cell.clone())],
             sources: vec![Loc::Mem(cell.clone()), Loc::Held(mask)],
             ..Semantics::new(Operation::Binary)
@@ -544,7 +544,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn _chain(

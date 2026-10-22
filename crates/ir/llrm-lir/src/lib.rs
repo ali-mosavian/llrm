@@ -496,7 +496,7 @@ impl fmt::Display for Operation {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
-    pub name: Option<String>,
+    pub name: Option<std::sync::Arc<str>>,
     pub dests: Vec<Loc>,
     pub sources: Vec<Loc>,
     pub target: Option<i64>,
@@ -564,7 +564,7 @@ pub static UNMODELLED: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Ope
 /// Python `RESTORE_IDIOM`.
 pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     op: Operation::Restore,
-    name: Some("restore".to_owned()),
+    name: Some("restore".into()),
     dests: Vec::new(),
     sources: Vec::new(),
     target: None,
@@ -659,7 +659,7 @@ pub fn restoring(
 ) -> Semantics {
     Semantics {
         op: Operation::Restore,
-        name: Some("restore".to_owned()),
+        name: Some("restore".into()),
         dests: vec![low, high],
         sources: vec![wide],
         target: None,
@@ -1004,7 +1004,7 @@ impl Repr for Semantics {
             "Semantics",
             &[
                 ("op", self.op.repr()),
-                ("name", self.name.repr()),
+                ("name", self.name.as_deref().map(str::to_owned).repr()),
                 ("dests", pyrepr::tuple(&self.dests)),
                 ("sources", pyrepr::tuple(&self.sources)),
                 ("target", self.target.repr()),
@@ -1032,7 +1032,7 @@ mod repr_tests {
         );
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ..Semantics::new(Operation::Move)
