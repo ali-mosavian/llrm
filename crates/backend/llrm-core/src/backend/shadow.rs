@@ -42,6 +42,9 @@ pub enum Selector {
     Old,
     /// The SelectionDAG translation, `selectiondag-plan.md`.
     Dag,
+    /// The DAG path where it can select, else the old selector, each refusal
+    /// reported (`[isel] NAME refused: WHY`): what the harness measures.
+    Shadow,
 }
 
 impl Selector {
@@ -50,6 +53,7 @@ impl Selector {
         match self {
             Self::Old => "old",
             Self::Dag => "dag",
+            Self::Shadow => "shadow",
         }
     }
 
@@ -58,7 +62,8 @@ impl Selector {
         match text {
             "old" => Ok(Self::Old),
             "dag" => Ok(Self::Dag),
-            _ => Err(format!("unknown --isel={text}; choose old or dag")),
+            "shadow" => Ok(Self::Shadow),
+            _ => Err(format!("unknown --isel={text}; choose old, dag or shadow")),
         }
     }
 }

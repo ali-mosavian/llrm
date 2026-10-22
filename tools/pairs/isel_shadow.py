@@ -3,7 +3,7 @@
 
     tools/pairs/isel_shadow.py LLRM_C [--new LLRM_C2] [--old-isel old] [--new-isel dag] [--src DIR] [--levels O1,O2] [--targets m32,m16] [--programs a,b]
 
-Each cell (program, target, level) is compiled by `LLRM_C --isel=OLD` and `LLRM_C2 (default LLRM_C) --isel=NEW` with `LLRM_DEBUG=isel`; the rows
+Each cell (program, target, level) is compiled by `LLRM_C --isel=OLD` and `LLRM_C2 (default LLRM_C) --isel=NEW` (default `shadow`: the DAG path where it can select, else the old selector, each refusal reported) with `LLRM_DEBUG=isel`; the rows
 (`[isel] NAME selector=.. instructions=.. copies=.. executed=.. memory=..`, see backend/shadow.rs) and, at m32, the bytes of each function
 (ELF symbol sizes) and at m16 (jwasm's listing of `-S`, offsets from `proc` to `endp`; calibrated against the OMF code bytes by
 ~/scratch/w3-qo/bytes.py) are compared by function. jwasm is $JWASM, else beside LLRM_C, else on PATH. Prints one summary line, then each function that differs and each cell one side refused. A compile that
@@ -29,12 +29,20 @@ FIELDS = ("instructions", "copies", "executed", "memory")
 SYMBOL = re.compile(r"^\s*\d+: [0-9a-f]+\s+(\d+) FUNC\s+\S+\s+\S+\s+\S+ (\S+)$")
 
 
+REFUSED = re.compile(r"^\[isel\] (\S+) refused: (.*)$")
+
+
 def parse_rows(stderr: str) -> dict[str, dict[str, str]]:
-    """{function: {field: value}} from the `isel` channel's rows; a function written twice keeps its last row."""
-    rows = {}
+    """{function: {field: value}} from the `isel` channel's rows; a function written twice keeps its last row. A function the DAG path
+    refused (`--isel=shadow`, which falls back to the old selector there) carries `refused: why`."""
+    rows, refused = {}, {}
     for line in stderr.splitlines():
         if found := ROW.match(line):
             rows[found[1]] = dict(zip(FIELDS, found.groups()[2:]))
+        elif found := REFUSED.match(line):
+            refused[found[1]] = found[2]
+    for name, why in refused.items():
+        rows.setdefault(name, {})["refused"] = why
     return rows
 
 
@@ -74,6 +82,8 @@ def differences(old: dict, new: dict) -> list[str]:
         a, b = old.get(name), new.get(name)
         if a is None or b is None:
             lines.append(f"{name}: only in {'old' if b is None else 'new'}")
+        elif "refused" in b:
+            lines.append(f"{name}: REFUSED {b['refused']}")
         elif a != b:
             lines.append(f"{name}: " + ", ".join(f"{k} {a[k]} -> {b[k]}" for k in a if a[k] != b.get(k)))
     return lines
@@ -108,7 +118,7 @@ def main() -> int:
     parser.add_argument("binary")
     parser.add_argument("--new", default="")
     parser.add_argument("--old-isel", default="old")
-    parser.add_argument("--new-isel", default="dag")
+    parser.add_argument("--new-isel", default="shadow")
     parser.add_argument("--src", default=str(Path(os.environ.get("ROWS_WORK", Path.home() / "scratch/rows")) / "base/b"))
     parser.add_argument("--levels", default="O2")
     parser.add_argument("--targets", default="m32,m16")

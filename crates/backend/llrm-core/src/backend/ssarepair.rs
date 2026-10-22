@@ -105,7 +105,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::analysis::loops;
-use crate::backend::{allocate, spiller};
+use crate::backend::allocate;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
@@ -235,11 +235,12 @@ pub fn repaired(
                     }
                 }
             }
-            let mut one = if rename.is_empty() { Arc::clone(one) } else { spiller::_renamed(one, &rename) };
+            let mut one =
+                if rename.is_empty() { Arc::clone(one) } else { crate::backend::bodyfacts::_renamed(one, &rename) };
             if let Some(value) = reloads(&one, redefined) {
                 let name = next;
                 next += 1;
-                one = spiller::_renamed(&one, &IndexMap::from_iter([(value, name)]));
+                one = crate::backend::bodyfacts::_renamed(&one, &IndexMap::from_iter([(value, name)]));
                 stacks.entry(value).or_default().push(name);
                 mine.push(value);
             } else {
@@ -338,7 +339,7 @@ pub fn simplified(body: &LirBody) -> Option<LirBody> {
                     .iter()
                     .map(|one| {
                         if one.uses.iter().any(|value| ends.contains_key(value)) {
-                            spiller::_renamed(one, &ends)
+                            crate::backend::bodyfacts::_renamed(one, &ends)
                         } else {
                             Arc::clone(one)
                         }
