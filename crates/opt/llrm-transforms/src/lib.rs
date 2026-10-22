@@ -262,6 +262,8 @@ pub mod parity;
 #[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
+mod codegen_slots_tests;
+#[cfg(test)]
 mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]

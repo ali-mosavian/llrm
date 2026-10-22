@@ -260,6 +260,57 @@ b3:
     assert!(!body.contains("load"), "{text}");
 }
 
+/// A declaration a pass makes is seen by the passes after it in the same run,
+/// as LLVM's `getOrInsertFunction` puts it in the module at once. Loop idiom
+/// declared `llvm.memset` (the module had none), and the merge after it did not
+/// know the callee for a memset: lru's two 14-byte fills stayed two calls,
+/// 52 clocks and 61 bytes at -Os.
+#[test]
+fn two_fills_made_into_memsets_in_a_module_with_none_are_one_memset() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@c = global [14 x i16] zeroinitializer
+
+define void @main() {{
+b0:
+  %second = getelementptr i16, ptr @c, i16 7
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %p = getelementptr i16, ptr @c, i16 %i
+  store i16 -1, ptr %p
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 7
+  br i1 %more, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %k = phi i16 [ 0, %b2 ], [ %l, %b3 ]
+  %q = getelementptr i16, ptr %second, i16 %k
+  store i16 -1, ptr %q
+  %l = add i16 %k, 1
+  %again = icmp ult i16 %l, 7
+  br i1 %again, label %b3, label %b4
+
+b4:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    let calls: Vec<&str> = text.lines().filter(|line| line.contains("call void @llvm.memset")).collect();
+    assert!(calls.len() == 1 && calls[0].contains("i16 28"), "{text}");
+}
+
 /// matmul8's init: an inner loop branching on `i == j` is peeled, then its
 /// outer loop, which decides every branch. Peel ran once per body, so the
 /// outer loop stayed rolled around eight undecided diamonds.
