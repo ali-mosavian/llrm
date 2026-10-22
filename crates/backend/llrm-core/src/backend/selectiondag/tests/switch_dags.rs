@@ -49,7 +49,8 @@ fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
 fn pins(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut all: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     let mut current: Option<(String, String)> = None;
-    let finish = |current: &mut Option<(String, String)>, all: &mut std::collections::BTreeMap<String, Vec<String>>| {
+    let finish = |current: &mut Option<(String, String)>,
+                  all: &mut std::collections::BTreeMap<String, Vec<String>>| {
         if let Some((name, body)) = current.take() {
             all.entry(name).or_default().push(normalized(&body));
         }
@@ -83,8 +84,7 @@ fn jump_table_and_bit_test_blocks_match_the_pins_initial_dags() {
 
 #[test]
 fn switch_blocks_match_the_pins_initial_dags() {
-    let (ours, pins) =
-        (ours(include_str!("../golden/switchdag.ll")), pins(include_str!("../golden/switchdag.pin.txt")));
+    let (ours, pins) = (ours(include_str!("../golden/switchdag.ll")), pins(include_str!("../golden/switchdag.pin.txt")));
     assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
     for (name, dumps) in &ours {
         assert_eq!(dumps, &pins[name], "function {name}");

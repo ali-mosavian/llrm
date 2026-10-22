@@ -13,8 +13,8 @@ fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
 }
 
 /// 71 of 158 functions of the shadow corpus stopped at "GlobalAddress:
-/// convert node to libcall". The pin makes `Wrapper (TargetGlobalAddress g)`,
-/// which the matcher turns into `mov reg, offset g`.
+/// convert node to libcall". The pin makes `Wrapper (TargetGlobalAddress
+/// g)`, which the matcher turns into `mov reg, offset g`.
 #[test]
 fn a_global_is_a_wrapper_of_the_target_address() {
     let (dag, root) = legalized(0);

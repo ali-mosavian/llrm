@@ -101,7 +101,8 @@ fn multiply_by_five_is_a_lea_after_types_are_legal() {
 }
 
 /// The other constants (root and first operand): 15 is `(x*5)*3`, 10 is
-/// `(x<<1)*5`, 11 is `(x*5 << 1) + x`, -5 is `0 - x*5`, 7 is `(x << 3) - x`.
+/// `(x<<1)*5`, 11 is `(x*5 << 1) + x`, -5 is `0 - x*5`, 7 is `(x << 3)
+/// - x`.
 #[test]
 fn multiply_by_other_constants_is_leas_shifts_and_adds() {
     let shape = |c: i32| {

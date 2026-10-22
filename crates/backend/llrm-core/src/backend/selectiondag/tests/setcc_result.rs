@@ -13,11 +13,11 @@ fn load(
     dag.get_load(vt, chain, ptr, info)
 }
 
-/// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no register
-/// holds. 73 of 160 functions of the shadow corpus stopped here ("SetCC:
-/// promote result"). After: an `i8` compare (the target's result type)
-/// zero-extended-in-register into the select's condition, and nothing
-/// illegal reachable.
+/// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no
+/// register holds. 73 of 160 functions of the shadow corpus stopped
+/// here ("SetCC: promote result"). After: an `i8` compare (the target's
+/// result type) zero-extended-in-register into the select's condition,
+/// and nothing illegal reachable.
 #[test]
 fn an_i1_compare_feeding_a_select_is_promoted_to_i8() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);

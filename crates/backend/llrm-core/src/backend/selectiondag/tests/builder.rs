@@ -43,9 +43,21 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         for &block in function.layout() {
-            let name =
-                format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
-            match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
+            let name = format!(
+                "{}:{}",
+                global.name.as_deref().unwrap(),
+                function.block(block).name.as_deref().unwrap_or("")
+            );
+            match build_block(
+                &module,
+                function,
+                &layout,
+                &target,
+                &llrm_x86_m32::M32,
+                &convention,
+                &mut info,
+                block,
+            ) {
                 Ok(done) => {
                     built.insert(name, normalized(&done.dag.dump()));
                 }
@@ -151,6 +163,21 @@ fn constant_expressions_match_the_pins_initial_dag() {
     }
 }
 
+/// `fshl`/`fshr` (a rotate when both inputs are one value),
+/// `lifetime.start`/`end` of a static alloca, and `memmove`, inline or a
+/// libcall: the pin's. Each stopped the builder as an "intrinsic call".
+#[test]
+fn funnel_lifetime_and_memmove_match_the_pins_initial_dag() {
+    let ll = include_str!("../golden/intrinsics.ll");
+    let pin = pin_blocks(include_str!("../golden/intrinsics.pin.txt"));
+    let (ours, refused) = our_blocks(ll);
+    assert_eq!(refused, Vec::<String>::new());
+    assert_eq!(ours.len(), 5);
+    for (name, dag) in &ours {
+        assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+    }
+}
+
 #[test]
 fn indirect_calls_match_the_pins_initial_dag() {
     let ll = include_str!("../golden/indirect.ll");
@@ -187,7 +214,8 @@ fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
-    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let convention =
+        crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let built = build_block(
         &module,

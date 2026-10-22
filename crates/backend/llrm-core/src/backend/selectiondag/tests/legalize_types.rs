@@ -59,7 +59,8 @@ fn a_promoted_loads_chain_users_follow() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let a = load(&mut dag, EVT::Int(12), 1);
-    let chain_user = dag.get_node(ISD::TokenFactor, EVT::OTHER, &[SDValue { node: a.node, res: 1 }, dag.entry_node()]);
+    let chain_user =
+        dag.get_node(ISD::TokenFactor, EVT::OTHER, &[SDValue { node: a.node, res: 1 }, dag.entry_node()]);
     dag.set_root(chain_user);
     legalize(&mut dag, &tli).unwrap();
     // A token factor of one chain and the entry is that chain.

@@ -48,7 +48,8 @@ fn a_left_shift_by_a_small_constant_is_a_shift_and_a_funnel_shift() {
     assert_eq!((dag.opcode(high), amount_of(&dag, high)), (ISD::FShl, (Some(3), EVT::I8)));
 }
 
-/// A shift by 40 moves a whole dword: `x >> 40` is `hi >> 8` low, zero high.
+/// A shift by 40 moves a whole dword: `x >> 40` is `hi >> 8` low, zero
+/// high.
 #[test]
 fn a_right_shift_past_one_dword_shifts_the_high_dword() {
     let (dag, low, high) = shifted(ISD::Srl, 40);
@@ -102,7 +103,11 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     let tli = p5();
     DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
     let root = dag.get_root();
-    assert_eq!((dag.opcode(root), root.res), (ISD::MergeValues, 1), "the merge of both halves; the combiner drops it");
+    assert_eq!(
+        (dag.opcode(root), root.res),
+        (ISD::MergeValues, 1),
+        "the merge of both halves; the combiner drops it"
+    );
     let high = dag.operand(root, 1);
     assert_eq!(dag.opcode(high), x86isd::CMOV);
     assert_eq!(dag.opcode(dag.operand(high, 0)), ISD::FShl, "the false value is the funnel shift");
