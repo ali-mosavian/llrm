@@ -439,7 +439,13 @@ impl Builder<'_> {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
-                        let info = MemInfo { mem_vt: part_vt, align, volatile: false, base: MemBase::Stack(-fixed), ext: None };
+                        let info = MemInfo {
+                            mem_vt: part_vt,
+                            align,
+                            volatile: false,
+                            base: MemBase::Stack(-fixed),
+                            ext: None,
+                        };
                         pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
                     }
                 }
