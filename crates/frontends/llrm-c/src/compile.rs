@@ -385,6 +385,15 @@ pub fn recorded(
     )
 }
 
+/// Why this binary cannot compile: the tree it was built in is gone.
+pub fn tree_missing() -> Option<String> {
+    let root = Path::new(env!("LLRM_ROOT"));
+    let wccq = option_env!("LLRM_WCCQ_DIR").map(Path::new);
+    let mut needs = vec![("source tree", root)];
+    needs.extend(wccq.map(|dir| ("front end directory", dir)));
+    llrm_support::tree::missing("llrm-c", &needs)
+}
+
 /// `source` recorded by the front end of `profile`'s tree, asked as it says.
 pub fn recorded_for(
     source: &Path,
