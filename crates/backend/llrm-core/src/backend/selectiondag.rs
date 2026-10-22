@@ -132,3 +132,5 @@ mod dagisel_tests;
 mod tests;
 #[cfg(test)]
 mod fpround_tests;
+#[cfg(test)]
+mod bundle_tests;

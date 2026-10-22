@@ -629,7 +629,10 @@ b50:
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
     let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
     let global = object_of(&parsed.unit(), root).expect("an object");
-    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
+    // DEVIATE AN2: the guard `%i < 4` and the counted loop narrowed this to
+    // [4, 11) by 2 (`Bounded`); `computeConstantRange` reads neither a phi nor
+    // a dominating branch, so the slice is the whole object (AM-BD-4).
+    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 0, 64, 1, 2).unwrap()]));
 }
 
 /// A byte counter stepping by `step` for 200 trips, counting the trips
