@@ -270,7 +270,28 @@ impl ISD {
         use ISD::*;
         matches!(
             self,
-            Add | Mul | MulHU | MulHS | SMulLoHi | UMulLoHi | And | Or | Xor | SMin | SMax | UMin | UMax | SAddSat | UAddSat | FAdd | FMul | UAddO | SAddO | UMulO | SMulO | AddC | AddE
+            Add | Mul
+                | MulHU
+                | MulHS
+                | SMulLoHi
+                | UMulLoHi
+                | And
+                | Or
+                | Xor
+                | SMin
+                | SMax
+                | UMin
+                | UMax
+                | SAddSat
+                | UAddSat
+                | FAdd
+                | FMul
+                | UAddO
+                | SAddO
+                | UMulO
+                | SMulO
+                | AddC
+                | AddE
         )
     }
 }
@@ -311,8 +332,8 @@ impl CondCode {
     const ALL: [CondCode; 24] = {
         use CondCode::*;
         [
-            SetFalse, SetOEq, SetOGt, SetOGe, SetOLt, SetOLe, SetONe, SetO, SetUo, SetUEq, SetUGt, SetUGe, SetULt, SetULe, SetUNe, SetTrue, SetFalse2, SetEq, SetGt, SetGe, SetLt,
-            SetLe, SetNe, SetTrue2,
+            SetFalse, SetOEq, SetOGt, SetOGe, SetOLt, SetOLe, SetONe, SetO, SetUo, SetUEq, SetUGt, SetUGe, SetULt,
+            SetULe, SetUNe, SetTrue, SetFalse2, SetEq, SetGt, SetGe, SetLt, SetLe, SetNe, SetTrue2,
         ]
     };
 
@@ -373,10 +394,16 @@ impl CondCode {
     }
 
     pub fn is_signed_int(self) -> bool {
-        matches!(self, CondCode::SetGt | CondCode::SetGe | CondCode::SetLt | CondCode::SetLe)
+        matches!(
+            self,
+            CondCode::SetGt | CondCode::SetGe | CondCode::SetLt | CondCode::SetLe
+        )
     }
 
     pub fn is_unsigned_int(self) -> bool {
-        matches!(self, CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe)
+        matches!(
+            self,
+            CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe
+        )
     }
 }
