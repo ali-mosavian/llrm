@@ -36,3 +36,10 @@ The pin: `cgscc(devirt<4>(inline, function-attrs<skip-non-recursive>, function<n
 ## 5. D10 and #3454 under the pin's walk
 
 Neither is an order artifact. LLVM refuses to inline a recursive callee into itself, so the pin has no self-copies at any order; D10 is gcc's `recursive_inlining` as a numbered DEVIATE (ruled 2026-10-22, review 2026-11-30) and its second Simplify run is its cleanup. #3454 (self-copies honour `-fno-inline-functions`, the pin's OnlyAlwaysInlining) is a flag fact independent of the walk. Both survive a walk that matches the pin's caps. D10's chains are re-measured after #3422 and #3497 (hanoi, recsum, rectwo).
+
+## 6. Rows added 2026-10-23
+
+| id | row | evidence | owner | plan note | first code PR |
+|---|---|---|---|---|---|
+| IPO-FP-1 | A call through a constant table of function pointers (`x_funcptr`: `table[(i*7 + (x&3)) & 3](x)`) is a switch of direct calls the inliner then takes: the pin's `CalledValuePropagation` states the callees (`!callees`) and its CGSCC inliner promotes the call (`Inliner.cpp` `tryPromoteCall`) before inlining; ours has neither and keeps four indirect calls | pin `default<O2>` on our IR of x_funcptr: no calls left, a `switch` with `call.0..3` blocks and `default.unreachable`; ours: `f0..f3` not inlined (C bench -O2/-O3: the only non-recursive difference of 142 program/levels) | w-6 | 2026-11-02 (read CalledValuePropagation and tryPromoteCall) | 2026-11-06 |
+| IPO-INL-1 | Recursive callees we inline (D10) that the pin never does: 20 of the 24 differing program/levels; accounted for by D10 | same comparison | w-6 | D10's numbered DEVIATE (docs/architecture/recursion-rows.md) | none |
