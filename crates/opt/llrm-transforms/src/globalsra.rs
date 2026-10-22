@@ -85,7 +85,7 @@ use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::pointer_base_with_constant_offset;
 
-use crate::globalopt::reach;
+use crate::globalopt::Reach;
 
 /// LLVM's cap on pieces both loaded and stored.
 const MAX_PIECES: usize = 16;
@@ -103,6 +103,73 @@ struct Access {
     size: u64,
     /// The integer a store writes, where it is a constant.
     constant: Option<u128>,
+}
+
+/// Every global's uses in `function`, found in one scan: as `globalopt::reach`
+/// finds one global's, none for a global one of whose uses is not its address.
+fn reach_all(
+    context: &llrm_mir::context::Context,
+    function: &llrm_mir::module::Function,
+    named: &mut BTreeMap<llrm_mir::context::ConstantId, BTreeSet<GlobalId>>,
+) -> BTreeMap<GlobalId, Option<Reach>> {
+    let mut work: BTreeMap<GlobalId, Vec<(InstId, usize)>> = BTreeMap::new();
+    let mut bad: BTreeSet<GlobalId> = BTreeSet::new();
+    for (_, inst) in function.walk() {
+        for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
+            let Operand::Constant(id) = operand else { continue };
+            let globals = named.entry(id).or_insert_with(|| {
+                let mut found = BTreeSet::new();
+                embedded(context, id, &mut found);
+                found
+            });
+            for &global in globals.iter() {
+                if crate::globalopt::addresses(context, id, global) {
+                    work.entry(global).or_default().push((inst, index));
+                } else {
+                    bad.insert(global);
+                }
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (global, mut work) in work {
+        if bad.contains(&global) {
+            out.insert(global, None);
+            continue;
+        }
+        let mut found = Reach { uses: Vec::new(), moved: Vec::new() };
+        while let Some((inst, index)) = work.pop() {
+            let op = function.instruction(inst);
+            match op.opcode {
+                Opcode::GetElementPtr { .. } | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast)
+                    if index == 0 =>
+                {
+                    found.moved.push(inst);
+                    if let Some(value) = op.result {
+                        work.extend(function.users(value).iter().map(|one| (one.user, one.index as usize)));
+                    }
+                }
+                _ => found.uses.push((inst, index)),
+            }
+        }
+        out.insert(global, Some(found));
+    }
+    for global in bad {
+        out.insert(global, None);
+    }
+    out
+}
+
+/// Each function's uses of each global.
+fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
+    let mut named = BTreeMap::new();
+    let mut all = BTreeMap::new();
+    for (function_id, _, function) in module.functions() {
+        if !function.is_declaration() {
+            all.insert(function_id, reach_all(&module.context, function, &mut named));
+        }
+    }
+    all
 }
 
 /// The functions changed.
@@ -129,14 +196,21 @@ pub fn split(
             .then_some(id)
         })
         .collect();
+    let reached = reaching(module);
     for id in candidates {
-        let Some(accesses) = accesses(module, layout, id) else { continue };
+        let Some(accesses) = accesses(module, layout, id, &reached) else { continue };
         let pieces = sliced(module, layout, id, &accesses);
         let Some(pieces) = pieces else { continue };
-        changed.extend(rewrite(module, id, &accesses, &pieces));
+        let moved: BTreeMap<GlobalId, Vec<InstId>> = reached
+            .iter()
+            .filter_map(|(&function, table)| Some((function, table.get(&id)?.as_ref()?.moved.clone())))
+            .collect();
+        changed.extend(rewrite(module, id, &accesses, &pieces, &moved));
     }
+    let reached = reaching(module);
+    let mut trees = BTreeMap::new();
     for id in locals(module) {
-        if let Some(function) = localize(module, layout, id) {
+        if let Some(function) = localize(module, layout, id, &reached, &mut trees) {
             changed.insert(function);
         }
     }
@@ -160,14 +234,14 @@ fn accesses(
     module: &Module,
     layout: &DataLayout,
     id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
 ) -> Option<Vec<Access>> {
     let context = &module.context;
     let mut found = Vec::new();
-    for (function_id, _, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let reached = reach(context, function, id)?;
+    for (&function_id, table) in reached {
+        let Some(reached) = table.get(&id) else { continue };
+        let reached = reached.as_ref()?;
+        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
         for &(inst, index) in &reached.uses {
             let instruction = function.instruction(inst);
             let (store, pointer) = match instruction.opcode {
@@ -221,7 +295,13 @@ fn sliced(
     if pieces.is_empty() {
         return None;
     }
-    if pieces.len() == 1 && pieces.values().next() == Some(&variable.ty) {
+    // Not back to the same layout: one piece that is all of the variable (a
+    // scalar the frontend spelled as bytes) is no split.
+    let whole = layout.alloc_size(&context.types, variable.ty) as i64;
+    if pieces.len() == 1
+        && (pieces.values().next() == Some(&variable.ty)
+            || pieces.iter().next().is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole))
+    {
         return None;
     }
     let mut end = 0;
@@ -231,7 +311,7 @@ fn sliced(
         }
         end = offset + layout.store_size(&context.types, ty) as i64;
     }
-    if end > layout.alloc_size(&context.types, variable.ty) as i64 {
+    if end > whole {
         return None;
     }
     let size = |offset: i64| layout.store_size(&context.types, pieces[&offset]) as i64;
@@ -279,6 +359,7 @@ fn rewrite(
     id: GlobalId,
     accesses: &[Access],
     pieces: &[(i64, TypeId, Constant)],
+    moved: &BTreeMap<GlobalId, Vec<InstId>>,
 ) -> BTreeSet<GlobalId> {
     let layout_sizes: Vec<i64> =
         pieces.iter().map(|(_, ty, _)| i64::from(module.context.types.int_bits(*ty).unwrap_or(8)) / 8).collect();
@@ -317,17 +398,13 @@ fn rewrite(
     let at = |offset: i64| pieces.iter().position(|(one, _, _)| *one == offset);
     let mut changed = BTreeSet::new();
     let Module { context, globals, .. } = module;
-    let mut reached: BTreeMap<GlobalId, Vec<InstId>> = BTreeMap::new();
-    for global in globals.iter().enumerate() {
-        let (idx, global) = global;
-        let GlobalKind::Function(function) = &global.kind else { continue };
-        if function.is_declaration() {
-            continue;
-        }
-        if let Some(found) = reach(context, function, id) {
-            reached.insert(GlobalId(idx as u32), found.moved);
-        }
-    }
+    let reached: BTreeMap<GlobalId, Vec<InstId>> = accesses
+        .iter()
+        .map(|one| one.function)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|function| (function, moved.get(&function).cloned().unwrap_or_default()))
+        .collect();
     for access in accesses {
         let void = context.types.void();
         let GlobalKind::Function(function) = &mut globals[access.function.0 as usize].kind else { continue };
@@ -414,6 +491,8 @@ fn localize(
     module: &mut Module,
     layout: &DataLayout,
     id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
 ) -> Option<GlobalId> {
     let context = &module.context;
     let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
@@ -421,11 +500,10 @@ fn localize(
     let mut owner: Option<GlobalId> = None;
     let mut loads: Vec<InstId> = Vec::new();
     let mut stores: Vec<InstId> = Vec::new();
-    for (function_id, _, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let Some(reached) = reach(context, function, id) else { return None };
+    for (&function_id, table) in reached {
+        let Some(reached) = table.get(&id) else { continue };
+        let reached = reached.as_ref()?;
+        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
         if reached.uses.is_empty() {
             continue;
         }
@@ -452,7 +530,7 @@ fn localize(
     if !Facts::of(&function.attrs).no_recurse() {
         return None;
     }
-    let tree = DomTree::of(function);
+    let tree = trees.entry(owner).or_insert_with(|| DomTree::of(function));
     let size = |inst: InstId, index: usize| {
         let ty = function.operand_type(context, function.instruction(inst).operands[index])?;
         Some(layout.store_size(&context.types, ty))

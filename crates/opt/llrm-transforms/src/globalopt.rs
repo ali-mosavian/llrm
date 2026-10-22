@@ -185,7 +185,7 @@ fn only_used(
 }
 
 /// Whether `constant` is `global`'s address, moved or cast.
-fn addresses(
+pub(crate) fn addresses(
     context: &Context,
     constant: ConstantId,
     global: GlobalId,
