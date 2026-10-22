@@ -152,7 +152,7 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress),
+        Box::new(twoaddr::TwoAddress { native: target.dword_address_form().is_some_and(|form| !form.secondary) }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
@@ -284,7 +284,7 @@ pub fn checked(
             &body,
             segments,
             classes,
-            &crate::backend::ssaspill::untouchable(&body),
+            &crate::backend::regclass::untouchable(&body),
         );
         let peak = found
             .iter()

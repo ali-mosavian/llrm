@@ -1093,7 +1093,10 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
-                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                // The stage that only retargets loads and stores of globals
+                // keeps GlobalsAA past its bodies, as the walk's runs do.
+                rerun(module, analyses, id, &mut again, stage == "globalsra.")
+                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),

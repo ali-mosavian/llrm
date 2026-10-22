@@ -165,14 +165,14 @@ fn callee_intrinsic(
 /// Every way `function` uses `global`'s address, found once: the operands that
 /// take the address as it stands (`uses`), and the address arithmetic and casts
 /// between the global and them (`moved`).
-struct Reach {
-    uses: Vec<(InstId, usize)>,
-    moved: Vec<InstId>,
+pub(crate) struct Reach {
+    pub(crate) uses: Vec<(InstId, usize)>,
+    pub(crate) moved: Vec<InstId>,
 }
 
 /// `global`'s uses in `function`, through address arithmetic and casts; none
 /// where an operand names the global other than as its address.
-fn reach(
+pub(crate) fn reach(
     context: &Context,
     function: &Function,
     global: GlobalId,
@@ -220,7 +220,7 @@ fn only_used(
 }
 
 /// Whether `constant` is `global`'s address, moved or cast.
-fn addresses(
+pub(crate) fn addresses(
     context: &Context,
     constant: ConstantId,
     global: GlobalId,

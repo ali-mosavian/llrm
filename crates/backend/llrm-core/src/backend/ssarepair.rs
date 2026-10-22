@@ -184,7 +184,7 @@ pub fn repaired(
             children.entry(*parent).or_default().push(block.at);
         }
     }
-    let mut next = spiller::_next_value(body);
+    let mut next = body.next_value();
     let mut stacks: IndexMap<u32, Vec<u32>> = IndexMap::default();
     let mut insns_of: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut phis_of: IndexMap<i64, Vec<Phi>> =
