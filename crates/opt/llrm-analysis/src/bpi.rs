@@ -979,7 +979,6 @@ pub fn print_module_branch_prob(module: &llrm_mir::module::Module) -> String {
     out
 }
 
-
 #[cfg(test)]
 #[path = "bpi_tests.rs"]
 mod tests;
