@@ -142,6 +142,10 @@ pub fn classes(
 /// {SI,DI}; the pin has no such model. A pair member keeps its side.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
+///
+/// No caller yet: splitkit's spiller and split sites recompute per value
+/// (`reclass_orders`, #3668); this whole-body entry is for the base/index pair
+/// members they leave to the parent, if a miss shows.
 pub fn recompute_class(
     body: &LirBody,
     value: u32,

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 178 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 179 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -39,6 +39,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
 | combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
+| combine_memintrinsics | InstCombine's memory intrinsics: a `memcpy` or `memmove` of 1, 2, 4 or 8 bytes is one integer load and one store. | `combine` (its `visit`, the `Call` opcode). | [combine_memintrinsics](combine_memintrinsics.md) |
 | combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
 | combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. |  | [combine_or](combine_or.md) |
@@ -83,6 +84,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | gepoffset | Moves the constant an index adds into a `gep` of its own, where address modes take it as a displacement: `a[i + 8]` then needs no add, and no register for the sum, to reach its element. | Once, after the body fixed point and after `hoist`: a hoisted constant `gep` | [gepoffset](gepoffset.md) |
 | globaldce | Delete the module's own bodies and variables that nothing live names. | Once, as a program pass after the interprocedural step, so the bodies that | [globaldce](globaldce.md) |
 | globalopt | Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
+| globalsra | Split an internal variable into the pieces its loads read, then give a piece one function writes before it reads to that function as a stack slot: LLVM's `SRAGlobal` and the localizing branch of `processInternalGlobal` (GlobalOpt.cpp, d1106deb71cc). | A stage of the interprocedural step, `globalsra.`, after the bodies are | [globalsra](globalsra.md) |
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. |  | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
