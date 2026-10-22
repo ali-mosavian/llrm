@@ -195,32 +195,57 @@ pub fn _merged(
     exits: &BTreeSet<i64>,
     predecessors: &llrm_support::graph::Predecessors,
 ) -> Result<bool, String> {
-    let mut reaching = needed
-        .iter()
-        .map(|&at| (at, if exits.contains(&at) { BTreeSet::from([at]) } else { BTreeSet::new() }))
-        .collect::<BTreeMap<_, _>>();
-    loop {
-        let changed = needed
-            .iter()
-            .map(|&at| {
-                let now = if exits.contains(&at) {
-                    reaching[&at].clone()
-                } else {
-                    predecessors[&at].iter().flat_map(|parent| reaching[parent].iter().copied()).collect()
-                };
-                (at, now)
-            })
-            .collect::<BTreeMap<_, _>>();
-        if changed == reaching {
-            break;
-        }
-        reaching = changed;
-    }
-    if reaching.values().any(BTreeSet::is_empty) {
-        return Ok(false);
-    }
+    // The phis that reach each block. A join stands for the exits behind it: a
+    // block below one that sees nothing else needs no phi (SSAUpdater makes a
+    // phi only where the values differ).
     let mut joins = exits.clone();
-    joins.extend(needed.iter().copied().filter(|at| reaching[at].len() > 1 && predecessors[at].len() > 1));
+    let reaching = loop {
+        let mut reaching = needed
+            .iter()
+            .map(|&at| (at, if joins.contains(&at) { BTreeSet::from([at]) } else { BTreeSet::new() }))
+            .collect::<BTreeMap<_, _>>();
+        loop {
+            let changed = needed
+                .iter()
+                .map(|&at| {
+                    let now = if joins.contains(&at) {
+                        reaching[&at].clone()
+                    } else {
+                        predecessors[&at].iter().flat_map(|parent| reaching[parent].iter().copied()).collect()
+                    };
+                    (at, now)
+                })
+                .collect::<BTreeMap<_, _>>();
+            if changed == reaching {
+                break;
+            }
+            reaching = changed;
+        }
+        if reaching.values().any(BTreeSet::is_empty) {
+            return Ok(false);
+        }
+        let more = needed
+            .iter()
+            .copied()
+            .filter(|at| !joins.contains(at) && reaching[at].len() > 1 && predecessors[at].len() > 1)
+            .collect::<Vec<_>>();
+        // One at a time, the one nothing else waiting lies above: a join above
+        // may leave those below it with one supplier.
+        let above = |from: i64| {
+            let mut seen = BTreeSet::new();
+            let mut pending = predecessors[&from].to_vec();
+            while let Some(at) = pending.pop() {
+                if needed.contains(&at) && seen.insert(at) {
+                    pending.extend(predecessors[&at].iter().copied());
+                }
+            }
+            seen
+        };
+        let Some(&first) = more.iter().find(|&&at| !above(at).iter().any(|up| more.contains(up))).or(more.first()) else {
+            break reaching;
+        };
+        joins.insert(first);
+    };
     // Which join's phi each needed block reads.
     let mut supplier = joins.iter().map(|&at| (at, at)).collect::<BTreeMap<_, _>>();
     let mut pending = needed.difference(&joins).copied().collect::<BTreeSet<_>>();

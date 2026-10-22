@@ -324,3 +324,63 @@ fn test_closing_over_a_held_shape_is_closing() {
     assert!(super::closed_in(f(&mut module), &shape).unwrap());
     assert_eq!(printed(&module), closed_once(LOOP_WITH_EXIT_USE));
 }
+
+/// A loop with two exits that meet at `merge`, then a branch that joins again:
+/// closing made a phi at every join below the first, `%s.lcssa3` and
+/// `%s.lcssa4` of one value, which the next `closed` took away again
+/// (`closed` was not a fixed point: 9 QCport modules, `LcssaForm` check).
+/// LLVM's SSAUpdater makes a phi only where the values differ.
+#[test]
+fn test_two_exits_that_meet_make_one_merge_phi_not_one_per_join_below() {
+    let closed = closed_once(
+        "declare i16 @g(i16)
+
+define i16 @f(i16 %n, i16 %m) {
+b1:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b1 ], [ %i2, %latch ]
+  %s = phi i16 [ 0, %b1 ], [ %s2, %latch ]
+  %c = icmp ult i16 %i, %n
+  br i1 %c, label %body, label %x1
+
+body:
+  %z = icmp eq i16 %i, %m
+  br i1 %z, label %x2, label %latch
+
+latch:
+  %i2 = add i16 %i, 1
+  %s2 = add i16 %s, %i
+  br label %h
+
+x1:
+  br label %merge
+
+x2:
+  br label %merge
+
+merge:
+  %t = icmp eq i16 %m, 0
+  br i1 %t, label %j, label %k
+
+k:
+  %r = call i16 @g(i16 %m)
+  br label %j
+
+j:
+  %e = icmp eq i16 %n, 3
+  br i1 %e, label %b27, label %b26
+
+b27:
+  br label %b26
+
+b26:
+  %out = add i16 %s, 1
+  ret i16 %out
+}
+",
+    );
+    assert_eq!(closed.lines().filter(|line| line.contains(".lcssa") && line.contains(" = phi ")).count(), 3, "{closed}");
+    assert!(closed.contains("add i16 %s.lcssa2, 1"), "{closed}");
+}
