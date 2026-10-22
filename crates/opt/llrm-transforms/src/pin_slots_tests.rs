@@ -261,49 +261,9 @@ const ROWS: &[Disposition] = &[
     row(Late, "div-rem-pairs", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
     row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
     row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(
-        Late,
-        "tailcallelim",
-        Why::Missing,
-        "the late run after expand-memcmp; ablation +1 instruction in 1 of 12 IRs",
-        UNASSIGNED,
-    ),
     row(Late, "vector-combine", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
     row(Late, "annotation-remarks", NA, "remarks off", ""),
     row(Late, "chr", NA, "control-height-reduction needs profile data", ""),
-    row(
-        Late,
-        "licm",
-        Why::Order,
-        "ours builds licm@1508 first in the Late list; the pin runs it after loop-interchange/loop-distribute/..",
-        "w-6",
-    ),
-    row(
-        Late,
-        "loop-interchange",
-        Why::Order,
-        "ours after licm@1508, before the pin's loop-rotate/loop-deletion",
-        UNASSIGNED,
-    ),
-    row(Late, "loop-load-elim", Why::Order, "stands earlier than the pin's", UNASSIGNED),
-    row(
-        Late,
-        "instsimplify",
-        Why::Order,
-        "stands earlier than the pin's (after the late instcombine runs)",
-        UNASSIGNED,
-    ),
-    row(
-        Simplify,
-        "adce",
-        Why::Order,
-        "-O1 only: ours runs the O2 order minus the absent passes; the pin's O1 list is its own",
-        UNASSIGNED,
-    ),
-    row(Simplify, "bdce", Why::Order, "-O1 only, as adce", UNASSIGNED),
-    row(Simplify, "instcombine", Why::Order, "-O1 only, as adce", UNASSIGNED),
-    row(Simplify, "sccp", Why::Order, "-O1 only, as adce", UNASSIGNED),
-    row(Simplify, "simplifycfg", Why::Order, "-O1 only, as adce", UNASSIGNED),
     row(Module, "memprof-remove-attributes", NA, "memprof: no profile", ""),
     row(Module, "annotation2metadata", NA, "no source annotations", ""),
     row(Module, "forceattrs", NA, "command-line forced attributes: none given", ""),
@@ -355,12 +315,19 @@ const ROWS: &[Disposition] = &[
     row(Module, "cg-profile", NA, "profile data", ""),
     row(Module, "rel-lookup-table-converter", NA, "relative lookup tables are a PIC feature; no PIC targets", ""),
     row(Module, "lower-comment-string", NA, "#pragma comment strings", ""),
+    row(
+        Simplify,
+        "memcpyopt",
+        Why::Order,
+        "-O1 only: ours places it where the O2 list does; the pin's O1 list orders it differently (the one slot off the pin's order, by position)",
+        UNASSIGNED,
+    ),
 ];
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
     (
-        "1438: simplifycfg@1438",
+        "2376: simplifycfg@2376",
         "registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is)",
     ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
@@ -408,6 +375,32 @@ impl Row {
     }
 }
 
+/// The indexes of a longest run of `matched` (its `Some` values, in order)
+/// that increases: the slots that stand in the pin's order.
+fn longest_increasing(matched: &[Option<usize>]) -> Vec<usize> {
+    // tails[k]: the index into `matched` of the smallest value ending a run of
+    // k + 1.
+    let mut tails: Vec<usize> = Vec::new();
+    let mut parent: Vec<Option<usize>> = vec![None; matched.len()];
+    for (index, value) in matched.iter().enumerate() {
+        let Some(value) = value else { continue };
+        let at = tails.partition_point(|&tail| matched[tail].is_some_and(|one| one < *value));
+        parent[index] = at.checked_sub(1).map(|before| tails[before]);
+        if at == tails.len() {
+            tails.push(index);
+        } else {
+            tails[at] = index;
+        }
+    }
+    let mut run = Vec::new();
+    let mut at = tails.last().copied();
+    while let Some(index) = at {
+        run.push(index);
+        at = parent[index];
+    }
+    run
+}
+
 fn rows() -> Vec<Row> {
     let mut rows = Vec::new();
     for (level, fixture) in FIXTURES {
@@ -415,27 +408,32 @@ fn rows() -> Vec<Row> {
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late, Phase::Module] {
             let groups = built_groups(level, phase);
             let mut taken = vec![false; groups.len()];
-            let mut cursor = 0;
-            for slot in pin.iter().filter(|one| one.phase == phase) {
-                let wants = |(_, entries): &(String, Vec<Entry>)| {
-                    entries.iter().any(|entry| llvm_names(entry).iter().any(|name| *name == slot.name))
-                };
-                let forward = (cursor..groups.len()).find(|&at| !taken[at] && wants(&groups[at]));
-                let (at, state) = match forward {
-                    Some(at) => (Some(at), "match"),
-                    None => (groups.iter().enumerate().position(|(at, group)| !taken[at] && wants(group)), "inverted"),
-                };
-                match at {
+            // Each pin slot takes the first group of ours that names its pass
+            // and is not taken, whatever the order; the order is
+            // judged after, by position: the slots off the longest
+            // run that is in the pin's order are the ones that
+            // moved (the others stand where they should).
+            let pins: Vec<&PinSlot> = pin.iter().filter(|one| one.phase == phase).collect();
+            let mut matched: Vec<Option<usize>> = Vec::new();
+            for slot in &pins {
+                let found = groups.iter().enumerate().position(|(at, (_, entries))| {
+                    !taken[at] && entries.iter().any(|entry| llvm_names(entry).iter().any(|name| *name == slot.name))
+                });
+                if let Some(at) = found {
+                    taken[at] = true;
+                }
+                matched.push(found);
+            }
+            let in_order = longest_increasing(&matched);
+            for (index, slot) in pins.iter().enumerate() {
+                match matched[index] {
                     Some(at) => {
-                        taken[at] = true;
-                        if state == "match" {
-                            cursor = at + 1;
-                        }
                         let kinds: Vec<String> =
                             groups[at].1.iter().map(|one| format!("{}:{:?}", one.slot, one.kind)).collect();
-                        rows.push(Row { level, pin: slot.clone(), ours: kinds.join(" + "), state });
+                        let state = if in_order.contains(&index) { "match" } else { "inverted" };
+                        rows.push(Row { level, pin: (*slot).clone(), ours: kinds.join(" + "), state });
                     }
-                    None => rows.push(Row { level, pin: slot.clone(), ours: String::new(), state: "none" }),
+                    None => rows.push(Row { level, pin: (*slot).clone(), ours: String::new(), state: "none" }),
                 }
             }
             for (at, (group, entries)) in groups.iter().enumerate() {

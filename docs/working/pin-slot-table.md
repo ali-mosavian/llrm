@@ -10,20 +10,198 @@ Output of the slot test (funcattrs-port, 2026-10-22; first table 1442783c8e6d, c
 
 ## Counts (pin slots)
 
-| level | match | inverted | none | ours-only | none+inverted: N/A | EXECUTED | MISSING | ORDER |
-|---|---|---|---|---|---|---|---|---|
-| -O1 | 28 | 9 | 58 | 9 | 20 | 12 | 26 | 9 |
-| -O2 | 43 | 4 | 67 | 3 | 25 | 12 | 30 | 4 |
-| -O3 | 43 | 4 | 70 | 4 | 26 | 12 | 32 | 4 |
-| -Os | 43 | 4 | 67 | 3 | 25 | 12 | 30 | 4 |
+By position (a pin slot is `inverted` only when it is off the longest run of our groups that stands in the pin's order; the first table's greedy matcher marked the wrong passes: licm@1508 for float2int). After #3517/#7d9f6edf8c (late list in the pin's order, TailCallElim at its late slot) merged:
 
-First table (registry only): -O1 58 none, -O2 67, -O3 70, -Os 67. Executed order accounts for the Module rows marked EXECUTED: that many of the none were instrument gaps, not gaps in llrm.
+| level | match | inverted | none | ours-only |
+|---|---|---|---|---|
+| -O1 | 37 | 1 | 57 | 9 |
+| -O2 | 48 | 0 | 66 | 3 |
+| -O3 | 48 | 0 | 69 | 4 |
+| -Os | 48 | 0 | 66 | 3 |
+
+History: first table -O2 43 match / 4 inverted / 67 none; by position and on merged parity 48 / 0 / 66 (-O1: 37 / 1 / 57; the one inverted slot is memcpyopt). The `none` rows are classified in the table's `row` column (N/A, EXECUTED, MISSING, ORDER).
 
 ## MISSING rows ranked by effect
 
 `tools/pairs/pin_ablate.py`: the pin's -O2 pipeline (fixture) over 12 bench C programs (crc, nbody, bintree, queens, shellsort, matmul, sieve, quicksort, mandel, fib, hanoi, histo; the pin's clang -O0 IR, m32), with one instance of a pass removed at a time; effect = change in instructions of the pin's output. The instrument sees effects (without gvn +50 instructions in 5 of 12 IRs, indvars +100 in 7, loop-unroll-full +77 in 4, early-cse +63 in 2). Result for the pass instances ours has no slot for (the full list is the table below): late `tailcallelim` +1 instruction in 1 of 12; every other MISSING pass 0 of 12. The corpus is small C without libm, memcmp, assumes or SSE: a 0 is not evidence the pass never matters (QB/QCport/Nib corpora were not measured: the pin cannot parse llrm's QB IR), only that these 12 do not need it. Order for owners: (1) late instcombine/tailcallelim/loop-rotate/loop-unroll/sroa/loop-deletion (the late list is where the pin cleans up after the loop passes; ours runs none of them, measured effect small on this corpus), (2) rpo-function-attrs, argpromotion (-O3), constmerge (-Os data bytes), (3) the rest.
 
 Rows with owner `unassigned` go to the coordinator on 10-26; the test `every_pin_slot_is_matched_or_accounted_for` fails on a slot without a row, on a row nothing needs, and on an inversion not in an ORDER row.
+
+## Order structure
+
+The pin's pipeline is nested, not a flat list of slots (`PassBuilderPipelines.cpp` at d1106deb71cc: [buildInlinerPipeline L973](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L973), the CGSCC members [L1047-L1049](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1047-L1049), [L1074](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1074)). `default<O2>` as the pin prints it, params shortened, `require`/`invalidate` left out:
+
+```
+memprof-remove-attributes
+annotation2metadata
+forceattrs
+inferattrs
+coro-early
+function<…>(
+  ee-instrument<…>
+  lower-expect
+  simplifycfg<…>
+  sroa<…>
+  early-cse<…>
+)
+openmp-opt
+ipsccp
+called-value-propagation
+globalopt
+function<…>(
+  mem2reg
+  instcombine<…>
+  simplifycfg<…>
+)
+always-inline
+function(
+)
+cgscc(
+  devirt<…>(
+    inline
+    function-attrs<…>
+    openmp-opt-cgscc
+    function<…>(
+      sroa<…>
+      early-cse<…>
+      speculative-execution<…>
+      jump-threading
+      correlated-propagation
+      jump-table-to-switch
+      simplifycfg<…>
+      instcombine<…>
+      aggressive-instcombine
+      libcalls-shrinkwrap
+      tailcallelim
+      simplifycfg<…>
+      reassociate
+      constraint-elimination
+      loop-mssa(
+        loop-instsimplify
+        loop-simplifycfg
+        licm<…>
+        loop-rotate<…>
+        licm<…>
+        simple-loop-unswitch<…>
+      )
+      simplifycfg<…>
+      instcombine<…>
+      loop(
+        loop-idiom
+        indvars
+        extra-simple-loop-unswitch-passes
+        loop-deletion
+        loop-unroll-full
+      )
+      sroa<…>
+      vector-combine
+      mldst-motion<…>
+      gvn<…>
+      sccp
+      bdce
+      instcombine<…>
+      dfa-jump-threading
+      jump-threading
+      correlated-propagation
+      adce
+      memcpyopt
+      dse
+      move-auto-init
+      loop-mssa(
+        licm<…>
+      )
+      coro-elide
+      simplifycfg<…>
+      instcombine<…>
+    )
+    function-attrs
+    function(
+    )
+    coro-split
+    coro-annotation-elide
+  )
+)
+deadargelim
+coro-cleanup
+globalopt
+globaldce
+elim-avail-extern
+rpo-function-attrs
+recompute-globalsaa
+function<…>(
+  drop-unnecessary-assumes
+  float2int
+  lower-constant-intrinsics
+  loop(
+    loop-rotate<…>
+    loop-deletion
+    loop-interchange
+  )
+  loop-distribute
+  inject-tli-mappings
+  loop-vectorize<…>
+  drop-unnecessary-assumes<…>
+  infer-alignment
+  loop-load-elim
+  instcombine<…>
+  simplifycfg<…>
+  slp-vectorizer
+  vector-combine
+  instcombine<…>
+  loop-unroll<…>
+  transform-warning
+  sroa<…>
+  infer-alignment
+  instcombine<…>
+  loop-mssa(
+    licm<…>
+  )
+  alignment-from-assumptions
+  loop-sink
+  instsimplify
+  div-rem-pairs
+  mergeicmps
+  expand-memcmp
+  tailcallelim
+  simplifycfg<…>
+)
+alloc-token
+globaldce
+constmerge
+cg-profile
+rel-lookup-table-converter
+lower-comment-string
+function(
+  annotation-remarks
+)
+```
+
+Ours as executed (`--dump` of d_faces -O2, stage files in the order the manager ran them; pipeline.rs `recorded` with `llvm_order`):
+
+```
+module
+  globalopt                      GlobalOpt (a subset)             pin: globalopt (first)
+  ports                          target I/O ports                 pin: -
+  stamp                          interprocedural::Stamp           pin: inferattrs
+  function  Early list           per body, all bodies             pin: function(Early)
+  ModuleIpo                      ipa-args, ipa-range, deadargelim pin: ipsccp, deadargelim (W1: before the Simplify list; the pin runs it after the CGSCC block)
+  sccp                           ipsccp's per-body half
+  function  Cleanup list         GlobalCleanup                    pin: function(mem2reg, instcombine, simplifycfg)
+  Walk (program pass)            callees first, per function: inline sites (inlinecost::sites), then the Simplify list over it, once
+  function  Late list            DEVIATE: before the interprocedural step; the pin runs it after the module passes below
+  Interprocedural                inline again, ipa-cp clones, what each body does (function-attrs); changed bodies rerun the Simplify list
+  writeonly, globaldce, available-externally, calleepop           pin: globalopt, globaldce, elim-avail-extern (+ fastcc)
+  llrm's own MIR passes          rotate (header copy), lsr, window, ...   pin: -
+```
+
+Differences, by order and contents (each a row of the table or of the list below):
+
+1. `devirt<4>`: the pin repeats the whole SCC block up to four times while indirect calls are devirtualized; ours runs the Simplify list once per body in `Walk` and again in `Interprocedural` (walk.rs W2a: per function, callee-first, not per SCC, no devirtualization repeat). Both go callee-first (`Walk`, walk.rs): the order is not the difference; the SCC unit and the repeat are. Row: DEVIATE W2a.
+2. `function-attrs` inside the SCC: the pin runs `function-attrs<skip-non-recursive-function-attrs>` right after `inline` and `function-attrs` after the function block, so a callee's attributes (readonly, nounwind, norecurse, argmem) are inferred from its simplified body before the caller is simplified. Ours states facts once up front (`stamp`) and infers them in `Interprocedural`, after the walk. Row: MISSING inside the walk, unassigned (evidence: w-1's `_cmd_tokenize@3` attr difference).
+3. `deadargelim` position: before the Simplify list in ours, after the CGSCC block in the pin (walk.rs W1). `always-inline` is a separate pass before the SCC block in the pin, inside `Walk`'s site decision in ours. Row: DEVIATE W1.
+4. After the SCC block the pin runs `deadargelim, coro-cleanup, globalopt, globaldce, elim-avail-extern, rpo-function-attrs, recompute-globalsaa`, then the Late function list, then `globaldce` again and `constmerge`. Ours runs the Late list before `Interprocedural`, then `writeonly`, `globaldce` (once), `available-externally`, `calleepop`; no `rpo-function-attrs`, no second `globaldce`, no `constmerge` (Module rows MISSING in the table).
+5. Contents of the function block `function<eager-inv;no-rerun>(...)` against our Simplify list, pass by pass: the pin's `speculative-execution`, `jump-table-to-switch`, `libcalls-shrinkwrap`, `constraint-elimination`, `loop-instsimplify`, `loop-simplifycfg`, `extra-simple-loop-unswitch-passes`, `vector-combine`, `mldst-motion`, `move-auto-init`, `coro-elide` have no slot of ours (classified in the table: N/A for the target and frontends, MISSING for the rest, ablation 0 of 12 IRs); ours has `loopsimplify`/`lcssa` pairs at :764 and :772 the pin's loop adaptors make implicit (ours-only rows). The order of the matched ones is the pin's (no inversion at -O2/-O3/-Os; by position).
+6. Not here: the `_sift` PRE/smax split is with w-1/w-4 via w-5.
 
 ## Table
 
