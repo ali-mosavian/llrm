@@ -543,6 +543,21 @@ mod builder {
         }
     }
 
+    /// `fshl`/`fshr` (a rotate when both inputs are one value),
+    /// `lifetime.start`/`end` of a static alloca, and `memmove`, inline or a
+    /// libcall: the pin's. Each stopped the builder as an "intrinsic call".
+    #[test]
+    fn funnel_lifetime_and_memmove_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/intrinsics.ll");
+        let pin = pin_blocks(include_str!("golden/intrinsics.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 5);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");
