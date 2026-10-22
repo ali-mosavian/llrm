@@ -471,10 +471,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 EFLAGS copy lowering",
-        Match,
+        Deviate,
         "flagscopy.rs",
         "",
-        "translated (registry flagscopy@5) over an explicit flags copy; isel makes none yet (DEVIATE R1). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "CG9: translated (registry flagscopy@5) over an explicit flags copy, the pseudo pair standing for the pin's COPY $eflags search (R1 one block, R2); reason: isel makes no flags copy; cost: none; exit: an isel producer of a flags copy; owner w-5; review 2026-11-19. Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -657,10 +657,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
-        Missing,
-        "prologue.rs, masm.rs; framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate; not yet called: CG7)",
+        Deviate,
+        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, FO-1) and framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate), not yet called: CG7",
         "",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry prologue@13. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
@@ -778,10 +778,10 @@ const ROWS: &[Row] = &[
     row("X86 vzeroupper inserter", Na, "", "", "AVX only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs"),
     row(
         "X86 Byte/Word Instruction Fixup",
-        Missing,
+        Deviate,
+        "peephole.peep group byte_word_fixup",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a peephole group (W2), one rule per pin function with its permalink, not a pass; reason: the liveness and encoding facts are the peephole's; cost: none known; exit: a Rust pass once those facts reach LIRTransforms; owner w-5; review 2026-11-19. W1: real mode only if not longer. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
     ),
     row(
         "X86 Atom pad short functions",

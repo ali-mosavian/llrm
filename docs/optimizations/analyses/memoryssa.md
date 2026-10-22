@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memoryssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memoryssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:268ed5ea28a6b859d67318d2d51f1fdb96185cfd221dbb86c05e0e5ccab6ba87 -->
+<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:d40ad92a319ddc27ed1184eff60a7c6d3c0502fb81850810a2b79cdca8bf25b2 -->
 
 # memoryssa
 
@@ -8,11 +8,12 @@ with a walker that finds the writes a load may see.
 
 ## How it works
 `Accesses` records what each instruction touches: a load's or store's own
-`MemRef`, a call's footprint (its `CallEffects`, or anything its attributes
-allow), and the bytes a call fills before reading any. It is the manager's
-`accesses` analysis, built from [`crate::manager`](manager.md)'s `Annotated` and
-`CallEffects`, and kept across changes that only move instructions or give a
-store another value (`update`).
+`MemRef`, a call's footprint (`alias::calls_by_attributes`: its attributes
+and `GlobalsModRef`, no points-to solve), and the bytes a call fills before
+reading any. A query of a call is the meet of the footprint and `AAResults`
+(BasicAA, GlobalsAA). It is the manager's `accesses` analysis, built from
+[`crate::manager`](manager.md)'s `Annotated`, and kept across changes that only move
+instructions or give a store another value (`update`).
 
 `built` numbers the accesses. Every instruction that writes (`None` writes
 means anything) is a `Def`; one that only reads memory is a `Use`; one that
@@ -112,7 +113,7 @@ From unit test `test_a_join_gets_one_memory_phi` in `memoryssa_tests.rs`.
 `transform`.
 
 ## Needs
-[`crate::manager`](manager.md) (`Annotated`, `CallEffects`, `ExposedFrames`),
+[`crate::manager`](manager.md) (`Annotated`, `PointerValues`, `ExposedFrames`),
 [`crate::cfg`](cfg.md), [`crate::regions`](regions.md), [`crate::pointerfacts`](pointerfacts.md),
 [`crate::memory`](memory.md).
 

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 124 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -53,6 +53,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
 | framelowering | The prologue and epilogue a frame needs on i486: LLVM's `X86FrameLowering::emitPrologue` ([L1677](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L1677)), `emitEpilogue` ([L2580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L2580)) and `emitSPUpdate` ([L247](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L247)), the callee-saved spills of `spillCalleeSavedRegisters` included. | Nothing yet (CG7). | [framelowering](framelowering.md) |
+| frameobjects | Where each frame object goes and how big the frame is: LLVM's `PEIImpl::calculateFrameObjectOffsets` ([PrologEpilogInserter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PrologEpilogInserter.cpp#L856)). | Nothing yet (FO-1). | [frameobjects](frameobjects.md) |
 | funnel | Expands `llvm.fshl` and `llvm.fshr` into shifts and an or in MIR before instruction selection, for the targets whose description lists `fshl` or `fshr` under `expand`. | Once per module in `driver::optimized`, for a target that lists `fshl` or | [funnel](funnel.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
@@ -76,6 +77,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
+| machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
