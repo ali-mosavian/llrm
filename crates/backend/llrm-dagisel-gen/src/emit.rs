@@ -291,7 +291,7 @@ pub fn render_instr_info(lines: &str, ids: &Ids, emitted: &BTreeSet<u16>) -> Res
         let mut parts = line.split(' ');
         let mut next = || parts.next().ok_or_else(|| format!("short instrinfo line `{line}`"));
         let name = next()?;
-        let Some(&opcode) = ids.0.get(&format!("X86::{name}")) else { continue };
+        let Some(&opcode) = ids.0.get(&format!("X86::{name}")).or_else(|| ids.0.get(&format!("TargetOpcode::{name}"))) else { continue };
         if !emitted.contains(&(opcode as u16)) {
             continue;
         }

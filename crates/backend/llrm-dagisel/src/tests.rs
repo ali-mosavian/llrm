@@ -1014,3 +1014,48 @@ mod select_loop {
         assert_eq!(to_cl.expect("the count goes to CL").1.ops[2], n, "the +32 is gone");
     }
 }
+
+mod nodes_before_the_table {
+    use super::*;
+    use crate::generated::ids::target_opcode;
+    use crate::testing::TestDag;
+
+    fn select(dag: &mut TestDag, node: u32) -> Outcome {
+        Selector::new(table::TABLE).select(dag, &mut crate::testing::TestHooks { address: None }, node)
+    }
+
+    #[test]
+    fn undef_becomes_implicit_def_not_an_unselectable_node() {
+        let mut dag = TestDag::new();
+        let undef = dag.node(isd::UNDEF, &[mvt::i32], &[]);
+
+        assert_eq!(select(&mut dag, undef), Outcome::Selected);
+
+        assert_eq!(dag.nodes[undef as usize].machine, Some(target_opcode::IMPLICIT_DEF));
+    }
+
+    #[test]
+    fn freeze_becomes_a_copy_of_its_operand() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let freeze = dag.node(isd::FREEZE, &[mvt::i32], &[x]);
+
+        assert_eq!(select(&mut dag, freeze), Outcome::Selected);
+
+        assert_eq!(dag.nodes[freeze as usize].machine, Some(target_opcode::COPY));
+        assert_eq!(dag.nodes[freeze as usize].ops, [x]);
+    }
+
+    #[test]
+    fn an_assertion_is_replaced_by_the_value_it_asserts_about() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let asserted = dag.node(isd::AssertZext, &[mvt::i32], &[x]);
+        let user = dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(asserted, 0), x]);
+
+        assert_eq!(select(&mut dag, asserted), Outcome::Selected);
+
+        assert_eq!(dag.nodes[user as usize].ops[0], x, "the add reads x, not the assertion");
+        assert!(dag.nodes[asserted as usize].dead);
+    }
+}

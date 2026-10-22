@@ -25,7 +25,7 @@
 //! [known]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3103
 
 use crate::dag::{Dag, Hooks, MemRef, SDValue};
-use crate::generated::ids::{isd, mvt};
+use crate::generated::ids::{isd, mvt, target_opcode};
 use crate::matcher::{opfl, Emit, Matcher, Opcode, Slice, Table, Vt};
 
 /// How a node left the interpreter.
@@ -108,6 +108,9 @@ impl Selector {
         node_to_match: u32,
     ) -> Outcome {
         if needs_no_selection(dag.opcode(node_to_match)) {
+            return Outcome::Selected;
+        }
+        if select_special(dag, node_to_match) {
             return Outcome::Selected;
         }
         let Scratch { node_stack, match_scopes, saved_stacks, recorded, matched_mem_refs, chain_nodes_matched } =
@@ -704,6 +707,36 @@ fn needs_no_selection(opcode: Opcode) -> bool {
             | isd::PSEUDO_PROBE
             | isd::DEACTIVATION_SYMBOL
     )
+}
+
+/// The nodes `SelectCodeCommon` makes machine nodes of before the table ([L3362][special]):
+/// `UNDEF`, `FREEZE` and the fences, and the asserts, which only mark a value. `false` for the rest.
+///
+/// [special]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3362
+fn select_special<D: Dag>(dag: &mut D, node: u32) -> bool {
+    let result = SDValue::new(node, 0);
+    let operand = |dag: &D| dag.operand(node, 0);
+    let (opcode, ops): (u16, Vec<SDValue>) = match dag.opcode(node) {
+        // Assertions say something about a value and are not code: its users read the operand.
+        isd::AssertSext | isd::AssertZext | isd::AssertAlign | isd::AssertNoFPClass => {
+            let source = operand(dag);
+            dag.replace_uses(result, source);
+            dag.remove_dead_node(node);
+            return true;
+        }
+        isd::UNDEF | isd::POISON => (target_opcode::IMPLICIT_DEF, Vec::new()),
+        isd::FREEZE => (target_opcode::COPY, vec![operand(dag)]),
+        isd::ARITH_FENCE => (target_opcode::ARITH_FENCE, vec![operand(dag)]),
+        isd::MEMBARRIER => (target_opcode::MEMBARRIER, vec![operand(dag)]),
+        _ => return false,
+    };
+    // `SelectNodeTo(N, Opc, VT, Ops)`: the node becomes the machine node.
+    let vt = dag.value_type(result);
+    let (selected, _) = dag.morph_node_to(node, opcode, &[vt], &ops);
+    if selected != node {
+        dag.replace_node(node, selected);
+    }
+    true
 }
 
 /// `SignExtend64(Val, MVT(VT).getFixedSizeInBits())`.

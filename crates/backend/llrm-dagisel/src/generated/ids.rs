@@ -14,12 +14,14 @@ pub mod isd {
     pub const AND: u16 = 193;
     pub const ANNOTATION_LABEL: u16 = 328;
     pub const ANY_EXTEND: u16 = 229;
+    pub const ARITH_FENCE: u16 = 353;
     pub const ATOMIC_LOAD: u16 = 356;
     pub const ATOMIC_LOAD_ADD: u16 = 361;
     pub const ATOMIC_STORE: u16 = 357;
     pub const ATOMIC_SWAP: u16 = 360;
     pub const AVGCEILU: u16 = 184;
     pub const AssertAlign: u16 = 5;
+    pub const AssertNoFPClass: u16 = 6;
     pub const AssertSext: u16 = 3;
     pub const AssertZext: u16 = 4;
     pub const BITCAST: u16 = 248;
@@ -97,6 +99,7 @@ pub mod isd {
     pub const LRINT: u16 = 293;
     pub const MCSymbol: u16 = 46;
     pub const MDNODE_SDNODE: u16 = 342;
+    pub const MEMBARRIER: u16 = 354;
     pub const MERGE_VALUES: u16 = 58;
     pub const MLOAD: u16 = 384;
     pub const MSTORE: u16 = 385;
@@ -745,6 +748,17 @@ pub mod x86 {
     pub const XOR32mr: u16 = 22637;
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
+}
+
+pub mod target_opcode {
+    pub const ARITH_FENCE: u16 = 26;
+    pub const COPY: u16 = 20;
+    pub const COPY_TO_REGCLASS: u16 = 13;
+    pub const EXTRACT_SUBREG: u16 = 8;
+    pub const IMPLICIT_DEF: u16 = 10;
+    pub const INSERT_SUBREG: u16 = 9;
+    pub const MEMBARRIER: u16 = 45;
+    pub const SUBREG_TO_REG: u16 = 12;
 }
 
 pub mod mvt {

@@ -83,7 +83,7 @@ fn run() -> Result<(), String> {
         }
     }
     // The opcodes the hand matchers make (`x86_rmw`) are named in the extras, not in the tables.
-    for name in extras.iter().filter(|n| n.starts_with("X86::") && *n != "X86::EFLAGS") {
+    for name in extras.iter().filter(|n| (n.starts_with("X86::") || n.starts_with("TargetOpcode::")) && *n != "X86::EFLAGS") {
         emitted.insert(ids.get(name)? as u16);
     }
     write("instrinfo.rs", emit::render_instr_info(&instrinfo, &ids, &emitted)?)?;
