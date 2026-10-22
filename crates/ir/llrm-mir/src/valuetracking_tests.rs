@@ -139,3 +139,44 @@ fn test_alignment_of_a_global_the_running_pass_declared_is_one() {
     // `@w` not yet among the globals.
     assert_eq!(alignment(&module.context, &layout, &[], function, pointer), 1);
 }
+
+/// A far pointer made of a global's selector is `segment:0`, a pointer into
+/// the data segment: `underlying` named the global its selector came from.
+#[test]
+fn underlying_stops_at_a_cast_from_a_selector_alone() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@pa = global [2 x i8] zeroinitializer
+
+define ptr addrspace(1) @f(i16 %n) {{
+b0:
+  %near = getelementptr i8, ptr @pa, i16 0
+  %far0 = addrspacecast ptr %near to ptr addrspace(1)
+  %sg = addrspacecast ptr addrspace(1) %far0 to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %sg to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  ret ptr addrspace(1) %p
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16";
+    let root = |datalayout: &str| {
+        let module = parse::module(&text(datalayout)).expect("parses");
+        let layout = crate::datalayout::DataLayout::parse(datalayout).expect("a layout");
+        let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+            unreachable!()
+        };
+        let ret = function.terminator(function.entry().expect("an entry")).expect("a return");
+        let (root, _) =
+            crate::valuetracking::underlying(&module.context, &layout, function, function.instruction(ret).operands[0]);
+        matches!(
+            root,
+            crate::module::Operand::Constant(id) if matches!(module.context.get(id).kind, crate::context::ConstantKind::Global(_))
+        )
+    };
+    assert!(root(base), "premise: through an integral selector space the global is the object");
+    assert!(!root(&format!("{base}-ni:2")));
+}

@@ -340,7 +340,6 @@ impl Options {
             ipa_ranges: false,
             loop_intervals: false,
             pre: false,
-            sibcalls: false,
             peel: false,
             loop_unrolling: false,
             unswitch: false,
@@ -730,10 +729,13 @@ pub(crate) fn llvm_order(
             // `simplifySwitch`, not translated yet, so these are the defaults.
             simplify_cfg("decide@1244"),
         ],
-        // The Late stage follows the Simplify list: L1438, Float2IntPass
-        // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
-        // function pass of `OptimizePM`, after LoopSink) and L2376.
+        // The Late stage follows the Simplify list, in `OptimizePM`'s order
+        // (the pin's printed pipeline): Float2IntPass (L1594) first, then the
+        // loop passes, L1438, LICM (L1508), InstSimplifyPass
+        // (PassBuilderPipelines.cpp#L1662, the last function pass, after
+        // LoopSink), L1682 and L2376.
         Phase::Late => vec![
+            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
@@ -759,10 +761,14 @@ pub(crate) fn llvm_order(
             // the unroll and the combine that follow it: "helps to clean up
             // some loop-invariant code created by the loop unroll pass".
             licm("licm@1508", true),
-            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
-            // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
+            // TailCallElim (l.1677, the module optimization pipeline's
+            // "calls created during optimization"), at every level: at -O1 it
+            // is the only one, so a self-recursive tail call is a loop there
+            // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
+            // runs in one). DivRemPairs and ExpandMemCmp, between the two at
             // the pin, are not slots.
+            slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],

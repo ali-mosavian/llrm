@@ -375,3 +375,45 @@ fn test_an_immutable_argument_keeps_the_copy_when_the_source_is_written_after_it
         argument(&copy_to_tmp("  call void @poke(ptr %src)\n", "call void @peek(ptr noalias nocapture readonly %tmp)"));
     assert!(text.contains("@peek(ptr noalias nocapture readonly %tmp)"), "{text}");
 }
+
+/// A callee that writes `segment:0` of a local's selector has not written the
+/// local. Call slot forwarding compares the call's argument with the copy's
+/// source after `strip_pointer_casts`, which looks through address space
+/// casts; it must not make the call write the copy's destination through a
+/// selector. It does not, with or without `ni:`: the pass bails on an argument
+/// whose pointer chain crosses a space. The test pins that (a direct argument
+/// is forwarded, the premise).
+#[test]
+fn test_a_call_through_the_selector_of_a_local_is_not_forwarded_into_its_copy() {
+    let after = |datalayout: &str, argument: &str| {
+        let mut module = parsed(&format!(
+            "target datalayout = \"{datalayout}\"
+
+declare void @init(ptr nocapture) nounwind willreturn memory(argmem: write)
+declare void @use(ptr)
+
+define void @f() {{
+b0:
+  %dst = alloca i32
+  %slot = alloca i32
+  %sg = addrspacecast ptr %slot to ptr addrspace(2)
+  %back = addrspacecast ptr addrspace(2) %sg to ptr
+  call void @init(ptr nocapture {argument})
+  %v = load i32, ptr %slot
+  store i32 %v, ptr %dst
+  call void @use(ptr %dst)
+  ret void
+}}
+"
+        ));
+        managed(&mut module, MemCpyOpt)
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16";
+    assert!(
+        !after(base, "%slot").contains("load i32, ptr %slot"),
+        "premise: a direct argument is forwarded into the copy"
+    );
+    for layout in [base.to_owned(), format!("{base}-ni:2")] {
+        assert!(after(&layout, "%back").contains("load i32, ptr %slot"), "the copy of the local went ({layout})");
+    }
+}
