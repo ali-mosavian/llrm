@@ -628,3 +628,27 @@ b5:
     let inner = after.split("b3:").nth(1).and_then(|rest| rest.split("\nb4:").next()).expect("b3");
     assert!(inner.contains(" = phi ptr addrspace(3)"), "the inner loop walks a huge pointer: {after}");
 }
+
+/// The pass began with no expressions of its own function, so the loop passes
+/// before it (IndVars) had made them for nothing: a second run on a function it
+/// leaves as it is made as many expressions as the first (4.6 M Ir of
+/// `get_scev` inside LSR on d_faces -O2, against the pin's cached SE).
+#[test]
+fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&format!("{DOS}{ARRAY}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    let (_, kept) = crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, None);
+    let kept = kept.expect("no edge was split");
+    let mut nodes = |held| {
+        let before = get(Event::ScevNodes);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, held);
+        get(Event::ScevNodes) - before
+    };
+    let (cold, warm) = (nodes(None), nodes(Some(kept)));
+    assert!(cold > 0);
+    assert!(warm < cold, "the held expressions were not read: {warm} new nodes, {cold} cold");
+}
