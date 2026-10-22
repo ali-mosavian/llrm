@@ -13,7 +13,8 @@
 //! 2. a conditional whose two ways are one block is a jump;
 //! 3. a jump to the block laid out next is dropped, and `jcc L; jmp M` with `L`
 //!    next becomes `j!cc M`;
-//! 4. `jcc Out; jmp Loop` in the block `Loop` becomes `j!cc Loop; jmp Out` (L1685);
+//! 4. `jcc Out; jmp Loop` in the block `Loop` becomes `j!cc Loop; jmp Out`
+//!    (L1685);
 //! 5. a block of one conditional branch identical to the branch that ends the
 //!    block before it takes that branch away (L1586).
 //!
