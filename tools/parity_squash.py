@@ -796,6 +796,22 @@ def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
     return smoke_failures(known)[0]
 
 
+def parity_smoke_module():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke  # noqa: PLC0415
+
+    return parity_smoke
+
+
+def compute_head_group_failures() -> set[str]:
+    """The tests/run groups' failing programs on the head itself (check origin/feat/parity out, build its binaries when stale), once per head sha."""
+    stage("head-groups")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().group_failures(smoke_bins())
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
     with land_lock():
         return _merge(number, known)
@@ -812,6 +828,10 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
     head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
+    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
+    whole = parity_smoke_module().runs_whole_groups(files)
+    if whole:
+        head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
     merged, why = merged_result(info["headRefOid"])
     if merged is None:
         print(f"REFUSED: {why}")
@@ -824,6 +844,8 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         return 1
     merged_failed, last = smoke_failures(known)
     print(last)
+    if whole:
+        merged_failed = merged_failed | parity_smoke_module().group_failures(smoke_bins())
     if unit_tests_of(merged_failed - head_failed):
         git("checkout", "-q", "--detach", BASE)
         head_failed = head_expanded(head_failed, merged_failed, failing_on_checkout)
@@ -833,7 +855,6 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
     if why := stale_at_the_call(merged):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
