@@ -209,6 +209,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD39 | sdag-d | emitter: no frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
+
 | SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
@@ -216,6 +217,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
+| SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD101 | sdag-a | switch case probabilities are `1/(cases+1)`, no BPI heuristics | `selectiondag/switchcg.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.
