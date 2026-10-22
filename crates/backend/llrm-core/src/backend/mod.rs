@@ -205,6 +205,7 @@ pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
 pub mod latecleanup;
+pub mod leaopt;
 pub mod machinedce;
 pub mod machinesink;
 pub mod masm;

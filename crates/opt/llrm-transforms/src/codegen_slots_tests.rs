@@ -436,10 +436,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Optimize",
-        Missing,
-        "",
+        Match,
+        "leaopt.rs",
         "-disable-x86-lea-opt",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -Os: ours 92 instr 244 B, pin-with 92 instr 250 B, pin-without 92 instr 251 B (1 programs)",
+        "translated (slot leaopt@5, before phi elimination); DEVIATE LO-1: only register-and-number addresses (no symbol or frame displacement), LO-2: 32-bit addresses only (exit w-6, 2026-11-09). Pin: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ",
     ),
     row(
         "X86 Optimize Call Frame",

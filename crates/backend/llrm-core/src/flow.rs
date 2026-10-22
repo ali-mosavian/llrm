@@ -71,6 +71,7 @@ const UNOPTIMIZED: &[&str] = &[
     "PushFold",
     "FixupSetCC",
     "CopyPropagation",
+    "X86OptimizeLEAs",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -84,6 +85,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
     ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
@@ -147,6 +149,9 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, before the pin allocates: two addresses that differ in a
+        // displacement are one (X86OptimizeLEAs, pre-RA).
+        Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -564,5 +569,25 @@ mod tests {
         .expect("a phase that changes nothing");
         assert_eq!(Arc::strong_count(&kept), 1, "the phase's end kept it");
         drop(body);
+    }
+
+    /// Each PR that added a phase bumped the literal length of `UNOPTIMIZED`
+    /// and `SLOTS`: two of them in one batch did not build, and the second
+    /// always conflicted (the 18:10 batch, 12 PRs). The lists are slices.
+    #[test]
+    fn the_phase_lists_have_no_literal_length() {
+        let text = include_str!("flow.rs");
+        for name in ["UNOPTIMIZED", "SLOTS"] {
+            let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
+            assert!(line.contains(": &["), "{line}");
+        }
+    }
+
+    /// Every phase `-O0` leaves out is a phase with a slot.
+    #[test]
+    fn every_unoptimized_phase_has_a_slot() {
+        for class in UNOPTIMIZED {
+            assert!(SLOTS.iter().any(|(one, _)| one == class), "{class}");
+        }
     }
 }

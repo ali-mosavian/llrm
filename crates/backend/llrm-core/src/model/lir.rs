@@ -116,6 +116,11 @@ pub struct Insn {
     pub what: Option<Semantics>,
     pub defines: Vec<u32>,
     pub uses: Vec<u32>,
+    /// Values its operands name and read as undefined (`ProcessImplicitDefs`'
+    /// `undef` flag): no definition reaches them and none is needed, so none is
+    /// in `uses`, no live range starts at them, and the allocator gives them any
+    /// register of their class.
+    pub undefs: Vec<u32>,
     pub clobbers: BTreeSet<RegId>,
     pub clobbers_high: BTreeSet<RegId>,
     pub spread: Vec<(i64, i64)>,
@@ -132,6 +137,9 @@ pub struct Insn {
     pub rematerialized: bool,
     /// Its memory access must happen exactly as written.
     pub volatile: bool,
+    /// A load of memory that never changes (a constant global:
+    /// `isDereferenceableInvariantLoad`).
+    pub invariant: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
@@ -429,7 +437,7 @@ impl Insn {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameAsks);
         let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
         let mut any = false;
-        for &value in self.defines.iter().chain(&self.uses) {
+        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs) {
             any |= moves(value)?;
         }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
@@ -471,6 +479,7 @@ impl Insn {
         let value = |value: &u32| rename(*value);
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
+        made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
                 .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
@@ -519,6 +528,7 @@ impl Insn {
             what,
             defines,
             uses,
+            undefs: Vec::new(),
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
             spread: Vec::new(),
@@ -533,6 +543,7 @@ impl Insn {
             frame_adjust: false,
             rematerialized: false,
             volatile: false,
+            invariant: false,
             reads_complete: false,
             line: None,
             debug: DebugTags::default(),
@@ -566,6 +577,12 @@ impl Insn {
     #[must_use]
     pub fn volatile(&self) -> bool {
         self.volatile
+    }
+
+    /// Whether it loads memory that never changes.
+    #[must_use]
+    pub fn invariant(&self) -> bool {
+        self.invariant
     }
 
     /// Whether it reads no register beyond its `requires` and the epilogue's.
