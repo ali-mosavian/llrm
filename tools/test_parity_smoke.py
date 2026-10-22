@@ -454,3 +454,24 @@ def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path)
         assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
     finally:
         del os.environ["QCPORT"], os.environ["QCPORT_INC"]
+
+
+def test_a_planted_qbrt_difference_is_a_failing_name_and_a_program_that_did_not_compile_is_one():
+    """tests/qbrt (218 results) is the QB product's differential and the gate did not run it: #3422 broke dgroup_nearly_full at m16 (byte 11 want 104 got 13) unseen."""
+    import parity_squash as sq
+
+    class Done:
+        returncode = 1
+        stdout = "PROGRAMS 2 a b\nCOMPILE-FAIL b -O2: x\nNOTPASS dgroup_nearly_full x86-m16 ok ok byte 11: want 104 got 13\nRESULT 1 of 4 pass\n"
+        stderr = ""
+
+    got = ps.qbrt_failures("/bins", run=lambda *a, **k: Done())
+    assert got == {"qbrt dgroup_nearly_full x86-m16", "qbrt b did-not-compile"}, got
+    assert sq.subset_refusals(set(), got, fixes=False) and sq.subset_refusals(got, got, fixes=False) == []
+
+    class Silent:
+        returncode = 2
+        stdout = ""
+        stderr = "boom"
+
+    assert ps.qbrt_failures("/bins", run=lambda *a, **k: Silent()) == {"qbrt-did-not-finish"}

@@ -443,6 +443,22 @@ def group_failures(
     return names
 
 
+def qbrt_failures(
+    bins: Path | str,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `qbrt <program> <target>` of the whole tests/qbrt differential (tools/dosbatch/qbrt_run.py --all: 218 results, 67 s at load 7) on `bins`, a program that
+    did not compile, or `qbrt-did-not-finish`."""
+    work = Path(tempfile.mkdtemp(prefix="qbrt-gate-"))
+    done = run([sys.executable, str(ROOT / "tools/dosbatch/qbrt_run.py"), str(work), "--all"], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(bins)})
+    output = done.stdout + done.stderr
+    names = {f"qbrt {line.split()[1]} {line.split()[2]}" for line in output.splitlines() if line.startswith("NOTPASS ")}
+    names |= {f"qbrt {line.split()[1]} did-not-compile" for line in output.splitlines() if line.startswith("COMPILE-FAIL ")}
+    if not names and (done.returncode or "RESULT " not in output):
+        names.add("qbrt-did-not-finish")
+    return names
+
+
 def touches_the_compiler(files: list[str] | set[str]) -> bool:
     """Whether a PR changes a crate: any of them can change what a QCport module compiles to, and QCport's `item` stopped compiling at four levels on a mid-end PR
     (#3422) the gate passed, because it compiled four QCport modules at -O2."""

@@ -45,7 +45,12 @@ def main() -> int:
     parser.add_argument("--targets", default="m32,m16")
     parser.add_argument("--programs", default="", help="comma-separated names; default every .c in --src")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
-    args = parser.parse_args()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import stamp
+
+    args, named, allow = parser.parse_args(stamp.options(sys.argv[1:])[0]), *stamp.options(sys.argv[1:])[1:]
+    stamp.check(args.old, named["base_sha"], allow, "old")
+    stamp.check(args.new, named["sha"], allow, "new")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import voidpair
 
