@@ -123,6 +123,9 @@ pub struct InlineSpiller<'a> {
     classes: &'a RegisterClasses,
     order_of: &'a dyn Fn(u32) -> Vec<RegId>,
     tables: Rc<Tables>,
+    /// `recomputeRegClass` of the registers an edit made
+    /// (`LiveRangeEdit::calculateRegClassAndHint`).
+    reclass: Option<Box<dyn Fn(&LiveIntervals, &[u32]) + 'a>>,
     reloads: usize,
     stores: usize,
     folded: usize,
@@ -154,6 +157,15 @@ pub struct InlineSpiller<'a> {
 }
 
 impl<'a> InlineSpiller<'a> {
+    /// The registers a spill makes take the class their own instructions give.
+    pub fn with_reclass(
+        mut self,
+        reclass: Box<dyn Fn(&LiveIntervals, &[u32]) + 'a>,
+    ) -> Self {
+        self.reclass = Some(reclass);
+        self
+    }
+
     pub fn new(
         template: &'a LirBody,
         frame: &'a mut Frame,
@@ -167,6 +179,7 @@ impl<'a> InlineSpiller<'a> {
             classes,
             order_of,
             tables,
+            reclass: None,
             reloads: 0,
             stores: 0,
             folded: 0,
@@ -1093,6 +1106,19 @@ impl InlineSpiller<'_> {
     }
 }
 
+impl InlineSpiller<'_> {
+    /// `Edit->calculateRegClassAndHint`'s `recomputeRegClass` for `made`.
+    fn recomputed(
+        &self,
+        lis: &LiveIntervals,
+        made: &[u32],
+    ) {
+        if let Some(reclass) = &self.reclass {
+            reclass(lis, made);
+        }
+    }
+}
+
 impl Spiller for InlineSpiller<'_> {
     fn spill(
         &mut self,
@@ -1132,6 +1158,7 @@ impl Spiller for InlineSpiller<'_> {
                 new_vregs.push(value);
             }
             edit.erase_virt_reg(lis, reg);
+            self.recomputed(lis, &new_vregs[first_new..]);
             return;
         }
         self.key = self.shared_key(lis, range.as_ref());
@@ -1170,6 +1197,7 @@ impl Spiller for InlineSpiller<'_> {
         // Hoisted spills may cause dead code.
         self.eliminate_dead_defs(lis, matrix, shrunk);
         edit.erase_virt_reg(lis, reg);
+        self.recomputed(lis, &new_vregs[first_new..]);
         if let Some(range) = &range {
             self.merged(range);
         }

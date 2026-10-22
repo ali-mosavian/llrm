@@ -236,6 +236,47 @@ impl BodySplitEnv {
     }
 }
 
+/// `MachineRegisterInfo::recomputeRegClass` for the registers an edit made: the
+/// order each takes from the instructions that name it, which can be wider
+/// than its parent's. A pinned value, one with a class of its own kind (the
+/// x87 stack) and one an address pair confines (its side is its parent's)
+/// keep theirs.
+fn reclass_orders(
+    tables: &Tables,
+    pinned: &crate::support::hash::HashSet<u32>,
+    sets: Option<&crate::backend::regclass::Sets>,
+    registers: Regs,
+    lis: &LiveIntervals,
+    regs: &[u32],
+) {
+    use crate::backend::regclass::{Confinement, confinement_of};
+    let Some(sets) = sets else { return };
+    for &reg in regs {
+        let Some(current) = tables.orders.borrow().get(&reg).cloned() else { continue };
+        if pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
+            continue;
+        }
+        let mut seen = crate::support::hash::HashSet::default();
+        let insns: Vec<Arc<Insn>> = lis
+            .operands(reg)
+            .iter()
+            .filter(|op| seen.insert(op.instr))
+            .map(|op| Arc::clone(lis.instr(op.instr)))
+            .collect();
+        let order: Vec<RegId> = match confinement_of(registers, insns.iter().map(|one| &**one), reg, sets) {
+            Confinement::Unknown => continue,
+            Confinement::Free => sets.available.clone(),
+            Confinement::Only(allowed) => {
+                let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
+                sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
+            }
+        };
+        if !order.is_empty() {
+            tables.orders.borrow_mut().insert(reg, order);
+        }
+    }
+}
+
 impl super::splitkit::SplitEnv for BodySplitEnv {
     fn is_terminator(
         &self,
@@ -287,34 +328,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         lis: &LiveIntervals,
         regs: &[u32],
     ) {
-        use crate::backend::regclass::{Confinement, confinement_of};
-        let Some(sets) = &self.sets else { return };
-        for &reg in regs {
-            let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
-            // A pinned value, and one with a class of its own kind (the x87
-            // stack), keep theirs.
-            if self.pinned.borrow().contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
-                continue;
-            }
-            let mut seen = crate::support::hash::HashSet::default();
-            let insns: Vec<Arc<Insn>> = lis
-                .operands(reg)
-                .iter()
-                .filter(|op| seen.insert(op.instr))
-                .map(|op| Arc::clone(lis.instr(op.instr)))
-                .collect();
-            let order: Vec<RegId> = match confinement_of(self.registers, insns.iter().map(|one| &**one), reg, sets) {
-                Confinement::Unknown => continue,
-                Confinement::Free => sets.available.clone(),
-                Confinement::Only(allowed) => {
-                    let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
-                    sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
-                }
-            };
-            if !order.is_empty() {
-                self.tables.orders.borrow_mut().insert(reg, order);
-            }
-        }
+        reclass_orders(&self.tables, &self.pinned.borrow(), self.sets.as_deref(), self.registers, lis, regs);
     }
 
     fn is_rematerializable(
@@ -837,7 +851,15 @@ pub fn decide_with_split(
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
         Mode::Simple => Box::new(SimpleSpiller::default()),
         Mode::Inline { frame, classes } => {
-            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)))
+            let (made, sets, pins, registers) = (
+                Rc::clone(&tables),
+                inputs.sets.map(|sets| Rc::new(sets.clone())),
+                inputs.pins.keys().copied().collect::<crate::support::hash::HashSet<u32>>(),
+                inputs.registers,
+            );
+            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)).with_reclass(Box::new(
+                move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs),
+            )))
         }
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
