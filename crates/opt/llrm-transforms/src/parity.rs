@@ -326,6 +326,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("cmpsub@1", Backend, "x86 EmitCmp: SUB shares flags with the difference", Translated, ""),
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),

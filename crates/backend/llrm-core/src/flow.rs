@@ -73,11 +73,13 @@ const UNOPTIMIZED: &[&str] = &[
     "CopyPropagation",
     "X86OptimizeLEAs",
     "MachineLICM",
+    "CmpAsSub",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
+    ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
@@ -134,6 +136,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // The compare of a value with the constant it was just subtracted by
+        // shares the subtract's flags (X86TargetLowering::EmitCmp).
+        Box::new(crate::backend::cmpsub::CmpAsSub),
         // On SSA, first: a phi cycle that carries one value is that value (the
         // pin: OptimizePHIs, ahead of MachineCSE).
         Box::new(crate::backend::optimizephis::OptimizePhis),

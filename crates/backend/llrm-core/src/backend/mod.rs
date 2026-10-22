@@ -203,6 +203,7 @@ pub mod liveness;
 pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
+pub mod cmpsub;
 pub mod machinecp;
 pub mod machinelicm;
 pub mod machinecse;
