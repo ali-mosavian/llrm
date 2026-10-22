@@ -337,6 +337,11 @@ impl Builder<'_> {
             }
             let entry_node = self.dag.entry_node();
             let value = match self.convention.parameters.get(at) {
+                // a byval parameter is its bytes in the caller's frame: the value is their address
+                Some(Parameter::Bytes(_)) => {
+                    fixed += 1;
+                    self.dag.get_frame_index(self.target.dag.pointer, -fixed)
+                }
                 Some(Parameter::Cell(_)) => {
                     fixed += 1;
                     let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
@@ -352,6 +357,13 @@ impl Builder<'_> {
                 _ => return Err(Refused("argument passed in several places or by value")),
             };
             self.node_map.insert(arg, value);
+            if self.function.parameter_attrs.get(at).is_some_and(|attrs| attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"))) {
+                // X86 keeps the sret pointer in a register to return it
+                let reg = self.info.new_reg();
+                self.info.sret_reg = Some(reg);
+                let copy = self.dag.get_copy_to_reg(entry_node, reg, value);
+                self.dag.set_root(copy);
+            }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
@@ -403,7 +415,21 @@ impl Builder<'_> {
         let extends: Vec<ISD> = (0..values.len())
             .map(|at| if llrm_mir::memory::has(attrs(at), "signext") { ISD::SignExtend } else if llrm_mir::memory::has(attrs(at), "zeroext") { ISD::ZeroExtend } else { ISD::AnyExtend })
             .collect();
-        let result = self.lower_call(callee_node, values, &extends, &plan, first, result_type)?;
+        let byvals: Vec<Option<(u64, u64)>> = (0..values.len())
+            .map(|at| {
+                let attrs = attrs(at);
+                let ty = attrs.iter().find_map(|attr| match attr {
+                    llrm_mir::opcode::Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                    _ => None,
+                })?;
+                let align = attrs.iter().find_map(|attr| match attr {
+                    llrm_mir::opcode::Attribute::Int(name, value) if name == "align" => Some(*value),
+                    _ => None,
+                });
+                Some((self.layout.alloc_size(&self.module.context.types, ty), align.unwrap_or(4)))
+            })
+            .collect();
+        let result = self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type)?;
         if let (Some(value), Some(result)) = (instruction.result, result) {
             self.set_value(value, result);
         }
@@ -412,7 +438,7 @@ impl Builder<'_> {
 
     /// `LowerCall` for arguments already evaluated: the sequence from
     /// `callseq_start` to the result read back; the result, if any.
-    pub(super) fn lower_call(&mut self, callee_node: SDValue, values: Vec<SDValue>, extends: &[ISD], plan: &Convention, first: i64, result_type: TypeId) -> Result<Option<SDValue>, Refused> {
+    pub(super) fn lower_call(&mut self, callee_node: SDValue, values: Vec<SDValue>, extends: &[ISD], byvals: &[Option<(u64, u64)>], plan: &Convention, first: i64, result_type: TypeId) -> Result<Option<SDValue>, Refused> {
         let types = &self.module.context.types;
         let bytes = (plan.stack_arguments - first).max(0) as u64;
         let root = self.root();
@@ -441,6 +467,19 @@ impl Builder<'_> {
                     let vt = self.dag.value_type(*value);
                     let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown };
                     stores.push(self.dag.get_store(chain, *value, address, mem));
+                }
+                Parameter::Bytes(displacement) => {
+                    // `CreateCopyOfByValArgument`: the pointee copied into the slot, always inline
+                    let (size, align) = byvals.get(at).copied().flatten().ok_or(Refused("byval argument of an unknown size"))?;
+                    let sp = *stack_pointer.get_or_insert_with(|| {
+                        let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                        self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
+                    });
+                    let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
+                    let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
+                    let _size = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
+                    let copy = self.inline_memcpy(chain, address, *value, size, usize::MAX, align, align)?.ok_or(Refused("byval copy"))?;
+                    stores.push(copy);
                 }
                 Parameter::Registers(regs) if regs.len() == 1 => copies.push((regs[0], *value)),
                 _ => return Err(Refused("argument passed in several places or by value")),
@@ -513,6 +552,16 @@ impl Builder<'_> {
                 glue = Some(SDValue { node: copy.node, res: 1 });
                 ops.push(self.dag.get_phys_register(vt, reg));
             }
+        }
+        if let Some(reg) = self.info.sret_reg {
+            // the pointer is returned in eax as well
+            let pointer = self.target.dag.pointer;
+            let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
+            let eax = self.sized_register(self.arch.register_named("eax"), pointer);
+            let copy = self.dag.get_copy_to_phys_reg(chain, eax, saved, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+            ops.push(self.dag.get_phys_register(pointer, eax));
         }
         let popped = self.dag.get_constant_with(self.convention.popped as u128, EVT::I32, true, false);
         let mut all = vec![chain, popped];

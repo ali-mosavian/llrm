@@ -514,6 +514,22 @@ mod builder {
         }
     }
 
+    /// `byval` parameters are the address of the caller's bytes, a `byval`
+    /// argument is copied into its slot, and `sret` is kept in a register and
+    /// returned in eax: the pin's. Each was refused.
+    #[test]
+    fn byval_and_sret_match_the_pins_initial_dag() {
+        // the pin's i486-linux is the System V convention: the callee pops the sret slot
+        let ll = include_str!("golden/byval.ll").replace("define ", "define sysvcc ").replace("declare ", "declare sysvcc ").replace("call ", "call sysvcc ");
+        let pin = pin_blocks(include_str!("golden/byval.pin.txt"));
+        let (ours, refused) = our_blocks(&ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");
