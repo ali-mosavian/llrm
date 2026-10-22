@@ -6879,9 +6879,21 @@ impl Selector<'_, '_, '_> {
 
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
     /// most `MEMCPY_MOVES` pairs (`MEMCPY_MOVES_SIZE` tuned for size), each a
-    /// load into a register and a store from it, widest first, where only
-    /// the bytes it names are read; else `rep movsd` through es:di, the
-    /// tail by `movsw` and `movsb`, as `memset` does its fill.
+    /// load into a register and a store from it, widest first, where only the
+    /// bytes it names are read; else `rep movsd` through es:di, the tail by
+    /// `movsw` and `movsb`, as `memset` does its fill.
+    ///
+    /// DEVIATE I1 (no number yet): beyond the moves the pin's
+    /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
+    /// the generic path, a `memcpy` libcall, for a size over
+    /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
+    /// `rep movsd` for both, the runtime having no `memcpy`. Exit: a runtime
+    /// `memcpy` (the C runtime's owner, runtime/c), then the libcall here.
+    ///
+    /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
+    /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
+    /// ours is `rep movsd` and a tail, `cpu.size` not telling -Os from -Oz.
+    /// Exit: a minsize flag from the driver options to the selector.
     fn memcpy(
         &mut self,
         arguments: &[Operand],
