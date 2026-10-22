@@ -30,7 +30,7 @@ A LIR value is a `u32`. `LirBody` has `origin` and `pins` per value and no class
 
 ## Order
 
-1. Field, isel sets it, `phielimination` and `twoaddr` copy the pin's classes. Fail-first: `test_a_far_pointers_phi_is_not_copied_through_ax` (on current parity it fails; the stand-in branch fixes it by palette-from-use).
+1. Field, isel sets it, `phielimination` and `twoaddr` copy the pin's classes. Fail-first: `test_a_far_pointers_phi_is_not_copied_through_ax` (seen to fail on parity 3b70c16822 when written; re-run before step 1).
 2. `recompute_class` over `regclass::collected`, with the `%51`/%53 shape: a word stored through an address, confined to {EBX} by inheritance, widens to the general class; a pair member keeps its side.
 3. Coalescer reads the field; DEVIATE C10 and the `touched` stand-in are deleted.
 4. Splitkit calls `recompute_class` at the spiller and split sites (their PR).
