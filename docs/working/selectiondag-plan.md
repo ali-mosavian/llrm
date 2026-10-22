@@ -114,7 +114,11 @@ An end-to-end run waits for A1 (builder) and D1 (emitter); until then each test 
 
 Pin: `SelectionDAG::Legalize` ([L6301][ld-legalize]) orders the nodes topologically and calls `SelectionDAGLegalize::LegalizeOp` ([L982][ld-op]) on each. `LegalizeOp` asks the action table (B0c) and does one of: **Legal** (keep; `LegalizeLoadOps` [L669][ld-loads] / `LegalizeStoreOps` [L492][ld-stores] first for memory nodes), **Custom** (`TLI.LowerOperation`, [x-lower]; `ReplaceNodeResults` [x-replace] for results of an illegal type), **Expand** (`ExpandNode` [L3210][ld-expand], then `ConvertNodeToLibcall` [L4734][ld-lib] for what remains), **Promote** (`PromoteNode` [L5432][ld-promote]), **LibCall** (`ExpandLibCall` [L2115][ld-libcall]). Runs after types are legal (B0) and before the third combine.
 
-**Correction found while reading the pin.** The i486 `select` is not expanded to a branch in the DAG. `LowerSELECT` ([L25834][x-select2]) builds `X86ISD::CMOV` on EFLAGS from a `CMP` for every CPU; with `NoCMOV` the matcher picks the `CMOV_GR8/GR16/GR32` pseudos (`X86InstrCompiler.td` L577 to L629, `usesCustomInserter`), and `EmitLoweredSelect` ([L37564][x-lowered]) turns each into a branch and a phi at instruction emission (`EmitInstrWithCustomInserter` [L38957][x-inserter], called by `InstrEmitter`). So B1's premise test is on the DAG (`select` becomes `CMOV` of a `CMP`), and the branch expansion belongs to sdag-c (pseudo patterns, C-side) and sdag-d (the emitter calls the inserter). The brief's "select at i486 is Expand" is neither.
+**Correction found while reading the pin.** The i486 `select` is not expanded to a branch in the DAG. `LowerSELECT` ([L25834][x-select2]) builds `X86ISD::CMOV` on EFLAGS from a `CMP` for every CPU; with `NoCMOV` the matcher picks the `CMOV_GR8/GR16/GR32` pseudos (`X86InstrCompiler.td` L577 to L629, `usesCustomInserter`), and `EmitLoweredSelect` ([L37564][x-lowered]) turns each into a branch and a phi at instruction emission (`EmitInstrWithCustomInserter` [L38957][x-inserter], called by `InstrEmitter`). So B1's premise test is on the DAG (`select` becomes `CMOV` of a `CMP`). Handoffs:
+
+1. sdag-c owns the `CMOV_GR8/GR16/GR32` pseudo patterns in the pruned i486/P5 table (no `CMOV32rr` there; pinned by its `neither_cpu_emits_cmov` test, descriptors in #3721).
+2. sdag-d owns the emitter calling the custom inserter, and `EmitLoweredSelect` (block split, branch, phi).
+3. sdag-b owns the DAG side: `LowerSELECT` to `CMOV` (B1c).
 
 | Id | Piece | Due | Premise test (fail first) |
 |---|---|---|---|
