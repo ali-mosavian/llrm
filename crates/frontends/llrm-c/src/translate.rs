@@ -2743,44 +2743,29 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
-    /// `size` bytes from `from` to `into`, widest first, as the old raise
-    /// copies.
+    /// `size` bytes from `from` to `into`: one `copy_bytes`, which lowers to
+    /// `llvm.memcpy` as clang's `EmitAggregateCopy` does, so the passes see a
+    /// memcpy and not a load and a store a word.
     fn copy(
         &mut self,
         into: i64,
         from: i64,
         size: i64,
     ) {
-        let mut done = 0;
-        while done < size {
-            let width = [4, 2, 1].into_iter().find(|&one| size - done >= one).expect("a byte left");
-            let ty = self.types.raw(width);
-            let source = self.displaced(from, done);
-            let target = self.displaced(into, done);
-            let moved = self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(source, 0, ty, false))]);
-            self.instruction(
-                Op::Store,
-                Vec::new(),
-                vec![Operand::IndirectPlace(indirect(target, 0, ty, false)), value_ref(moved)],
-            );
-            done += width;
+        if size <= 0 {
+            return;
         }
-    }
-
-    /// `pointer` moved `by` constant bytes, inside its object.
-    fn displaced(
-        &mut self,
-        pointer: i64,
-        by: i64,
-    ) -> i64 {
-        if by == 0 {
-            return pointer;
-        }
-        let at = self.int(self.types.word(), by);
-        let result = self.value(self.type_of(pointer));
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
-        self.stated_instructions.push((id, Fact::InBounds));
-        result
+        let ty = self.types.raw(1);
+        let count = h::Constant { r#type: self.types.word(), value: h::Number::Int(size) };
+        self.instruction(
+            Op::CopyBytes,
+            Vec::new(),
+            vec![
+                Operand::IndirectPlace(indirect(into, 0, ty, false)),
+                Operand::IndirectPlace(indirect(from, 0, ty, false)),
+                Operand::Constant(count),
+            ],
+        );
     }
 
     /// `value`, of C type `from`, as `to`.
@@ -4296,6 +4281,21 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
+    }
+
+    /// `y = x` of a 104-byte struct (QCport: 221 such load/store pairs in 11
+    /// modules at -Os): clang's `EmitAggregateCopy` is one `llvm.memcpy`; the
+    /// raise made 26 pairs of 4-byte loads and stores, which no later pass
+    /// could see as a copy.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn a_struct_assignment_is_one_memcpy_not_a_load_and_a_store_a_word() {
+        let source = "struct S { float a[26]; };\nvoid __cdecl use(struct S *);\nint __cdecl f(void) { struct S x, y; use(&x); y = x; use(&y); return 0; }\n";
+        for flat in [false, true] {
+            let text = raised_c(source, flat);
+            assert_eq!(text.matches("@llvm.memcpy").count(), 1, "{text}");
+            assert!(text.matches(" load ").count() < 3, "{text}");
+        }
     }
 
     /// `__builtin_expect(x, 0)` is clang's `llvm.expect` where it optimizes

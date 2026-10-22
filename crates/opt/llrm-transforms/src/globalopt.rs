@@ -113,18 +113,53 @@ pub fn never_stored(module: &Module) -> Vec<GlobalId> {
         (internal && !variable.constant && variable.initializer.is_some() && !held.contains(&GlobalId(at as u32)))
             .then_some(GlobalId(at as u32))
     });
-    candidates
-        .filter(|&id| module.functions().all(|(_, _, function)| only_loaded(&module.context, function, id)))
-        .collect()
+    candidates.filter(|&id| module.functions().all(|(_, _, function)| only_loaded(module, function, id))).collect()
 }
 
-/// Whether every use of `global` in `function` only loads through it.
+/// Whether every use of `global` in `function` only reads through it: a load,
+/// or the source of a non-volatile `memcpy` or `memmove` (`AnalyzeGlobal`,
+/// GlobalStatus.cpp: a transfer from the global is `IsLoaded`, a transfer into
+/// it is a store). The C front end's aggregate initializers are a `memcpy` from
+/// an internal global; until SROA turns it into loads, only this makes it
+/// `constant`.
 fn only_loaded(
-    context: &Context,
+    module: &Module,
     function: &Function,
     global: GlobalId,
 ) -> bool {
-    only_used(context, function, global, &|op, index| matches!(op.opcode, Opcode::Load { .. }) && index == 0)
+    let context = &module.context;
+    only_used(context, function, global, &|op, index| match op.opcode {
+        Opcode::Load { .. } => index == 0,
+        Opcode::Call(_) => {
+            use llrm_mir::intrinsics::Intrinsic;
+            let volatile = match op.operands.get(3) {
+                Some(Operand::Constant(id)) => {
+                    !matches!(
+                        context.get(*id).kind,
+                        ConstantKind::Int(0) | ConstantKind::Zero
+                    )
+                }
+                _ => true,
+            };
+            index == 1
+                && !volatile
+                && callee_intrinsic(module, function, op)
+                    .is_some_and(|one| matches!(one, Intrinsic::MemCpy | Intrinsic::MemMove))
+        }
+        _ => false,
+    })
+}
+
+/// The intrinsic the call `op` of `function` calls.
+fn callee_intrinsic(
+    module: &Module,
+    function: &Function,
+    op: &llrm_mir::module::Instruction,
+) -> Option<llrm_mir::intrinsics::Intrinsic> {
+    let Operand::Constant(callee) = *op.operands.last()? else { return None };
+    let ConstantKind::Global(callee) = module.context.get(callee).kind else { return None };
+    let _ = function;
+    module.globals.get(callee.0 as usize)?.intrinsic()
 }
 
 /// Every way `function` uses `global`'s address, found once: the operands that
