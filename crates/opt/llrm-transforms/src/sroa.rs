@@ -1246,24 +1246,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.context
     }
 
-    /// The allocas a debug record names (DEVIATE: left alone).
-    /// DEVIATE: `findDVRDeclares` (SROA.cpp#L6160) is not migrated; the alloca
-    /// stays.
-    fn declared_allocas(&self) -> llrm_mir::dense::IdSet<InstId> {
-        self.function()
-            .debug_records()
-            .iter()
-            .filter_map(|one| match one.what {
-                llrm_mir::DebugWhat::Declare(Operand::Value(value)) => Some(value),
-                _ => None,
-            })
-            .filter_map(|value| match self.function().value(value).def {
-                llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// `SROA::runSROA`. SROA.cpp#L6430
     fn run_sroa(&mut self) -> bool {
         let Some(entry) = self.function().entry() else { return false };
