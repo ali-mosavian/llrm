@@ -341,7 +341,8 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
         log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
-    new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
+    # fmt is never excused by the head's own failures: every landing is formatted (the user's order), a red head file is formatted by the PR that touches it.
+    new = {name: items - (set() if name == "fmt" else before.get(name, set())) for name, items in after.items() if name not in (head_failed or set())}
     new = {name: items for name, items in new.items() if items}
     if not new:
         return f"{number}: PASS"
@@ -490,6 +491,34 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
             sha = git("rev-parse", "HEAD", cwd=work).strip()
             pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
             return sha if pushed.returncode == 0 else ""
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
+
+
+def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str, str]:
+    """(sha, ""): `head` with tools/fmt.sh applied to the .rs files its PR changes, the result committed on top and pushed to `branch` as a fast-forward; `head` itself when it is already
+    formatted. (sha, why) with sha empty when fmt.sh fails with exit 2 or more (a missing toolchain, a crash: the landing is refused) or the push fails. Every landing is formatted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            files = [f for f in git("diff", "--name-only", f"{base}...{head}", cwd=work).split() if f.endswith(".rs") and (work / f).is_file()]
+            changed = []
+            for path in files:
+                text = (work / path).read_text()
+                done = subprocess.run(["tools/fmt.sh", "--stdin", path], cwd=work, input=text, capture_output=True, text=True)
+                if done.returncode >= 2:
+                    return "", f"tools/fmt.sh failed on {path} (exit {done.returncode}): {(done.stderr or done.stdout).strip()[-160:]}"
+                if done.stdout and done.stdout != text:
+                    (work / path).write_text(done.stdout)
+                    changed.append(path)
+            if not changed:
+                return head, ""
+            identity = ["-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost"]
+            subprocess.run(["git", *identity, "commit", "-q", "-am", "style: tools/fmt.sh on the files the PR changes"], cwd=work, check=True, capture_output=True)
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            return (sha, "") if pushed.returncode == 0 else ("", f"pushing the formatted head to {branch} failed: {pushed.stderr.strip()[-160:]}")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
@@ -761,6 +790,19 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
+        sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+        if not sha:
+            print(f"#{number}: REFUSED: {why}")
+            refused.append(number)
+            return
+        if sha != infos[number]["headRefOid"]:
+            print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
+            infos[number] = {**infos[number], "headRefOid": sha}
+            for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
+                seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True).stdout or "{}").get("headRefOid")
+                if seen == sha:
+                    break
+                time.sleep(5)
         landed_ok = squash(number, infos[number], known_red_line(known))
         (landed if landed_ok else refused).append(number)
         if landed_ok:
