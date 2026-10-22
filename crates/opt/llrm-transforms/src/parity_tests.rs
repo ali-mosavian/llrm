@@ -115,9 +115,12 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
         &[
             "optimizephis@1",
             "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
             "machinecse@4",
             "machinesink@4",
             "floatalloc@8",
+            "pushfold@6",
             "coalesce@10",
             "latecleanup@13",
             "leaopt@5",

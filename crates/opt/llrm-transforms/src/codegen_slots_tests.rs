@@ -443,10 +443,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 Optimize Call Frame",
-        Missing,
+        Deviate,
+        "pushfold.rs",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",
@@ -471,10 +471,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 EFLAGS copy lowering",
-        Missing,
-        "flag lanes (liveness.rs), stepflags.rs",
+        Match,
+        "flagscopy.rs",
         "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "translated (registry flagscopy@5) over an explicit flags copy; isel makes none yet (DEVIATE R1). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -657,10 +657,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
-        Missing,
-        "prologue.rs, masm.rs",
+        Deviate,
+        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, not yet called: FO-1)",
         "",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry prologue@13. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Machine Late Instructions Cleanup Pass",

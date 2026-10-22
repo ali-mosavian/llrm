@@ -68,9 +68,11 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "PushFold",
     "FixupSetCC",
     "CopyPropagation",
     "X86OptimizeLEAs",
+    "MachineLICM",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -80,12 +82,15 @@ const SLOTS: &[(&str, &str)] = &[
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
+    ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
     ("FloatAlloc", "floatalloc@8"),
@@ -142,6 +147,9 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, a loop-invariant computation in the preheader (the pin:
+        // EarlyMachineLICM, ahead of MachineCSE).
+        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
@@ -159,9 +167,15 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // Flags kept across an instruction that clobbers them become a byte
+        // per condition (the pin: X86FlagsCopyLowering, every level).
+        Box::new(crate::backend::flagscopy::FlagsCopy),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        // A pushed value a load made, read nowhere else, is pushed from the
+        // load's cell (the pin: X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         if crate::backend::allocate::rfp_on() {
             Box::new(floatassign::FloatPrep {
