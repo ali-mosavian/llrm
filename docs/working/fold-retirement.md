@@ -5,6 +5,7 @@ Owner: w-6. Each slot PR shows d_faces -O2 m32 Ir (dists, `-m32 -mabi=sysv -marc
 | Slot | d_faces M | objsweep | QCport B | PR |
 |---|--:|---|--:|---|
 | fold@677 | 1305.5 -> 1259.9 (-45.6) | 0 of 568 changed | +119 of 1,233,771 | #3818 |
+| fold@768 | 1303.3 -> 1278.8 (-24.5) | 3 of 568 (nbody m32 O3 -40 B) | -105 of 1,233,701 | this PR |
 
 ## FR-1: objects larger without fold@677 (owner w-6, review 2026-11-04)
 
