@@ -172,3 +172,55 @@ pub(crate) fn group_source(one: &Insn) -> Option<Held> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ir::{Held, Imm, Mem, Semantics};
+
+    fn def(
+        sources: Vec<Loc>,
+        op: Operation,
+        name: &str,
+    ) -> Insn {
+        let what = Semantics {
+            name: Some(name.to_owned()),
+            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            sources,
+            ..Semantics::new(op)
+        };
+        Insn::new(0, None, Some(what), vec![1], vec![])
+    }
+
+    /// A literal move is made again; a load only when the cell holds. Without
+    /// the second rule a load of a cell a store changes between two reads was
+    /// made again and read the new value.
+    #[test]
+    fn test_a_load_is_made_again_only_when_the_cell_holds() {
+        let literal = def(vec![Loc::Imm(Imm { value: 7, width: 4, address: None })], Operation::Move, "mov");
+        assert!(is_trivially_re_materializable(&literal, false));
+        let cell = Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 4);
+        let load = def(vec![Loc::Mem(cell)], Operation::Move, "mov");
+        assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
+        assert!(is_trivially_re_materializable(&load, true));
+    }
+
+    /// `values` leaves out a literal read wider than the move that makes it
+    /// (DEVIATE R1) and takes the one read at its width.
+    #[test]
+    fn test_a_literal_read_wider_than_its_move_is_not_made_again() {
+        let literal = Arc::new(def(vec![Loc::Imm(Imm { value: 7, width: 4, address: None })], Operation::Move, "mov"));
+        let narrow = Arc::new(Insn::new(1, None, None, vec![], vec![1]));
+        let body = LirBody::new(
+            "r",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(
+                0,
+                vec![Arc::clone(&literal), narrow],
+            ))],
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+    }
+}
