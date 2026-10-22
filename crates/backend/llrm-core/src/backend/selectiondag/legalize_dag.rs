@@ -148,10 +148,69 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         match action {
             Action::Legal => Ok(()),
             Action::Promote => self.promote_node(node),
-            Action::Expand | Action::LibCall | Action::Custom => {
-                Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" })
-            }
+            Action::Expand => match self.expand_node(node) {
+                Some(results) => {
+                    for (res, new) in results.into_iter().enumerate() {
+                        self.replace_node(SDValue { node: node.node, res: res as u8 }, new);
+                    }
+                    Ok(())
+                }
+                None => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "convert node to libcall" }),
+            },
+            Action::LibCall | Action::Custom => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" }),
         }
+    }
+
+    /// `ExpandNode`, for the cases translated: the replacement for each result
+    /// of `node`, or `None` if it has to become a library call.
+    fn expand_node(&mut self, node: SDValue) -> Option<Vec<SDValue>> {
+        let op = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
+        match op {
+            ISD::UDiv | ISD::SDiv => {
+                let divrem = if op == ISD::SDiv { ISD::SDivRem } else { ISD::UDivRem };
+                if !ready(self, divrem) {
+                    return None;
+                }
+                let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                Some(vec![self.dag.get_node_multi(divrem, &[vt, vt], &[a, b])])
+            }
+            ISD::URem | ISD::SRem => {
+                // `TargetLowering::expandREM`.
+                let (divrem, div) = if op == ISD::SRem { (ISD::SDivRem, ISD::SDiv) } else { (ISD::UDivRem, ISD::UDiv) };
+                let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                if ready(self, divrem) {
+                    let both = self.dag.get_node_multi(divrem, &[vt, vt], &[a, b]);
+                    return Some(vec![SDValue { node: both.node, res: 1 }]);
+                }
+                if ready(self, div) {
+                    let quotient = self.dag.get_node(div, vt, &[a, b]);
+                    let product = self.dag.get_node(ISD::Mul, vt, &[quotient, b]);
+                    return Some(vec![self.dag.get_node(ISD::Sub, vt, &[a, product])]);
+                }
+                None
+            }
+            ISD::MulHU | ISD::MulHS => {
+                let lohi = if op == ISD::MulHU { ISD::UMulLoHi } else { ISD::SMulLoHi };
+                let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
+                Some(vec![SDValue { node: both.node, res: 1 }])
+            }
+            ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            _ => None,
+        }
+    }
+
+    /// `TargetLowering::expandBSWAP`, for `i16` (a rotate by 8). Other widths
+    /// are legal on the targets here or not yet translated.
+    fn expand_bswap(&mut self, node: SDValue) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if vt != EVT::I16 {
+            return None;
+        }
+        let amount = self.dag.get_constant(8, EVT::I8);
+        Some(self.dag.get_node(ISD::Rotl, vt, &[self.dag.operand(node, 0), amount]))
     }
 
     /// `ReplaceNode(Old, New)` for a node with one value result.
