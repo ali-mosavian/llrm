@@ -356,7 +356,7 @@ impl Analysis for Accesses {
         if let Ok(values) = &*values {
             unit = unit.with_point_values(values);
         }
-        let made = Self::of_with(&unit, references.clone(), footprints);
+        let made = Self::of(&unit, references.clone(), footprints);
         Ok(Rc::new(Self { source: Some(annotated), ..made }))
     }
 
@@ -471,7 +471,7 @@ impl Accesses {
     /// `unit`'s accesses as `alias` resolves them: each reference with its
     /// provenance.
     pub fn resolved(unit: &Unit) -> Result<Self, String> {
-        Ok(Self::of(unit, unit.annotated()?.into_owned()))
+        Ok(Self::of(unit, unit.annotated()?.into_owned(), &crate::alias::calls_by_attributes(unit)))
     }
 
     /// `function`'s accesses, the manager's: from its `Annotated` and
@@ -485,19 +485,11 @@ impl Accesses {
         (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
-    /// `unit`'s accesses from `references` (`alias::annotated`'s) and the
-    /// bytes each call initializes.
+    /// `unit`'s accesses from `references` (`alias::annotated`'s), each call
+    /// reading and writing what its footprint in `calls` says (the manager's
+    /// `CallFootprints`: its attributes and `GlobalsModRef`, no points-to
+    /// solve), and the bytes each call initializes.
     pub fn of(
-        unit: &Unit,
-        references: IndexMap<InstId, MemRef>,
-    ) -> Self {
-        // A call's reads and writes as its attributes and `GlobalsModRef` say;
-        // no points-to solve.
-        Self::of_with(unit, references, &crate::alias::calls_by_attributes(unit))
-    }
-
-    /// `of`, the calls' effects given (the manager's `CallFootprints`).
-    pub fn of_with(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
         calls: &llrm_mir::dense::IdMap<InstId, crate::alias::Effect>,

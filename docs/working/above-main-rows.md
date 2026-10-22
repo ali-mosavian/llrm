@@ -46,6 +46,7 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-CA-2 | qbdemo (QB) | Os | bytes | not stated | not stated | +21 B (+11 B with #3357 alone) | as AM-CA-1 | splitkit | 2026-11-13, jpeg allocation rows | #3436 |
 | AM-CA-3 | deedlines (QB) | Os | bytes | not stated | not stated | +6 B (-36 B with #3357 alone) | eight functions move by up to 4 instructions; the first differing pass is the stamp output, where `load @b$seg` is kept across a volatile far store (G8: the runtime-named, unexported b$seg is local) | splitkit | 2026-11-13, jpeg allocation rows | #3436 |
 | AM-CA-4 | QCport game/mdl_ai `atk_shambler@3` | Os | bytes | not stated | not stated | +23 B (+0.09%), 232 to 241 instructions | EarlyCSE reuses a load across four `llvm.lifetime.start` calls (argmem-only): a longer live range costs registers later | splitkit | 2026-11-13, jpeg allocation rows | #3436 |
+| AM-CA-5 | QB `REDIM`/`ERASE` descriptors (deedlines) | O1,O2,Os | precision | global kept tracked across a runtime call | untracked | a store to the array reloaded after the runtime call (the old tests: +128 memory operands on deedlines) | GlobalsModRef takes an address in any initializer as escaped and does not read `noretain` (ours); `CallEffects` did. In a compile globaldce removes the dead descriptor first; deedlines -O2 bytes are below base with #3357 | funcattrs-port | 2026-11-13, GlobalsModRef reads `noretain` (DEVIATE G9), measured on deedlines | #3436 |
 
 ## To add by their owners
 

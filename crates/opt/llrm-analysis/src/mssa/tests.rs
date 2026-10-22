@@ -883,7 +883,7 @@ b2:
         ))
         .collect();
     let [_use, after_capture, before_capture] = calls[..] else { panic!("{calls:?}") };
-    let accesses = Accesses::of(&unit, references);
+    let accesses = Accesses::of(&unit, references, &crate::alias::calls_by_attributes(&unit));
     let aa = AliasQuery::new(&unit, &accesses);
     let store = unit
         .function
