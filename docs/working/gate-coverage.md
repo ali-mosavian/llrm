@@ -64,6 +64,13 @@ Every layer prints its failures as names and the gate compares them with the hea
 | llrm-elf-arm64 | 2 | 0 | 0 |
 | llrm-env | 1 | 0 | 0 |
 
+## Gaps, numbered
+
+| id | what is not run | measured / estimated cost | what covers it now | proposal |
+|---|---|---|---|---|
+| G1 | integration tests under `crates/*/tests/*.rs` of the changed crates: the layer runs `cargo test -p <crate> --lib` only | `--tests` on the changed crate, debug, load 25-34 (2026-10-23): llrm-core 58 s, llrm-analysis 19 s, llrm-mir 29 s, llrm-transforms 1133 s (queue plus a cold test build; the tests themselves ran in under 4 s) | `tools/gate/nightly_integration.py` runs the workspace targets once a night | map each crate integration target to the files it imports (as #3542 did for the root targets) and run only the targets a PR's files reach; decision: oversight |
+| G2 | llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources; a PR that changes no llrm-mir file never ran them (extload.rs, booleans.rs, selectiondag/: three reds on parity) | llrm-mir lib alone: 23 s | the hourly sweep names the red after it lands | closed by this PR: any `.rs` under `crates/` also runs llrm-mir's lib tests |
+
 ## Ratchets with no per-test names
 
 `ratchet:docs`, `ratchet:prepush-docs|facts|fmt|scans|test docs_links`, `ratchet:warnings` and `workspace` print no test names; a second failure inside one is hidden. Each needs to print its items or be split.
