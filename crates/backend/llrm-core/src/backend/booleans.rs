@@ -183,16 +183,30 @@ pub fn branched(
         }
         // a & b of two compares used as a value: b only when a.
         if and_wins && one.opcode == Opcode::Binary(BinaryOp::And) && bits == Some(1) {
-            let only_branches = function
+            // A branch reads its condition from flags, and a user that is
+            // logic of bools is a longer chain whose root a branch reads
+            // (qcport console -Os: `c > 96 && c < 123 && d`).
+            let feeds_a_branch = function
                 .users(result)
                 .snapshot()
                 .iter()
-                .all(|used| function.instruction(used.user).opcode == Opcode::Br && used.index == 0);
-            if only_branches {
+                .any(
+                    |used| matches!(
+                        function.instruction(used.user).opcode,
+                        Opcode::Br | Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+                    ),
+                );
+            if feeds_a_branch {
                 continue;
             }
             let [left, right] = one.operands[..] else { continue };
             for (first, second) in [(left, right), (right, left)] {
+                // Both sides compares: a longer `&&` chain is branches already
+                // where a branch reads it, and a bool made of one and tested
+                // again is worse than the setcc chain (qcport menu -Os).
+                if !word_compare(context, function, first, word_bits) {
+                    continue;
+                }
                 let Some(compare) = defined_for(function, second, inst) else { continue };
                 let Some(Operand::Value(second_value)) = Some(second) else { continue };
                 if !word_compare(context, function, Operand::Value(second_value), word_bits) {
