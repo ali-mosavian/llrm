@@ -722,7 +722,9 @@ no:
     let got = listing(text, "f");
     // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
     // Greedy's register choice (#2312): the old pin's instructions, memory
-    // operands, prefixes and adjacent dependencies, other registers.
+    // operands, prefixes and adjacent dependencies, other registers. The
+    // extensions and the negate sink into the arm that reads them (a88a614969,
+    // MachineSink outside size builds): the `no` path runs none of them.
     assert_eq!(
         got,
         [
@@ -731,15 +733,16 @@ no:
             "L0_0:",
             "mov cx, word ptr [bp+6]",
             "cmp cx, word ptr [bp+8]",
-            "setl dl",
-            "movzx ax, dl",
-            "neg ax",
+            "setl al",
             "cmp cx, 3",
-            "sete bl",
-            "movzx cx, bl",
-            "and dl, bl",
+            "sete cl",
+            "mov dl, al",
+            "and dl, cl",
             "je L0_8",
             "L0_6:",
+            "movzx ax, al",
+            "neg ax",
+            "movzx cx, cl",
             "add ax, cx",
             "pop bp",
             "retf",
@@ -749,7 +752,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (18, 2));
+    assert_eq!(counts(&got), (19, 2));
 }
 
 #[test]
@@ -2490,11 +2493,26 @@ join:
   ret i16 %v
 }
 ";
-    // The byte test reads its cell where it runs: the load crosses the address
-    // arithmetic.
+    // The address arithmetic sinks into the arm that makes the phi's input
+    // (a88a614969, MachineSink outside size builds); bx is defined on both
+    // paths before the load.
     assert_eq!(
-        listing(text, "f")[3..7],
-        ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]
+        listing(text, "f")[3..],
+        [
+            "mov bx, word ptr [bp+6]",
+            "cmp byte ptr [bp+8], 0",
+            "je L0_3",
+            "L0_2:",
+            "add bx, bx",
+            "add bx, offset a",
+            "jmp L0_4",
+            "L0_3:",
+            "mov bx, offset a",
+            "L0_4:",
+            "mov ax, word ptr [bx]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 

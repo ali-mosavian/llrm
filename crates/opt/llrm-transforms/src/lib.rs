@@ -91,6 +91,8 @@ mod calleepop_tests;
 pub mod canonexit;
 pub mod canonical;
 pub mod cfg;
+#[cfg(test)]
+mod codegen_slots_tests;
 pub mod combine;
 pub mod combine_add_idioms;
 pub mod combine_addsub;
@@ -261,8 +263,6 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
-#[cfg(test)]
-mod codegen_slots_tests;
 #[cfg(test)]
 mod pin_slots_tests;
 pub mod pipeline;
