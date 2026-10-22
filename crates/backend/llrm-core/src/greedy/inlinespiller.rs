@@ -337,7 +337,7 @@ impl<'a> InlineSpiller<'a> {
             let value = lis.next_virtual_register();
             lis.reserve_virtual_register(value);
             // It stands beside the unit and claims none of the def's bytes,
-            // as `spiller::_inserted` places what it makes.
+            // as `crate::greedy::tii::_inserted` places what it makes.
             let beside = lis.instr(members[0]);
             let at = beside.covers.map_or(beside.at, |covers| covers.0);
             let again = Arc::new(Insn {
@@ -463,7 +463,7 @@ impl<'a> InlineSpiller<'a> {
                     // A parallel copy's member folds to memory on either side,
                     // memory to memory included: `parcopy` sequences it.
                     let values = std::iter::once(reg).collect();
-                    crate::backend::spiller::_in_place(one, &values, self.frame, &|value| {
+                    crate::greedy::tii::fold_copy_member(one, &values, self.frame, &|value| {
                         if value == reg { home_key } else { value }
                     })
                     .ok()
@@ -493,13 +493,13 @@ impl<'a> InlineSpiller<'a> {
             lis.rewrite_instr(block, *key, Arc::clone(one));
         }
         if reads {
-            let reload = crate::backend::spiller::_reload(&old[0], new, &cell);
+            let reload = crate::greedy::tii::load_reg_from_stack_slot(&old[0], new, &cell);
             lis.insert_instr_before(block, Some(renamed[0].id()), reload);
             self.reloads += 1;
         }
         if writes {
             let last = renamed.last().expect("a unit has members");
-            let store = crate::backend::spiller::_store(&old[old.len() - 1], new, &cell);
+            let store = crate::greedy::tii::store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
             lis.insert_instr_after(block, last.id(), store);
             self.stores += 1;
         }
@@ -966,7 +966,7 @@ impl InlineSpiller<'_> {
             let at = def.covers.map_or(def.at, |covers| covers.0);
             crate::backend::floatassign::_stored(src, &cell, at)
         } else {
-            crate::backend::spiller::_store(&def, src, &cell)
+            crate::greedy::tii::store_reg_to_stack_slot(&def, src, &cell)
         };
         lis.insert_instr_after(block, def_key, store);
         self.stores += 1;
