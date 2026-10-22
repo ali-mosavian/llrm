@@ -133,6 +133,12 @@ pub trait AddrDag: Dag {
     fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[SDValue]) -> SDValue;
     /// `getConstant(value, vt)` (not a target constant).
     fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue;
+    /// The segment register a memory node addresses through (`X86::ES`, ...), the pin's address
+    /// space 256..258 for GS, FS and SS; `None` for the default segment.
+    fn segment_override(&self, node: u32) -> Option<u16> {
+        let _ = node;
+        None
+    }
     /// `StoreSDNode::isNonTemporal`.
     fn is_non_temporal(&self, node: u32) -> bool;
     fn target_frame_index(&mut self, index: i32, vt: Vt) -> SDValue;
@@ -722,7 +728,16 @@ impl<D: AddrDag> Matcher<'_, D> {
     ///
     /// [sel]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3202
     pub fn select_addr(&mut self, n: SDValue) -> Option<AddressOperands> {
+        self.select_addr_of(None, n)
+    }
+
+    /// `selectAddr(Parent, N)`: `parent` is the memory node whose address `n` is; its segment
+    /// override becomes the segment operand.
+    pub fn select_addr_of(&mut self, parent: Option<u32>, n: SDValue) -> Option<AddressOperands> {
         let mut am = AddressMode::default();
+        if let Some(reg) = parent.and_then(|p| self.dag.segment_override(p)) {
+            am.segment = Some(self.dag.register(reg, mvt::i16));
+        }
         if self.match_address(n, &mut am) {
             return None;
         }

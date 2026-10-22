@@ -129,7 +129,7 @@ pub fn fold_load_store_into_mem_operand<D: AddrDag>(dag: &mut D, hooks: &X86Hook
     let Some((load, input_chain)) = found else { return false };
 
     let ptr = dag.operand(load, 1);
-    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode }).select_addr(ptr) else { return false };
+    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode }).select_addr_of(Some(load), ptr) else { return false };
     let address = [a.base, a.scale, a.index, a.disp, a.segment];
     let results = [mvt::i32, mvt::Other];
 

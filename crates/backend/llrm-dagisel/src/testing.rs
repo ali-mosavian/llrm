@@ -17,6 +17,10 @@ pub struct Node {
     pub load: Option<LoadExt>,
     pub memory_vt: Option<Vt>,
     pub symbol: Option<Wrapped>,
+    /// A `VTSDNode`'s type.
+    pub vt_node: Option<Vt>,
+    /// The segment register the memory node addresses through.
+    pub segment: Option<u16>,
     pub dead: bool,
 }
 
@@ -40,6 +44,11 @@ impl TestDag {
     #[allow(dead_code)]
     pub fn make_constant(&mut self, value: i64, vt: Vt) -> SDValue {
         SDValue::new(self.add(Node { opcode: isd::Constant, vts: vec![vt], constant: Some(value), ..Node::default() }), 0)
+    }
+
+    /// A `VTSDNode`.
+    pub fn make_value_type_node(&mut self, vt: Vt) -> SDValue {
+        SDValue::new(self.add(Node { opcode: isd::VALUETYPE, vts: vec![mvt::Other], vt_node: Some(vt), ..Node::default() }), 0)
     }
 
     pub fn frame_index(&mut self, index: i32, vt: Vt) -> SDValue {
@@ -135,8 +144,8 @@ impl Dag for TestDag {
     fn cond_code(&self, _: SDValue) -> Option<u8> {
         None
     }
-    fn value_type_node(&self, _: SDValue) -> Option<Vt> {
-        None
+    fn value_type_node(&self, value: SDValue) -> Option<Vt> {
+        self.nodes[value.node as usize].vt_node
     }
     fn is_undef(&self, _: SDValue) -> bool {
         false
@@ -387,6 +396,9 @@ impl AddrDag for TestDag {
     }
     fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue {
         self.make_constant(value, vt)
+    }
+    fn segment_override(&self, node: u32) -> Option<u16> {
+        self.nodes[node as usize].segment
     }
     fn is_non_temporal(&self, _: u32) -> bool {
         false

@@ -15,3 +15,45 @@ let Predicates = [Not64BitMode] in {
 def : Pat<(X86les addr:$src), (LES16rm addr:$src)>;
 def : Pat<(X86lds addr:$src), (LDS16rm addr:$src)>;
 }
+
+// `rep movs` and `rep stos` on the 16-bit registers: the pin has SI/DI/CX only as ESI/EDI/ECX
+// (with an address-size prefix) and RSI/RDI/RCX. In real mode the string instructions use
+// DS:SI and ES:DI; the segments are set by the code around the node.
+let SchedRW = [WriteMicrocoded] in {
+let Defs = [CX, DI, SI], Uses = [CX, DI, SI], isCodeGenOnly = 1 in {
+def REP_MOVSB_16 : I<0xA4, RawFrm, (outs), (ins),
+                     "{rep;movsb (%si), %es:(%di)|rep movsb es:[di], [si]}",
+                     []>, REP, AdSize16, Requires<[In16BitMode]>;
+def REP_MOVSW_16 : I<0xA5, RawFrm, (outs), (ins),
+                     "{rep;movsw (%si), %es:(%di)|rep movsw es:[di], [si]}",
+                     []>, REP, AdSize16, OpSize16, Requires<[In16BitMode]>;
+def REP_MOVSD_16 : I<0xA5, RawFrm, (outs), (ins),
+                     "{rep;movsl (%si), %es:(%di)|rep movsd es:[di], [si]}",
+                     []>, REP, AdSize16, OpSize32, Requires<[In16BitMode]>;
+}
+
+let Defs = [CX, DI], isCodeGenOnly = 1 in {
+  let Uses = [AL, CX, DI] in
+  def REP_STOSB_16 : I<0xAA, RawFrm, (outs), (ins),
+                       "{rep;stosb %al, %es:(%di)|rep stosb es:[di], al}",
+                       []>, REP, AdSize16, Requires<[In16BitMode]>;
+  let Uses = [AX, CX, DI] in
+  def REP_STOSW_16 : I<0xAB, RawFrm, (outs), (ins),
+                       "{rep;stosw %ax, %es:(%di)|rep stosw es:[di], ax}",
+                       []>, REP, AdSize16, OpSize16, Requires<[In16BitMode]>;
+  let Uses = [EAX, CX, DI] in
+  def REP_STOSD_16 : I<0xAB, RawFrm, (outs), (ins),
+                       "{rep;stosl %eax, %es:(%di)|rep stosd es:[di], eax}",
+                       []>, REP, AdSize16, OpSize32, Requires<[In16BitMode]>;
+}
+} // SchedRW
+
+// Tried before the pin's 32-bit forms, which the same node also matches.
+let AddedComplexity = 10, Predicates = [In16BitMode] in {
+def : Pat<(X86rep_movs i8), (REP_MOVSB_16)>;
+def : Pat<(X86rep_movs i16), (REP_MOVSW_16)>;
+def : Pat<(X86rep_movs i32), (REP_MOVSD_16)>;
+def : Pat<(X86rep_stos i8), (REP_STOSB_16)>;
+def : Pat<(X86rep_stos i16), (REP_STOSW_16)>;
+def : Pat<(X86rep_stos i32), (REP_STOSD_16)>;
+}
