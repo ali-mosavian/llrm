@@ -6,7 +6,7 @@
 SELECT_SHADOW is `cargo build --release -p llrm-core --example select_shadow`. Each program is compiled
 by `LLRM_C -m32 -march=i486 -O2 --dump`; the last IR the dump writes goes to the example (the DAG path:
 builder, legalizers, `select_node`) and to the pin's `llc -O2 -stop-after=finalize-isel` (through
-pin.py). A function lands in the first bucket that fits: a block the builder or a legalizer refuses
+pin.py). Every defined function of the IR lands in exactly one bucket, so the total is fixed (a whole-program failure puts all its functions in one bucket; a program with no IR counts as one row). The first bucket that fits: a block the builder or a legalizer refuses
 (by reason), a node the selector could not select (by node), machine opcodes that differ from the pin's
 (by the opcode), or equal. Prints the bucket table; `--out` writes every function.
 """
@@ -29,6 +29,16 @@ FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
 FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
 BOOKKEEPING = {"COPY", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
+
+
+def defined(ir: str) -> list[str]:
+    """The functions the IR defines: the fixed total, whatever either side later does with them."""
+    return re.findall(r"^define\b[^\n]*@(\S+?)\(", ir, re.M)
+
+
+def whole_program(program: str, ir: str, bucket: str) -> list[tuple[str, str, str]]:
+    """A failure of the whole run: every defined function lands in `bucket`, so the total holds."""
+    return [(program, f, bucket) for f in defined(ir)] or [(program, "*", bucket)]
 
 
 def last_ir(dump: Path) -> Path | None:
@@ -88,8 +98,11 @@ def short(reason: str) -> str:
     return reason[:70]
 
 
-def rows_of(program, funcs, refused, pinned):
+def rows_of(program, funcs, refused, pinned, ir=""):
     rows = []
+    for name in defined(ir):
+        if name not in funcs:
+            rows.append((program, name, "missing from the shadow's output"))
     for name, f in funcs.items():
         reasons = refused.get(name, [])
         if f["blocks"] == 0:
@@ -117,12 +130,12 @@ def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
     """The rows for one IR file the pin's llc and the example both read."""
     mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600)
     if mine.returncode != 0:
-        return [(program, "*", "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])]
+        return whole_program(program, ir.read_text(), "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])
     funcs, refused = ours(mine.stdout)
     theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
     if theirs.returncode != 0:
-        return [(program, "*", "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])]
-    return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout))
+        return whole_program(program, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
+    return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout), ir.read_text())
 
 
 def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
@@ -133,20 +146,20 @@ def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
         done = subprocess.run([llrm_c, *FLAGS, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600)
         ir = last_ir(dump)
         if done.returncode != 0 or ir is None:
-            return [(source.stem, "*", "compile failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:60])]
+            return whole_program(source.stem, ir.read_text() if ir else "", "compile failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:60])
         # llrm's own calling convention for internal functions is not LLVM's: both sides see the default one.
         clean = Path(tmp) / "clean.ll"
         clean.write_text(re.sub(r"\b(?:watcallcc|sysvcc|regparm3cc|cdeclcc|pascalcc|ia16cc) ", "", ir.read_text()))
         ir = clean
         mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600)
         if mine.returncode != 0:
-            return [(source.stem, "*", "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])]
+            return whole_program(source.stem, ir.read_text(), "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])
         funcs, refused = ours(mine.stdout)
         theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
         if theirs.returncode != 0:
-            return [(source.stem, "*", "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])]
+            return whole_program(source.stem, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
         pinned = pin_opcodes(theirs.stdout)
-        return rows_of(source.stem, funcs, refused, pinned)
+        return rows_of(source.stem, funcs, refused, pinned, ir.read_text())
 
 
 def main() -> int:
@@ -171,7 +184,7 @@ def main() -> int:
     with ThreadPoolExecutor(args.jobs) as pool:
         rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
-    print(f"{len(rows)} functions in {len(sources)} programs: {buckets['equal']} equal")
+    print(f"{buckets['equal']} equal of {len(rows)} defined functions in {len(sources)} programs")
     for bucket, n in buckets.most_common():
         print(f"{n:6d}  {bucket}")
     if args.out:
