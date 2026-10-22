@@ -585,9 +585,9 @@ def integration_failures(
     import xfail  # noqa: PLC0415
 
     command = ["cargo", "test", "--release", "--no-fail-fast", "-p", "llrm", *[arg for name in targets for arg in ("--test", name)]]
-    done = run(slotted(command), cwd=root, capture_output=True, text=True)
-    output = done.stdout + done.stderr
-    found = set(red_tests(output))
+    # one stream: cargo prints `Running tests/X.rs` on stderr and the test lines on stdout, and stdout + stderr read as two blocks lost which target a test belonged to
+    done = run(slotted(command), cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    found = set(red_tests(done.stdout))
     if done.returncode and not found:
         found = {"integration-did-not-run"}
     return found - xfail.load().keys()
