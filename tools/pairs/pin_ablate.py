@@ -87,6 +87,11 @@ def show(nodes) -> str:
     return ",".join(node if children is None else f"{node}({show(children)})" for node, children in nodes)
 
 
+def pin_text(path: Path) -> str:
+    """The IR as the pin parses it: llrm's own attributes (`threeway`, `flagsresult`) are not LLVM's."""
+    return re.sub(r" (threeway|flagsresult)\b", "", path.read_text())
+
+
 def instructions(ir: str) -> int:
     return sum(1 for line in ir.splitlines() if re.match(r"^\s+(%\S+ = |store |call |br |ret |switch |unreachable)", line))
 
@@ -98,13 +103,15 @@ def main(passes: list[str]) -> int:
     of = pin.target(os.environ.get("LLRM_ABLATE_TARGET", "m32"), optsize=bool(os.environ.get("LLRM_ABLATE_OPTSIZE")))
     full = show(tree([l for l in FIXTURE.read_text().splitlines() if not l.startswith(";")][-1]))
     base = {}
-    for ir in irs:
-        done = pin.opt(full, ir.read_text(), of)
+    skipped = []
+    for ir in list(irs):
+        done = pin.opt(full, pin_text(ir), of)
         if done.returncode != 0:
-            print("pipeline failed on", ir, done.stderr[:200])
-            return 1
+            skipped.append(f"{ir.parent.name}: {done.stderr.strip().splitlines()[0][:90] if done.stderr.strip() else 'failed'}")
+            irs.remove(ir)
+            continue
         base[ir] = instructions(done.stdout)
-    print(f"# pin opt -O2 over {len(irs)} IRs ({root}); target m32; baseline instructions {sum(base.values())}")
+    print(f"# pin opt -O2 over {len(irs)} IRs ({root}); target {of.triple}, optsize {of.optsize}; baseline instructions {sum(base.values())}; the pin could not parse {len(skipped)}: {'; '.join(skipped)}")
     print("pass | IRs changed | instructions without it (sum over the changed) | delta")
     root_tree = tree([l for l in FIXTURE.read_text().splitlines() if not l.startswith(";")][-1])
     for name in passes:
@@ -115,7 +122,7 @@ def main(passes: list[str]) -> int:
             pipeline = show(without(root_tree, name, at))
             changed = delta = failed = 0
             for ir in irs:
-                done = pin.opt(pipeline, ir.read_text(), of)
+                done = pin.opt(pipeline, pin_text(ir), of)
                 if done.returncode != 0:
                     failed += 1
                     continue

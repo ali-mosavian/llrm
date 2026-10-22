@@ -64,6 +64,30 @@ Rows with owner `unassigned` go to the coordinator on 10-26; the test `every_pin
 
 The second `globaldce`, `constmerge` and `rpo-function-attrs` the pin runs after the SCC block are rows above (globaldce's is in the EXECUTED row's note). The ranking is provisional: the 12 bench C IRs are a sample (late tailcallelim was the only mover; QB-shaped IRs and more C programs are untested). Follow-up by 10-27: widen the ablation to the QCport modules' stage IRs (65 modules, -Os too) through pin.py and report any pass that moves bytes.
 
+## QCport-stage ablation (the follow-up of the MISSING ranking)
+
+`tools/pairs/pin_ablate.py` over the 65 QCport modules' stage IRs (`llrm-c -m16 -march=i386 -O2 --dump`, `01-globalopt.ll`; the pin parses
+all 65 once `threeway` and `flagsresult`, llrm's own attributes, are dropped), the pin's -O2 list with one instance of a pass removed at
+a time; at -O2 and at -Os (the -O2 list on `optsize` IR: `LLRM_ABLATE_OPTSIZE=1`); baseline 63213 instructions (-O2), 51432 (-Os).
+The metric is the pin's output instruction count, not object bytes. The instances that still have no slot of ours and move something:
+
+| pass (instance) | -O2: IRs changed, delta instructions | -Os | what it is |
+|---|---|---|---|
+| constraint-elimination | 5 of 65, +11 | 4 of 65, +13 | Simplify list (MISSING, w-4) |
+| mldst-motion | 4, +11 | 4, +9 | Simplify list (MISSING, w-4) |
+| late instcombine (the last of the Late list) | 3, +17 | none | Late list (MISSING, w-4) |
+| late loop-unroll<O2> | 3, -95 (the unroll adds 95) | none | Late list (MISSING, w-3) |
+| late loop-rotate | 3, -3 | 4, -2 | Late loop nest (MISSING, w-3) |
+| late sroa<preserve-cfg;aggregate-to-vector> | 1, -1 | 1, -1 | Late list (MISSING, w-4) |
+| infer-alignment | 1, +2 | none | Late list (MISSING, w-1) |
+| loop-instsimplify | 1, -1 | 1, -1 | loop-mssa nest (MISSING, w-3) |
+
+Nothing reaches 0.05% of the baseline except the late `loop-unroll` at -O2 (95 instructions, 0.15%: it makes code bigger, for speed):
+the next most is `constraint-elimination` at -Os, 13 of 51432 (0.025%). The ranking of the first table stands, with these eight as
+the ones that move anything on QCport; every other MISSING pass changes 0 of 65 IRs at both levels. Instances our slots already
+match (`tailcallelim`, the early `loop-rotate`, `sroa`, `instcombine`) move code, as expected; they are in the raw output
+(`~/scratch/fa/qcablate_O2.txt`, `qcablate_Os.txt`).
+
 ## Order structure
 
 The pin's pipeline is nested, not a flat list of slots (`PassBuilderPipelines.cpp` at d1106deb71cc: [buildInlinerPipeline L973](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L973), the CGSCC members [L1047-L1049](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1047-L1049), [L1074](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1074)). `default<O2>` as the pin prints it, params shortened, `require`/`invalidate` left out:
