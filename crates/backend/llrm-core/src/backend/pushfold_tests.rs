@@ -31,7 +31,7 @@ fn insn(
     Arc::new(Insn::new(
         at,
         Some((at, at)),
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }),
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }),
         defines,
         uses,
     ))
@@ -59,7 +59,7 @@ fn body(insns: Vec<Arc<Insn>>) -> LirBody {
 }
 
 fn names(body: &LirBody) -> Vec<String> {
-    body.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+    body.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
 }
 
 /// `f(p->a, p->b, p->c)` pushed 3 loads into registers and 3 pushes of them

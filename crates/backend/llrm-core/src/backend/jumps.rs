@@ -281,7 +281,7 @@ fn inverted(
             }
             let flipped = Arc::new(Insn {
                 what: Some(Semantics {
-                    name: Some((*opposite).to_owned()),
+                    name: Some((*opposite).into()),
                     target: Some(onward),
                     ..branch_what.clone()
                 }),
@@ -310,7 +310,7 @@ fn inverted(
         }
         let flipped = Arc::new(Insn {
             what: Some(Semantics {
-                name: Some((*opposite).to_owned()),
+                name: Some((*opposite).into()),
                 target: last_what.target,
                 ..branch_what.clone()
             }),
@@ -352,7 +352,7 @@ fn _explicit(body: &LirBody) -> Result<Vec<Block>, masm::Unprintable> {
             let jump = Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("jmp".to_owned()), target: Some(fall), ..Semantics::new(Operation::Jump) }),
+                Some(Semantics { name: Some("jmp".into()), target: Some(fall), ..Semantics::new(Operation::Jump) }),
                 Vec::new(),
                 Vec::new(),
             );

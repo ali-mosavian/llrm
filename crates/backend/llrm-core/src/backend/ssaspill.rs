@@ -2242,7 +2242,7 @@ fn written(
             let mut jump = Insn::new(
                 beside.at,
                 Some((beside.at, beside.at)),
-                Some(Semantics { name: Some("jmp".to_owned()), target: Some(*to), ..Semantics::new(Operation::Jump) }),
+                Some(Semantics { name: Some("jmp".into()), target: Some(*to), ..Semantics::new(Operation::Jump) }),
                 Vec::new(),
                 Vec::new(),
             );
@@ -2379,7 +2379,7 @@ mod tests {
         let cell = Mem { addr: Some(Addr::new(Space::Segment, 0)), ..Mem::new(None, 2) };
         let held = |value| Loc::Held(Held { value, width: 2 });
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let one = |at: i64, what, defines: Vec<u32>, uses: Vec<u32>| {
             Arc::new(Insn::new(at, Some((at, at)), what, defines, uses))
@@ -2421,7 +2421,7 @@ mod tests {
         let cell = Mem { addr: Some(Addr::new(Space::Segment, 2)), ..Mem::new(None, 2) };
         let held = |value| Loc::Held(Held { value, width: 2 });
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let one = |at: i64, what, defines: Vec<u32>, uses: Vec<u32>| {
             Arc::new(Insn::new(at, Some((at, at)), what, defines, uses))
@@ -2491,7 +2491,7 @@ mod tests {
         let cell = Mem { addr: Some(Addr::new(Space::Segment, 0)), ..Mem::new(None, 2) };
         let held = |value| Loc::Held(Held { value, width: 2 });
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let load = Insn {
             volatile: true,

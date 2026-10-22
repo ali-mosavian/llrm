@@ -559,7 +559,7 @@ pub fn materialized(
                     _inserted(
                         &one,
                         Semantics {
-                            name: Some("lea".to_owned()),
+                            name: Some("lea".into()),
                             dests: vec![Loc::Held(Held { value: fresh, width: _width(&one, value) })],
                             sources: vec![Loc::Address(address.clone())],
                             ..Semantics::new(Operation::Address)
@@ -4143,7 +4143,7 @@ fn _unfolded_index(
     let add = _inserted(
         one,
         Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![Loc::Held(base)],
             sources: vec![Loc::Held(base), Loc::Held(index)],
             ..Semantics::new(Operation::Binary)
@@ -5015,7 +5015,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -5395,7 +5395,7 @@ mod tests {
         for op_name in ["xor", "add", "and", "sub"] {
             let op = _add(1, 1, 0x100);
             let op = Insn {
-                what: Some(Semantics { name: Some(op_name.to_owned()), ..what(&op).clone() }),
+                what: Some(Semantics { name: Some(op_name.into()), ..what(&op).clone() }),
                 uses: vec![1],
                 ..op
             };
@@ -6347,7 +6347,7 @@ mod tests {
     #[test]
     fn test_an_unhandled_arithmetic_form_keeps_its_reload() {
         let add = _add(1, 2, 0x100);
-        let adc = Insn { what: Some(Semantics { name: Some("adc".to_owned()), ..what(&add).clone() }), ..add };
+        let adc = Insn { what: Some(Semantics { name: Some("adc".into()), ..what(&add).clone() }), ..add };
         let got = _out(&_body(vec![adc]), &[2]);
         assert_eq!(got.len(), 2, "{got:?}");
         assert!(name(&got[0]) == Some("mov") && is_mem(&what(&got[0]).sources[0]));
@@ -6728,7 +6728,7 @@ mod tests {
         {
             let mut frame = Frame::new(0);
             let op = _add(1, 2, 0x100);
-            let op = Insn { what: Some(Semantics { name: Some(name.to_owned()), ..what(&op).clone() }), ..op };
+            let op = Insn { what: Some(Semantics { name: Some(name.into()), ..what(&op).clone() }), ..op };
             let (body, _) = spilled(
                 &_body(vec![op]),
                 &set(&[1, 2]),
@@ -6988,7 +6988,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 vec![],
                 vec![],
             ))
@@ -7131,7 +7131,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 defines,
                 uses,
             ))
@@ -7180,7 +7180,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 vec![],
                 vec![],
             ))

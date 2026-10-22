@@ -133,7 +133,7 @@ pub(crate) fn _mov(
     out_of: Loc,
 ) -> Semantics {
     Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![into],
         sources: vec![out_of],
         ..Semantics::new(Operation::Move)

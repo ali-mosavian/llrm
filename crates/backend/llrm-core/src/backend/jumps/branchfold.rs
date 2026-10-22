@@ -92,7 +92,7 @@ fn aimed(
     name: Option<&str>,
 ) -> Arc<Insn> {
     let what = one.what.as_ref().expect("a branch has semantics");
-    let name = name.map(str::to_owned).or_else(|| what.name.clone());
+    let name = name.map(std::sync::Arc::<str>::from).or_else(|| what.name.clone());
     Arc::new(Insn { what: Some(Semantics { name, target: Some(target), ..what.clone() }), ..(**one).clone() })
 }
 
@@ -277,7 +277,7 @@ impl<'a> Folder<'a> {
         {
             let jump = Arc::new(Insn {
                 what: Some(Semantics {
-                    name: Some("jmp".to_owned()),
+                    name: Some("jmp".into()),
                     target: Some(to),
                     ..Semantics::new(Operation::Jump)
                 }),
@@ -519,7 +519,7 @@ impl<'a> Folder<'a> {
         let jump = Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) }),
+            Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
             Vec::new(),
             Vec::new(),
         );

@@ -675,7 +675,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
     }
 
@@ -714,7 +714,7 @@ mod tests {
         let names: Vec<_> = established(&body)
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)))
             .collect();
         assert_eq!(names, ["add", "movzx", "mov"], "esi is zero-extended between its write and the cell");
     }
@@ -749,7 +749,7 @@ mod tests {
         let names: Vec<_> = established(&body)
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)))
             .collect();
         assert_eq!(names, ["add", "lea"]);
     }
@@ -923,7 +923,7 @@ mod tests {
 
         assert_ne!(before(&after)[&widening] & ebx_bit, 0, "the loop's widening reads a register zero above its word");
         let names =
-            |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect::<Vec<_>>();
+            |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>();
         assert_eq!(names(&after.blocks[0]), ["mov", "movzx", "jmp"]);
         assert_eq!(names(&after.blocks[1]), ["movzx", "add", "cmp", "jne"]);
     }

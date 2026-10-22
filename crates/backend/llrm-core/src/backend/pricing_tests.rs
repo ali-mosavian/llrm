@@ -29,7 +29,7 @@ fn test_scalar_double_shifts_use_the_integer_shift_price() {
         assert_eq!(classify(mnemonic, "edx,eax,16", ""), "shift_ri");
         let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });
         let what = ir::Semantics {
-            name: Some(mnemonic.to_owned()),
+            name: Some(mnemonic.into()),
             dests: vec![reg(RegId::EDX)],
             sources: vec![
                 reg(RegId::EDX),
@@ -53,7 +53,7 @@ fn test_a_shift_by_one_is_priced_as_the_three_clock_form() {
     assert_eq!(classify("shl", "word [bp-4],1", "d166fc"), "shift_ri");
     let reg = || ir::Loc::Reg(ir::Reg { register: RegId::AX, width: 2 });
     let what = ir::Semantics {
-        name: Some("shl".to_owned()),
+        name: Some("shl".into()),
         dests: vec![reg()],
         sources: vec![reg(), ir::Loc::Imm(ir::Imm { value: 1, width: 1, address: None })],
         ..ir::Semantics::new(ir::Operation::Binary)
@@ -172,7 +172,7 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
         ..ir::Mem::new(None, 0)
     };
     let what = ir::Semantics {
-        name: Some("lea".to_owned()),
+        name: Some("lea".into()),
         dests: vec![reg(RegId::ESI)],
         sources: vec![ir::Loc::Mem(cell)],
         ..ir::Semantics::new(ir::Operation::Address)
@@ -192,7 +192,7 @@ fn test_every_float_function_the_selector_emits_has_a_byte_price() {
     for bits in [16, 32] {
         for (_, name) in crate::backend::isel::FLOAT_FUNCTIONS {
             let what = ir::Semantics {
-                name: Some(name.to_owned()),
+                name: Some(name.into()),
                 dests: st0.clone(),
                 sources: st0.clone(),
                 ..ir::Semantics::new(ir::Operation::FloatUnary)
@@ -253,7 +253,7 @@ fn test_every_float_unary_the_backend_names_has_a_byte_price() {
     for bits in [16, 32] {
         for name in &names {
             let what = ir::Semantics {
-                name: Some(name.clone()),
+                name: Some(name.as_str().into()),
                 dests: st0.clone(),
                 sources: st0.clone(),
                 ..ir::Semantics::new(ir::Operation::FloatUnary)

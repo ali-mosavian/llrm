@@ -161,7 +161,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
                     at_flags,
                     Some((at_flags, at_flags)),
                     Some(Semantics {
-                        name: Some("mov".to_owned()),
+                        name: Some("mov".into()),
                         dests: vec![Loc::Held(Held { value: zero, width: 4 })],
                         sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
                         ..Semantics::new(Operation::Move)

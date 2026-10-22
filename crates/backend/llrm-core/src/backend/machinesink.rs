@@ -884,7 +884,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -932,7 +932,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names: Vec<_> =
-            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
     }
 
@@ -1047,7 +1047,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names: Vec<_> =
-            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+            sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
     }
 
@@ -1088,7 +1088,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
-            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
         };
         // The premise: no block reads the flags the add sets.
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
@@ -1133,7 +1133,7 @@ mod tests {
         body.inputs = [1, 7, 8].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
-            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
@@ -1175,7 +1175,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
-            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
         };
         let moved = sunk(&body, false);
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the lea left the block");
@@ -1217,7 +1217,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
-            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
         };
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
@@ -1261,7 +1261,7 @@ mod tests {
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let names = |body: &LirBody, block: usize| -> Vec<String> {
-            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
         };
         assert_eq!(names(&sunk(&body, true), 0), ["add", "cmp", "je"], "the add stays");
         assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");

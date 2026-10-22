@@ -260,7 +260,7 @@ fn float_move(
 ) -> Arc<Insn> {
     let held = |value| Loc::Held(Held { value, width: 10 });
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(into)],
         sources: vec![held(from)],
         ..Semantics::new(Operation::Move)
@@ -309,7 +309,7 @@ fn test_a_float_compare_clobbers_the_status_word_register() {
     use crate::model::lir::{Block, LirBlock};
     let held = |value| Loc::Held(Held { value, width: 10 });
     let what = Semantics {
-        name: Some("fcom".to_owned()),
+        name: Some("fcom".into()),
         sources: vec![held(1), held(2)],
         ..Semantics::new(Operation::Compare)
     };

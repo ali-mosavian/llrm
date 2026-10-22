@@ -270,7 +270,7 @@ mod tests {
 
     fn def(v: u32) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(v)],
             sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
@@ -283,13 +283,13 @@ mod tests {
     }
 
     fn jump(target: i64) -> Arc<Insn> {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
     fn branch(target: i64) -> Arc<Insn> {
         let what =
-            Semantics { name: Some("jne".to_owned()), target: Some(target), ..Semantics::new(Operation::Branch) };
+            Semantics { name: Some("jne".into()), target: Some(target), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
@@ -344,7 +344,7 @@ mod tests {
         let wide = |value: u32| Loc::Held(Held { value, width: 8 });
         let make = |value: u32| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![wide(value)],
                 sources: vec![Loc::Imm(Imm { value: 7, width: 8, address: None })],
                 ..Semantics::new(Operation::Move)
@@ -369,7 +369,7 @@ mod tests {
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let load = |value: u32| {
             let what = Semantics {
-                name: Some("fldz".to_owned()),
+                name: Some("fldz".into()),
                 dests: vec![float(value)],
                 ..Semantics::new(Operation::FloatLoad)
             };
@@ -377,7 +377,7 @@ mod tests {
         };
         let store = |value: u32| {
             let what = Semantics {
-                name: Some("fstp".to_owned()),
+                name: Some("fstp".into()),
                 dests: vec![Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::BX, width: 4 })],
                 sources: vec![float(value)],
                 ..Semantics::new(Operation::FloatStore)

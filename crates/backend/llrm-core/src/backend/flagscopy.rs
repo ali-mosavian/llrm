@@ -139,7 +139,7 @@ fn make(
     defines: Vec<u32>,
     uses: Vec<u32>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
 }
 
@@ -212,7 +212,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                         }
                         let mut changed = (**one).clone();
                         if let Some(what) = changed.what.as_mut() {
-                            what.name = Some(format!("{stem}{}", if *inverted { "e" } else { "ne" }));
+                            what.name = Some(format!("{stem}{}", if *inverted { "e" } else { "ne" }).into());
                         }
                         before.push(Arc::new(changed));
                         edits.push((*index, before));
@@ -286,7 +286,7 @@ mod tests {
         insns.extend(readers.iter().zip(10..).map(|(&name, value)| reader(name, value)));
         let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let done = lowered(&body).unwrap();
-        done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+        done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
     }
 
     #[test]

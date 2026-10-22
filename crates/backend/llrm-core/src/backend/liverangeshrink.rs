@@ -404,7 +404,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -485,7 +485,7 @@ mod tests {
         let branch = insn(4, Operation::Branch, "je", vec![], vec![], vec![], vec![]);
         let before = body(vec![constant(0, 10), constant(1, 11), cmp, add(3, 13, 10, 11), branch, ret(5)]);
         let names: Vec<_> =
-            shrink(&before).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+            shrink(&before).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "cmp", "add", "je", "ret"]);
     }
 }

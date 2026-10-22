@@ -178,7 +178,7 @@ fn _integer_loads(
                         && let Some((name, _)) = constpool::x87_constant(value as f64)
                     {
                         let mut made = (*one).clone();
-                        made.what = Some(Semantics { name: Some(name.to_owned()), sources: Vec::new(), ..what });
+                        made.what = Some(Semantics { name: Some(name.into()), sources: Vec::new(), ..what });
                         insns.push(Arc::new(made));
                         changed = true;
                         continue;
@@ -188,7 +188,7 @@ fn _integer_loads(
                         let cell = pool.cell(constpool::narrowest(f64::from(value)));
                         let mut made = (*one).clone();
                         made.what =
-                            Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
+                            Some(Semantics { name: Some("fld".into()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
                         changed = true;
                         continue;
@@ -490,7 +490,7 @@ pub(crate) fn _equivalent_loads(
     sequence: &[Arc<Insn>],
     live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> IndexMap<u32, u32> {
-    let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
+    let mut available: IndexMap<(Option<std::sync::Arc<str>>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
         // A volatile load is observable and may be backed by changing device
@@ -1809,7 +1809,7 @@ impl Plan<'_> {
             && select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some()
         {
             Semantics {
-                name: Some(_compare_name(home).to_owned()),
+                name: Some(_compare_name(home).into()),
                 sources: vec![what.sources[0].clone(), cell],
                 ..what.clone()
             }

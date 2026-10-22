@@ -18,7 +18,7 @@ fn insn(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
 }
 
@@ -57,7 +57,7 @@ fn shape(made: &LirBody) -> Vec<(String, Vec<Loc>)> {
         .iter()
         .map(|one| {
             let what = one.what.as_ref().unwrap();
-            (what.name.clone().unwrap_or_default(), what.sources.clone())
+            (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.sources.clone())
         })
         .collect()
 }
@@ -99,7 +99,7 @@ fn test_a_call_ends_the_copies() {
     let call = Arc::new(Insn::new(
         2,
         Some((2, 2)),
-        Some(Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) }),
+        Some(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) }),
         vec![],
         vec![],
     ));

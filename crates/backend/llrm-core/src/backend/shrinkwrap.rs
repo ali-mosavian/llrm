@@ -345,7 +345,7 @@ mod tests {
         register: RegId,
     ) -> Arc<Insn> {
         let one = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register, width: 4 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ..Semantics::new(ir::Operation::Move)
@@ -359,12 +359,12 @@ mod tests {
     ) -> Arc<Insn> {
         insn(
             at,
-            Semantics { name: Some("je".to_owned()), target: Some(target), ..Semantics::new(ir::Operation::Branch) },
+            Semantics { name: Some("je".into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) },
         )
     }
 
     fn ret(at: i64) -> Arc<Insn> {
-        insn(at, Semantics { name: Some("ret".to_owned()), ..Semantics::new(ir::Operation::Return) })
+        insn(at, Semantics { name: Some("ret".into()), ..Semantics::new(ir::Operation::Return) })
     }
 
     fn block(

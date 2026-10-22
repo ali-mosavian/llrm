@@ -133,7 +133,7 @@ pub fn fused(body: &LirBody) -> LirBody {
                     return block.clone();
                 };
                 let sub = Semantics {
-                    name: Some("sub".to_owned()),
+                    name: Some("sub".into()),
                     sources: vec![
                         Loc::Held(source),
                         Loc::Imm(Imm { value: subtracted as i64, width: source.width, address: None }),
@@ -147,7 +147,7 @@ pub fn fused(body: &LirBody) -> LirBody {
                     } else if position == compare {
                         continue;
                     } else if position == branch {
-                        let renamed = Semantics { name: Some(condition.to_owned()), ..jcc.clone() };
+                        let renamed = Semantics { name: Some(condition.into()), ..jcc.clone() };
                         out.push(Arc::new(Insn { what: Some(renamed), ..(**insn).clone() }));
                     } else {
                         out.push(Arc::clone(insn));
@@ -186,7 +186,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -211,7 +211,7 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let done = fused(&body);
         let names: Vec<String> =
-            done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+            done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["sub", "jae"]);
     }
 }

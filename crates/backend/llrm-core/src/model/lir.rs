@@ -1412,7 +1412,7 @@ impl LirBody {
 /// selects to no bytes. Named `nop`, select emits a real one.
 #[must_use]
 pub fn inert() -> Semantics {
-    Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }
+    Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }
 }
 
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
@@ -1760,7 +1760,7 @@ mod tests {
             16,
             Some((16, 18)),
             Some(Semantics {
-                name: Some("call".to_owned()),
+                name: Some("call".into()),
                 sources: vec![Loc::Held(Held { value: 1, width: 2 })],
                 target: Some(5),
                 ..Semantics::new(Operation::Call)
