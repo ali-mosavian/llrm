@@ -80,10 +80,16 @@ fn main() {
             if std::env::var_os("DUMP").is_some() {
                 println!("DAG {name}:{block_name}\n{}", done.dag.dump());
             }
+            let done_root = done.dag.get_root().node;
             let mut adapter = DagisAdapter::new(&mut done.dag);
             // Users before operands, as the pin walks `allnodes` backwards.
             for node in reachable_users_first(&adapter) {
-                if llrm_dagisel::dag::Dag::is_machine(&adapter, node) || adapter.is_dead(node) {
+                // As `DoInstructionSelection`: nothing reads a node that matching made dead (the root has a handle).
+                let root = done_root;
+                if llrm_dagisel::dag::Dag::is_machine(&adapter, node)
+                    || adapter.is_dead(node)
+                    || (node != root && llrm_dagisel::dag::Dag::use_empty(&adapter, node))
+                {
                     continue;
                 }
                 let outcome = select_node(&selector, &mut adapter, &mut hooks, node);

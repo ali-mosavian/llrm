@@ -88,6 +88,43 @@ def short(reason: str) -> str:
     return reason[:70]
 
 
+def rows_of(program, funcs, refused, pinned):
+    rows = []
+    for name, f in funcs.items():
+        reasons = refused.get(name, [])
+        if f["blocks"] == 0:
+            continue  # a declaration
+        if reasons:
+            top = Counter(reasons).most_common(1)[0][0]
+            kind, _, why = top.partition(": ")
+            bucket = f"refused {kind}: " + short(why)
+        elif f["unselected"]:
+            bucket = "unselected " + max(f["unselected"], key=f["unselected"].get)
+        else:
+            want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
+            have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
+            if want == have:
+                bucket = "equal"
+            else:
+                pin_only, ours_only = want - have, have - want
+                top = max((pin_only + ours_only).items(), key=lambda kv: kv[1])[0]
+                bucket = f"differs: {'pin only' if top in pin_only else 'ours only'} {top}"
+        rows.append((program, name, bucket))
+    return rows
+
+
+def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
+    """The rows for one IR file the pin's llc and the example both read."""
+    mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600)
+    if mine.returncode != 0:
+        return [(program, "*", "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])]
+    funcs, refused = ours(mine.stdout)
+    theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
+    if theirs.returncode != 0:
+        return [(program, "*", "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])]
+    return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout))
+
+
 def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
     """[(program, function, bucket)]."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -109,28 +146,7 @@ def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
         if theirs.returncode != 0:
             return [(source.stem, "*", "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])]
         pinned = pin_opcodes(theirs.stdout)
-        rows = []
-        for name, f in funcs.items():
-            reasons = refused.get(name, [])
-            if f["blocks"] == 0:
-                continue  # a declaration
-            if reasons:
-                top = Counter(reasons).most_common(1)[0][0]
-                kind, _, why = top.partition(": ")
-                bucket = f"refused {kind}: " + short(why)
-            elif f["unselected"]:
-                bucket = "unselected " + max(f["unselected"], key=f["unselected"].get)
-            else:
-                want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
-                have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
-                if want == have:
-                    bucket = "equal"
-                else:
-                    pin_only, ours_only = want - have, have - want
-                    top = max((pin_only + ours_only).items(), key=lambda kv: kv[1])[0]
-                    bucket = f"differs: {'pin only' if top in pin_only else 'ours only'} {top}"
-            rows.append((source.stem, name, bucket))
-        return rows
+        return rows_of(source.stem, funcs, refused, pinned)
 
 
 def main() -> int:
@@ -139,9 +155,15 @@ def main() -> int:
     parser.add_argument("shadow")
     parser.add_argument("--src", default=str(Path(os.environ.get("ROWS_WORK", Path.home() / "scratch/rows")) / "base/b"))
     parser.add_argument("--programs", default="")
+    parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-c)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     parser.add_argument("--out", default="")
     args = parser.parse_args()
+    if args.ir:
+        rows = compare(args.shadow, Path(args.ir), Path(args.ir).stem)
+        for _, f, b in rows:
+            print(f"{b:60s} {f}")
+        return 0
     sources = sorted(Path(args.src).glob("*.c"))
     if args.programs:
         want = set(args.programs.split(","))
