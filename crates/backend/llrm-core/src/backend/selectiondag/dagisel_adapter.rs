@@ -143,6 +143,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        TargetExternalSymbolNode => pin::TargetExternalSymbol,
+        JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
         // The pin's X86ISD numbers.
         Target(code) => code,
