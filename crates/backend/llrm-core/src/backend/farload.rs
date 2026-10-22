@@ -158,7 +158,7 @@ fn _pair(
     // segment register the selector is given.
     let what = Semantics {
         name: Some(
-            regs.load_form(regs.far()).expect("a target with a far segment states the load that fills it").to_owned(),
+            regs.load_form(regs.far()).expect("a target with a far segment states the load that fills it").into(),
         ),
         dests: vec![Loc::Held(first_dest), Loc::Held(second_dest)],
         sources: vec![Loc::Mem(Mem { width: 4, ..first_cell })],
@@ -256,7 +256,7 @@ mod tests {
             at,
             Some((at, at)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(destination)],
                 sources: vec![Loc::Mem(cell)],
                 ..Semantics::new(Operation::Move)

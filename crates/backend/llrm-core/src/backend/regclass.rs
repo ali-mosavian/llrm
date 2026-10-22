@@ -1103,7 +1103,7 @@ mod tests {
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             target,
@@ -1197,7 +1197,7 @@ mod tests {
         let (base, word) = (1, 2);
         let held = |value| Loc::Held(Held { value, width: 2 });
         let semantics = |op, name: &str, dests, sources| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests,
             sources,
             ..Semantics::new(op)

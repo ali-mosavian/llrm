@@ -155,7 +155,7 @@ struct Fps<'a> {
 /// popping form of an instruction that acts on the top of the stack.
 fn popping(what: &Semantics) -> Option<Semantics> {
     let name = what.name.as_deref()?;
-    let renamed = |name: &str| Semantics { name: Some(name.to_owned()), ..what.clone() };
+    let renamed = |name: &str| Semantics { name: Some(name.into()), ..what.clone() };
     match (what.op, name) {
         (Operation::FloatStore, "fst") => Some(renamed("fstp")),
         (Operation::FloatStore, "fist") => Some(renamed("fistp")),
@@ -171,7 +171,7 @@ fn popping(what: &Semantics) -> Option<Semantics> {
                     [first, second] if *first == what.dests[0] && *second == st(0)
                 ) =>
         {
-            Some(Semantics { op: Operation::FloatArithPop, name: Some(format!("{name}p")), ..what.clone() })
+            Some(Semantics { op: Operation::FloatArithPop, name: Some(format!("{name}p").into()), ..what.clone() })
         }
         _ => None,
     }
@@ -432,10 +432,10 @@ impl Fps<'_> {
             let floating = |loc: &Loc| matches!(loc, Loc::Held(held) if held.width == 10);
             match (what.dests.as_slice(), what.sources.as_slice()) {
                 ([Loc::Mem(_)], [source]) if floating(source) => {
-                    what = Semantics { op: Operation::FloatStore, name: Some("fstp".to_owned()), ..what };
+                    what = Semantics { op: Operation::FloatStore, name: Some("fstp".into()), ..what };
                 }
                 ([dest], [Loc::Mem(_)]) if floating(dest) => {
-                    what = Semantics { op: Operation::FloatLoad, name: Some("fld".to_owned()), ..what };
+                    what = Semantics { op: Operation::FloatLoad, name: Some("fld".into()), ..what };
                 }
                 _ => {}
             }
@@ -545,7 +545,7 @@ impl Fps<'_> {
     ) -> Result<(), Raised> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
         self.move_to_top(source)?;
-        let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
+        let name = if name_is(&what, "fst") { Some("fstp".into()) } else { what.name.clone() };
         if !step.kills(source) {
             let sized = |widths: &[u32]| {
                 what.dests
@@ -567,7 +567,7 @@ impl Fps<'_> {
                 _ => None,
             };
             if let Some(kept) = kept {
-                self.emit(Semantics { name: Some(kept.to_owned()), sources: vec![st(0)], ..what });
+                self.emit(Semantics { name: Some(kept.into()), sources: vec![st(0)], ..what });
                 return Ok(());
             }
             let scratch = self.take_fresh();
@@ -749,7 +749,7 @@ impl Fps<'_> {
         let what = self.one().what.clone().expect("a floating instruction has semantics");
         let integer = what.name.as_deref().is_some_and(|name| name.starts_with("fi"));
         let name = if integer { "ficom" } else { "fcom" };
-        self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
+        self.emit(Semantics { name: Some(name.into()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
         if step.kills(left) {
             self.pop_stack_after();
         }

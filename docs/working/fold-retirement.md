@@ -5,7 +5,8 @@ Owner: w-6. Each slot PR shows d_faces -O2 m32 Ir (dists, `-m32 -mabi=sysv -marc
 | Slot | d_faces M | objsweep | QCport B | PR |
 |---|--:|---|--:|---|
 | fold@677 | 1305.5 -> 1259.9 (-45.6) | 0 of 568 changed | +119 of 1,233,771 | #3818 |
-| fold@768 | 1303.3 -> 1278.8 (-24.5) | 3 of 568 (nbody m32 O3 -40 B) | -105 of 1,233,701 | this PR |
+| fold@768 | 1303.3 -> 1278.8 (-24.5) | 3 of 568 (nbody m32 O3 -40 B) | -105 of 1,233,701 | #3832 |
+| fold@801 | 1202.5 -> 1089.9 (-112.6) | 0 of 568 changed | +846 of 1,233,858 (34 objects, 3 smaller) | this PR |
 
 ## FR-1: the eight objects larger without fold@677 (owner w-6, review 2026-11-04)
 
@@ -22,3 +23,30 @@ Asm of the `fold677` dists (62d45c8880 vs 77048ad015) per object, instruction mu
 The pin cannot give asm for these m16 objects (its code16 target has 32-bit registers, no 8086 model), so the check is at the IR level with the pin's own passes. Owner w-6: translate the xor-of-compare fold into `combine`
 (2026-11-04), find the stores' pass (2026-11-04); the layout rows stay as growth with this number.
 Later slot PRs carry a row per growth cause in their body.
+
+## FR-2: objects larger without fold@801 (owner w-6, review 2026-11-04)
+
+QCport m16, fold@801 removed: 31 objects larger (largest d_alias Os +156, mdl_ai O2 +119, O3 +111, O1 +31, Os +67,
+ls O2/O3 +61, savegame O1/O2/O3 +18/+24/+23, weapons +26/+26/+17, ent O2/O3 +12, pak O2/O3 +18), 3 smaller (client O1 -14,
+sc O1 -20, savegame Os -8). Asm instruction multisets of five of them, `fold801` dists (7bbe8e4c7b vs 081c72b216):
+
+| Object | B | What differs |
+|---|--:|---|
+| d_alias Os | +156 | a branch chain on a compare of a stored word is a `test ax, ax; je` pair and two x87 loads (51 more instructions) in place of stack-slot compares and constant moves: the compare/select folds fold did |
+| mdl_ai O2 | +119 | `sete al; and cl, al` (4 sites) and `je` for `jne` chains: an and of compares kept as a value, not a branch |
+| ls O2/O3 | +61 | `idiv bx`/`fmul` by a constant in a table (`$K28`) for `lea [ecx+ecx*4]` and `idiv cx`: a multiply/divide by a constant folded differently |
+| weapons O2 | +26 | `sete dl` (3 sites) for `je` branches, and a different x87 stack shuffle (`fstp st(3)`/`fxch`) |
+| savegame O2 | +24 | `fcompp; fnstsw ax` for an integer compare, one more spill (`sub sp, 360` for 358) |
+
+Cause not yet named per rewrite (fold's value evaluator `_numbers` at this slot, per w-8's table): the next step is the
+stage diff of each body before and after the slot, then the rewrite translated into `combine` or the number accepted.
+Not checked against the pin (m16 has no pin asm; the check is the pin's InstCombine on the stage IR).
+
+### FR-2a: the first difference in d_alias Os (stage diff)
+
+`LLRM_MIR_STAGES` dirs of the two `fold801` dists, d_alias.c -Os m16, value numbers normalised: the bodies first differ
+in the input of `09/loop-load-elim@1400` (the cleanup list), not in a dumped pass. There `br i1 %c, label %b48, label %b34`
+(base) is `%x = xor i1 %c, true; br i1 %x, label %b34, label %b48` (new), plus one more incoming edge on a 9-way phi.
+The pin's InstCombine swaps the successors of a branch on a `xor true` ([visitCondBrInst L4347](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4347); `pin.opt('instcombine')` gives `br %c.not, %e, %t` for it)
+and so does `combine_branch.rs`, with a test, so the open question is why the xor survives `combine@1242` in this body
+(not run on the block, or made after it): to find with the stage dumps of 08/09, w-6, 2026-11-04.

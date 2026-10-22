@@ -515,7 +515,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
     }
 
@@ -585,7 +585,7 @@ mod tests {
         let one = insns.iter().find(|one| one.defines == [value]).expect("defined");
         let what = one.what.as_ref().expect("semantics");
         let [Loc::Held(left), Loc::Held(right)] = &what.sources[..] else { panic!("registers") };
-        (what.name.clone().expect("named"), left.value, right.value)
+        (what.name.as_deref().map(str::to_owned).expect("named"), left.value, right.value)
     }
 
     /// What `value` is, the leaves taken as their numbers and the load as 1000.

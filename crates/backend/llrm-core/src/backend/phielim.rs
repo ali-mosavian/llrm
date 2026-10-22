@@ -255,7 +255,7 @@ pub(crate) fn move_of(
     out_of: Held,
 ) -> Semantics {
     Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![Loc::Held(into)],
         sources: vec![Loc::Held(out_of)],
         ..Semantics::new(Operation::Move)
@@ -263,7 +263,7 @@ pub(crate) fn move_of(
 }
 
 fn jump_to(target: i64) -> Semantics {
-    Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) }
+    Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) }
 }
 
 /// `body` with every phi it can lower replaced by copies.
@@ -1443,7 +1443,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) })
     }
 
     fn block(
