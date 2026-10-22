@@ -40,7 +40,6 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Undef => pin::UNDEF,
         Poison => pin::POISON,
         Register => pin::Register,
-        RegisterMask => pin::RegisterMask,
         GlobalAddress => pin::GlobalAddress,
         TargetGlobalAddress => pin::TargetGlobalAddress,
         ExternalSymbol => pin::ExternalSymbol,
