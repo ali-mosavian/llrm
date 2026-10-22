@@ -57,7 +57,10 @@ b0:
 ",
     );
     assert!(changed && !after.contains("alloca"), "{after}");
-    assert!(after.contains("@c.0 = internal global i16 7") && after.contains("@c.1 = internal global i16 9"), "{after}");
+    assert!(
+        after.contains("@c.0 = internal global i16 7") && after.contains("@c.1 = internal global i16 9"),
+        "{after}"
+    );
 }
 
 /// A body that may recurse sees its own earlier call's value: no slot.

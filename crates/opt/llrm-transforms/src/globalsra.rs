@@ -17,10 +17,11 @@
 //! `name.N` initialized from the original's bytes.
 //!
 //! A variable with one accessing body that does not recurse, whose every load
-//! a store of at least its size dominates (`isPointerValueDeadOnEntryToFunction`,
-//! at most 100 load-store pairs), is replaced by an `alloca` in that body's
-//! entry, stored with the initializer first. The body passes then forward the
-//! slot. The pieces are made first, so a piece localizes.
+//! a store of at least its size dominates
+//! (`isPointerValueDeadOnEntryToFunction`, at most 100 load-store pairs), is
+//! replaced by an `alloca` in that body's entry, stored with the initializer
+//! first. The body passes then forward the slot. The pieces are made first, so
+//! a piece localizes.
 //!
 //! DEVIATE GSRA-1: the pin merges consecutive stores in the DAG at selection,
 //! after its second GlobalOpt, so its SRA sees `store i16`; the `Merge` slot
@@ -64,9 +65,9 @@
 //! ```
 //!
 //! # Runs
-//! A stage of the interprocedural step after the bodies are stamped (a body's
-//! `norecurse` is stated there), `globalsra.`; the bodies it changed go back
-//! through the pipeline.
+//! A stage of the interprocedural step, `globalsra.`, after the bodies are
+//! stamped (a body's `norecurse` is stated there); the bodies it changed go
+//! back through the pipeline.
 //!
 //! # See also
 //! [`crate::globalopt`], LLVM's `SRAGlobal`, `collectSRATypes`.
@@ -89,7 +90,8 @@ use crate::globalopt::Reach;
 
 /// LLVM's cap on pieces both loaded and stored.
 const MAX_PIECES: usize = 16;
-/// LLVM's cap on load-store pairs examined by `isPointerValueDeadOnEntryToFunction`.
+/// LLVM's cap on load-store pairs examined by
+/// `isPointerValueDeadOnEntryToFunction`.
 const MAX_PAIRS: usize = 100;
 
 /// One load or store of a variable.
@@ -117,11 +119,15 @@ fn reach_all(
     for (_, inst) in function.walk() {
         for (index, &operand) in function.instruction(inst).operands.iter().enumerate() {
             let Operand::Constant(id) = operand else { continue };
-            let globals = named.entry(id).or_insert_with(|| {
-                let mut found = BTreeSet::new();
-                embedded(context, id, &mut found);
-                found
-            });
+            let globals = named
+                .entry(id)
+                .or_insert_with(
+                    || {
+                        let mut found = BTreeSet::new();
+                        embedded(context, id, &mut found);
+                        found
+                    },
+                );
             for &global in globals.iter() {
                 if crate::globalopt::addresses(context, id, global) {
                     work.entry(global).or_default().push((inst, index));
@@ -141,7 +147,8 @@ fn reach_all(
         while let Some((inst, index)) = work.pop() {
             let op = function.instruction(inst);
             match op.opcode {
-                Opcode::GetElementPtr { .. } | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast)
+                Opcode::GetElementPtr { .. }
+                | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast)
                     if index == 0 =>
                 {
                     found.moved.push(inst);
@@ -300,7 +307,10 @@ fn sliced(
     let whole = layout.alloc_size(&context.types, variable.ty) as i64;
     if pieces.len() == 1
         && (pieces.values().next() == Some(&variable.ty)
-            || pieces.iter().next().is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole))
+            || pieces
+                .iter()
+                .next()
+                .is_some_and(|(&at, &ty)| at == 0 && layout.store_size(&context.types, ty) as i64 == whole))
     {
         return None;
     }
@@ -378,19 +388,23 @@ fn rewrite(
         }
         let initializer = module.context.constant(initializer.clone());
         let piece = GlobalId(module.globals.len() as u32);
-        module.globals.push(GlobalValue {
-            name: unique.into(),
-            linkage: Linkage::Internal,
-            unnamed_addr: Default::default(),
-            address_space: space,
-            kind: GlobalKind::Variable(GlobalVariable {
-                ty: *ty,
-                constant: false,
-                externally_initialized: false,
-                initializer: Some(initializer),
-                align,
-            }),
-        });
+        module
+            .globals
+            .push(
+                GlobalValue {
+                    name: unique.into(),
+                    linkage: Linkage::Internal,
+                    unnamed_addr: Default::default(),
+                    address_space: space,
+                    kind: GlobalKind::Variable(GlobalVariable {
+                        ty: *ty,
+                        constant: false,
+                        externally_initialized: false,
+                        initializer: Some(initializer),
+                        align,
+                    }),
+                },
+            );
         let pointer = module.context.types.ptr(space);
         let address = module.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(piece) });
         made.push((piece, address));
@@ -559,7 +573,10 @@ fn localize(
     );
     function.insert(slot, Position::Before(first)).ok()?;
     let result = function.instruction(slot).result?;
-    if !matches!(context.get(initializer).kind, ConstantKind::Undef | ConstantKind::Poison) {
+    if !matches!(
+        context.get(initializer).kind,
+        ConstantKind::Undef | ConstantKind::Poison
+    ) {
         let init = function.create_instruction(
             Opcode::Store { align: None, volatile: false },
             void,

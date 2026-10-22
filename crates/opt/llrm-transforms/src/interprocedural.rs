@@ -29,9 +29,10 @@
 //! 2. The private bodies nothing reaches any more, the ones the walk
 //!    ([`crate::walk::Walk`]) inlined into every caller, lose their bodies
 //!    (`bare_the_unreached`). Inlining is the walk's alone.
-//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]), `globalsra.` ([`crate::globalsra`]):
-//!    a pointer a body only reads is passed as the fields it reads; a far
-//!    pointer every call fills from DGROUP is passed as its offset.
+//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]),
+//!    `globalsra.` ([`crate::globalsra`]): a pointer a body only reads is
+//!    passed as the fields it reads; a far pointer every call fills from DGROUP
+//!    is passed as its offset.
 //! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
 //!    results replaced by it (`llrm_analysis::interprocedural`); the call
 //!    stays.
