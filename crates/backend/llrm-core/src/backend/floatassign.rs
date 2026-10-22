@@ -375,7 +375,7 @@ fn _may_write(
         }
         let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
         if one.call.as_ref().is_some_and(|call| {
-            call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))
+            call.writes() && !(framed && call.spares(crate::backend::bodyfacts::_frame_disp(cell), cell.width))
         }) {
             return true;
         }
@@ -1490,7 +1490,7 @@ fn _rereadable_across(
     // As the integer spiller asks it: in a sealed body only the frame's own
     // stores reach an incoming argument's cell.
     let written =
-        |one: &Insn| crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
+        |one: &Insn| crate::backend::bodyfacts::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
     if body.blocks.iter().flat_map(|one| &one.insns).any(|one| !Arc::ptr_eq(one, load) && written(one)) {
         return false;
     }
