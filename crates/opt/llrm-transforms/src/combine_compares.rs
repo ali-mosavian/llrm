@@ -17,7 +17,8 @@
 //! `canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
 //! uselist-port's shared helper), `foldICmpWithConstant`,
 //! `foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
-//! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
+//! `foldIsMultipleOfAPowerOfTwo`, the rest of `foldICmpBinOp` (the sum folds
+//! are in `combine_icmp_binop`), `foldICmpInstWithConstant`,
 //! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
@@ -58,6 +59,7 @@ use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
 use crate::combine_shared::{get_complexity, query};
 
@@ -204,7 +206,10 @@ pub fn visit_icmp(
             return new_icmp(c, inst, IntPredicate::Sgt, op0, ones);
         }
     }
-    // OWED: foldICmpBinOp.
+    // OWED: the rest of foldICmpBinOp (see `combine_icmp_binop`).
+    if let Some(r) = fold_icmp_bin_op(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
