@@ -229,9 +229,27 @@ fn candidate(
             {
                 return None;
             }
-            if loaded(second) {
+            // The other operand must die here (made in this block, read only
+            // here): one that lives on, a loop's invariant, is
+            // copied for the two-address form, and the pin unfolds the load in
+            // its two-address pass (`mov t,[m]; add t,r` over `mov
+            // t,r; add t,[m]`: x_transpose +7.6% clocks).
+            let from_memory = |held: &Held| {
+                insns[..at]
+                    .iter()
+                    .rev()
+                    .find(|one| defines(one, held.value))
+                    .is_some_and(
+                        |one| one.what
+                            .as_ref()
+                            .is_some_and(
+                                |made| made.op == Operation::Move && matches!(made.sources.as_slice(), [Loc::Mem(_)]),
+                            ),
+                    )
+            };
+            if loaded(second) && from_memory(second) && loaded(first) {
                 *second
-            } else if commutative && loaded(first) {
+            } else if commutative && loaded(first) && from_memory(first) && loaded(second) {
                 *first
             } else {
                 return None;
