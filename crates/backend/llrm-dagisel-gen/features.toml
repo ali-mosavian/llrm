@@ -6,6 +6,14 @@
 [cpu.i486]
 features = ["X87"]
 
+# Real mode on a 386: the pin's `Proc<"i386", [FeatureX87]>` (L1912).
+[cpu.m16]
+features = ["X87"]
+
+# m16.td's 16-bit string forms ask for the mode.
+[cpu.m16.atom]
+"Subtarget->is16Bit()" = true
+
 [cpu.p5]
 features = ["X87", "CX8"]
 

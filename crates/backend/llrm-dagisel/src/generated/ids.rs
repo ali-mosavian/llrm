@@ -28,6 +28,7 @@ pub mod isd {
     pub const BUILD_VECTOR: u16 = 162;
     pub const BUILTIN_OP_END: u16 = 475;
     pub const BasicBlock: u16 = 7;
+    pub const BlockAddress: u16 = 20;
     pub const CALLSEQ_END: u16 = 334;
     pub const CALLSEQ_START: u16 = 333;
     pub const CATCHRET: u16 = 329;
@@ -40,6 +41,7 @@ pub mod isd {
     pub const CTTZ_ZERO_POISON: u16 = 216;
     pub const Constant: u16 = 12;
     pub const ConstantFP: u16 = 13;
+    pub const ConstantPool: u16 = 18;
     pub const CopyFromReg: u16 = 52;
     pub const CopyToReg: u16 = 51;
     pub const DEACTIVATION_SYMBOL: u16 = 474;
@@ -49,6 +51,7 @@ pub mod isd {
     pub const EXTRACT_SUBVECTOR: u16 = 167;
     pub const EXTRACT_VECTOR_ELT: u16 = 164;
     pub const EntryToken: u16 = 1;
+    pub const ExternalSymbol: u16 = 19;
     pub const FABS: u16 = 261;
     pub const FADD: u16 = 99;
     pub const FDIV: u16 = 102;
@@ -67,12 +70,14 @@ pub mod isd {
     pub const FSQRT: u16 = 262;
     pub const FSUB: u16 = 100;
     pub const FrameIndex: u16 = 16;
+    pub const GlobalAddress: u16 = 14;
     pub const HANDLENODE: u16 = 346;
     pub const INSERT_SUBVECTOR: u16 = 166;
     pub const INSERT_VECTOR_ELT: u16 = 163;
     pub const INTRINSIC_VOID: u16 = 50;
     pub const INTRINSIC_WO_CHAIN: u16 = 48;
     pub const INTRINSIC_W_CHAIN: u16 = 49;
+    pub const JumpTable: u16 = 17;
     pub const LIFETIME_END: u16 = 389;
     pub const LIFETIME_START: u16 = 388;
     pub const LLRINT: u16 = 294;
@@ -141,6 +146,7 @@ pub mod isd {
     pub const TargetGlobalTLSAddress: u16 = 40;
     pub const TargetJumpTable: u16 = 42;
     pub const TokenFactor: u16 = 2;
+    pub const UADDO_CARRY: u16 = 75;
     pub const UADDSAT: u16 = 86;
     pub const UBSANTRAP: u16 = 351;
     pub const UINT_TO_FP: u16 = 235;
@@ -148,6 +154,7 @@ pub mod isd {
     pub const UMIN: u16 = 189;
     pub const UNDEF: u16 = 53;
     pub const USUBSAT: u16 = 88;
+    pub const VALUETYPE: u16 = 8;
     pub const VECTOR_COMPRESS: u16 = 178;
     pub const VSELECT: u16 = 220;
     pub const XOR: u16 = 195;
@@ -343,6 +350,8 @@ pub mod x86isd {
     pub const LCMPXCHG16_DAG: u16 = 659;
     pub const LCMPXCHG8_DAG: u16 = 660;
     pub const LCMPXCHG_DAG: u16 = 661;
+    pub const LDS: u16 = 24577;
+    pub const LES: u16 = 24576;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -421,6 +430,7 @@ pub mod x86isd {
     pub const SEG_ALLOCA: u16 = 737;
     pub const SELECTS: u16 = 738;
     pub const SETCC: u16 = 739;
+    pub const SETCC_CARRY: u16 = 740;
     pub const SHUF128: u16 = 741;
     pub const SHUFP: u16 = 742;
     pub const SINT_TO_FP_RND: u16 = 743;
@@ -456,6 +466,7 @@ pub mod x86isd {
     pub const UCOMI: u16 = 773;
     pub const UCOMX: u16 = 774;
     pub const UINT_TO_FP_RND: u16 = 775;
+    pub const UMUL: u16 = 776;
     pub const UMWAIT: u16 = 777;
     pub const UNPCKH: u16 = 778;
     pub const UNPCKL: u16 = 779;
@@ -636,6 +647,71 @@ pub mod x86isd {
     pub const WrapperRIP: u16 = 954;
     pub const XOR: u16 = 955;
     pub const XTEST: u16 = 956;
+}
+
+pub mod x86 {
+    pub const ADC16mi: u16 = 465;
+    pub const ADC16mr: u16 = 471;
+    pub const ADC32mi: u16 = 490;
+    pub const ADC32mr: u16 = 496;
+    pub const ADC8mi: u16 = 540;
+    pub const ADC8mr: u16 = 544;
+    pub const ADD16mi: u16 = 573;
+    pub const ADD16mr: u16 = 583;
+    pub const ADD32mi: u16 = 614;
+    pub const ADD32mr: u16 = 624;
+    pub const ADD8mi: u16 = 696;
+    pub const ADD8mr: u16 = 702;
+    pub const AND16mi: u16 = 804;
+    pub const AND16mr: u16 = 814;
+    pub const AND32mi: u16 = 845;
+    pub const AND32mr: u16 = 855;
+    pub const AND8mi: u16 = 927;
+    pub const AND8mr: u16 = 933;
+    pub const CS: u16 = 12;
+    pub const CX: u16 = 13;
+    pub const DEC16m: u16 = 1511;
+    pub const DEC32m: u16 = 1522;
+    pub const DEC8m: u16 = 1543;
+    pub const DS: u16 = 20;
+    pub const EFLAGS: u16 = 28;
+    pub const ES: u16 = 31;
+    pub const FS: u16 = 36;
+    pub const GS: u16 = 38;
+    pub const INC16m: u16 = 1901;
+    pub const INC32m: u16 = 1912;
+    pub const INC8m: u16 = 1933;
+    pub const NEG16m: u16 = 2849;
+    pub const NEG16r: u16 = 2854;
+    pub const NEG32m: u16 = 2859;
+    pub const NEG32r: u16 = 2864;
+    pub const NEG8m: u16 = 2879;
+    pub const NEG8r: u16 = 2884;
+    pub const OR16mi: u16 = 2921;
+    pub const OR16mr: u16 = 2931;
+    pub const OR32mi: u16 = 2962;
+    pub const OR32mr: u16 = 2973;
+    pub const OR8mi: u16 = 3045;
+    pub const OR8mr: u16 = 3051;
+    pub const SBB16mi: u16 = 4165;
+    pub const SBB16mr: u16 = 4171;
+    pub const SBB32mi: u16 = 4190;
+    pub const SBB32mr: u16 = 4196;
+    pub const SBB8mi: u16 = 4240;
+    pub const SBB8mr: u16 = 4244;
+    pub const SS: u16 = 68;
+    pub const SUB16mi: u16 = 4744;
+    pub const SUB16mr: u16 = 4754;
+    pub const SUB32mi: u16 = 4785;
+    pub const SUB32mr: u16 = 4795;
+    pub const SUB8mi: u16 = 4867;
+    pub const SUB8mr: u16 = 4873;
+    pub const XOR16mi: u16 = 22586;
+    pub const XOR16mr: u16 = 22596;
+    pub const XOR32mi: u16 = 22627;
+    pub const XOR32mr: u16 = 22637;
+    pub const XOR8mi: u16 = 22709;
+    pub const XOR8mr: u16 = 22715;
 }
 
 pub mod mvt {
