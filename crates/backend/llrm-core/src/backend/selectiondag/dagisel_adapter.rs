@@ -430,6 +430,10 @@ impl Dag for DagisAdapter<'_> {
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         (self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops), Vec::new())
     }
+    fn update_node_operands(&mut self, node: u32, operands: &[PinValue]) -> u32 {
+        let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
+        self.dag.update_node_operands(node, &ops)
+    }
     fn replace_uses(&mut self, from: PinValue, to: PinValue) {
         self.dag.replace_all_uses_with(ours(from), ours(to));
     }
@@ -505,6 +509,26 @@ impl AddrDag for DagisAdapter<'_> {
             let node = &self.dag.nodes()[user as usize];
             node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
         })
+    }
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[PinValue]) -> PinValue {
+        let ops: Vec<SDValue> = ops.iter().copied().map(ours).collect();
+        let isd = match opcode {
+            pin::ADD => ISD::Add,
+            pin::SUB => ISD::Sub,
+            pin::AND => ISD::And,
+            pin::OR => ISD::Or,
+            pin::XOR => ISD::Xor,
+            pin::SHL => ISD::Shl,
+            pin::SRL => ISD::Srl,
+            pin::TRUNCATE => ISD::Truncate,
+            pin::ZERO_EXTEND => ISD::ZeroExtend,
+            pin::ANY_EXTEND => ISD::AnyExtend,
+            other => panic!("the address folds never make pin opcode {other}"),
+        };
+        theirs(self.dag.get_node(isd, our_vt(vt), &ops))
+    }
+    fn get_constant(&mut self, value: i64, vt: Vt) -> PinValue {
+        theirs(self.dag.get_constant(value as u128, our_vt(vt)))
     }
     fn is_non_temporal(&self, _: u32) -> bool {
         false
