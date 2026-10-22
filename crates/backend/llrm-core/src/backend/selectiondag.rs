@@ -130,3 +130,5 @@ mod schedule_tests;
 mod dagisel_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod fpround_tests;

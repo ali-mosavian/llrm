@@ -68,6 +68,12 @@ impl FunctionLoweringInfo {
         reg
     }
 
+    /// A new stack object (`CreateStackTemporary`): its frame index.
+    pub fn new_stack_object(&mut self) -> i32 {
+        self.next_frame_index += 1;
+        self.next_frame_index - 1
+    }
+
     /// The next jump table index of the function.
     pub fn new_jump_table(&mut self) -> u32 {
         self.next_jump_table += 1;

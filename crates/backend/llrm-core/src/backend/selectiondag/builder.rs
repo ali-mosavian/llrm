@@ -797,9 +797,26 @@ impl Builder<'_> {
     fn visit_cast(&mut self, instruction: &llrm_mir::module::Instruction, op: CastOp) -> Result<(), Refused> {
         let operand = self.get_value(instruction.operands[0])?;
         let dest = self.type_of(instruction.ty)?;
-        let result = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
+        let result = if op == CastOp::FPRound { self.round_through_memory(operand, dest) } else { self.cast_value(op, operand, dest, flags_of(instruction.flags))? };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// `fpround`: the value stored to a stack slot of its own type and loaded
+    /// back, so an x87 register holding it wider is rounded to the type's
+    /// precision (what the old selector does with `fstp`/`fld`). The pin never
+    /// sees this cast: its same-type `FP_ROUND` is a no-op.
+    fn round_through_memory(&mut self, operand: SDValue, vt: EVT) -> SDValue {
+        let index = self.info.new_stack_object();
+        let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
+        let align = vt.size_in_bits().div_ceil(8);
+        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index) };
+        let root = self.root();
+        let store = self.dag.get_store(root, operand, slot, info);
+        self.dag.set_root(store);
+        let value = self.dag.get_load(vt, store, slot, info);
+        self.pending_loads.push(SDValue { node: value.node, res: 1 });
+        value
     }
 
     /// The node a cast makes of `operand` (`visitTrunc`, `visitZExt`, ...).
