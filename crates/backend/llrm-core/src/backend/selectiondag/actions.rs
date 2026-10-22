@@ -26,7 +26,7 @@
 //! that needs it (B1), in the position the constructor sets it. Arms for
 //! SSE, AVX, MMX, vectors, `f16`/`f128` and `is64Bit` are N/A.
 //!
-//! DEVIATE SD20: the tables are keyed by [`MVT`]; `Far` has no entry and is
+//! DEVIATE SD32: the tables are keyed by [`MVT`]; `Far` has no entry and is
 //! always expanded by the type legalizer. Reason: SD2. Exit: none. Owner
 //! sdag-b. Review 2026-11-13.
 //!

@@ -116,7 +116,7 @@
 //! unroller.
 //!
 //! # Needs
-//! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+//! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 //! up front, and frozen at the end of D so the passes of E read them without
 //! recomputing after each edit.
 //!
@@ -129,7 +129,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -1006,7 +1006,7 @@ pub fn recorded(
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
-    manager.require::<Callbacks>();
+    manager.require::<GlobalsModRefAnalysis>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
@@ -1124,6 +1124,7 @@ pub fn recorded(
     // summaries it made there.
     manager.freeze::<Summaries>();
     manager.freeze::<GlobalsAA>();
+    manager.freeze::<GlobalsModRefAnalysis>();
     // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
     // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
     // The loops it guards are re-simplified for the passes that follow. Not at

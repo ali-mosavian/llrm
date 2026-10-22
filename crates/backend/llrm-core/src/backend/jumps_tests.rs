@@ -214,7 +214,8 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         false,
     )
     .unwrap()
-    .pop()
+    .into_iter()
+    .find(|phase| phase.class_name() == "ControlFlow")
     .unwrap()
     .transform(source)
     .unwrap();
@@ -918,7 +919,8 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
         false,
     )
     .unwrap()
-    .pop()
+    .into_iter()
+    .find(|phase| phase.class_name() == "ControlFlow")
     .unwrap()
     .transform(two_zero_tails(true))
     .unwrap();
@@ -1917,4 +1919,28 @@ fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
         block(9, vec![_return(9)], vec![]).into(),
     ]);
     assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
+}
+
+/// The pin copies propagation twice, again after tail duplication and block
+/// placement (row 84): the phases end `ControlFlow`, `CopyPropagation`.
+#[test]
+fn test_copy_propagation_runs_again_after_the_control_flow() {
+    let names = |cpu: &str| -> Vec<&'static str> {
+        crate::flow::machine(
+            &IndexMap::default(),
+            Some(Rc::new(RefCell::new(Frame::new(0)))),
+            None,
+            Some(&IndexMap::default()),
+            false,
+            cpu,
+            &crate::backend::target::BUILT_IN,
+            false,
+        )
+        .unwrap()
+        .iter()
+        .map(|phase| phase.class_name())
+        .collect()
+    };
+    let optimized = names("386");
+    assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
 }

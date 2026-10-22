@@ -135,6 +135,19 @@ impl MemoryLocation {
     ) -> Option<Self> {
         let op = unit.function.instruction(call);
         let pointer = *op.operands.get(arg as usize)?;
+        // `memset`, `memcpy` and `memmove` name the bytes they touch through
+        // their destination and source (`getForDest`, `getForSource`).
+        let named = llrm_mir::memory::callee(unit.context, unit.function, call)
+            .and_then(|one| unit.globals.get(one.0 as usize)?.name.as_deref())
+            .and_then(llrm_mir::intrinsics::Intrinsic::named);
+        let touches = match named {
+            Some(llrm_mir::intrinsics::Intrinsic::MemSet) => arg == 0,
+            Some(llrm_mir::intrinsics::Intrinsic::MemCpy | llrm_mir::intrinsics::Intrinsic::MemMove) => arg < 2,
+            _ => false,
+        };
+        if touches && let Some(length) = llrm_mir::intrinsics::length(unit.context, *op.operands.get(2)?) {
+            return Some(Self::new(pointer, LocationSize::Precise(length)));
+        }
         Some(Self::before_or_after(pointer))
     }
 
