@@ -159,20 +159,38 @@ pub struct Declared {
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
     first_node: u32,
-    /// The live instructions of each defined function by id, `None` for a
-    /// declaration, while a pass that `wants_sizes` runs: no other body is
-    /// visible to a function pass (`Function::getInstructionCount`).
-    sizes: Vec<Option<usize>>,
+    /// What the manager has counted of other functions for the function in
+    /// hand, and the ones a pass asked about that it has not (`size_of`).
+    sizes: HashMap<GlobalId, Size>,
+    wanted: Vec<GlobalId>,
+}
+
+/// How big another function is (`Function::getInstructionCount`), which a
+/// function pass cannot see: the manager counts it on request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Size {
+    /// Not counted yet: `size_of` asked, and the pass runs over the function
+    /// again once the manager has counted.
+    Unknown,
+    Declaration,
+    Instructions(usize),
 }
 
 impl Declared {
-    /// How many instructions function `id` has, as the pass that `wants_sizes`
-    /// found it, or `None` for a declaration.
+    /// How many instructions function `id` has. One not counted yet is
+    /// `Unknown`, and is counted before the pass runs over this function
+    /// again; nothing is counted where no pass asks.
     pub fn size_of(
-        &self,
+        &mut self,
         id: GlobalId,
-    ) -> Option<usize> {
-        self.sizes.get(id.0 as usize).copied().flatten()
+    ) -> Size {
+        if let Some(&known) = self.sizes.get(&id) {
+            return known;
+        }
+        if !self.wanted.contains(&id) {
+            self.wanted.push(id);
+        }
+        Size::Unknown
     }
 
     pub fn of(module: &Module) -> Self {
@@ -190,7 +208,8 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: module.metadata.len() as u32,
-            sizes: Vec::new(),
+            sizes: HashMap::default(),
+            wanted: Vec::new(),
         }
     }
 
@@ -209,7 +228,8 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: metadata as u32,
-            sizes: Vec::new(),
+            sizes: HashMap::default(),
+            wanted: Vec::new(),
         }
     }
 
@@ -2508,14 +2528,6 @@ pub trait FunctionPass {
         true
     }
 
-    /// The pass reads how many instructions another function has
-    /// (`Function::getInstructionCount`): the manager counts them once before
-    /// the pass runs over the module and again for each function it changed
-    /// (`Declared::size_of`).
-    fn wants_sizes(&self) -> bool {
-        false
-    }
-
     /// The pass dumps the bodies it is run over itself (the pipeline does, per
     /// function), so the manager dumps none.
     fn dumps_inputs_itself(&self) -> bool {
@@ -2867,75 +2879,89 @@ impl PassManager {
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
-            let sized = pass.wants_sizes();
-            if sized {
-                declared.sizes = module
-                    .globals
-                    .iter()
-                    .map(|global| match &global.kind {
-                        GlobalKind::Function(function) if !function.is_declaration() => {
-                            Some(function.live_instructions())
-                        }
-                        _ => None,
-                    })
-                    .collect();
-            }
             for at in 0..module.globals.len() {
-                let id = GlobalId(at as u32);
-                // The other bodies as they stand, for an audit that reads a
-                // callee.
-                if check_captures() {
-                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
-                }
-                let Module { context, globals, metadata, .. } = &mut *module;
-                let global = &mut globals[at];
-                let GlobalKind::Function(function) = &mut global.kind else { continue };
-                if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
-                    continue;
-                }
-                set_running_function(global.name.as_deref().unwrap_or_default());
-                let cache = analyses.manager(id, &outer);
-                let before = function.mark();
-                let running = crate::counts::pass_run_over(name, function);
-                let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
-                    spanned(name, || {
-                        run_checked(
-                            pass.as_mut(),
-                            &mut Unit {
-                                context,
-                                layout: &layout,
-                                function,
-                                id: Some(id),
-                                metadata,
-                                declared: &mut declared,
-                            },
-                            cache,
-                        )
-                    })
-                });
-                drop(running);
-                if let Some(problem) = take_phi_problem() {
-                    return Err(problem);
-                }
-                kept.retain(|one| preserved.keeps(*one));
-                spanned("invalidate", || cache.invalidate(function, &preserved));
-                cache.check_kept(name, context, &layout, function);
-                if self.verify_invalidation {
-                    let stale = cache.stale(context, &layout, function);
-                    if !stale.is_empty() {
-                        return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
+                // A pass that asked how big another function is (`size_of`)
+                // runs over the function again once the manager has counted:
+                // the first run changed nothing a size decides.
+                let mut counted = false;
+                loop {
+                    {
+                        let id = GlobalId(at as u32);
+                        // The other bodies as they stand, for an audit that
+                        // reads a callee.
+                        if check_captures() {
+                            MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+                        }
+                        let Module { context, globals, metadata, .. } = &mut *module;
+                        let global = &mut globals[at];
+                        let GlobalKind::Function(function) = &mut global.kind else { break };
+                        if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
+                            break;
+                        }
+                        set_running_function(global.name.as_deref().unwrap_or_default());
+                        let cache = analyses.manager(id, &outer);
+                        let before = function.mark();
+                        let running = crate::counts::pass_run_over(name, function);
+                        let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
+                            spanned(name, || {
+                                run_checked(
+                                    pass.as_mut(),
+                                    &mut Unit {
+                                        context,
+                                        layout: &layout,
+                                        function,
+                                        id: Some(id),
+                                        metadata,
+                                        declared: &mut declared,
+                                    },
+                                    cache,
+                                )
+                            })
+                        });
+                        drop(running);
+                        if let Some(problem) = take_phi_problem() {
+                            return Err(problem);
+                        }
+                        kept.retain(|one| preserved.keeps(*one));
+                        spanned("invalidate", || cache.invalidate(function, &preserved));
+                        cache.check_kept(name, context, &layout, function);
+                        if self.verify_invalidation {
+                            let stale = cache.stale(context, &layout, function);
+                            if !stale.is_empty() {
+                                return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
+                            }
+                        }
+                        // An analysis that reads the log of edits is told of
+                        // this one.
+                        let moved = function.mark() != before;
+                        stages.push(Stage {
+                            pass: name,
+                            module: index,
+                            function: id,
+                            changes: function.take_changes(),
+                        });
+                        if moved {
+                            analyses.edit_log.push(id);
+                        }
+
+                        spanned("declared", || declared.place(module))?;
                     }
+                    if counted || declared.wanted.is_empty() {
+                        break;
+                    }
+                    for asked in std::mem::take(&mut declared.wanted) {
+                        let size = match &module.globals[asked.0 as usize].kind {
+                            GlobalKind::Function(function) if !function.is_declaration() => {
+                                Size::Instructions(function.live_instructions())
+                            }
+                            _ => Size::Declaration,
+                        };
+                        declared.sizes.insert(asked, size);
+                    }
+                    counted = true;
                 }
-                // An analysis that reads the log of edits is told of this one.
-                let moved = function.mark() != before;
-                stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
-                if moved {
-                    analyses.edit_log.push(id);
-                }
-                if sized && let GlobalKind::Function(function) = &module.globals[at].kind {
-                    declared.sizes[at] = Some(function.live_instructions());
-                }
-                spanned("declared", || declared.place(module))?;
+                declared.sizes.clear();
+                declared.wanted.clear();
             }
             if self.verify_invalidation {
                 let stale = analyses.stale(module, &kept);

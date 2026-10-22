@@ -5,7 +5,7 @@ use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::context::{GlobalId, mask};
 use llrm_mir::interpret::Val;
 use llrm_mir::module::GlobalKind;
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Outer, Size};
 
 use crate::testing::{parsed, printed, results};
 
@@ -29,17 +29,19 @@ fn converted(
     inputs: &[&[i128]],
 ) -> (bool, String) {
     let mut module = parsed(&format!("{DOS}{text}"));
-    let sizes: Vec<Option<usize>> = module
+    let sizes: Vec<Size> = module
         .globals
         .iter()
         .map(|global| match &global.kind {
-            GlobalKind::Function(function) if !function.is_declaration() => Some(function.live_instructions()),
-            _ => None,
+            GlobalKind::Function(function) if !function.is_declaration() => {
+                Size::Instructions(function.live_instructions())
+            }
+            _ => Size::Declaration,
         })
         .collect();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = super::converted(context, &layout, function, &outer, &|id: GlobalId| sizes[id.0 as usize]);
+    let changed = super::converted(context, &layout, function, &outer, &mut |id: GlobalId| sizes[id.0 as usize]);
     let after = printed(&module);
     if changed {
         let want: Vec<_> =

@@ -33,10 +33,11 @@
 //! The unit test `a_call_through_a_table_is_a_switch_of_direct_calls`.
 //!
 //! # Runs
-//! Slot `jumptableswitch@672`, after `cvp@669`. The pass `wants_sizes`: the
-//! manager counts each function's instructions once per module (the pin reads
-//! `getInstructionCount` of the callee), which is all it costs where no table
-//! is called.
+//! Slot `jumptableswitch@672`, after `cvp@669`. The pin reads
+//! `getInstructionCount` of each callee, which a function pass cannot see
+//! here: `Declared::size_of` answers `Unknown` and the manager counts those
+//! functions, then runs the pass over this function again. A function with no
+//! call through a table asks nothing, so nothing is counted.
 
 use llrm_mir::constantfolding::constant_fold_load_from_const;
 use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId, signed};
@@ -44,7 +45,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode, Tail};
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses, Size};
 
 use crate::edges;
 
@@ -65,10 +66,6 @@ impl FunctionPass for JumpTableToSwitch {
         Some("jump-table-to-switch")
     }
 
-    fn wants_sizes(&self) -> bool {
-        true
-    }
-
     fn adds_memory_operations(&self) -> bool {
         false
     }
@@ -79,8 +76,8 @@ impl FunctionPass for JumpTableToSwitch {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let declared = &*unit.declared;
-        if converted(unit.context, unit.layout, unit.function, &outer, &|id| declared.size_of(id)) {
+        let declared = &mut *unit.declared;
+        if converted(unit.context, unit.layout, unit.function, &outer, &mut |id| declared.size_of(id)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -89,20 +86,21 @@ impl FunctionPass for JumpTableToSwitch {
 }
 
 /// Every call of `function` through a table, as a switch; whether any was.
-/// `size` is how many instructions a defined function has.
+/// `size` is how big a function is: `Unknown` makes the manager count it and
+/// run the pass again, so a function with no table is never counted.
 pub fn converted(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
-    size: &dyn Fn(GlobalId) -> Option<usize>,
+    size: &mut dyn FnMut(GlobalId) -> Size,
 ) -> bool {
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut current = Some(block);
         while let Some(here) = current {
             let Some((call, table)) = function.iter_block(here).collect::<Vec<_>>().into_iter().find_map(|inst| {
-                parse_jump_table(context, layout, function, outer, size, inst).map(|table| (inst, table))
+                parse_jump_table(context, layout, function, outer, &mut *size, inst).map(|table| (inst, table))
             }) else {
                 break;
             };
@@ -125,7 +123,7 @@ fn parse_jump_table(
     layout: &DataLayout,
     function: &Function,
     outer: &passes::Outer,
-    size_of: &dyn Fn(GlobalId) -> Option<usize>,
+    size_of: &mut dyn FnMut(GlobalId) -> Size,
     inst: InstId,
 ) -> Option<Table> {
     let call = function.instruction(inst);
@@ -197,7 +195,7 @@ fn parse_jump_table(
             let found = constant_fold_load_from_const(context, layout, initializer, pointer_type, entry * stride)?;
             let ConstantKind::Global(id) = context.get(found).kind else { return None };
             let GlobalKind::Function(target) = &outer.globals.get(id.0 as usize)?.kind else { return None };
-            let defined = size_of(id)?;
+            let Size::Instructions(defined) = size_of(id) else { return None };
             (target.ty == call_type && defined <= FUNCTION_SIZE).then_some(found)
         })
         .collect::<Option<Vec<_>>>()?;

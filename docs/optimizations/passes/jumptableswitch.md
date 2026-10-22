@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumptableswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumptableswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:7813c767fb5d307c043a070f3aabc4c7fd4716ec6497d3243420741c5f4dd404 -->
+<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:573dab0343ec64bb802fa9fb2f7c8d75be77acd6d05d67cc629baa498c8133ec -->
 
 # jumptableswitch
 
@@ -38,7 +38,8 @@ profile) and no `!prof` on the switch: llrm has none.
 The unit test `a_call_through_a_table_is_a_switch_of_direct_calls`.
 
 ## Runs
-Slot `jumptableswitch@672`, after `cvp@669`. The pass `wants_sizes`: the
-manager counts each function's instructions once per module (the pin reads
-`getInstructionCount` of the callee), which is all it costs where no table
-is called.
+Slot `jumptableswitch@672`, after `cvp@669`. The pin reads
+`getInstructionCount` of each callee, which a function pass cannot see
+here: `Declared::size_of` answers `Unknown` and the manager counts those
+functions, then runs the pass over this function again. A function with no
+call through a table asks nothing, so nothing is counted.
