@@ -868,3 +868,17 @@ def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tm
     run("add", "-A")
     run("commit", "-q", "-m", "pr")
     assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))
+
+
+def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
+    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+    asked = []
+
+    def on_merged(packages):
+        asked.append(set(packages))
+        return set()
+
+    ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-c" not in asked[1]
