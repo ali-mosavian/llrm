@@ -69,7 +69,7 @@ Rules for every piece: idiomatic Rust (`SDNode` in an arena indexed by `SDValue 
 
 | Id | Piece | Group | Due | Premise test (fail first) |
 |---|---|---|---|---|
-| A0 | `selectiondag` module: `MVT`/`EVT`, `ISD`, arena `SelectionDAG`, `getNode` with CSE and constant folding (`SelectionDAG.cpp`) | sdag-a | 2026-11-05 | `x + 0`, `x * 1`, `3 + 4` built twice give one node, constant folded; fails on an empty DAG |
+| A0 | `selectiondag` module: `MVT`/`EVT`, `ISD`, arena `SelectionDAG`, `getNode` with CSE and constant folding (`SelectionDAG.cpp`) | sdag-a | 2026-11-05 | `x + y` built twice gives one node; `3 + 4` is one constant node; `x * 1` stays a `MUL` (the identity fold is `DAGCombiner::visitMUL`, B2); fails on an empty DAG |
 | A1 | Builder, scalar subset: arithmetic, casts, `icmp`/`select`/`br`, load/store, GEP, `phi` as `CopyToReg`; per-block DAG | sdag-a | 2026-11-19 | a MIR block of `a+b; store` dumps the DAG the pin's `-debug-only=isel` shows for the same IR (text compare, pin run through `pin.py`) |
 | A2 | Calls, returns, arguments through `Convention::place` (SD5); switch lowering (`SwitchCG`: clusters, jump tables, bit tests, peel) | sdag-a | 2026-12-10 | a 6-way `switch` makes the pin's jump table or bit test at m32; the DAG for a `watcall16` call has `CopyToReg AX, DX, BX, CX` in that order |
 | B0 | Type legalizer: promote and expand integers, `far` (SD2); `X86TargetLowering` action table for m32 from the target description | sdag-b | 2026-11-26 | an i64 add at m32 becomes `add`/`adc` nodes; the same at m16 for a `far` pair; fails with the action table empty (node stays illegal) |
@@ -82,6 +82,33 @@ Rules for every piece: idiomatic Rust (`SDNode` in an arena indexed by `SDValue 
 | D0 | Harness: `--isel=dag` flag, per-function LIR dump from both selectors (`ISEL_DUMP`), `tools/pairs/isel_shadow.py` (counts instructions, bytes, copies, executed instructions per function) feeding `objsweep` | sdag-d | 2026-11-05 | the report on old-vs-old is empty; a seeded one-instruction difference shows as one function |
 | D1 | Scheduler (RegPressure list scheduler, `ScheduleDAGRRList`) and `InstrEmitter` to LIR; the first end-to-end function through the DAG path | sdag-d | 2026-12-03 | `x = a+b; y = x*c` returns the right value through the emulator on the new path (tests/run `c`), fails when the emitter drops a `CopyToReg` |
 | D2 | Shadow runs on the corpus: objsweep, QCport -Os (65 modules, `tools/rows/qcport.py`, m16), the rows, `tests/run` (c, nib, qb, alias, huge), qbrt. First on the pieces that exist (functions the DAG path refuses fall back to the old selector only inside the shadow harness, counted) | sdag-d | from 2026-12-03, weekly | per run: correctness failures (must be 0 before the switch), refused functions, rows above main |
+
+### B0 in detail (sdag-b)
+
+Pin: `DAGTypeLegalizer::run` ([L196][lt-run]) over `LegalizeTypes.h` (1.3k), `LegalizeIntegerTypes.cpp` (89 `PromoteIntRes_*`-family and 57 `ExpandIntRes_*` functions, 6.7k lines), `X86TargetLowering` ctor ([L131][x-ctor]) and `computeRegisterProperties` (called at [L2934][x-regprops]). Input is A0's `selectiondag` module; B0 starts its code when A0 (#3689) lands. At both targets `i8`, `i16`, `i32` are legal, `i1` and odd widths promote, `i64` expands to two `i32`, `f32`/`f64`/`f80` are legal in the x87 classes (no `SoftenFloat`/`ExpandFloat`, nothing to translate there), and at m16 `far` expands to two `i16`. Today this is `legalize.rs` (promotion, in MIR), `isel/expand.rs`, `isel/wide.rs` (halves); they stay until Phase 2.
+
+| Id | Piece (pin function, in the pin's order) | Due | Notes |
+|---|---|---|---|
+| B0a | `TargetLoweringInfo`: `ValueTypeActions`, `getTypeAction`/`getTypeToTransformTo` (what `computeRegisterProperties` and `getTypeConversion` compute), `LegalizeAction` enum, and the `X86TargetLowering` action table for m32 (`setOperationAction`, `setLoadExtAction`, `setTruncStoreAction`, `setCondCodeAction` for the i486/P5 subset), written in the ctor's order because a later call overwrites an earlier | 2026-11-12 | table is Rust data built from the target description (legal widths, CPU features); vector, SSE, AVX and 64-bit arms of the ctor are not translated and listed as N/A with their line ranges |
+| B0b | `run()` and its machinery: node ids (`enum NodeId { New, ReadyToProcess, Processed, Unanalyzed(n) }`), worklist, `AnalyzeNewNode`/`AnalyzeNewValue`, `ReplaceValueWith`, `RemapValue`, the maps `ReplacedValues`, `PromotedIntegers`, `ExpandedIntegers` (arena-indexed `Vec<Option<_>>`, not hash maps), `PerformExpensiveChecks` as a debug-only verifier | 2026-11-19 | no `NodeUpdateListener`: the arena makes replacement an index rewrite |
+| B0c | `PromoteIntegerResult`/`PromoteIntegerOperand`, in corpus order: constants, loads (`PromoteIntRes_LOAD`), binary arithmetic and logic, shifts (amount zero-extended), `SETCC` ([L1371][li-setcc]), `Select` ([L1350][li-select]), trunc/zext/sext, bitcast, div/rem (extension by signedness), stores (`PromoteIntegerOperand`), `BRCOND`/`CopyToReg` operands | 2026-11-26 | replaces `legalize.rs`'s cases one by one |
+| B0d | `ExpandIntegerResult`/`ExpandIntegerOperand`: `ExpandIntRes_Constant` ([L4116][li-const]), `ADDSUB` ([L3725][li-addsub]) to `ADDC`/`ADDE` pairs, `MUL` ([L4540][li-mul]), logic, `ExpandShiftByConstant` ([L3296][li-shiftc]) and the unknown-amount form, `LOAD`, `SETCC` ([L3589][li-esetcc]), `Select`, trunc/ext, `UDIV`/`SDIV`/`UREM`/`SREM` as helper calls | 2026-12-03 | SD19 below |
+| B0e | `far` (SD2): `MVT::Far` action `ExpandInteger`-shaped; results as (offset, selector) halves for load, store, select, `CopyToReg`/`CopyFromReg`, constants, compares, `far_cast`; operands through `BUILD_PAIR` | 2026-12-03 | m16 only; the m32 table has no `far` |
+
+Numbered DEVIATE from B0:
+
+- **SD19** Wide division and remainder of `i64` call our inline helper routines with their register contracts (`lower_int64.rs`, `llrm_x86::helpers`) where the pin emits a compiler-rt libcall. The legalizer returns a `CALL` node with the helper's convention (SD5). Reason: the helpers exist, are exact, and no runtime library is linked. Owner sdag-b; exit: when LegalizeDAG's `ExpandLibCall` path is translated in B1 and the helper contract is expressed as a `RuntimeLibcall` table (review 2026-12-17).
+
+Premise tests (each seen failing before its piece lands; they dump the DAG after `LegalizeTypes` as text and, where the pin shows the same IR, compare with `pin.py`'s `llc -debug-only=legalize-types` output):
+
+1. B0a: `getTypeAction` is `Legal` for i8/i16/i32, `Promote` for i1 (to i8), i12 (to i16), i24 (to i32), `Expand` for i64 (to i32) and, at m16 only, `far`; an empty table makes every type `Legal` and the test fail.
+2. B0b: a DAG whose root uses an illegal type leaves `run()` with no illegal type in any node, and a node replaced twice resolves through `RemapValue` to its last replacement.
+3. B0c: `i12 add` promotes to `i16 add` with no extension; `i12 udiv` zero-extends both operands; `i12 sdiv` sign-extends them (the signedness is the symptom: wrong results for a negative `i12` quotient).
+4. B0d: `i64 add` at m32 is `ADDC` low then `ADDE` high; `i64 shl 8` is the pin's two-node funnel form (`ExpandShiftByConstant`); `i64 load` is two `i32` loads at offsets 0 and 4 with the chain joined.
+5. B0e: a `far` load is two `i16` loads (offset, then selector at +2); `far == far` is two compares combined; a `far` `select` is two `select`s.
+6. SD19: `i64 sdiv` produces a `CALL` to the helper named in `llrm_x86::helpers`, with its argument registers.
+
+An end-to-end run waits for A1 (builder) and D1 (emitter); until then each test builds its DAG by hand through A0's `getNode`.
 
 The ordering inside a group is the table's; groups run in parallel from 2026-10-26, so by 2026-12-03 an end-to-end function exists (A0, A1, B0, C0, D0 done; D1 joins them). Shadow means the old selector produces the output; the new one runs in `--isel=dag` and in the harness.
 
@@ -105,6 +132,34 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 2. **Combiner scale**: 32.5k lines of C++ plus X86's `PerformDAGCombine`; the plan lands visitors by corpus frequency and leaves the rest as numbered MISSING rows in this file's table (to be added at B2), not as a gap with no owner.
 3. **m16 patterns the pin lacks** (SD2..SD4, SD9): the largest source of DEVIATEs; each carries a pin-dump premise test that shows the pin cannot express it.
 4. **Quality regressions against the hand-tuned selector**: the shadow report is the instrument; per [pr-rules](pr-rules.md) rows above main are fixed generally or kept by a numbered DEVIATE with the row as evidence, never by a shape patch.
+
+## 6. DEVIATE registry
+
+One list of the `SD` numbers, so no two groups take one. Add a row in the PR that first uses a number; the next free number is the last row's plus one. The reason, exit and review date sit in the code or section named.
+
+| SD | Owner | What | Where |
+|---|---|---|---|
+| SD1 | plan | MIR, not LLVM IR, is the builder's input | §2 |
+| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `selectiondag/lowering.rs` |
+| SD3 | sdag-c | 16-bit real-mode address components | §2 |
+| SD4 | sdag-c | BX/SI/DI/BP address classes on virtual registers | §2 |
+| SD5 | sdag-a | calling conventions from `Convention::place` | §2 |
+| SD6 | sdag-c | x87 as `RFP` pseudo-forms until `fpstack.rs` | §2 |
+| SD7 | plan | `i64` is two dwords at both sizes (no change) | §2 |
+| SD8 | sdag-c | our cycle tables break ties inside a `group` | §2 |
+| SD9 | sdag-c | `.td`-syntax additions for patterns the pin lacks (block) | §3 |
+| SD10 | sdag-a | no `SDLoc` | `selectiondag.rs` |
+| SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
+| SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
+| SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
+| SD14 | sdag-b | floating types always legal (no soften/expand) | `selectiondag/lowering.rs` |
+| SD15 | sdag-a | `FindMergedConditions` not ported | builder |
+| SD16 | sdag-a | no `LiveOutRegInfo` | builder |
+| SD17 | sdag-a | vreg numbers differ from the pin's | builder |
+| SD18 | sdag-a | select patterns (abs, min, max) | builder |
+| SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
+
+Next free: **SD20**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
@@ -133,6 +188,7 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 [s-build]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536
 [s-burr]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3113
 [e-node]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L1003
+[x-regprops]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L2934
 [x-ctor]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L131
 [x-sched]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L148
 [x-lower]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L34783
@@ -155,3 +211,10 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 [x-16]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L1926
 [tg-emit]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/utils/TableGen/DAGISelEmitter.cpp#L152
 [tg-table]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/utils/TableGen/DAGISelMatcherEmitter.cpp#L1602
+[li-setcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1371
+[li-select]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1350
+[li-const]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4116
+[li-addsub]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3725
+[li-mul]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4540
+[li-shiftc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3296
+[li-esetcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3589

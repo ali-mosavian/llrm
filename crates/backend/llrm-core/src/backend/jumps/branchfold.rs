@@ -12,7 +12,11 @@
 //!    block that enters it (an empty block, or one that only jumps);
 //! 2. a conditional whose two ways are one block is a jump;
 //! 3. a jump to the block laid out next is dropped, and `jcc L; jmp M` with `L`
-//!    next becomes `j!cc M`.
+//!    next becomes `j!cc M`;
+//! 4. `jcc Out; jmp Loop` in the block `Loop` becomes `j!cc Loop; jmp Out`
+//!    (L1685);
+//! 5. a block of one conditional branch identical to the branch that ends the
+//!    block before it takes that branch away (L1586).
 //!
 //! A block that nothing enters is dead; its source bytes are kept by `_prune`.
 //!
@@ -316,6 +320,62 @@ impl<'a> Folder<'a> {
                 .collect();
             self.set(index, block.with_insns(insns).into_inner());
             return true;
+        }
+        // `jcc Out; jmp Loop` in a block that is `Loop`: `j!cc Loop; jmp Out`,
+        // so the one-block loop is a conditional branch back (L1685).
+        if let (Some(cond), Some(jump), Some(taken), Some(other)) = (&exit.cond, &exit.jump, exit.taken, exit.other)
+            && other == block.at
+            && taken != block.at
+            && let Some(opposite) =
+                cond.what.as_ref().and_then(|what| what.name.as_deref()).and_then(|name| _OPPOSITE.get(name))
+        {
+            let (back, out) = (aimed(cond, other, Some(opposite)), aimed(jump, taken, None));
+            let insns = block
+                .insns
+                .iter()
+                .map(|one| {
+                    if Arc::ptr_eq(one, cond) {
+                        Arc::clone(&back)
+                    } else if Arc::ptr_eq(one, jump) {
+                        Arc::clone(&out)
+                    } else {
+                        Arc::clone(one)
+                    }
+                })
+                .collect();
+            self.set(index, block.with_insns(insns).into_inner());
+            return true;
+        }
+        // A block of one conditional branch identical to the one that ends the
+        // block it follows: the earlier branch goes (L1586).
+        if let (Some(cond), None, Some(taken)) = (&exit.cond, &exit.jump, exit.taken)
+            && block.insns.iter().filter(|one| !one.is_meta()).count() == 1
+            && let Some(before) = self.prev[index]
+        {
+            let previous = self.blocks[before].clone();
+            let ahead = Exit::of(&previous);
+            let name = |one: &Arc<Insn>| one.what.as_ref().and_then(|what| what.name.clone());
+            if let (Some(earlier), None, Some(there)) = (&ahead.cond, &ahead.jump, ahead.taken)
+                && there == taken
+                && name(earlier) == name(cond)
+                && self.after(before) == Some(block.at)
+                && previous.succ.contains(&block.at)
+            {
+                let insns = previous
+                    .insns
+                    .iter()
+                    .map(|one| if Arc::ptr_eq(one, earlier) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
+                    .collect();
+                self.odds.rerouted(previous.at, &previous.succ, taken, &[(block.at, 1.0)]);
+                if let Some(entering) = self.preds.get_mut(&taken) {
+                    entering.remove(&previous.at);
+                }
+                self.set(
+                    before,
+                    LirBlock { succ: std::iter::once(block.at).collect(), ..previous.with_insns(insns).into_inner() },
+                );
+                return true;
+            }
         }
         false
     }

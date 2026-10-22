@@ -204,6 +204,7 @@ pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
+pub mod latecleanup;
 pub mod machinedce;
 pub mod machinesink;
 pub mod masm;
@@ -231,6 +232,7 @@ pub mod rmw;
 pub mod saverestore;
 pub mod schedule;
 pub mod selectconstants;
+pub mod selectiondag;
 pub mod selects;
 pub mod shadow;
 #[cfg(test)]

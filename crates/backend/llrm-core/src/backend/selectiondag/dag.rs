@@ -1,0 +1,292 @@
+//! The arena: nodes, values, the CSE map and node construction.
+
+use std::collections::HashMap;
+
+use super::isd::{CondCode, ISD};
+use super::mvt::EVT;
+
+/// One result of a node: `SDValue(Node, ResNo)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SDValue {
+    pub node: u32,
+    pub res: u8,
+}
+
+/// `SDNodeFlags`; CSE keeps the flags both builders agree on
+/// (`intersectFlagsWith`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SDNodeFlags(pub u8);
+
+impl SDNodeFlags {
+    pub const NO_UNSIGNED_WRAP: SDNodeFlags = SDNodeFlags(1);
+    pub const NO_SIGNED_WRAP: SDNodeFlags = SDNodeFlags(2);
+    pub const EXACT: SDNodeFlags = SDNodeFlags(4);
+    pub const NON_NEG: SDNodeFlags = SDNodeFlags(8);
+
+    pub fn intersect(self, other: SDNodeFlags) -> SDNodeFlags {
+        SDNodeFlags(self.0 & other.0)
+    }
+
+    pub fn has(self, flag: SDNodeFlags) -> bool {
+        self.0 & flag.0 == flag.0
+    }
+}
+
+/// What a leaf node carries besides its opcode and types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NodeData {
+    None,
+    /// `ConstantSDNode`: the bits at the node's width, zero above it.
+    Const { bits: u128, opaque: bool },
+    /// `ConstantFPSDNode`, as the bits of its type (DEVIATE SD11).
+    ConstFp { bits: u128 },
+    CondCode(CondCode),
+    ValueType(EVT),
+    Register(u32),
+    FrameIndex(i32),
+    Global { symbol: u32, offset: i64 },
+    Block(u32),
+    Symbol(u32),
+}
+
+#[derive(Clone, Debug)]
+pub struct SDNode {
+    pub opcode: ISD,
+    pub values: Vec<EVT>,
+    pub ops: Vec<SDValue>,
+    pub flags: SDNodeFlags,
+    pub data: NodeData,
+}
+
+/// `TargetLowering::BooleanContent`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BooleanContents {
+    ZeroOrOne,
+    ZeroOrNegativeOne,
+    Undefined,
+}
+
+/// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
+/// than read from a global.
+#[derive(Clone, Copy, Debug)]
+pub struct DagConfig {
+    pub boolean_contents: BooleanContents,
+    /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
+    pub offset_folding: bool,
+}
+
+impl Default for DagConfig {
+    /// x86: 0 or 1, and symbol offsets fold.
+    fn default() -> DagConfig {
+        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: true }
+    }
+}
+
+type CseKey = (ISD, Vec<EVT>, Vec<SDValue>, NodeData);
+
+/// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
+pub struct SelectionDAG {
+    nodes: Vec<SDNode>,
+    cse: HashMap<CseKey, u32>,
+    pub(super) config: DagConfig,
+    entry: SDValue,
+}
+
+impl SelectionDAG {
+    pub fn new(config: DagConfig) -> SelectionDAG {
+        let mut dag = SelectionDAG { nodes: Vec::new(), cse: HashMap::new(), config, entry: SDValue { node: 0, res: 0 } };
+        dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None);
+        dag
+    }
+
+    pub fn entry_node(&self) -> SDValue {
+        self.entry
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn node(&self, value: SDValue) -> &SDNode {
+        &self.nodes[value.node as usize]
+    }
+
+    pub fn opcode(&self, value: SDValue) -> ISD {
+        self.node(value).opcode
+    }
+
+    pub fn value_type(&self, value: SDValue) -> EVT {
+        self.node(value).values[value.res as usize]
+    }
+
+    pub fn operand(&self, value: SDValue, index: usize) -> SDValue {
+        self.node(value).ops[index]
+    }
+
+    pub fn is_undef(&self, value: SDValue) -> bool {
+        matches!(self.opcode(value), ISD::Undef | ISD::Poison)
+    }
+
+    /// The value of a `ConstantSDNode` (`Constant` or `TargetConstant`).
+    pub fn constant(&self, value: SDValue) -> Option<u128> {
+        match (self.opcode(value), self.node(value).data) {
+            (ISD::Constant | ISD::TargetConstant, NodeData::Const { bits, .. }) => Some(bits),
+            _ => None,
+        }
+    }
+
+    pub fn is_opaque(&self, value: SDValue) -> bool {
+        matches!(self.node(value).data, NodeData::Const { opaque: true, .. })
+    }
+
+    pub fn is_null_constant(&self, value: SDValue) -> bool {
+        self.constant(value) == Some(0)
+    }
+
+    pub(super) fn width(&self, value: SDValue) -> u32 {
+        self.value_type(value).size_in_bits()
+    }
+
+    /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,
+    /// data); glue is never shared.
+    pub(super) fn intern(
+        &mut self,
+        opcode: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        flags: SDNodeFlags,
+        data: NodeData,
+    ) -> SDValue {
+        let shareable = !values.contains(&EVT::GLUE);
+        let key = (opcode, values.to_vec(), ops.to_vec(), data);
+        if shareable {
+            if let Some(&found) = self.cse.get(&key) {
+                let node = &mut self.nodes[found as usize];
+                node.flags = node.flags.intersect(flags);
+                return SDValue { node: found, res: 0 };
+            }
+        }
+        let index = self.nodes.len() as u32;
+        self.nodes.push(SDNode { opcode, values: key.1.clone(), ops: key.2.clone(), flags, data });
+        if shareable {
+            self.cse.insert(key, index);
+        }
+        SDValue { node: index, res: 0 }
+    }
+
+    pub fn get_undef(&mut self, vt: EVT) -> SDValue {
+        self.intern(ISD::Undef, &[vt], &[], SDNodeFlags::default(), NodeData::None)
+    }
+
+    pub fn get_poison(&mut self, vt: EVT) -> SDValue {
+        self.intern(ISD::Poison, &[vt], &[], SDNodeFlags::default(), NodeData::None)
+    }
+
+    pub fn get_constant(&mut self, bits: u128, vt: EVT) -> SDValue {
+        self.get_constant_with(bits, vt, false, false)
+    }
+
+    /// `getConstant` with `isT` (a `TargetConstant`) and `isO` (opaque).
+    pub fn get_constant_with(&mut self, bits: u128, vt: EVT, target: bool, opaque: bool) -> SDValue {
+        assert!(vt.is_integer(), "integer constant of {vt:?}");
+        let bits = bits & super::fold::mask(vt.size_in_bits());
+        let opcode = if target { ISD::TargetConstant } else { ISD::Constant };
+        self.intern(opcode, &[vt], &[], SDNodeFlags::default(), NodeData::Const { bits, opaque })
+    }
+
+    pub fn get_all_ones_constant(&mut self, vt: EVT) -> SDValue {
+        self.get_constant(u128::MAX, vt)
+    }
+
+    /// `getBoolConstant`: true is 1, or all ones for `ZeroOrNegativeOne`.
+    pub fn get_bool_constant(&mut self, value: bool, vt: EVT) -> SDValue {
+        if !value {
+            return self.get_constant(0, vt);
+        }
+        match self.config.boolean_contents {
+            BooleanContents::ZeroOrOne | BooleanContents::Undefined => self.get_constant(1, vt),
+            BooleanContents::ZeroOrNegativeOne => self.get_all_ones_constant(vt),
+        }
+    }
+
+    /// `isBoolConstant`.
+    pub fn bool_constant(&self, value: SDValue) -> Option<bool> {
+        let bits = self.constant(value)?;
+        let all_ones = super::fold::mask(self.width(value));
+        match self.config.boolean_contents {
+            BooleanContents::ZeroOrOne => (bits <= 1).then_some(bits == 1),
+            BooleanContents::ZeroOrNegativeOne => (bits == 0 || bits == all_ones).then_some(bits != 0),
+            BooleanContents::Undefined => Some(bits != 0),
+        }
+    }
+
+    pub fn get_cond_code(&mut self, cond: CondCode) -> SDValue {
+        self.intern(ISD::CondCodeNode, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::CondCode(cond))
+    }
+
+    pub fn get_value_type_node(&mut self, vt: EVT) -> SDValue {
+        self.intern(ISD::ValueType, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::ValueType(vt))
+    }
+
+    pub fn get_global_address(&mut self, vt: EVT, symbol: u32, offset: i64) -> SDValue {
+        self.intern(ISD::GlobalAddress, &[vt], &[], SDNodeFlags::default(), NodeData::Global { symbol, offset })
+    }
+
+    pub fn get_register(&mut self, vt: EVT, reg: u32) -> SDValue {
+        self.intern(ISD::Register, &[vt], &[], SDNodeFlags::default(), NodeData::Register(reg))
+    }
+
+    /// `getNOT`: `xor v, -1`.
+    pub fn get_not(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let ones = self.get_all_ones_constant(vt);
+        self.get_node(ISD::Xor, vt, &[value, ones])
+    }
+
+    /// `getNegative`: `sub 0, v`.
+    pub fn get_negative(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let zero = self.get_constant(0, vt);
+        self.get_node(ISD::Sub, vt, &[zero, value])
+    }
+
+    pub fn get_setcc(&mut self, vt: EVT, lhs: SDValue, rhs: SDValue, cond: CondCode) -> SDValue {
+        let cc = self.get_cond_code(cond);
+        self.get_node(ISD::SetCC, vt, &[lhs, rhs, cc])
+    }
+
+    pub fn get_select(&mut self, vt: EVT, cond: SDValue, then: SDValue, other: SDValue) -> SDValue {
+        self.get_node(ISD::Select, vt, &[cond, then, other])
+    }
+
+    /// `getNode(Opcode, VT, Ops...)` with no flags.
+    pub fn get_node(&mut self, opcode: ISD, vt: EVT, ops: &[SDValue]) -> SDValue {
+        self.get_node_flags(opcode, vt, ops, SDNodeFlags::default())
+    }
+
+    /// `getNode`: the folds of the pin's one-, two- and three-operand forms,
+    /// then the CSE lookup. Four or more operands and no folds are the
+    /// pin's `ArrayRef` form, which only checks `TokenFactor`-like cases.
+    pub fn get_node_flags(&mut self, opcode: ISD, vt: EVT, ops: &[SDValue], flags: SDNodeFlags) -> SDValue {
+        let folded = match *ops {
+            [n1] => self.fold_unary(opcode, vt, n1, flags),
+            [n1, n2] => self.fold_binary(opcode, vt, n1, n2, flags),
+            [n1, n2, n3] => self.fold_ternary(opcode, vt, n1, n2, n3),
+            _ => Folded::Keep(ops.to_vec()),
+        };
+        match folded {
+            Folded::Done(value) => value,
+            Folded::Keep(ops) => self.intern(opcode, &[vt], &ops, flags, NodeData::None),
+        }
+    }
+
+    /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.
+    pub fn get_node_multi(&mut self, opcode: ISD, values: &[EVT], ops: &[SDValue]) -> SDValue {
+        self.intern(opcode, values, ops, SDNodeFlags::default(), NodeData::None)
+    }
+}
+
+/// A `getNode` fold either ends in a value or lets the node be built with
+/// the (possibly canonicalized) operands.
+pub(super) enum Folded {
+    Done(SDValue),
+    Keep(Vec<SDValue>),
+}

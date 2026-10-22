@@ -89,6 +89,7 @@ pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod canonexit;
+pub mod canonfreeze;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
