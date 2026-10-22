@@ -21,7 +21,7 @@ fn _insn(
     Arc::new(Insn::new(
         at,
         Some((at, at + 1)),
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(operation) }),
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(operation) }),
         Vec::new(),
         Vec::new(),
     ))
@@ -47,7 +47,7 @@ fn same(
 }
 
 fn names(body: &LirBody) -> Vec<String> {
-    body.insns().iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+    body.insns().iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
 }
 
 fn dests(body: &LirBody) -> Vec<RegId> {

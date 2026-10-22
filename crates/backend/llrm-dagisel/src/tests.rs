@@ -1,6 +1,6 @@
 //! The interpreter against the generated i486 table, on hand-built DAGs.
 
-use crate::dag::SDValue;
+use crate::dag::{Dag, SDValue};
 use crate::generated::ids::{isd, mvt};
 use crate::generated::x86_i486 as table;
 use crate::interp::{Outcome, Selector};
@@ -1136,5 +1136,274 @@ mod select_loop {
             .live()
             .find(|(_, n)| n.opcode == isd::CopyToReg && dag.nodes[n.ops[1].node as usize].register == Some(x86::CL));
         assert_eq!(to_cl.expect("the count goes to CL").1.ops[2], n, "the +32 is gone");
+    }
+}
+
+mod nodes_before_the_table {
+    use super::*;
+    use crate::generated::ids::target_opcode;
+    use crate::testing::TestDag;
+
+    fn select(
+        dag: &mut TestDag,
+        node: u32,
+    ) -> Outcome {
+        Selector::new(table::TABLE).select(dag, &mut crate::testing::TestHooks { address: None }, node)
+    }
+
+    #[test]
+    fn undef_becomes_implicit_def_not_an_unselectable_node() {
+        let mut dag = TestDag::new();
+        let undef = dag.node(isd::UNDEF, &[mvt::i32], &[]);
+
+        assert_eq!(select(&mut dag, undef), Outcome::Selected);
+
+        assert_eq!(dag.nodes[undef as usize].machine, Some(target_opcode::IMPLICIT_DEF));
+    }
+
+    #[test]
+    fn freeze_becomes_a_copy_of_its_operand() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let freeze = dag.node(isd::FREEZE, &[mvt::i32], &[x]);
+
+        assert_eq!(select(&mut dag, freeze), Outcome::Selected);
+
+        assert_eq!(dag.nodes[freeze as usize].machine, Some(target_opcode::COPY));
+        assert_eq!(dag.nodes[freeze as usize].ops, [x]);
+    }
+
+    #[test]
+    fn an_assertion_is_replaced_by_the_value_it_asserts_about() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let asserted = dag.node(isd::AssertZext, &[mvt::i32], &[x]);
+        let user = dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(asserted, 0), x]);
+
+        assert_eq!(select(&mut dag, asserted), Outcome::Selected);
+
+        assert_eq!(dag.nodes[user as usize].ops[0], x, "the add reads x, not the assertion");
+        assert!(dag.nodes[asserted as usize].dead);
+    }
+}
+
+#[test]
+fn an_x86isd_node_is_found_by_name_in_the_pins_numbers() {
+    // Builders spell their own target codes and name them; the pin's number
+    // comes from the name.
+    use crate::generated::ids::{x86isd, x86isd_id};
+    assert_eq!(x86isd_id("RET_GLUE"), Some(x86isd::RET_GLUE));
+    assert_eq!(x86isd_id("CMOV"), Some(x86isd::CMOV));
+    assert_eq!(x86isd_id("NO_SUCH_NODE"), None);
+}
+
+#[test]
+fn a_return_glue_node_is_selected_to_ret() {
+    use crate::generated::ids::x86isd;
+    let mut dag = crate::testing::TestDag::new();
+    let zero = dag.target_constant(0, mvt::i32);
+    let ret = dag.node(x86isd::RET_GLUE, &[mvt::Other], &[SDValue::new(0, 0), zero]);
+
+    let mut hooks = crate::x86_hooks::X86Hooks::new(crate::x86_hooks::Options {
+        cpu: crate::x86_hooks::Cpu::I486,
+        opt_none: false,
+        opt_for_size: false,
+        min_size: false,
+        has_frame_pointer: true,
+        address_mode: crate::x86_addr::AddrMode::Flat32,
+    });
+
+    assert_eq!(
+        crate::x86_select::select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, ret),
+        Outcome::Selected
+    );
+
+    assert_eq!(selected(&dag, ret), "RET");
+}
+
+mod symbol_plus_two_registers {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher, SymbolKind};
+
+    /// `@sym + x + (y << 2)`, associated either way.
+    fn address(
+        dag: &mut TestDag,
+        symbol_first: bool,
+    ) -> (SDValue, SDValue, SDValue) {
+        let sym = dag.wrapped_global(7, 0, mvt::i32);
+        let (x, y) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[y, two]), 0);
+        let address = if symbol_first {
+            let sym_x = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym_x, scaled]), 0)
+        } else {
+            let x_scaled = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[x, scaled]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x_scaled]), 0)
+        };
+        (address, x, y)
+    }
+
+    #[test]
+    fn a_symbol_with_a_register_and_a_scaled_register_is_one_memory_operand() {
+        for symbol_first in [true, false] {
+            let mut dag = TestDag::new();
+            let (address, x, y) = address(&mut dag, symbol_first);
+            let mut am = AddressMode::default();
+
+            assert!(
+                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }
+                    .match_address(address, &mut am)
+            );
+
+            let symbol = am.symbol.expect("the symbol is the displacement");
+            assert_eq!((symbol.kind, symbol.id), (SymbolKind::Global, 7), "symbol_first={symbol_first}");
+            assert_eq!(
+                (am.base_reg, am.index_reg, am.scale),
+                (Some(x), Some(y), 4),
+                "[sym + x + y*4], symbol_first={symbol_first}"
+            );
+        }
+    }
+}
+
+mod divrem {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `{q, r} = UDIVREM/SDIVREM a, b` (i32) with both results used; returns
+    /// the dag and the node.
+    fn divide(
+        opcode: u16,
+        a: SDValue,
+        b: SDValue,
+        dag: &mut TestDag,
+    ) -> u32 {
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        node
+    }
+
+    fn run(
+        dag: &mut TestDag,
+        node: u32,
+    ) -> Outcome {
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
+    }
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// Without the hand case the table has no pattern for DIVREM: a division
+    /// was `CannotSelect`.
+    #[test]
+    fn an_unsigned_divide_is_div_after_clearing_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::UDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::DIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_sign_extends_with_cdq() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::SDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::CDQ) && m.contains(&x86::IDIV32r) && !m.contains(&x86::MOV32r0), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_of_a_non_negative_dividend_clears_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let small = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[a, mask]), 0);
+        let node = divide(isd::SDIVREM, small, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::IDIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+}
+
+mod masked_operand_that_is_not_a_shift {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
+
+    /// `a + (zext(b) & 0xff)` in an address: the AND's first operand has one
+    /// operand, not a shift. The mask fold read operand 1 of that register
+    /// before checking it was a shift, and panicked (x_primes and x_rle
+    /// crashed the shadow).
+    #[test]
+    fn an_and_of_a_unary_node_does_not_read_a_shift_amount() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i8));
+        let x = SDValue::new(dag.node(isd::ZERO_EXTEND, &[mvt::i32], &[b]), 0);
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let masked = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[x, mask]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, masked]), 0);
+        let mut am = AddressMode::default();
+
+        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
+    }
+}
+
+mod mul_lohi {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// `hi:lo = *MUL_LOHI a, b` (i32), both halves used, as the
+    /// division-by-constant combine makes.
+    fn multiply(opcode: u16) -> Vec<u16> {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        machine(&dag)
+    }
+
+    /// Without the hand case the table has no pattern for MUL_LOHI: it was
+    /// `CannotSelect`.
+    #[test]
+    fn an_unsigned_wide_multiply_is_mul32r() {
+        assert!(multiply(isd::UMUL_LOHI).contains(&x86::MUL32r));
+    }
+
+    #[test]
+    fn a_signed_wide_multiply_is_imul32r() {
+        assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
     }
 }

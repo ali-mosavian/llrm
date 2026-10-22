@@ -3,6 +3,7 @@
 use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+use llrm_dagisel::x86_select::select_node;
 
 use super::dag::{MemBase, MemInfo};
 use super::dagisel_adapter::DagisAdapter;
@@ -132,4 +133,27 @@ fn jump_table_external_symbol_and_register_mask_nodes_have_the_pins_numbers() {
     assert_eq!(pin_opcode(ISD::RegisterMask), pin::RegisterMask);
     assert_eq!(pin_opcode(ISD::JumpTable), pin::JumpTable);
     assert_eq!(pin_opcode(ISD::TargetExternalSymbolNode), pin::TargetExternalSymbol);
+}
+
+#[test]
+fn a_return_node_is_selected_to_ret() {
+    use super::x86isd;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let ret = dag.get_node(x86isd::RET_GLUE, EVT::OTHER, &[entry, zero]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), ret.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, ret.node), "RET");
+}
+
+#[test]
+fn a_target_code_is_named_or_already_the_pins_number() {
+    use llrm_dagisel::generated::ids::x86isd as pin;
+
+    use super::dagisel_adapter::pin_opcode;
+    assert_eq!(pin_opcode(super::x86isd::CALL), pin::CALL, "sdag-a's private code, by name");
+    assert_eq!(pin_opcode(ISD::Target(pin::Wrapper)), pin::Wrapper, "sdag-b's lowering writes the pin's number");
 }

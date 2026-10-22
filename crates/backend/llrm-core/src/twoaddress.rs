@@ -287,7 +287,7 @@ pub fn three_address(
     let mut made = one.clone();
     made.what = Some(Semantics {
         op: Operation::Address,
-        name: Some("lea".to_owned()),
+        name: Some("lea".into()),
         dests: vec![Loc::Held(*into)],
         sources: vec![Loc::Mem(cell)],
         ..Semantics::new(Operation::Address)

@@ -448,7 +448,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         let mut jump = Insn::new(
             last.at,
             Some((last.at, last.at)),
-            Some(Semantics { name: Some("jmp".to_owned()), target: Some(*target), ..Semantics::new(Operation::Jump) }),
+            Some(Semantics { name: Some("jmp".into()), target: Some(*target), ..Semantics::new(Operation::Jump) }),
             Vec::new(),
             Vec::new(),
         );
@@ -494,11 +494,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
             let mut jump = Insn::new(
                 last.at,
                 Some((last.at, last.at)),
-                Some(Semantics {
-                    name: Some("jmp".to_owned()),
-                    target: Some(bridge),
-                    ..Semantics::new(Operation::Jump)
-                }),
+                Some(Semantics { name: Some("jmp".into()), target: Some(bridge), ..Semantics::new(Operation::Jump) }),
                 Vec::new(),
                 Vec::new(),
             );
@@ -666,7 +662,7 @@ mod tests {
         Arc::new(Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) }),
+            Some(Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) }),
             vec![],
             vec![],
         ))
@@ -994,7 +990,7 @@ mod tests {
                 .expect("a block")
                 .insns
                 .iter()
-                .filter_map(|one| one.what.as_ref()?.name.clone())
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect::<Vec<_>>()
         };
         let after = latched(&build(false, true));

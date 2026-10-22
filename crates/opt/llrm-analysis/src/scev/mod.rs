@@ -62,6 +62,7 @@ pub mod pattern;
 pub mod poison;
 pub mod predicate;
 pub mod print;
+pub mod quadratic;
 pub mod range;
 #[cfg(test)]
 mod range_factoring_tests;

@@ -229,6 +229,15 @@ pub trait Dag {
         value: SDValue,
         glue: Option<SDValue>,
     ) -> u32;
+    /// `getCopyFromReg` with glue: the value is result 0, the chain 1, the glue
+    /// 2.
+    fn copy_from_reg(
+        &mut self,
+        chain: SDValue,
+        register: u16,
+        vt: Vt,
+        glue: SDValue,
+    ) -> u32;
     fn token_factor(
         &mut self,
         chains: &[SDValue],

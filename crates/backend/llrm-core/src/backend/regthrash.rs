@@ -453,7 +453,7 @@ mod tests {
         Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(operation) }),
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(operation) }),
             vec![],
             vec![],
         )

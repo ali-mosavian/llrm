@@ -685,7 +685,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
     let seg = |place: &Loc| matches!(place, Loc::Reg(one) if SEGMENTS.contains_key(&one.register));
     let step = |op, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
         op,
-        name: Some(name.to_owned()),
+        name: Some(name.into()),
         dests,
         sources,
         target: None,
@@ -2632,7 +2632,7 @@ mod sweep_support {
         target: Option<i64>,
         indirect: bool,
     ) -> Semantics {
-        Semantics { op, name: name.map(str::to_owned), dests, sources, target, indirect, table: Vec::new() }
+        Semantics { op, name: name.map(Into::into), dests, sources, target, indirect, table: Vec::new() }
     }
 
     type Want = Option<(&'static str, Option<usize>, Option<usize>, Vec<usize>, bool)>;

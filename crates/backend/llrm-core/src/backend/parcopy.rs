@@ -211,7 +211,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 fn _width(one: &Loc) -> u32 {
@@ -640,7 +640,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn _move(
@@ -701,7 +701,7 @@ mod tests {
     }
 
     fn name(one: &Insn) -> String {
-        one.what.as_ref().unwrap().name.clone().unwrap()
+        one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()
     }
 
     fn names(insns: &[Arc<Insn>]) -> Vec<String> {

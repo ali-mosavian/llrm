@@ -46,6 +46,7 @@ use super::mvt::EVT;
 pub mod x86isd {
     use super::ISD;
 
+    pub const ADC: ISD = ISD::Target(477);
     pub const ADD: ISD = ISD::Target(478);
     pub const AND: ISD = ISD::Target(485);
     pub const BRCOND: ISD = ISD::Target(493);
@@ -59,6 +60,7 @@ pub mod x86isd {
     pub const LDS: ISD = ISD::Target(24577);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
+    pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
     pub const XOR: ISD = ISD::Target(955);
@@ -119,6 +121,8 @@ impl Hooks for X86Lowering {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
+            ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
+            ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             _ => None,
@@ -366,6 +370,46 @@ fn lower_global_address(
         let delta = dag.get_constant(rest as u128, vt);
         dag.get_node(ISD::Add, vt, &[wrapped, delta])
     })
+}
+
+/// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of
+/// `X86ISD::ADD`/`SUB`, and the carry (`B`; `E` for an add of one) as a
+/// `setcc`, merged with the sum.
+fn lower_xalu(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let (opcode, code) = match dag.opcode(node) {
+        ISD::UAddO => (x86isd::ADD, if dag.constant(rhs) == Some(1) { cond::E } else { cond::B }),
+        _ => (x86isd::SUB, cond::B),
+    };
+    let value = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    let flags = SDValue { node: value.node, res: 1 };
+    let code = cond_code(dag, code);
+    let overflow = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[value, overflow])
+}
+
+/// `LowerADDSUBO_CARRY`: the carry in is put into the flags (`carry + -1`),
+/// then `ADC`/`SBB` add or subtract it; the carry out is `B` of its flags.
+fn lower_addsub_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(node);
+    let carry_vt = dag.value_type(carry);
+    let ones = dag.get_all_ones_constant(carry_vt);
+    let set_carry = dag.get_node_multi(x86isd::ADD, &[carry_vt, EVT::I32], &[carry, ones]);
+    let flags_in = SDValue { node: set_carry.node, res: 1 };
+    let opcode = if dag.opcode(node) == ISD::UAddOCarry { x86isd::ADC } else { x86isd::SBB };
+    let sum = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs, flags_in]);
+    let flags = SDValue { node: sum.node, res: 1 };
+    let code = cond_code(dag, cond::B);
+    let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
 }
 
 fn is_pow2(value: u128) -> bool {
