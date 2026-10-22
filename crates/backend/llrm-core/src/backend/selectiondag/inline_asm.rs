@@ -76,3 +76,29 @@ pub fn lower_asm(
     }
     (chain, results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::selectiondag::{DagConfig, ISD};
+
+    /// The node's operand order is the emitter's contract: chain, symbol,
+    /// fixups, input registers, glue. A reorder would hand the emitter a
+    /// register where it reads a symbol.
+    #[test]
+    fn operands_are_chain_symbol_fixups_registers_glue() {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let (ax, dx) = (RegId::from_raw(1), RegId::from_raw(2));
+        let value = dag.get_constant(7, EVT::I32);
+        let fixup = dag.get_target_global_address(EVT::I32, 0, 0);
+        let root = dag.entry_node();
+        let (chain, results) = lower_asm(&mut dag, root, "llrm.ia16.asm.90", &[fixup], &[(ax, value)], &[(dx, EVT::I32)]);
+        assert_eq!(results.len(), 1);
+        let read = dag.operand(results[0], 2);
+        let node = SDValue { node: read.node, res: 0 };
+        assert_eq!(dag.opcode(node), x86isd::LLRM_ASM);
+        let ops: Vec<ISD> = (0..5).map(|at| dag.opcode(dag.operand(node, at))).collect();
+        assert_eq!(ops, [ISD::CopyToReg, ISD::TargetExternalSymbolNode, ISD::TargetGlobalAddress, ISD::Register, ISD::CopyToReg]);
+        assert_eq!(chain.res, 1);
+    }
+}
