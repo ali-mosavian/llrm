@@ -28,11 +28,16 @@
 //! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
 //! that nothing joins away. Under RFP the phis are lowered like any other.
 //!
-//! DEVIATE P4 (exit: floatassign deleted): a phi of a value no general
-//! register holds is left for `phielim`'s own lowering, except an x87 value
-//! under RFP. Fact: on the floatassign route `FloatAssign` and `FloatAlloc` run
-//! before the coalescer, where LLVM's FPS runs after register allocation, so a
-//! copy of an x87 value costs an `fld` and an `fstp` that nothing joins away.
+//! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
+//! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
+//! 2026-11-14): a temporary is made in its result's class by name
+//! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it
+//! the class the result has, which the type gave the result when isel made it.
+//! There is no per-value class at isel time here, and computing the result's
+//! class at this pass cost +0.40% Ir on d_faces -O2 (measured, #3625); so the
+//! class is what `regclass::classes` finds from the result's uses when a pass
+//! asks (`Coalescer::llvm_env`). A far pointer's selector read through ES is
+//! the case (render/dl).
 //!
 //! DEVIATE P2 (no number): `IMPLICIT_DEF` and undef incoming values do not
 //! exist in LIR, so `allPhiOperandsUndefined`, `ImpDefs` and `SrcUndef` are not
@@ -152,24 +157,24 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         &split_body
     };
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut next = crate::backend::splitkit::_next_value(body);
+    let mut next = body.next_value();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
+    let mut born: IndexMap<u32, u32> = IndexMap::default();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
         for &to in block.succ.iter() {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
-    // Values no general register holds, but not the x87 ones under RFP: the
-    // stackifier follows allocation there.
+    // The x87 values, left alone without RFP: the stackifier follows allocation
+    // only there.
     let x87 = if crate::backend::allocate::rfp_on() {
-        crate::backend::floatassign::_floating_values(body)
-    } else {
         Default::default()
+    } else {
+        crate::backend::floatassign::_floating_values(body)
     };
-    let floating = crate::backend::ssaspill::floating(body);
     for block in &body.blocks {
         let mut stays = Vec::new();
         // If all incoming edges are critical, identical phis are lowered
@@ -178,9 +183,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre))
-                || (floating.contains(&phi.result) && !x87.contains(&phi.result))
-            {
+            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || x87.contains(&phi.result) {
                 stays.push(phi.clone());
                 continue;
             }
@@ -198,6 +201,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             });
             if all_critical && reused.is_none() {
                 lowered_phis.insert(key, incoming);
+            }
+            if reused.is_none() {
+                born.insert(incoming, phi.result);
             }
             // The copy at the top of the block, after any remaining phis.
             head.entry(block.at).or_default().push(phielim::_copy(block, phi.result, incoming, None, width));
@@ -217,6 +223,9 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         left.insert(block.at, stays);
     }
     let mut out = body.clone();
+    if !born.is_empty() {
+        Arc::make_mut(&mut out.class_like).extend(born);
+    }
     for block in &mut out.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let first = block.insns.iter().position(|one| !one.arrival()).unwrap_or(block.insns.len());
@@ -241,7 +250,6 @@ fn _held(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::coalesce::_copy as copy_of;
     use crate::model::ir::{Imm, Loc, Operation, Semantics};
 
     fn held(value: u32) -> Loc {
@@ -293,7 +301,7 @@ mod tests {
     }
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
-        block.insns.iter().filter_map(|one| copy_of(one)).collect()
+        block.insns.iter().filter_map(|one| one.copy_of()).collect()
     }
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was
@@ -313,6 +321,32 @@ mod tests {
         lowered(&was).expect("lowers");
         let built = SETS_BUILT.with(|one| one.get());
         assert_eq!(built, 0, "{built} block sets built to lower one body");
+    }
+
+    /// A phi of an 8-byte integer (a `long long` in m32) is lowered like any
+    /// other. It was left for `phielim`'s own priced lowering, where the pin's
+    /// legalizer has made it two 4-byte phis before PHIElimination runs
+    /// (d_faces -O2: that stage cost 11.7 M instructions on one body).
+    #[test]
+    fn test_a_phi_of_an_8_byte_integer_is_lowered_like_any_other() {
+        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let make = |value: u32| {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![wide(value)],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 8, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![value], vec![]))
+        };
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
+        let was = body(vec![
+            block(0, vec![make(1), jump(1)], &[1], vec![]),
+            block(1, vec![make(12), read(10), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        let now = lowered(&was).expect("lowers");
+        assert_eq!(now.blocks.iter().map(|one| one.phis.len()).sum::<usize>(), 0, "no phi is left for the old stage");
     }
 
     /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own

@@ -463,6 +463,12 @@ pub(crate) fn wide_roots(
     let Some(what) = &one.what else {
         return 0;
     };
+    // A `lea` is arithmetic: the low 16 bits of `[e?x+e?x+k]` are those of the
+    // 16-bit sum whatever the upper halves hold, and a 32-bit result is the full
+    // sum; a cell that reads the result asks for its own upper half.
+    if what.op == Operation::Address {
+        return 0;
+    }
     let wide = |register: RegId| if regs.width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 };
     what.dests
         .iter()
@@ -612,9 +618,13 @@ pub fn established(body: &LirBody) -> LirBody {
         }
         if std::mem::take(&mut preheaders) {
             let mut wanted: IndexMap<i64, Roots> = IndexMap::default();
+            // Each root has its own outermost loop that leaves it alone: one
+            // the counter in edx disturbs must not keep ebp in the inner loop.
             for (at, _, roots) in &missing {
-                if let Some(header) = outermost(*at, *roots) {
-                    *wanted.entry(header).or_default() |= roots;
+                for root in (0..Roots::BITS).map(|shift| 1 << shift).filter(|bit| roots & bit != 0) {
+                    if let Some(header) = outermost(*at, root) {
+                        *wanted.entry(header).or_default() |= root;
+                    }
                 }
             }
             if !wanted.is_empty() {
@@ -707,6 +717,41 @@ mod tests {
             .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
             .collect();
         assert_eq!(names, ["add", "movzx", "mov"], "esi is zero-extended between its write and the cell");
+    }
+
+    /// A `lea` is arithmetic, not an address read: `lea ecx, [eax-1]` of a dword `eax` is the dword sum, and
+    /// a `movzx eax, ax` put before it by the cell rule destroyed the upper half of a `long` (the first
+    /// version of the m16 conversion of a tied add to a `lea`, `g(long *p, long n)` in ~/scratch/w1-gate/xa/l32.c).
+    #[test]
+    fn test_a_lea_cell_does_not_ask_for_its_registers_upper_half() {
+        use crate::model::ir::{Held, Mem};
+        let (esi, ebx) =
+            (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
+        let cell = Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
+        let lea = one(
+            1,
+            Operation::Address,
+            "lea",
+            vec![Loc::Reg(Reg { register: RegId::ECX, width: 4 })],
+            vec![Loc::Mem(cell)],
+            None,
+        );
+        let body = LirBody::new(
+            "lea",
+            0,
+            vec![
+                LirBlock::new(0, vec![one(0, Operation::Binary, "add", vec![esi.clone()], vec![esi, ebx], None), lea])
+                    .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let names: Vec<_> = established(&body)
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()))
+            .collect();
+        assert_eq!(names, ["add", "lea"]);
     }
 
     #[test]

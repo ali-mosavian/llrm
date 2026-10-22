@@ -205,68 +205,181 @@ const fn row(
 use Phase::{Early, Late, Module, Simplify};
 
 const ROWS: &[Disposition] = &[
-    row(Early, "ee-instrument", NA, "-pg/-finstrument-functions: no frontend asks for it", ""),
     row(
         Early,
-        "lower-expect",
-        Why::Missing,
-        "llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs",
-        UNASSIGNED,
+        "ee-instrument",
+        NA,
+        "-pg/-finstrument-functions: no frontend asks for it Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
     ),
-    row(Early, "callsite-splitting", Why::Missing, "-O3 only; not measured", UNASSIGNED),
-    row(Simplify, "speculative-execution", NA, "runs only on a target with divergent branches; x86 has none", ""),
-    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "libcalls-shrinkwrap", Why::Missing, "errno-setting libm calls; ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "constraint-elimination", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "loop-instsimplify", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "loop-simplifycfg", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "extra-simple-loop-unswitch-passes", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "vector-combine", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
-    row(Simplify, "mldst-motion", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Simplify, "move-auto-init", NA, "needs -ftrivial-auto-var-init metadata; no frontend emits it", ""),
-    row(Simplify, "coro-elide", NA, "coroutines: no frontend", ""),
-    row(Late, "drop-unnecessary-assumes", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "alignment-from-assumptions", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "lower-constant-intrinsics", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Early, "callsite-splitting", Why::Missing, "-O3 only; not measured", "funcattrs-port, 11-09"),
+    row(
+        Simplify,
+        "speculative-execution",
+        NA,
+        "runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Simplify,
+        "libcalls-shrinkwrap",
+        Why::Missing,
+        "errno-setting libm calls; ablation 0 of 12 IRs",
+        "funcattrs-port, 11-09",
+    ),
+    row(Simplify, "constraint-elimination", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Simplify,
+        "loop-instsimplify",
+        Why::Missing,
+        "registry Missing entry; ablation 0 of 12 IRs",
+        "w-3 (w-5 if silent at 09:00), 11-09",
+    ),
+    row(
+        Simplify,
+        "loop-simplifycfg",
+        Why::Missing,
+        "registry Missing entry; ablation 0 of 12 IRs",
+        "w-3 (w-5 if silent at 09:00), 11-09",
+    ),
+    row(
+        Simplify,
+        "extra-simple-loop-unswitch-passes",
+        Why::Missing,
+        "ablation 0 of 12 IRs",
+        "w-3 (w-5 if silent at 09:00), 11-09",
+    ),
+    row(
+        Simplify,
+        "vector-combine",
+        NA,
+        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
+        "",
+    ),
+    row(Simplify, "mldst-motion", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Simplify,
+        "move-auto-init",
+        NA,
+        "needs -ftrivial-auto-var-init metadata; no frontend emits it Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Simplify,
+        "coro-elide",
+        NA,
+        "coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(Late, "drop-unnecessary-assumes", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
+    row(Late, "alignment-from-assumptions", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
+    row(Late, "lower-constant-intrinsics", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(
         Late,
         "loop-rotate",
         Why::Missing,
         "the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched)",
-        UNASSIGNED,
+        "w-3 (w-5 if silent at 09:00), 11-09",
     ),
-    row(Late, "loop-deletion", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "loop-distribute", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "inject-tli-mappings", NA, "maps scalar libcalls to vector ones; vectors deferred", ""),
-    row(Late, "loop-vectorize", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
-    row(Late, "slp-vectorizer", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
-    row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "loop-deletion", Why::Missing, "ablation 0 of 12 IRs", "w-3 (w-5 if silent at 09:00), 11-09"),
+    row(Late, "loop-distribute", Why::Missing, "ablation 0 of 12 IRs", "w-3 (w-5 if silent at 09:00), 11-09"),
+    row(
+        Late,
+        "inject-tli-mappings",
+        NA,
+        "maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
+        "",
+    ),
+    row(
+        Late,
+        "loop-vectorize",
+        NA,
+        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
+        "",
+    ),
+    row(
+        Late,
+        "slp-vectorizer",
+        NA,
+        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
+        "",
+    ),
+    row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(
         Late,
         "instcombine",
         Why::Missing,
         "the three late runs; ours has no combine slot in the late list",
-        UNASSIGNED,
+        "w-4, 11-09",
     ),
-    row(Late, "loop-unroll", Why::Missing, "the late loop-unroll<O2>; ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "transform-warning", NA, "diagnostic for failed pragmas; no output", ""),
+    row(
+        Late,
+        "loop-unroll",
+        Why::Missing,
+        "the late loop-unroll<O2>; ablation 0 of 12 IRs",
+        "w-3 (w-5 if silent at 09:00), 11-09",
+    ),
+    row(
+        Late,
+        "transform-warning",
+        NA,
+        "diagnostic for failed pragmas; no output Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
     row(
         Late,
         "sroa",
         Why::Missing,
         "the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs",
-        UNASSIGNED,
+        "w-4, 11-09",
     ),
-    row(Late, "loop-sink", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "div-rem-pairs", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
-    row(Late, "vector-combine", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
-    row(Late, "annotation-remarks", NA, "remarks off", ""),
-    row(Late, "chr", NA, "control-height-reduction needs profile data", ""),
-    row(Module, "memprof-remove-attributes", NA, "memprof: no profile", ""),
-    row(Module, "annotation2metadata", NA, "no source annotations", ""),
-    row(Module, "forceattrs", NA, "command-line forced attributes: none given", ""),
+    row(Late, "loop-sink", Why::Missing, "ablation 0 of 12 IRs", "w-3 (w-5 if silent at 09:00), 11-09"),
+    row(Late, "div-rem-pairs", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Late,
+        "vector-combine",
+        NA,
+        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
+        "",
+    ),
+    row(
+        Late,
+        "annotation-remarks",
+        NA,
+        "remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Late,
+        "chr",
+        NA,
+        "control-height-reduction needs profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "memprof-remove-attributes",
+        NA,
+        "memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "annotation2metadata",
+        NA,
+        "no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "forceattrs",
+        NA,
+        "command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
     row(
         Module,
         "inferattrs",
@@ -274,12 +387,48 @@ const ROWS: &[Disposition] = &[
         "stamp (interprocedural::Stamp): states what a body does, llrm's own form",
         "",
     ),
-    row(Module, "coro-early", NA, "coroutines: no frontend", ""),
-    row(Module, "coro-split", NA, "coroutines: no frontend", ""),
-    row(Module, "coro-annotation-elide", NA, "coroutines: no frontend", ""),
-    row(Module, "coro-cleanup", NA, "coroutines: no frontend", ""),
-    row(Module, "openmp-opt", NA, "OpenMP: no frontend", ""),
-    row(Module, "openmp-opt-cgscc", NA, "OpenMP: no frontend", ""),
+    row(
+        Module,
+        "coro-early",
+        NA,
+        "coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "coro-split",
+        NA,
+        "coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "coro-annotation-elide",
+        NA,
+        "coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "coro-cleanup",
+        NA,
+        "coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "openmp-opt",
+        NA,
+        "OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "openmp-opt-cgscc",
+        NA,
+        "OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
     row(
         Module,
         "ipsccp",
@@ -287,7 +436,7 @@ const ROWS: &[Disposition] = &[
         "DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program",
         "",
     ),
-    row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", UNASSIGNED),
+    row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", "w-6, 11-09"),
     row(Module, "globalopt", Why::Executed, "globalopt (first), writeonly, calleepop: a subset of GlobalOpt", ""),
     row(Module, "always-inline", Why::Executed, "walk (the CGSCC walk's inliner)", ""),
     row(Module, "inline", Why::Executed, "walk, and interprocedural (inlines again after the clones)", ""),
@@ -298,7 +447,7 @@ const ROWS: &[Disposition] = &[
         "interprocedural (states what each body does); not compared pass by pass",
         "",
     ),
-    row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", UNASSIGNED),
+    row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", "w-6, 11-09"),
     row(
         Module,
         "deadargelim",
@@ -311,22 +460,58 @@ const ROWS: &[Disposition] = &[
         "argpromotion",
         Why::Missing,
         "-O3 only; argpromotion.rs exists, where it runs is not in the registry: unverified",
-        UNASSIGNED,
+        "w-6, 11-09",
     ),
-    row(Module, "recompute-globalsaa", NA, "an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs)", ""),
+    row(
+        Module,
+        "recompute-globalsaa",
+        NA,
+        "an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
     row(
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
-    row(Module, "constmerge", Why::Missing, "merging identical constants: data bytes at -Os; not measured", UNASSIGNED),
-    row(Module, "alloc-token", NA, "clang option, off", ""),
-    row(Module, "cg-profile", NA, "profile data", ""),
-    row(Module, "rel-lookup-table-converter", NA, "relative lookup tables are a PIC feature; no PIC targets", ""),
-    row(Module, "lower-comment-string", NA, "#pragma comment strings", ""),
+    row(
+        Module,
+        "constmerge",
+        Why::Missing,
+        "merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight",
+        "w-6, 11-09",
+    ),
+    row(
+        Module,
+        "alloc-token",
+        NA,
+        "clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "cg-profile",
+        NA,
+        "profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "rel-lookup-table-converter",
+        NA,
+        "relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
+    row(
+        Module,
+        "lower-comment-string",
+        NA,
+        "#pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
+        "",
+    ),
     row(
         Simplify,
         "memcpyopt",
@@ -465,19 +650,60 @@ fn rows() -> Vec<Row> {
     rows
 }
 
+/// The one state of a row: MATCH, or what accounts for it (N/A, EXECUTED,
+/// DEVIATE, MISSING, ORDER); `UNACCOUNTED` is a gap with no row, which the test
+/// refuses.
+fn published_state(row: &Row) -> &'static str {
+    match row.state {
+        "match" => "MATCH",
+        "ours-only" => "DEVIATE",
+        _ => row.account().map_or("UNACCOUNTED", |one| why_word(one.why)),
+    }
+}
+
+/// The note and the owner of a row's state: its own row's, or an ours-only
+/// group's.
+fn row_note(row: &Row) -> (&'static str, &'static str) {
+    match row.state {
+        "match" => ("", ""),
+        "ours-only" => {
+            OURS_ONLY.iter().find(|(group, _)| row.ours.starts_with(group)).map_or(("", ""), |(_, note)| (note, ""))
+        }
+        _ => row.account().map_or(("", ""), |one| (one.note, one.owner)),
+    }
+}
+
 fn table(rows: &[Row]) -> String {
     let mut text = String::from(
-        "| level | phase | pin slot | nest | state | ours | row | note | owner |\n|---|---|---|---|---|---|---|---|---|\n",
+        "| level | phase | pin slot | nest | state | ours | note | owner |\n|---|---|---|---|---|---|---|---|\n",
     );
     for row in rows {
-        let account = if row.state == "match" { None } else { row.account() };
-        let (why, note, owner) = account.map_or(("", "", ""), |one| (why_word(one.why), one.note, one.owner));
+        let (note, owner) = row_note(row);
         text.push_str(&format!(
-            "| {} | {:?} | {} | {} | {} | {} | {} | {} | {} |\n",
-            row.level, row.pin.phase, row.pin.text, row.pin.path, row.state, row.ours, why, note, owner
+            "| {} | {:?} | {} | {} | {} | {} | {} | {} |\n",
+            row.level,
+            row.pin.phase,
+            row.pin.text,
+            row.pin.path,
+            published_state(row),
+            row.ours,
+            note,
+            owner
         ));
     }
     text
+}
+
+/// How many rows of `level` are in each state.
+fn counts(
+    rows: &[Row],
+    level: &str,
+) -> std::collections::BTreeMap<&'static str, usize> {
+    let mut found = std::collections::BTreeMap::new();
+    for row in rows.iter().filter(|row| row.level == level) {
+        *found.entry(published_state(row)).or_insert(0) += 1;
+    }
+    found
 }
 
 fn why_word(why: Why) -> &'static str {
@@ -486,7 +712,7 @@ fn why_word(why: Why) -> &'static str {
         Why::Deviate => "DEVIATE",
         Why::Missing => "MISSING",
         Why::Order => "ORDER",
-        Why::Executed => "EXECUTED (outside the registry)",
+        Why::Executed => "EXECUTED",
     }
 }
 
@@ -495,7 +721,12 @@ fn the_pin_slot_table_is_written_on_request() {
     let rows = rows();
     assert!(rows.iter().any(|one| one.state == "match"), "nothing matched: the fixtures or the registry moved");
     if let Ok(path) = std::env::var("LLRM_PIN_SLOT_TABLE") {
-        std::fs::write(path, table(&rows)).expect("table written");
+        std::fs::write(&path, table(&rows)).expect("table written");
+        let mut summary = String::new();
+        for (level, _) in FIXTURES {
+            summary.push_str(&format!("{level} {:?}\n", counts(&rows, level)));
+        }
+        std::fs::write(format!("{path}.counts"), summary).expect("counts written");
     }
 }
 
@@ -516,11 +747,7 @@ fn every_pin_slot_is_matched_or_accounted_for() {
                 Some(one) if row.state == "inverted" && one.why != Why::Order => {
                     errors.push(format!("{} {}: inverted, but its row is not an ORDER row", row.level, row.pin.text))
                 }
-                Some(one)
-                    if matches!(one.why, Why::Missing | Why::Order)
-                        && !one.owner.contains("w-")
-                        && one.owner != UNASSIGNED =>
-                {
+                Some(one) if matches!(one.why, Why::Missing | Why::Order) && one.owner.is_empty() => {
                     errors.push(format!("{}: a gap row without an owner", one.name))
                 }
                 Some(_) => {}
@@ -551,4 +778,19 @@ fn every_pin_slot_is_matched_or_accounted_for() {
     errors.sort();
     errors.dedup();
     assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
+}
+
+/// Every pin slot of every level is in exactly one of six states, and the
+/// states add up to the slots: `none` is not a state a reader sees.
+#[test]
+fn every_row_has_exactly_one_state() {
+    let rows = rows();
+    let states = ["MATCH", "N/A", "EXECUTED", "DEVIATE", "MISSING", "ORDER"];
+    for row in &rows {
+        assert!(states.contains(&published_state(row)), "{} {}: {}", row.level, row.pin.text, published_state(row));
+    }
+    for (level, _) in FIXTURES {
+        let total: usize = counts(&rows, level).values().sum();
+        assert_eq!(total, rows.iter().filter(|row| row.level == level).count(), "{level}");
+    }
 }

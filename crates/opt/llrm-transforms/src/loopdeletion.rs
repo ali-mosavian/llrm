@@ -53,6 +53,7 @@
 //! [`deleteDeadLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L521),
 //! [`breakLoopBackedge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L746).
 
+use llrm_analysis::scev::analysis::Scevs;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -82,6 +83,9 @@ pub struct Run<'a> {
     /// Blocks of deleted loops, empty, erased when the pass is done: erasing
     /// scans the layout, so each deletion would.
     pub emptied: Vec<BlockId>,
+    /// The expressions of the passes before (`Scevs`), current while the
+    /// function is as they left it: dropped at the first change.
+    pub scev: ScalarEvolution,
 }
 
 /// `LoopDeletionResult`.
@@ -258,6 +262,26 @@ fn is_loop_dead(
     changed: &mut bool,
     preheader: BlockId,
 ) -> bool {
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let dead = is_loop_dead_with(run, analyzed, lp, exiting_blocks, exit_block, changed, preheader, &mut se);
+    // The expressions stand while this left the function as it was.
+    if !*changed {
+        run.scev = se;
+    }
+    dead
+}
+
+#[allow(clippy::too_many_arguments)]
+fn is_loop_dead_with(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    exiting_blocks: &[BlockId],
+    exit_block: Option<BlockId>,
+    changed: &mut bool,
+    preheader: BlockId,
+    se: &mut ScalarEvolution,
+) -> bool {
     // Make sure that all PHI entries coming from the loop are loop invariant.
     // Because the code is in LCSSA form, any values used outside of the loop
     // must pass through a PHI in the exit block, meaning that this check is
@@ -318,7 +342,6 @@ fn is_loop_dead(
         return false;
     }
 
-    let mut se = ScalarEvolution::new();
     let cx = cx_of(run, analyzed);
     let mut work = vec![lp];
     while let Some(current) = work.pop() {
@@ -785,11 +808,24 @@ fn break_backedge_if_not_taken(
     analyzed: &Analyzed,
     lp: Loop,
 ) -> Result {
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let result = break_backedge_with(run, analyzed, lp, &mut se);
+    if result == Result::Unmodified {
+        run.scev = se;
+    }
+    result
+}
+
+fn break_backedge_with(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    se: &mut ScalarEvolution,
+) -> Result {
     if lp.get_loop_latch(run.function).is_none() {
         return Result::Unmodified;
     }
     let header = lp.get_header();
-    let mut se = ScalarEvolution::new();
     let (max_zero, btc_zero, non_zero) = {
         let cx = cx_of(run, analyzed);
         let is_zero = |se: &ScalarEvolution, s| se.as_constant(s).is_some_and(|value| value.is_zero());
@@ -898,6 +934,8 @@ pub fn delete_loops(run: &mut Run) -> bool {
             continue;
         }
         changed = true;
+        // The function is not as the expressions left it.
+        run.scev = ScalarEvolution::new();
         // LD4: a deleted loop with no loop around or inside it leaves the
         // other loops' analyses as they were.
         if !(deleted && alone) {
@@ -927,6 +965,7 @@ impl FunctionPass for LoopDeletion {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -936,8 +975,16 @@ impl FunctionPass for LoopDeletion {
             outer: &outer,
             function: unit.function,
             emptied: Vec::new(),
+            scev: ScalarEvolution::new(),
         };
-        if delete_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        run.scev = held.take();
+        let changed = delete_loops(&mut run);
+        if changed {
+            PreservedAnalyses::none()
+        } else {
+            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+            PreservedAnalyses::all()
+        }
     }
 }
 

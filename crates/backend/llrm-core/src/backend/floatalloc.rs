@@ -533,7 +533,7 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    let loaded_id = super::spiller::_next_value(body);
+    let loaded_id = body.next_value();
     let chopped_id = loaded_id + 1;
     let loaded = Held { value: loaded_id, width: 2 };
     let chopped = Held { value: chopped_id, width: 2 };

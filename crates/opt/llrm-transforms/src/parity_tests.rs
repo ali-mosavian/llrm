@@ -46,9 +46,12 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
 /// A slot the parity pipeline runs must be in the registry, or it has no kind.
 #[test]
 fn test_a_slot_that_runs_and_is_not_registered_fails() {
-    let why =
-        parity::check(parity::REGISTRY, Phase::Early, &["decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"])
-            .unwrap_err();
+    let why = parity::check(
+        parity::REGISTRY,
+        Phase::Early,
+        &["lowerexpect@1177", "decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"],
+    )
+    .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -111,11 +114,14 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check_backend(
         &[
             "optimizephis@1",
+            "fixupsetcc@5",
             "machinecse@4",
             "machinesink@4",
             "floatalloc@8",
             "coalesce@10",
+            "latecleanup@13",
             "jumps@17",
+            "copyprop@18",
             "allocate@11",
             "unknown@1",
         ],

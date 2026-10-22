@@ -123,6 +123,9 @@ pub struct InlineSpiller<'a> {
     classes: &'a RegisterClasses,
     order_of: &'a dyn Fn(u32) -> Vec<RegId>,
     tables: Rc<Tables>,
+    /// `recomputeRegClass` of the registers an edit made
+    /// (`LiveRangeEdit::calculateRegClassAndHint`).
+    reclass: Option<Box<dyn Fn(&LiveIntervals, &[u32]) + 'a>>,
     reloads: usize,
     stores: usize,
     folded: usize,
@@ -154,6 +157,15 @@ pub struct InlineSpiller<'a> {
 }
 
 impl<'a> InlineSpiller<'a> {
+    /// The registers a spill makes take the class their own instructions give.
+    pub fn with_reclass(
+        mut self,
+        reclass: Box<dyn Fn(&LiveIntervals, &[u32]) + 'a>,
+    ) -> Self {
+        self.reclass = Some(reclass);
+        self
+    }
+
     pub fn new(
         template: &'a LirBody,
         frame: &'a mut Frame,
@@ -167,6 +179,7 @@ impl<'a> InlineSpiller<'a> {
             classes,
             order_of,
             tables,
+            reclass: None,
             reloads: 0,
             stores: 0,
             folded: 0,
@@ -337,7 +350,7 @@ impl<'a> InlineSpiller<'a> {
             let value = lis.next_virtual_register();
             lis.reserve_virtual_register(value);
             // It stands beside the unit and claims none of the def's bytes,
-            // as `spiller::_inserted` places what it makes.
+            // as `crate::greedy::tii::_inserted` places what it makes.
             let beside = lis.instr(members[0]);
             let at = beside.covers.map_or(beside.at, |covers| covers.0);
             let again = Arc::new(Insn {
@@ -463,7 +476,7 @@ impl<'a> InlineSpiller<'a> {
                     // A parallel copy's member folds to memory on either side,
                     // memory to memory included: `parcopy` sequences it.
                     let values = std::iter::once(reg).collect();
-                    crate::backend::spiller::_in_place(one, &values, self.frame, &|value| {
+                    crate::greedy::tii::fold_copy_member(one, &values, self.frame, &|value| {
                         if value == reg { home_key } else { value }
                     })
                     .ok()
@@ -493,13 +506,13 @@ impl<'a> InlineSpiller<'a> {
             lis.rewrite_instr(block, *key, Arc::clone(one));
         }
         if reads {
-            let reload = crate::backend::spiller::_reload(&old[0], new, &cell);
+            let reload = crate::greedy::tii::load_reg_from_stack_slot(&old[0], new, &cell);
             lis.insert_instr_before(block, Some(renamed[0].id()), reload);
             self.reloads += 1;
         }
         if writes {
             let last = renamed.last().expect("a unit has members");
-            let store = crate::backend::spiller::_store(&old[old.len() - 1], new, &cell);
+            let store = crate::greedy::tii::store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
             lis.insert_instr_after(block, last.id(), store);
             self.stores += 1;
         }
@@ -894,7 +907,7 @@ impl InlineSpiller<'_> {
         if one.group.is_some() {
             return false;
         }
-        let Some((dst, src)) = crate::backend::coalesce::_copy(&one) else { return false };
+        let Some((dst, src)) = one.copy_of() else { return false };
         // A copy of the program owns bytes of the object that its erasure
         // would leave unclaimed.
         let owns = one.covers.is_some_and(|(from, to)| from != to);
@@ -966,7 +979,7 @@ impl InlineSpiller<'_> {
             let at = def.covers.map_or(def.at, |covers| covers.0);
             crate::backend::floatassign::_stored(src, &cell, at)
         } else {
-            crate::backend::spiller::_store(&def, src, &cell)
+            crate::greedy::tii::store_reg_to_stack_slot(&def, src, &cell)
         };
         lis.insert_instr_after(block, def_key, store);
         self.stores += 1;
@@ -1013,7 +1026,7 @@ impl InlineSpiller<'_> {
                     continue;
                 }
                 // Follow sibling copies down the dominator tree.
-                if let Some((dst, from)) = crate::backend::coalesce::_copy(one).filter(|_| one.group.is_none()) {
+                if let Some((dst, from)) = one.copy_of().filter(|_| one.group.is_none()) {
                     if from == reg && matrix.vrm.get_original(dst) == self.original && lis.has_interval(dst) {
                         if let Some(dst_vni) = lis.get_interval(dst).range.get_vn_info_at(&idx.get_reg_slot(false)) {
                             work.push((dst, dst_vni));
@@ -1085,12 +1098,23 @@ impl InlineSpiller<'_> {
                 let one = lis.instr(def);
                 // An instruction of the program owns bytes of the object that
                 // an erased one would leave unclaimed.
-                if one.covers.is_none_or(|(from, to)| from == to)
-                    && (crate::backend::coalesce::_copy(one).is_some() || remat_shape(one))
-                {
+                if one.covers.is_none_or(|(from, to)| from == to) && (one.copy_of().is_some() || remat_shape(one)) {
                     dead.push(def);
                 }
             }
+        }
+    }
+}
+
+impl InlineSpiller<'_> {
+    /// `Edit->calculateRegClassAndHint`'s `recomputeRegClass` for `made`.
+    fn recomputed(
+        &self,
+        lis: &LiveIntervals,
+        made: &[u32],
+    ) {
+        if let Some(reclass) = &self.reclass {
+            reclass(lis, made);
         }
     }
 }
@@ -1134,6 +1158,7 @@ impl Spiller for InlineSpiller<'_> {
                 new_vregs.push(value);
             }
             edit.erase_virt_reg(lis, reg);
+            self.recomputed(lis, &new_vregs[first_new..]);
             return;
         }
         self.key = self.shared_key(lis, range.as_ref());
@@ -1172,6 +1197,7 @@ impl Spiller for InlineSpiller<'_> {
         // Hoisted spills may cause dead code.
         self.eliminate_dead_defs(lis, matrix, shrunk);
         edit.erase_virt_reg(lis, reg);
+        self.recomputed(lis, &new_vregs[first_new..]);
         if let Some(range) = &range {
             self.merged(range);
         }
@@ -1251,7 +1277,7 @@ mod tests {
             &self,
             instr: &Insn,
         ) -> Option<(u32, u32)> {
-            crate::backend::coalesce::_copy(instr)
+            instr.copy_of()
         }
 
         fn pinned(
@@ -1353,7 +1379,7 @@ mod tests {
         assert_eq!(at.len(), 1, "stores of the home: {after:?}");
         assert_eq!(after[at[0]].uses, [1], "the source is stored, not the copy: {after:?}");
         assert_eq!(at[0], 1, "right after the source's definition: {after:?}");
-        assert!(after.iter().all(|one| crate::backend::coalesce::_copy(one).is_none()), "the copy is dead: {after:?}");
+        assert!(after.iter().all(|one| one.copy_of().is_none()), "the copy is dead: {after:?}");
         // Spilling the source in its turn stores its value once more, in the
         // same home: the store of the register itself goes.
         let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };

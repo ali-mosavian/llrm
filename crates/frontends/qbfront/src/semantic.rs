@@ -3796,6 +3796,14 @@ impl Compiler {
                 Statement::Data { values, .. } => {
                     let row = self.next_read_data_row;
                     self.next_read_data_row += 1;
+                    // READ enters at the DATA statement: a block of its own, so
+                    // that no value of the statement before it crosses into an
+                    // entry.
+                    if !self.blocks[self.current_block].instructions.is_empty() {
+                        let block = self.new_block();
+                        self.jump_if_open(block);
+                        self.select_block(block);
+                    }
                     self.data_entries.push(self.blocks[self.current_block].id);
                     self.emit_runtime_call(&format!("$QB$DATA:{row}"), Vec::new(), Vec::new());
                     self.append_read_data(values)?;
@@ -8176,15 +8184,13 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        // Where errors land the processor's trap, which names no statement, is
-        // code.
-        if (self.options.checked_division || self.handles_errors || self.module_handled)
-            && matches!(op, Binary::Modulo | Binary::IntegerDivide)
-            && !matches!(common, SINGLE | DOUBLE)
-        {
-            // Where only errors land (no -fsanitize), the zero divisor is the
-            // IR's own check.
-            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
+        // BC's divide traps on a zero divisor and the error names the
+        // statement; MIR's `sdiv` by zero is undefined, which -O2
+        // deletes (`x% = 5 \ y%` with y% = 0 and x% unused printed on):
+        // the zero divisor is an explicit ERROR 11 here, as
+        // -fsanitize=integer-divide-by-zero made it.
+        if matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, true)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
@@ -8217,28 +8223,22 @@ impl Compiler {
         type_id: u32,
     ) -> Result<Operand, SemanticError> {
         let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
-        let cell = self.temporary(type_id)?;
-        self.emit("store", Vec::new(), vec![Operand::Place(cell), operand]);
-        let value = self.value(type_id);
-        self.emit("load", vec![value], vec![Operand::Place(cell)]);
-        let mut tested = Operand::Value(value);
+        // The operand is compared where it is and read again after the branch:
+        // a cell would round it to the variable's width (D-RFP5).
+        let mut tested = operand.clone();
         if check.range == intrinsics::Range::AbsAbove {
             tested = self.computed("fabs", type_id, vec![tested]);
         }
         let bound = self.floating_literal(check.bound, type_id)?;
-        let op = if check.range == intrinsics::Range::AtMost {
-            "le"
-        } else if check.range == intrinsics::Range::AtLeast {
-            "ge"
-        } else {
-            "gt"
+        let op = match check.range {
+            intrinsics::Range::AtMost => "le",
+            intrinsics::Range::AtLeast => "ge",
+            intrinsics::Range::AbsAbove => "gt",
         };
         let truth = self.value(BOOLEAN);
         self.emit(op, vec![truth], vec![tested, bound]);
         self.raise_if(Operand::Value(truth), check.error)?;
-        let again = self.value(type_id);
-        self.emit("load", vec![again], vec![Operand::Place(cell)]);
-        Ok(Operand::Value(again))
+        Ok(operand)
     }
 
     /// ERROR `number` where `condition` holds, raised as ERROR raises it.
