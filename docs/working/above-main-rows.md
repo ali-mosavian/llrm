@@ -16,8 +16,6 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-8 | quicksort m32 | O3 | clocks | 178429 | 201984 | +23555 (+13.2%) | D10 copies; cause not examined | w-6 | 2026-10-25 | #3507 |
 | AM-9 | recfloat m32 | O1 | clocks | 84605 | 86394 | +1789 (+2.1%) | `decay` becomes a loop (good) but the entry gains a table lookup (`G$5[eax*8]`, cmp/jae) for its first calls: +141 B | w-6 | 2026-10-25 | |
 | AM-10 | x_hanoi2 m32 | O3 | clocks | 134926 | 164043 | +29117 (+21.6%) | D10 copies at depth 3; no depth reaches main (best 148561 at depth 2); main's -O3 does something else with the recursion | w-6 | 2026-11-30, D10 review | #3507 |
-| AM-11 | hanoi m32 | O2,O3 | clocks | 96 | 103 | +7 (+7.3%) | the chain of differences `n-1==0`... in D10 copies; SimplifyCFG's branch-compare to switch fold | w-4 | after #3422 re-measure, 2026-10-24 | #3422 |
-| AM-12 | recsum m32 | O1 | clocks | 127296 | 131065 | +3769 (+3.0%) | as AM-11 | w-4 | after #3422 re-measure, 2026-10-24 | #3422 |
 | AM-13 | recmany m32 | O1 | clocks | 214706 | 218101 | +3395 (+1.6%) | allocation: the specialised clone leaves 4 spills an iteration | splitkit | after RECMANY-TCE-1 (w-2), allocation freeze | |
 | AM-14 | x_popcount m32 | O1,O2,O3 | bytes | 1795 | 1840 | +45 (+2.5%) | isel folds an add into an LEA, then needs a `test` the pin's flags reuse avoids (only with #3497) | w-2 | with #3497, 2026-10-27 | #3497 |
 | AM-15 | QCport host/demo | Os | bytes | 5673 | 5852 | +179 (+3.2%) | phi temporary with no register class of its own (QO-1, QO-13b); base already above main | splitkit | 2026-10-30, QO-13b | |
@@ -30,7 +28,8 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-SL-2 | QCport render/r_portal | O3 | bytes | not stated | not stated | +142 (+0.5%) over #3597's base | as AM-SL-1 (sl-r_portal-{B,N}.s) | w-4 (X87-GAP) | d_alias/demo fld-fstp re-measure after #3457 and the scheduler, with X87-GAP-3 closed or numbered: 2026-10-31, then re-dated | #3597 |
 | AM-R1 | QCport render/r_bsp `_r_cull_box` | Os | instructions | 153 | 174 | +21 (module +281 B over main, m16) | x87 compare duplication: the cmp feeding the n-selects is cloned into the f-selects' block (fcmp 5 to 8 at addresssink); pin-equal (the pin's llc on our pre-sink IR also has 8); main keeps the selects as branches | laa-runtime-checks-loadelim | the tuning phase: a select-vs-branch cost rule for one flags register / x87 compares; w-5 checks whether w-2's setcc rule covers it | |
 | AM-R2 | QCport render/r_bsp `_r_draw_world` (+ `_r_draw_brush_model` 72 to 93, `_r_mark_leaves` 146 to 158) | Os | instructions | 250 | 297 | +47 | allocation traffic (mov 79 to 119, frame refs 46 to 70) with a smaller MIR than main's | splitkit | after their switch-over pieces | |
+| AM-NB-1 | nbody m32 | O2,O3 | clocks | 355537 / 336281 | 377442 / 372067 | +21905 (+6.2%) / +35786 (+10.6%) | first bad 7761d2b672 (LoopFullUnroll cost half): x87 spill traffic, 9 live doubles against 8 slots; re-taken 2026-10-22 on parity a9a0289b53, same numbers | w-1 (with w-4) | 2026-10-31, allocation rows | |
 
 ## To add by their owners
 
-Named by the coordinator and not yet filled: QO-SIZE-1, QO-13 (render/dl -O2), r_bsp, x_bubble, nbody, lru m32, CC1 rows, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
+Named by the coordinator and not yet filled: QO-SIZE-1, QO-13 (render/dl -O2), r_bsp, x_bubble, lru m32, CC1 rows, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
