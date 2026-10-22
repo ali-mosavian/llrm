@@ -16,10 +16,10 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 
 | level | MATCH | N/A | EXECUTED | DEVIATE | MISSING | ORDER | slots |
 |---|---|---|---|---|---|---|---|
-| -O1 | 37 | 20 | 10 | 11 | 25 | 1 | 104 |
-| -O2 | 48 | 25 | 10 | 5 | 29 | 0 | 117 |
-| -O3 | 48 | 26 | 10 | 6 | 31 | 0 | 121 |
-| -Os | 48 | 25 | 10 | 5 | 29 | 0 | 117 |
+| -O1 | 38 | 20 | 10 | 11 | 24 | 1 | 104 |
+| -O2 | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
+| -O3 | 49 | 26 | 10 | 6 | 30 | 0 | 121 |
+| -Os | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
 
 At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 3 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
@@ -247,7 +247,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | level | phase | pin slot | nest | state | ours | note | owner |
 |---|---|---|---|---|---|---|---|
 | -O1 | Early | ee-instrument<> | function<eager-inv> | N/A |  | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O1 | Early | lower-expect | function<eager-inv> | MISSING |  | no llvm.expect reaches MIR: llrm-c compiled __builtin_expect as a call of an undefined `__builtin_expect_` (a link error); #3532 makes it its argument; the weights (LowerExpectIntrinsic from llvm.expect) are the remaining slot; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
+| -O1 | Early | lower-expect | function<eager-inv> | MATCH | lowerexpect@1177:Translated |  |  |
 | -O1 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1178:Partial |  |  |
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
@@ -351,7 +351,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O1 | Module | lower-comment-string |  | N/A |  | #pragma comment strings |  |
 | -O2 | Early | ee-instrument<> | function<eager-inv> | N/A |  | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O2 | Early | lower-expect | function<eager-inv> | MISSING |  | no llvm.expect reaches MIR: llrm-c compiled __builtin_expect as a call of an undefined `__builtin_expect_` (a link error); #3532 makes it its argument; the weights (LowerExpectIntrinsic from llvm.expect) are the remaining slot; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
+| -O2 | Early | lower-expect | function<eager-inv> | MATCH | lowerexpect@1177:Translated |  |  |
 | -O2 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1178:Partial |  |  |
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
@@ -468,7 +468,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O2 | Module | lower-comment-string |  | N/A |  | #pragma comment strings |  |
 | -O3 | Early | ee-instrument<> | function<eager-inv> | N/A |  | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O3 | Early | lower-expect | function<eager-inv> | MISSING |  | no llvm.expect reaches MIR: llrm-c compiled __builtin_expect as a call of an undefined `__builtin_expect_` (a link error); #3532 makes it its argument; the weights (LowerExpectIntrinsic from llvm.expect) are the remaining slot; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
+| -O3 | Early | lower-expect | function<eager-inv> | MATCH | lowerexpect@1177:Translated |  |  |
 | -O3 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1178:Partial |  |  |
 | -O3 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O3 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
@@ -589,7 +589,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O3 | Module | lower-comment-string |  | N/A |  | #pragma comment strings |  |
 | -Os | Early | ee-instrument<> | function<eager-inv> | N/A |  | -pg/-finstrument-functions: no frontend asks for it |  |
-| -Os | Early | lower-expect | function<eager-inv> | MISSING |  | no llvm.expect reaches MIR: llrm-c compiled __builtin_expect as a call of an undefined `__builtin_expect_` (a link error); #3532 makes it its argument; the weights (LowerExpectIntrinsic from llvm.expect) are the remaining slot; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
+| -Os | Early | lower-expect | function<eager-inv> | MATCH | lowerexpect@1177:Translated |  |  |
 | -Os | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1178:Partial |  |  |
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
