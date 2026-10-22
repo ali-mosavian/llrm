@@ -89,6 +89,7 @@ pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod canonexit;
+pub mod canonfreeze;
 pub mod canonical;
 pub mod cfg;
 pub mod combine;
@@ -116,6 +117,7 @@ pub mod combine_gep_phi;
 pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_loadstore;
+pub mod combine_memintrinsics;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
@@ -178,6 +180,7 @@ pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
 pub mod globalopt;
+pub mod globalsra;
 pub mod gvn;
 #[cfg(test)]
 mod gvn_load_tests;

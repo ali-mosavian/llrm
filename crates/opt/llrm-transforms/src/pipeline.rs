@@ -102,7 +102,7 @@
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
-//! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -116,7 +116,7 @@
 //! unroller.
 //!
 //! # Needs
-//! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+//! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 //! up front, and frozen at the end of D so the passes of E read them without
 //! recomputing after each edit.
 //!
@@ -129,7 +129,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -151,6 +151,14 @@ use crate::{
 /// is -O2.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
+    /// The library routines the compile states the program links (the pin's
+    /// `TargetLibraryInfo`, which it reads from the triple: here the front
+    /// end's profile states them, as the ABI chosen by `-mabi` spells and
+    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// System V convention only, llrm-qb and llrm-nib none, so no other
+    /// compile forms a call of a library routine. Exit: a `Target::library`
+    /// of each target that states its routines. Owner w-6, review 2026-11-30.
+    pub library: Vec<llrm_mir::libfunc::Routine>,
     /// Off at -O0: no pass runs.
     pub optimize: bool,
     pub limits: Limits,
@@ -267,6 +275,7 @@ const ROUNDS: usize = 4;
 impl Default for Options {
     fn default() -> Self {
         Self {
+            library: Vec::new(),
             optimize: true,
             llvm_order: llvm_order_default(),
             rotate_slot: true,
@@ -457,7 +466,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -841,7 +850,10 @@ pub(crate) fn llvm_order(
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
-                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
+                slot(
+                    "loopidiom@737",
+                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
@@ -994,7 +1006,7 @@ pub fn recorded(
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
-    manager.require::<Callbacks>();
+    manager.require::<GlobalsModRefAnalysis>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
@@ -1081,7 +1093,10 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
-                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                // The stage that only retargets loads and stores of globals
+                // keeps GlobalsAA past its bodies, as the walk's runs do.
+                rerun(module, analyses, id, &mut again, stage == "globalsra.")
+                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1109,6 +1124,7 @@ pub fn recorded(
     // summaries it made there.
     manager.freeze::<Summaries>();
     manager.freeze::<GlobalsAA>();
+    manager.freeze::<GlobalsModRefAnalysis>();
     // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
     // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
     // The loops it guards are re-simplified for the passes that follow. Not at
@@ -1192,6 +1208,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
         passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin runs canon-freeze with loop-reduce, before it.
+        passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with

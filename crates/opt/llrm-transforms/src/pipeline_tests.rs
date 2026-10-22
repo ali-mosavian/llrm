@@ -788,6 +788,10 @@ fn pipelined(
 /// nothing 5 times.
 #[test]
 fn the_summaries_are_worked_out_from_nothing_once() {
+    assert!(
+        std::env::var_os("LLRM_CHECK_STALE").is_none(),
+        "counts recomputes: LLRM_CHECK_STALE recomputes held analyses and adds to them"
+    );
     let (_, runs) = pipelined(SUMMARISED, pipeline::Options::basic());
     let first =
         |name: &str| runs.iter().find(|(one, how, _)| *one == name && *how == "first").map_or(0, |found| found.2);
@@ -2144,6 +2148,10 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 /// not survive either); 10 here, which this holds at.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
+    assert!(
+        std::env::var_os("LLRM_CHECK_STALE").is_none(),
+        "counts recomputes: LLRM_CHECK_STALE recomputes held analyses and adds to them"
+    );
     let mut files = corpus_files();
     files.sort_by_key(|(_, path)| std::cmp::Reverse(std::fs::metadata(path).map(|one| one.len()).unwrap_or(0)));
     let (name, path) = files
@@ -2796,7 +2804,7 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let applied = Applied { options, ..Applied::default() };
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
-        assert_eq!(&names[at.saturating_sub(2)..at], ["loopsimplify", "lcssa"], "{names:?}");
+        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
         assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
     }
 }

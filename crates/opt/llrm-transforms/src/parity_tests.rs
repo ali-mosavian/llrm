@@ -114,11 +114,14 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check_backend(
         &[
             "optimizephis@1",
+            "fixupsetcc@5",
             "machinecse@4",
             "machinesink@4",
             "floatalloc@8",
             "coalesce@10",
+            "latecleanup@13",
             "jumps@17",
+            "copyprop@18",
             "allocate@11",
             "unknown@1",
         ],

@@ -498,11 +498,8 @@ fn test_division_and_variable_shifts() {
             "mov ax, bx",
             "xor dx, dx",
             "div cx",
-            // MachineCopyPropagation leaves the tied `add`/`shl` on `si` and
-            // copies once at the end: the same 19 instructions as before.
-            "add si, dx",
-            "shl si, cl",
-            "mov ax, si",
+            "lea ax, [edx+esi]",
+            "shl ax, cl",
             "pop si",
             "pop bp",
             "retf",
@@ -512,7 +509,9 @@ fn test_division_and_variable_shifts() {
 
 /// A variable index is scaled, and an address only accesses read is their
 /// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
-/// so no `ss:` override: it cost a byte and a clock at each access.
+/// so no `ss:` override: it cost a byte and a clock at each access. The
+/// doubled index is made once and both accesses use it (7a574ed3ed: precse
+/// no longer reads a load as touching the flags, so the two `i + i` are one).
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -532,15 +531,12 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
-            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
             "add si, si",
+            "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
-            "pop di",
             "pop si",
             "leave",
             "retf"
@@ -740,10 +736,10 @@ no:
             "and dl, cl",
             "je L0_8",
             "L0_6:",
-            "movzx ax, al",
-            "neg ax",
-            "movzx cx, cl",
-            "add ax, cx",
+            "movzx dx, al",
+            "neg dx",
+            "movzx ax, cl",
+            "add ax, dx",
             "pop bp",
             "retf",
             "L0_8:",
@@ -1059,6 +1055,35 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     );
     let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
+}
+
+/// QCport render/pal `_pal_install@3` and game/combat `_combat_radius@3`: a
+/// memmove of a few constant bytes whose direction no pass proved stopped the
+/// compile ("a memmove whose direction no pass proved") once MemCpyOpt made one
+/// of a copy chain. It is every load, then every store, as
+/// `getMemmoveLoadsAndStores`: the sides may overlap however they lie.
+#[test]
+fn test_a_small_memmove_of_no_proved_direction_loads_everything_before_it_stores() {
+    for (callee, source) in [("p0.p0", "ptr"), ("p0.p1", "ptr addrspace(1)")] {
+        let text = format!(
+            "declare void @llvm.memmove.{callee}.i16(ptr, {source}, i16, i1)
+define i16 @f(ptr %a, {source} %b) addrspace(1) {{
+  call void @llvm.memmove.{callee}.i16(ptr %a, {source} %b, i16 12, i1 false)
+  ret i16 0
+}}
+"
+        );
+        let lines = listing(&text, "f");
+        let moves: Vec<(usize, &String)> =
+            lines.iter().enumerate().filter(|(_, one)| one.starts_with("mov ") && one.contains("dword ptr")).collect();
+        let is_store = |one: &String| {
+            one.contains("ptr") && one.find("ptr").is_some_and(|at| one.find(',').is_some_and(|c| at < c))
+        };
+        let (stores, loads): (Vec<_>, Vec<_>) = moves.iter().partition(|(_, one)| is_store(one));
+        assert_eq!((loads.len(), stores.len()), (3, 3), "{lines:?}");
+        assert!(loads.iter().all(|(l, _)| stores.iter().all(|(s, _)| l < s)), "{lines:?}");
+        assert!(!lines.iter().any(|one| one.starts_with("rep ") || one == "std"), "{lines:?}");
+    }
 }
 
 /// A backward move of constant addresses and a length of whole dwords stepped
@@ -1554,9 +1579,9 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
-            "mov ax, word ptr [bp-2]",
+            "mov cx, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
-            "mov cx, word ptr [bp-4]",
+            "mov ax, word ptr [bp-4]",
             "add ax, cx",
             "fldcw word ptr [bp-6]",
             "leave",
@@ -1602,11 +1627,10 @@ b1:
             "sar eax, 31",
             "shr eax, 22",
             "xor ebx, ebx",
-            "add ecx, eax",
+            "add eax, ecx",
             "adc edx, ebx",
-            "shrd ecx, edx, 10",
-            "shld edx, ecx, 16",
-            "mov ax, cx",
+            "shrd eax, edx, 10",
+            "shld edx, eax, 16",
             "pop bp",
             "retf",
         ]
@@ -1708,8 +1732,8 @@ define i1 @ne(double %a, double %b) addrspace(1) {
             .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':'))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("eq"), ["sete al", "setnp cl", "and al, cl", "pop bp", "retf"]);
-    assert_eq!(answered("ne"), ["setne al", "setp cl", "or al, cl", "pop bp", "retf"]);
+    assert_eq!(answered("eq"), ["sete cl", "setnp al", "and al, cl", "pop bp", "retf"]);
+    assert_eq!(answered("ne"), ["setne cl", "setp al", "or al, cl", "pop bp", "retf"]);
 }
 
 /// An unordered predicate is the carry or zero unordered also sets: ult is
@@ -2575,7 +2599,7 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     assert_eq!(seven, ["mov cx, word ptr [bp+6]", "mov ax, cx", "shl ax, 3", "sub ax, cx"]);
     assert_eq!(counts(&seven), (4, 1));
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
-    assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "imul ax, word ptr [bp+8]"]);
+    assert_eq!(inner(variable), ["mov ax, word ptr [bp+8]", "imul ax, word ptr [bp+6]"]);
 }
 
 /// Tuned for size, a multiply by a constant is the imul unless the shifts and
@@ -3323,6 +3347,43 @@ define i16 @f() addrspace(1) {{
     assert!(assembled_on("486", &text(22)).contains("rep stosd"));
 }
 
+/// Tuned for size a constant memcpy is inline moves up to four pairs
+/// (`MaxStoresPerMemcpyOptSize`, X86ISelLowering.cpp#L2939), else `rep movs`;
+/// not tuned, eight (#L2938). A 24-byte copy (six dword pairs) was moves at
+/// -Os too.
+#[test]
+fn test_a_memcpy_tuned_for_size_is_moves_only_up_to_four_pairs() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  %b = alloca [{size} x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 {size}, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}}
+"
+        )
+    };
+    let sized = |size: u32, tuned: bool| {
+        let cpu = crate::backend::cpu::tuned("486", tuned).expect("a target");
+        let module = assemble::assembled(
+            &parsed(&text(size)),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(sized(24, true).contains("rep movs dword"), "{}", sized(24, true));
+    assert!(!sized(16, true).contains("movs"), "{}", sized(16, true));
+    assert!(!sized(24, false).contains("movs"), "{}", sized(24, false));
+    assert!(sized(36, false).contains("rep movs dword"), "{}", sized(36, false));
+}
+
 /// A far global is `seg name:offset name`, and a memset of a variable
 /// length `rep stosd` then `rep stosb` through it, as the old route made
 /// C's `fill_far`; isel refused "a far global", then the variable length.
@@ -3416,7 +3477,7 @@ define i16 @g() addrspace(1) {
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
     assert!(f[add + 1].starts_with("adc e"), "{f:?}");
     let g = listing(text, "g");
-    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
+    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or edx, eax"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
     }
 }
@@ -4591,11 +4652,11 @@ fn test_far_pointers_compare_by_words() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+6]",
-            "xor ax, word ptr [bp+10]",
-            "mov cx, word ptr [bp+8]",
-            "xor cx, word ptr [bp+12]",
-            "or ax, cx",
+            "mov ax, word ptr [bp+10]",
+            "xor ax, word ptr [bp+6]",
+            "mov cx, word ptr [bp+12]",
+            "xor cx, word ptr [bp+8]",
+            "or cx, ax",
             "sete al",
             "movzx ax, al",
             "pop bp",
@@ -4608,8 +4669,8 @@ fn test_far_pointers_compare_by_words() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+6]",
-            "or ax, word ptr [bp+8]",
+            "mov ax, word ptr [bp+8]",
+            "or ax, word ptr [bp+6]",
             "setne al",
             "movzx ax, al",
             "pop bp",
@@ -4647,7 +4708,7 @@ define i16 @f() addrspace(1) {
             "db 0fah",
             "xor ax, ax",
             "db 0cdh,01ah",
-            "lea ax, [ecx+edx]",
+            "lea ax, [edx+ecx]",
             "pop bp",
             "retf"
         ]
@@ -4753,9 +4814,10 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "movzx ebx, word ptr [bp+6]",
-            "mov eax, dword ptr [bp+10]",
-            "lea ebx, [ebx+eax*2]",
+            "movzx eax, word ptr [bp+6]",
+            "mov ebx, dword ptr [bp+10]",
+            "add ebx, ebx",
+            "add ebx, eax",
             "mov ecx, ebx",
             "sar ecx, 16",
             "shl ecx, 12",
@@ -4767,7 +4829,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
             "retf"
         ]
     );
-    assert_eq!(counts(&got), (14, 5));
+    assert_eq!(counts(&got), (15, 4));
 }
 
 /// Huge pointers are canonical, so an order is the selector's then the
@@ -4816,14 +4878,14 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "movzx eax, word ptr [bp+6]",
-            "movzx ecx, word ptr [bp+10]",
-            "sub eax, ecx",
-            "movzx ecx, word ptr [bp+8]",
+            "movzx ecx, word ptr [bp+6]",
+            "movzx eax, word ptr [bp+10]",
+            "sub ecx, eax",
+            "movzx eax, word ptr [bp+8]",
             "movzx edx, word ptr [bp+12]",
-            "sub ecx, edx",
-            "sar ecx, 12",
-            "shl ecx, 16",
+            "sub eax, edx",
+            "sar eax, 12",
+            "shl eax, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
             "pop bp",
@@ -5611,14 +5673,14 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
         "f",
     );
-    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+6]".to_owned()), "{arithmetic:?}");
     assert!(arithmetic.contains(&"lea eax, [ecx+ecx*2]".to_owned()), "{arithmetic:?}");
 
     let extends = listing(
         "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
         "f",
     );
-    for want in ["movsx eax, byte ptr [bp+6]", "movzx ecx, word ptr [bp+8]", "add eax, ecx"] {
+    for want in ["movsx ecx, byte ptr [bp+6]", "movzx eax, word ptr [bp+8]", "add eax, ecx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
 
@@ -6627,4 +6689,82 @@ done:
         before.iter().rev().take(4).any(|line| line.starts_with("sub ") || line.starts_with("cmp ")),
         "no offset compare before the selector's borrow: {lines:#?}"
     );
+}
+
+/// A phi of two far pointers read through ES in a loop: the selector came
+/// through AX (`mov ax, [bp+8]`, `mov ax, bx` in the other arm, `mov es, ax`
+/// at the join), where it is loaded into ES in each arm. #3441 gave the phi's
+/// temporary no class of its own, so the coalescer refused the copies between
+/// it and the segment-class result (render/dl -O2: `mov es, [bp-8]` was three
+/// instructions, +14 in the module).
+#[test]
+fn test_a_far_pointers_phi_is_not_copied_through_ax() {
+    let text = "define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %r, i1 %c, i16 %n) addrspace(1) {
+b0:
+  br i1 %c, label %b1, label %b2
+b1:
+  br label %b3
+b2:
+  br label %b3
+b3:
+  %q = phi ptr addrspace(1) [ %p, %b1 ], [ %r, %b2 ]
+  br label %b4
+b4:
+  %i = phi i16 [ 0, %b3 ], [ %i2, %b5 ]
+  %o = mul i16 %i, 30
+  %a = getelementptr i8, ptr addrspace(1) %q, i16 %o
+  %v = load i16, ptr addrspace(1) %a
+  %t = icmp eq i16 %v, 1
+  br i1 %t, label %b6, label %b5
+b5:
+  %i2 = add i16 %i, 1
+  %d = icmp eq i16 %i2, %n
+  br i1 %d, label %b6, label %b4
+b6:
+  ret i16 %i
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov es, di".to_owned()) && got.contains(&"mov es, bx".to_owned()), "{got:?}");
+    assert!(!got.iter().any(|line| line == "mov ax, bx" || line.starts_with("mov ax, word ptr [bp+8]")), "{got:?}");
+}
+
+/// X86 DynAlloca Expander (the pin's `x86-dyn-alloca-expander`) has nothing to
+/// expand here: the pin lowers a dynamic `alloca` on i486-linux to the round
+/// up and `sub esp, n` with no DYN_ALLOCA pseudo and no probe (its pseudo is
+/// made only under MSVC-style stack probing), and so does
+/// `hook_dynamic_alloca`: the size rounded to the stack's alignment, subtracted
+/// from the stack pointer, which is the address. Row 55 of the codegen slot
+/// table is N/A on that.
+#[test]
+fn test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe() {
+    let text = assembled(
+        "declare void @use(ptr)
+define void @f(i16 %n) {
+b0:
+  %p = alloca i8, i16 %n, align 2
+  call void @use(ptr %p)
+  ret void
+}
+",
+    );
+    assert!(text.contains("sub sp,") || text.contains("sub esp,"), "the stack pointer is lowered: {text}");
+    assert!(text.contains("and "), "by a size rounded to the stack's alignment: {text}");
+    assert!(!text.contains("loop") && !text.contains("__chkstk") && !text.contains("B$STK"), "no probe: {text}");
+}
+
+/// A register-plus-register add of a live source is a `lea [a+b]`, and the assembler has a form for it
+/// at both targets: the first version carried a literal address in the cell and `host.c` and `mdl.c`
+/// (QCport -Os, m16) stopped with "no encoding" for `lea r32, [abs+r38+r37]`.
+#[test]
+fn test_a_register_sum_of_a_live_source_is_encoded_as_a_lea() {
+    let text = "define i32 @f(i32 %a, i32 %b) addrspace(1) {
+  %c = add i32 %a, %b
+  %d = and i32 %c, %a
+  %e = xor i32 %d, %b
+  ret i32 %e
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("lea ")), "{got:?}");
 }

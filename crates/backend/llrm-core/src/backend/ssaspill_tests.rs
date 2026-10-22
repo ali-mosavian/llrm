@@ -576,7 +576,7 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
             body,
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
-            &ssaspill::untouchable(body),
+            &crate::backend::regclass::untouchable(body),
         )
     };
     assert!(!found(&body).is_empty(), "premise: the body asks for more selectors than there are registers");
@@ -596,7 +596,7 @@ fn test_a_copy_group_is_one_point_not_one_per_copy() {
             body,
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
-            &ssaspill::untouchable(body),
+            &crate::backend::regclass::untouchable(body),
         )
         .len()
     };
@@ -628,7 +628,7 @@ fn test_phis_that_do_not_fit_live_in_memory() {
         &eliminated,
         &target::BUILT_IN,
         &crate::backend::classes::RegisterClasses::m16(),
-        &ssaspill::untouchable(&eliminated),
+        &crate::backend::regclass::untouchable(&eliminated),
     );
     let most = found
         .iter()
@@ -678,7 +678,7 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
             body,
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
-            &ssaspill::untouchable(body),
+            &crate::backend::regclass::untouchable(body),
         )
         .len()
     };

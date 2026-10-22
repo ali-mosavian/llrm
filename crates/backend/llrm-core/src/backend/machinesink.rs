@@ -143,7 +143,10 @@ fn safe_to_move(
 ) -> bool {
     let Some(what) = &one.what else { return false };
     let writes_memory = what.dests.iter().any(|place| matches!(place, Loc::Mem(_)));
-    let reads_memory = what.sources.iter().any(|place| matches!(place, Loc::Mem(_)));
+    // `lea` names a cell and reads none: the pin's LEA32r is not `mayLoad`.
+    // Counted as a load it stayed above every branch (x_collatz: `lea
+    // edi,[ecx+ecx*2]` run on each trip, the pin's sunk into the odd arm).
+    let reads_memory = what.op != Operation::Address && what.sources.iter().any(|place| matches!(place, Loc::Mem(_)));
     let effects = writes_memory
         || one.volatile()
         || one.call.is_some()
@@ -1135,6 +1138,48 @@ mod tests {
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
         assert_eq!(names(&moved, 0), ["fsub", "cmp", "jbe"], "the fsub stayed");
+    }
+
+    /// x_collatz ran `lea edi,[ecx+ecx*2]` on every trip of its inner loop,
+    /// above the branch whose odd arm alone read it: the sinker took the
+    /// `lea`'s address operand for a memory read and refused to move it
+    /// past the branch. The pin's sunk it.
+    #[test]
+    fn test_a_lea_is_not_a_load_and_sinks_past_a_branch() {
+        use crate::model::ir::Mem;
+        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(None, 4) };
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Address, "lea", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(2), imm(5)], vec![], vec![2]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3])])
+        };
+        let join = LirBlock::new(2, vec![insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "collatz",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        let moved = sunk(&body, false);
+        assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the lea left the block");
+        assert_eq!(names(&moved, 1), ["lea", "mov"], "and went into the arm");
     }
 
     /// The same, with the operand read again in the arm: the `add` then needs
