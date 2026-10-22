@@ -69,3 +69,27 @@ b1:
     let (_, rest) = after.split_once("b1:").expect("a second block");
     assert!(rest.contains("mul i16 %i, 8") && rest.contains("i16 6"), "{after}");
 }
+
+/// `p = c ? &a[1] : &a[3]` made in the block before the access read two
+/// addresses held across the edge; the offsets are selected and the access adds
+/// the one to the base.
+#[test]
+fn test_a_select_of_two_offsets_of_one_base_is_one_select_and_a_gep() {
+    let after = sunk(
+        "define void @f(ptr %a, i1 %c) {
+b0:
+  %x = getelementptr i16, ptr %a, i16 1
+  %y = getelementptr i16, ptr %a, i16 3
+  %p = select i1 %c, ptr %x, ptr %y
+  br label %b1
+
+b1:
+  store i16 0, ptr %p
+  ret void
+}
+",
+    );
+    let (entry, rest) = after.split_once("b1:").expect("a second block");
+    assert!(!entry.contains("getelementptr"), "the arms' addresses are not made in b0: {after}");
+    assert!(rest.contains("select i1 %c, i16 2, i16 6") && rest.contains("getelementptr i8, ptr %a"), "{after}");
+}

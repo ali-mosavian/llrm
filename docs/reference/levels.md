@@ -69,7 +69,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir rotate` (header copy, `tree-ch`; not at -Os) | x | on | on | on | on | on |
 | `mir jumpthread` (a branch; the switch of a loop's state from -O2: `pass_thread_jumps`, `flag_thread_jumps && flag_expensive_optimizations`, [`tree-ssa-threadbackward.cc:1072`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-threadbackward.cc#L1072)) | x | on, no state machines | on | on | on | on, no state machines |
 | `mir gepoffset` | x | on | on | on | on | on |
-| `mir addresssink` | x | on | on | on | on | on |
+| `mir cgpaddr` | x | on | on | on | on | on |
 | `mir extload` (the pin's DAGCombiner `ExtendUsesToFormExtLoad`, as a pass before isel) | x | on | on | on | on | on |
 | `mir switchconv` (`-ftree-switch-conversion`: the lookup table) | x | x | on | on | on | x |
 | `mir switchlower` (bit tests, jump tables, the tree) | x | on | on | on | on | on |
