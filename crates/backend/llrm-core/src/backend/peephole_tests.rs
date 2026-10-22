@@ -5137,3 +5137,79 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
     }
 }
+
+/// x_collatz ran `mov dl, cl; and dl, 1; jne` where the pin selects `test cl,
+/// 1; jne` (`(brcond (and x, m))`): the `and` writes a register nothing reads,
+/// and the copy that kept `cl` is not needed. Not when the register is read
+/// afterwards.
+#[test]
+fn test_a_mask_only_a_branch_reads_is_a_test_of_its_source() {
+    for (variant, rewritten) in [("dead", true), ("read after", false)] {
+        let copy = insn(
+            0,
+            None,
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::CL, 1)], vec![rl(RegId::AL, 1)])),
+            vec![],
+            vec![],
+        );
+        let mask = insn(
+            2,
+            None,
+            Some(sem(Operation::Binary, "and", vec![rl(RegId::CL, 1)], vec![rl(RegId::CL, 1), im(1, 1)])),
+            vec![],
+            vec![],
+        );
+        let branch = insn(5, None, Some(semt(Operation::Branch, "jne", vec![], vec![], Some(11))), vec![], vec![]);
+        let fall = if rewritten {
+            sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AX, 2), im(1, 2)])
+        } else {
+            sem(Operation::Move, "mov", vec![rl(RegId::BL, 1)], vec![rl(RegId::CL, 1)])
+        };
+        let taken = sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AX, 2), im(2, 2)]);
+        let blocks = vec![
+            block(0, vec![Arc::new(copy), Arc::new(mask), Arc::new(branch)], vec![7, 11]),
+            block(
+                7,
+                vec![
+                    Arc::new(insn(7, None, Some(fall), vec![], vec![])),
+                    Arc::new(insn(
+                        9,
+                        None,
+                        Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(0))),
+                        vec![],
+                        vec![],
+                    )),
+                ],
+                vec![0],
+            ),
+            block(
+                11,
+                vec![
+                    Arc::new(insn(11, None, Some(taken), vec![], vec![])),
+                    Arc::new(insn(
+                        13,
+                        None,
+                        Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(0))),
+                        vec![],
+                        vec![],
+                    )),
+                ],
+                vec![0],
+            ),
+        ];
+        let result = tested_masks(rules(), &body("mask", 0, crate::model::lir::shared(blocks)));
+        let kept: Vec<&Insn> = result.blocks[0]
+            .insns
+            .iter()
+            .map(|one| &**one)
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing))
+            .collect();
+        let shape: Vec<&str> = kept.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap()).collect();
+        if rewritten {
+            assert_eq!(shape, ["test", "jne"], "{variant}");
+            assert_eq!(kept[0].what.as_ref().unwrap().sources, vec![rl(RegId::AL, 1), im(1, 1)], "{variant}");
+        } else {
+            assert_eq!(shape, ["mov", "and", "jne"], "{variant}");
+        }
+    }
+}

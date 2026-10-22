@@ -3301,6 +3301,25 @@ mod tests {
         assert_eq!(ir::root(registers(&made[0].sources)[1]), RegId::ECX, "{:?}", made[0].sources);
     }
 
+    /// An operand read as undef names a value with no register: the rewrite gives it the first register of
+    /// the class where it used to stop with `Unplaced`.
+    #[test]
+    fn test_an_operand_read_as_undef_is_placed_in_any_register() {
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 2 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
+        one.undefs = vec![9];
+        let held: IndexMap<u32, RegId> = IndexMap::from_iter([(2, RegId::BX)]);
+        let classes = RegisterClasses::m16();
+        let placed = _placed(&Arc::new(one), &held, &classes).expect("placed");
+        let sources = &placed.what.as_ref().expect("semantics").sources;
+        assert!(matches!(&sources[0], Loc::Reg(_)), "{sources:?}");
+    }
+
     #[test]
     fn test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() {
         let cwd = Insn::new(
