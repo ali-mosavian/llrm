@@ -257,13 +257,7 @@ impl Calling {
                 .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
         }
-        for (name, value) in table
-            .iter()
-            .filter(|(name, _)| !matches!(
-                name.as_str(),
-                "default" | "abi" | "private" | "private_instrument"
-            ))
-        {
+        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi" | "private" | "private_instrument")) {
             let mut one = value.as_table().ok_or_else(|| format!("calling.toml: {name} is not a table"))?.clone();
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
@@ -289,7 +283,9 @@ impl Calling {
             .transpose()?;
         let private_instrument = table
             .get("private_instrument")
-            .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention"))
+            .map(|one| {
+                one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention")
+            })
             .transpose()?;
         let calling = Self { conventions, abis, default, private, private_instrument };
         for (key, name) in [("private", &calling.private), ("private_instrument", &calling.private_instrument)] {
