@@ -36,10 +36,57 @@ pub(super) struct CaseBlock {
     this_bb: BlockId,
 }
 
-impl CaseBlock {
-    pub(super) fn this_bb(&self) -> BlockId {
-        self.this_bb
+/// What a block made by the lowering holds, built once the layout is final.
+#[derive(Clone, Debug)]
+pub(super) enum Deferred {
+    /// A compare and branch.
+    Case(CaseBlock, Operand),
+    /// `visitJumpTableHeader` in a block other than the switch's.
+    JumpTableHeader(JumpTableHeader),
+    /// `visitJumpTable`: the indirect branch through the table.
+    JumpTable { block: BlockId, reg: u32, index: u32 },
+    /// `visitBitTestHeader` in a block other than the switch's.
+    BitTestHeader(BitTestHeader),
+    /// `visitBitTestCase`: one mask test.
+    BitTestCase { block: BlockId, header: BitTestHeader, case: usize, next: BlockId },
+}
+
+impl Deferred {
+    pub(super) fn block(&self) -> BlockId {
+        match self {
+            Deferred::Case(case, _) => case.this_bb,
+            Deferred::JumpTableHeader(header) => header.block,
+            Deferred::JumpTable { block, .. } | Deferred::BitTestCase { block, .. } => *block,
+            Deferred::BitTestHeader(header) => header.block,
+        }
     }
+}
+
+/// `JumpTableHeader` with the `JumpTable` it heads.
+#[derive(Clone, Debug)]
+pub(super) struct JumpTableHeader {
+    block: BlockId,
+    cond: Operand,
+    first: i128,
+    last: i128,
+    reg: u32,
+    table_block: BlockId,
+    default: BlockId,
+    unreachable: bool,
+}
+
+/// `BitTestBlock` as the header and the case blocks read it.
+#[derive(Clone, Debug)]
+pub(super) struct BitTestHeader {
+    block: BlockId,
+    cond: Operand,
+    low_bound: i128,
+    range: i128,
+    reg: u32,
+    case_blocks: Vec<BlockId>,
+    masks: Vec<(u64, BlockId)>,
+    default: BlockId,
+    unreachable: bool,
 }
 
 /// `SwitchWorkListItem`: clusters `first..=last` to lower in `block`, which
@@ -109,8 +156,8 @@ impl Builder<'_> {
         }
         let target = SwitchTarget::x86(self.target.dag.pointer.size_in_bits());
         let plan = switchcg::plan(&cases, default.0, &target);
-        if plan.peeled.is_some() || plan.clusters.iter().any(|cluster| cluster.kind != ClusterKind::Range) {
-            return Err(Refused("switch with a jump table, bit tests or a peeled case"));
+        if plan.peeled.is_some() {
+            return Err(Refused("switch with a peeled case"));
         }
         if plan.clusters.is_empty() {
             let next = self.layout_next(self.block);
@@ -122,7 +169,8 @@ impl Builder<'_> {
             }
             return Ok(());
         }
-        let clusters = plan.clusters;
+        let clusters = plan.clusters.clone();
+        self.plan = Some(plan);
         let unreachable_default = self
             .function
             .iter_block(default)
@@ -138,6 +186,119 @@ impl Builder<'_> {
             }
             self.lower_work_item(&item, &mut clusters, cond, default, unreachable_default)?;
         }
+        Ok(())
+    }
+
+    pub(super) fn visit_deferred(&mut self, item: Deferred) -> Result<(), Refused> {
+        match item {
+            Deferred::Case(case, cond) => self.visit_switch_case(case, cond),
+            Deferred::JumpTableHeader(header) => self.emit_jump_table_header(&header),
+            Deferred::JumpTable { reg, index, .. } => {
+                // visitJumpTable: `br_jt (CopyFromReg reg):1, JumpTable, index`
+                let pointer = self.target.dag.pointer;
+                let root = self.control_root();
+                let copy = self.dag.get_copy_from_reg(root, reg, pointer);
+                let table = self.dag.get_jump_table(pointer, index);
+                let chain = SDValue { node: copy.node, res: 1 };
+                let node = self.dag.get_node(ISD::BrJT, EVT::OTHER, &[chain, table, copy]);
+                self.dag.set_root(node);
+                Ok(())
+            }
+            Deferred::BitTestHeader(header) => self.emit_bit_test_header(&header),
+            Deferred::BitTestCase { block, header, case, next } => self.emit_bit_test_case(block, &header, case, next),
+        }
+    }
+
+    /// `visitJumpTableHeader`.
+    fn emit_jump_table_header(&mut self, header: &JumpTableHeader) -> Result<(), Refused> {
+        let pointer = self.target.dag.pointer;
+        let switch_op = self.get_value(header.cond)?;
+        let vt = self.dag.value_type(switch_op);
+        let first = self.dag.get_constant(header.first as u128, vt);
+        let sub = self.dag.get_node(ISD::Sub, vt, &[switch_op, first]);
+        let index = self.dag.get_zext_or_trunc(sub, pointer);
+        let root = self.control_root();
+        let copy_to = self.dag.get_copy_to_reg(root, header.reg, index);
+        let next = self.layout_next(header.block);
+        let mut root = copy_to;
+        if !header.unreachable {
+            let span = self.dag.get_constant((header.last - header.first) as u128, vt);
+            let cmp = self.dag.get_setcc(EVT::I8, sub, span, CondCode::SetUGt);
+            let default = self.dag.get_basic_block(header.default.0);
+            root = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cmp, default]);
+        }
+        if Some(header.table_block) != next {
+            let dest = self.dag.get_basic_block(header.table_block.0);
+            root = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
+        }
+        self.dag.set_root(root);
+        Ok(())
+    }
+
+    /// `visitBitTestHeader`.
+    fn emit_bit_test_header(&mut self, header: &BitTestHeader) -> Result<(), Refused> {
+        let switch_op = self.get_value(header.cond)?;
+        let vt = self.dag.value_type(switch_op);
+        let low = self.dag.get_constant(header.low_bound as u128, vt);
+        let range_sub = self.dag.get_node(ISD::Sub, vt, &[switch_op, low]);
+        let reg_vt = self.bit_test_type(vt, header);
+        let sub = if reg_vt == vt { range_sub } else { self.dag.get_zext_or_trunc(range_sub, reg_vt) };
+        let root = self.control_root();
+        let copy_to = self.dag.get_copy_to_reg(root, header.reg, sub);
+        let mut root = copy_to;
+        if !header.unreachable {
+            let range = self.dag.get_constant(header.range as u128, vt);
+            let cmp = self.dag.get_setcc(EVT::I8, range_sub, range, CondCode::SetUGt);
+            let default = self.dag.get_basic_block(header.default.0);
+            root = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cmp, default]);
+        }
+        let first = header.case_blocks[0];
+        if Some(first) != self.layout_next(header.block) {
+            let dest = self.dag.get_basic_block(first.0);
+            root = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
+        }
+        self.dag.set_root(root);
+        Ok(())
+    }
+
+    /// The type the bit-test index lives in: the condition's, or a pointer
+    /// when a mask does not fit it.
+    fn bit_test_type(&self, vt: EVT, header: &BitTestHeader) -> EVT {
+        let bits = vt.size_in_bits();
+        let fits = bits >= 64 || header.masks.iter().all(|(mask, _)| mask >> bits == 0);
+        if fits { vt } else { self.target.dag.pointer }
+    }
+
+    /// `visitBitTestCase`.
+    fn emit_bit_test_case(&mut self, block: BlockId, header: &BitTestHeader, case: usize, next: BlockId) -> Result<(), Refused> {
+        let (mask, target) = header.masks[case];
+        let cond_type = self.operand_type(header.cond)?;
+        let vt = self.bit_test_type(cond_type, header);
+        let root = self.control_root();
+        let shift_op = self.dag.get_copy_from_reg(root, header.reg, vt);
+        let pop = mask.count_ones();
+        let cmp = if pop == 1 {
+            let bit = self.dag.get_constant(u128::from(mask.trailing_zeros()), vt);
+            self.dag.get_setcc(EVT::I8, shift_op, bit, CondCode::SetEq)
+        } else if i128::from(pop) == header.range {
+            let ones = self.dag.get_constant(u128::from(mask.trailing_ones()), vt);
+            self.dag.get_setcc(EVT::I8, shift_op, ones, CondCode::SetNe)
+        } else {
+            let one = self.dag.get_constant(1, vt);
+            let shifted = self.dag.get_node(ISD::Shl, vt, &[one, shift_op]);
+            let m = self.dag.get_constant(u128::from(mask), vt);
+            let and = self.dag.get_node(ISD::And, vt, &[shifted, m]);
+            let zero = self.dag.get_constant(0, vt);
+            self.dag.get_setcc(EVT::I8, and, zero, CondCode::SetNe)
+        };
+        let root = self.control_root();
+        let dest = self.dag.get_basic_block(target.0);
+        let mut node = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cmp, dest]);
+        if Some(next) != self.layout_next(block) {
+            let fall = self.dag.get_basic_block(next.0);
+            node = self.dag.get_node(ISD::Br, EVT::OTHER, &[node, fall]);
+        }
+        self.dag.set_root(node);
         Ok(())
     }
 
@@ -237,6 +398,55 @@ impl Builder<'_> {
                 self.export_condition(cond)?;
                 (block, false)
             };
+            match cluster.kind {
+                ClusterKind::JumpTable(index) => {
+                    let table = self.plan.as_ref().expect("a plan").jump_tables[index].clone();
+                    let table_block = self.new_block(&mut insert_at);
+                    let jt_index = self.info.new_jump_table();
+                    let reg = self.info.new_reg();
+                    let header = JumpTableHeader {
+                        block: current,
+                        cond,
+                        first: table.low,
+                        last: table.high,
+                        reg,
+                        table_block,
+                        default: fallthrough,
+                        unreachable,
+                    };
+                    self.deferred.push(Deferred::JumpTable { block: table_block, reg, index: jt_index });
+                    if current == self.block {
+                        self.emit_jump_table_header(&header)?;
+                    } else {
+                        self.deferred.push(Deferred::JumpTableHeader(header));
+                    }
+                }
+                ClusterKind::BitTests(index) => {
+                    let bits = self.plan.as_ref().expect("a plan").bit_tests[index].clone();
+                    let case_blocks: Vec<BlockId> = bits.cases.iter().map(|_| self.new_block(&mut insert_at)).collect();
+                    let reg = self.info.new_reg();
+                    let header = BitTestHeader {
+                        block: current,
+                        cond,
+                        low_bound: bits.low_bound,
+                        range: bits.range,
+                        reg,
+                        masks: bits.cases.iter().zip(&case_blocks).map(|(case, _)| (case.mask, BlockId(case.dest))).collect(),
+                        case_blocks: case_blocks.clone(),
+                        default: fallthrough,
+                        unreachable,
+                    };
+                    for (at, &block) in case_blocks.iter().enumerate() {
+                        let next = case_blocks.get(at + 1).copied().unwrap_or(fallthrough);
+                        self.deferred.push(Deferred::BitTestCase { block, header: header.clone(), case: at, next });
+                    }
+                    if current == self.block {
+                        self.emit_bit_test_header(&header)?;
+                    } else {
+                        self.deferred.push(Deferred::BitTestHeader(header));
+                    }
+                }
+                ClusterKind::Range => {
             let mut case = if cluster.low == cluster.high {
                 CaseBlock { cc: CondCode::SetEq, lhs: CaseValue::Condition, rhs: CaseValue::Constant(cluster.low), mhs: None, true_bb: BlockId(cluster.dest), false_bb: fallthrough, this_bb: current }
             } else {
@@ -254,6 +464,8 @@ impl Builder<'_> {
                 case.cc = CondCode::SetTrue;
             }
             self.emit_or_defer(case, cond)?;
+                }
+            }
             current = fallthrough;
         }
         Ok(())
@@ -263,7 +475,7 @@ impl Builder<'_> {
         if case.this_bb == self.block {
             self.visit_switch_case(case, cond)
         } else {
-            self.deferred.push((case, cond));
+            self.deferred.push(Deferred::Case(case, cond));
             Ok(())
         }
     }

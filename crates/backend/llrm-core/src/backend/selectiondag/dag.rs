@@ -67,6 +67,7 @@ pub enum NodeData {
     Block(u32),
     Symbol(u32),
     Mem(MemInfo),
+    JumpTable(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -515,6 +516,10 @@ impl SelectionDAG {
 
     /// A call's `RegisterMask` operand: the registers the callee preserves
     /// are the allocator's to know, so the node carries none.
+    pub fn get_jump_table(&mut self, vt: EVT, index: u32) -> SDValue {
+        self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
     pub fn get_register_mask(&mut self) -> SDValue {
         self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
     }

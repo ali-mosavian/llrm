@@ -91,6 +91,9 @@ impl SelectionDAG {
                     write!(text, " {offset}").ok();
                 }
             }
+            NodeData::JumpTable(index) => {
+                write!(text, "<{index}>").ok();
+            }
             NodeData::FrameIndex(index) => {
                 write!(text, "<{index}>").ok();
             }

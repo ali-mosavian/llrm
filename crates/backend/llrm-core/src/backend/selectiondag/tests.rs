@@ -889,6 +889,15 @@ mod switch_dags {
     /// compares, the chains, the or-trick) are the pin's, block for block.
     /// A `switch` is refused before this piece.
     #[test]
+    fn jump_table_and_bit_test_blocks_match_the_pins_initial_dags() {
+        let (ours, pins) = (ours(include_str!("golden/jtbt.ll")), pins(include_str!("golden/jtbt.pin.txt")));
+        assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
+        for (name, dumps) in &ours {
+            assert_eq!(dumps, &pins[name], "function {name}");
+        }
+    }
+
+    #[test]
     fn switch_blocks_match_the_pins_initial_dags() {
         let (ours, pins) = (ours(include_str!("golden/switchdag.ll")), pins(include_str!("golden/switchdag.pin.txt")));
         assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());

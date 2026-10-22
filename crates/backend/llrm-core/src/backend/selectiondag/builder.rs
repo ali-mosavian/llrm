@@ -89,13 +89,14 @@ pub fn build_block(
     // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that is final
     let mut extra = Vec::new();
     let mut next = next_synthetic;
-    for (case, cond) in deferred {
-        let mut one = Builder::new(module, function, layout, target, arch, convention, info, case.this_bb(), order.clone(), next, Some(switch_name.clone()));
-        one.visit_switch_case(case, cond)?;
+    for item in deferred {
+        let block = item.block();
+        let mut one = Builder::new(module, function, layout, target, arch, convention, info, block, order.clone(), next, Some(switch_name.clone()));
+        one.visit_deferred(item)?;
         let root = one.control_root();
         one.dag.set_root(root);
         next = one.next_synthetic;
-        extra.push((case.this_bb(), BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
+        extra.push((block, BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
     }
     Ok(BlockDag { dag, phi_updates, live_ins, extra })
 }
@@ -143,6 +144,7 @@ impl<'a> Builder<'a> {
             order,
             deferred: Vec::new(),
             next_synthetic,
+            plan: None,
         }
     }
 }
@@ -166,8 +168,9 @@ struct Builder<'a> {
     block: BlockId,
     /// The blocks in layout order, with the ones a switch lowering adds.
     order: Vec<BlockId>,
-    deferred: Vec<(switch::CaseBlock, Operand)>,
+    deferred: Vec<switch::Deferred>,
     next_synthetic: u32,
+    plan: Option<super::switchcg::SwitchPlan>,
 }
 
 fn flags_of(flags: llrm_mir::opcode::Flags) -> SDNodeFlags {
