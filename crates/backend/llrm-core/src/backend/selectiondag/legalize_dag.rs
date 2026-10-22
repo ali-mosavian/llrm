@@ -139,7 +139,16 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if action == Action::Custom {
             if let Some(result) = self.hooks.lower_operation(self.dag, node) {
                 if result != node {
-                    self.replace_node(node, result);
+                    // A node with several results is replaced result by result
+                    // (the node of `MERGE_VALUES` the target returns).
+                    let results = self.dag.node(node).values.len() as u8;
+                    if results > 1 && self.dag.node(result).values.len() == results as usize {
+                        for res in 0..results {
+                            self.replace_node(SDValue { node: n, res }, SDValue { node: result.node, res });
+                        }
+                    } else {
+                        self.replace_node(node, result);
+                    }
                 }
                 return Ok(());
             }
