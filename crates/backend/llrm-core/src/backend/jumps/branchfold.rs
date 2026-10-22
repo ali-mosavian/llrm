@@ -121,6 +121,9 @@ struct Folder<'a> {
     entry: i64,
     /// Loop headers with a measured trip count stay where they are.
     protected: &'a BTreeSet<i64>,
+    /// The register file and width the effects of an instruction are worked
+    /// out in; none in a body that has no allocation (a test's).
+    regs: Option<(llrm_lir::registers::Regs, u32)>,
 }
 
 /// `body` with its branches folded; `protected` blocks are never bypassed.
@@ -158,6 +161,7 @@ impl<'a> Folder<'a> {
             odds: body.odds.clone(),
             entry: body.entry,
             protected,
+            regs: body.registers.map(|regs| (regs, body.bits)),
         }
     }
 
@@ -377,7 +381,109 @@ impl<'a> Folder<'a> {
                 return true;
             }
         }
-        false
+        self.hoist_common(index, &exit)
+    }
+
+    /// `HoistCommonCodeInSuccs` (L2043): the first instruction both ways of a
+    /// conditional branch begin with, where this block is the only way into
+    /// either, runs ahead of the branch (and of the compare that sets it up)
+    /// instead. Only a move of a register or a constant to a register the
+    /// compare and the branch do not touch, the kind allocation inserts.
+    fn hoist_common(
+        &mut self,
+        index: usize,
+        exit: &Exit,
+    ) -> bool {
+        let Some((regs, bits)) = self.regs else { return false };
+        let block = self.blocks[index].clone();
+        let (Some(cond), Some(taken)) = (&exit.cond, exit.taken) else { return false };
+        let Some(other) = exit.other.or_else(|| self.after(index)) else { return false };
+        if taken == other || taken == block.at || other == block.at {
+            return false;
+        }
+        let alone =
+            |at: i64| self.preds.get(&at).is_some_and(|entering| entering.len() == 1 && entering.contains(&block.at));
+        if !alone(taken) || !alone(other) {
+            return false;
+        }
+        let (Some(&one), Some(&two)) = (self.pos.get(&taken), self.pos.get(&other)) else { return false };
+        let (first, second) = (self.blocks[one].clone(), self.blocks[two].clone());
+        if !first.phis.is_empty() || !second.phis.is_empty() {
+            return false;
+        }
+        let lead = |block: &LirBlock| block.insns.iter().position(|insn| !insn.is_meta());
+        let (Some(at), Some(by)) = (lead(&first), lead(&second)) else { return false };
+        let (head, tail) = (&first.insns[at], &second.insns[by]);
+        if head.what != tail.what || !head.inserted() || !tail.inserted() {
+            return false;
+        }
+        let plain = |insn: &Insn| {
+            insn.what.as_ref().is_some_and(|what| {
+                what.op == Operation::Move
+                    && what.dests.iter().all(|loc| matches!(loc, crate::model::ir::Loc::Reg(_)))
+                    && what
+                        .sources
+                        .iter()
+                        .all(|loc| matches!(
+                            loc,
+                            crate::model::ir::Loc::Reg(_) | crate::model::ir::Loc::Imm(_)
+                        ))
+            }) && insn.defines.is_empty()
+                && insn.uses.is_empty()
+                && insn.call.is_none()
+                && insn.group.is_none()
+                && insn.symbol.is_none()
+                && insn.spread.is_empty()
+                && insn.clobbers.is_empty()
+                && !insn.volatile
+                && !insn.frame_adjust
+                && !insn.spill_reload
+                && !insn.spill_store
+        };
+        if !plain(head) {
+            return false;
+        }
+        let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, head, true, true) else {
+            return false;
+        };
+        // From the compare that sets up the branch, or the branch, to the end.
+        let last = block.insns.iter().position(|insn| Arc::ptr_eq(insn, cond)).expect("the branch is in its block");
+        let mut from = last;
+        if let Some(before) = block.insns[..last].iter().rposition(|insn| !insn.is_meta()) {
+            if block.insns[before].what.as_ref().is_some_and(|what| what.op == Operation::Compare) {
+                from = before;
+            }
+        }
+        let (mut used, mut defined) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
+        // The branches read the flags and no register; a move writes neither.
+        let branches =
+            |insn: &Insn| insn.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Branch | Operation::Jump));
+        for insn in block.insns[from..].iter().filter(|insn| !insn.is_meta() && !branches(insn)) {
+            let Some((read, write)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
+                return false;
+            };
+            used = used.or(&read);
+            defined = defined.or(&write);
+        }
+        if !writes.is_disjoint(&used) || !writes.is_disjoint(&defined) || !reads.is_disjoint(&defined) {
+            return false;
+        }
+        let hoisted = Arc::clone(head);
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        insns.insert(from, hoisted);
+        self.set(index, block.with_insns(insns).into_inner());
+        for (place, lead) in [(one, at), (two, by)] {
+            let gone = self.blocks[place].clone();
+            let insns: Vec<Arc<Insn>> = gone
+                .insns
+                .iter()
+                .enumerate()
+                .filter(|(position, _)| *position != lead)
+                .map(|(_, insn)| Arc::clone(insn))
+                .collect();
+            self.set(place, gone.with_insns(insns).into_inner());
+        }
+        true
     }
 
     /// `block` stays; every block that enters `index` goes to `onward` instead.

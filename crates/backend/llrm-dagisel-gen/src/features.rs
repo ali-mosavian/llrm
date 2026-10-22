@@ -40,6 +40,11 @@ impl Cpu {
             };
             atoms.insert(atom.clone(), rule);
         }
+        // A CPU's own `[cpu.NAME.atom]` rows win over the shared `[atom]` rows.
+        for (atom, rule) in doc.get("cpu").and_then(|c| c.get(name)).and_then(|c| c.get("atom")).and_then(|a| a.as_table()).into_iter().flatten() {
+            let toml::Value::Boolean(b) = rule else { return Err(format!("atom `{atom}`: expected a boolean")) };
+            atoms.insert(atom.clone(), AtomRule::Constant(*b));
+        }
         let dynamic = doc
             .get("dynamic")
             .and_then(|d| d.as_table())

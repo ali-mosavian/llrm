@@ -14,9 +14,9 @@
 //! The builder (`builder::build_block`) visits a block's instructions in order
 //! and keeps the pin's chain bookkeeping: pending loads, pending exports,
 //! `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-//! lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the block
-//! that defines it ends in `CopyToReg`, the blocks that read it start from
-//! `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+//! lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+//! block that defines it ends in `CopyToReg`, the blocks that read it start
+//! from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
 //! Calls, returns, arguments and switches are refused (`Refused`) until A2.
 //!
@@ -80,6 +80,8 @@ pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
+pub mod opcodes;
+pub mod schedule;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
@@ -87,5 +89,9 @@ pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod opcodes_tests;
+#[cfg(test)]
+mod schedule_tests;
 #[cfg(test)]
 mod tests;
