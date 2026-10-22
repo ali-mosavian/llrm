@@ -430,16 +430,6 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
-    // `simplifyCondBranch`'s value comparisons (SimplifyCFG.cpp:8963), before
-    // the compare chain; a `switch` has them in `switchopt`.
-    if function.is_placed(block)
-        && function.terminator(block).is_some_and(|last| {
-            function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 3
-        })
-        && crate::switchvalue::folded(options, context, spec, function, block)
-    {
-        return true;
-    }
     if function.is_placed(block) && icmpchain::folded(context, spec, function, block) {
         return true;
     }
