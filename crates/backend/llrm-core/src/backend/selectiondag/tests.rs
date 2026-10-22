@@ -408,7 +408,7 @@ mod builder {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
-                match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
+                match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                     Ok(done) => {
                         built.insert(name, normalized(&done.dag.dump()));
                     }
@@ -449,5 +449,42 @@ mod builder {
         for (name, dag) in &ours {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }
+    }
+
+    /// A direct call: `callseq_start`, the stack stores, `X86ISD::CALL`,
+    /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
+    /// is refused before this piece.
+    #[test]
+    fn calls_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/calls.ll");
+        let pin = pin_blocks(include_str!("golden/calls.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// A `watcallcc` call passes its first four word arguments in AX, DX, BX,
+    /// CX: the call's register copies are `CopyToReg` of those, in that order,
+    /// glued, each read back as an operand of `X86ISD::CALL`. A call that
+    /// left them on the stack would show `store` nodes instead.
+    #[test]
+    fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
+        let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+            declare watcallcc i16 @w(i16, i16, i16, i16)\n\
+            define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  %r = call watcallcc i16 @w(i16 %a, i16 %b, i16 %c, i16 %d)\n  ret i16 %r\n}\n";
+        let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let built = build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap()).unwrap_or_else(|why| panic!("{}", why.0));
+        let dump = built.dag.dump();
+        let copies: Vec<&str> = dump.lines().filter(|line| line.contains("CopyToReg") && line.contains(" $")).collect();
+        let registers: Vec<&str> = copies.iter().filter_map(|line| line.split("Register:i16 $").nth(1)?.split(',').next()).collect();
+        assert_eq!(registers, ["ax", "dx", "bx", "cx", "ax"], "four arguments, then the result:\n{dump}");
+        assert!(!dump.contains("store"), "{dump}");
     }
 }

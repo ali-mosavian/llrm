@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:a93cb4719dd948ddc57595f67272c7af66be7409c83339f2d2517bdef227fbce -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:0a0b34d17dd860e09364eace3dce38f5ef0aeda3b949cd1202b2b4099bede175 -->
 
 # selectiondag
 
@@ -25,7 +25,9 @@ that defines it ends in `CopyToReg`, the blocks that read it start from
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
 Arguments and returns go through the target's `Convention` (stack
 parameters are loads of fixed objects, register ones live-in copies;
-`ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+`ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+Indirect calls, intrinsics, switches, floats and values wider than a
 register are refused (`Refused`) until their pieces land.
 
 ## Runs
@@ -68,6 +70,10 @@ ones; comparisons renumber them. Exit: none. Owner sdag-a.
 DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
 `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD20: a call's `TargetGlobalAddress` carries no relocation flag
+(`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+Exit: none. Owner sdag-a.
 
 ## See also
 LLVM's `SelectionDAG::getNode`
