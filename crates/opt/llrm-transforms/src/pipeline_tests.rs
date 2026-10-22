@@ -1470,6 +1470,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "simplifycfg@1438",
             "float2int@1594",
             "instsimplify@1662",
+            "tailrec@1677",
             "simplifycfg@1682",
             "simplifycfg@2376"
         ]
@@ -2251,6 +2252,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "simplifycfg@1438",
             "float2int@1594",
             "instsimplify@1662",
+            "tailrec@1677",
             "simplifycfg@1682",
             "simplifycfg@2376"
         ]
@@ -2374,6 +2376,30 @@ out:
         ("-Omax", pipeline::Options::aggressive()),
     ] {
         assert!(entry_branches(options), "{level}: the slot did not unswitch the header test");
+    }
+}
+
+/// recmany -O1 -m32 ran 1500 frames deep (60 KB of stack, DOS/32A exception
+/// 06h): the pin's -O1 has TailCallElim only at PassBuilderPipelines.cpp#L1677,
+/// a slot ours did not have, so a self-recursive tail call stayed a call. The
+/// slot must be built at every level and turn the call into a loop.
+#[test]
+fn test_the_late_tail_call_slot_makes_a_loop_of_a_self_call_at_every_level() {
+    let text = "define i32 @f(i32 %a, i32 %n) {\nb0:\n  %z = icmp eq i32 %n, 0\n  br i1 %z, label %done, label %rec\nrec:\n  %m = sub i32 %n, 1\n  %b = add i32 %a, %n\n  %r = tail call i32 @f(i32 %b, i32 %m)\n  ret i32 %r\ndone:\n  ret i32 %a\n}\n";
+    for (level, options) in [
+        ("-O1", pipeline::Options::basic()),
+        ("-O2", pipeline::Options::standard()),
+        ("-Os", pipeline::Options::size()),
+        ("-O3", pipeline::Options::speed()),
+    ] {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("tailrec@1677".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "tailrec@1677"), "{level}: no slot");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        let after = llrm_mir::print::module(&module);
+        assert!(!after.contains("call i32 @f"), "{level}: the self call stayed:\n{after}");
     }
 }
 
