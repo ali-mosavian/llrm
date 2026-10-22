@@ -353,7 +353,9 @@ fn passing(
             let Some(found) = entry(arch, convention, variadic) else {
                 return refuse(format!("calling convention {convention}"));
             };
-            let pops = convention == llrm_mir::opcode::FAST || found.cleanup == Cleanup::Callee;
+            // `fastcc` is C's callee-pop twin unless the description states a `fastcc` of its own.
+            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
                 pops,
