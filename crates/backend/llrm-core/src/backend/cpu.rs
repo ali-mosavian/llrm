@@ -160,6 +160,10 @@ pub struct Profile {
     /// the language allows to stay (Nib and BASIC: only a store the program
     /// writes rounds).
     pub rounds_float_spills: bool,
+    /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
+    /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
+    /// pin rounds; QB follows real BC text.
+    pub spills_extended: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -309,6 +313,7 @@ impl Profile {
             aggressive: false,
             float_store: false,
             rounds_float_spills: false,
+            spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -445,7 +450,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -502,7 +507,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -518,6 +523,7 @@ pub fn tuned_optimizing(
     float_store: bool,
     aggressive: bool,
     rounds_float_spills: bool,
+    spills_extended: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -534,6 +540,7 @@ pub fn tuned_optimizing(
         float_store,
         aggressive,
         rounds_float_spills,
+        spills_extended,
     );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
@@ -547,6 +554,7 @@ pub fn tuned_optimizing(
         float_store,
         aggressive,
         rounds_float_spills,
+        spills_extended,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);

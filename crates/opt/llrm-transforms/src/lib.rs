@@ -215,6 +215,7 @@ pub mod local;
 mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
+pub mod loopfilter;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;

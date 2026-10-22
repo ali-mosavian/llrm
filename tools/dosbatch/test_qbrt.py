@@ -16,7 +16,7 @@ import dosbatch  # noqa: E402
 import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
-from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
+from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, KNOWN, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
 
 
 @pytest.fixture(scope="module")
@@ -30,13 +30,6 @@ def results(tmp_path_factory):
 # Programs that wait for something outside the runtime.  Strict: one that starts
 # to pass must leave this table.
 WAITING: dict[str, str] = {}
-
-# (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
-# test so the entry goes.  Only the flat target has any.
-KNOWN: dict[tuple[str, str], str] = {
-    ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
-}
-
 
 def case(name: str):
     reason = WAITING.get(name)

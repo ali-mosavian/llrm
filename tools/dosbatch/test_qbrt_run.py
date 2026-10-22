@@ -63,3 +63,18 @@ def test_the_tool_loads_without_pytest():
         text=True,
     )
     assert done.returncode == 0, done.stderr[-300:]
+
+
+def run_of(difference: str = "", status: str = "ok"):
+    from types import SimpleNamespace as N
+
+    return N(reference=N(status="ok"), candidate=N(status=status, detail=None), difference=difference, screen_difference="")
+
+
+def test_a_known_difference_is_expected_and_one_that_now_matches_fails():
+    """qbrt_run counted `scores` at the flat target as a difference although test_qbrt.KNOWN lists it: a clean run read 217/218 and hid new failures."""
+    known = {("scores", "flat"): "#1542"}
+    assert qbrt_run.unexpected(known, "scores", "flat", run_of("x")) is None
+    assert "remove it from KNOWN" in qbrt_run.unexpected(known, "scores", "flat", run_of())
+    assert qbrt_run.unexpected(known, "other", "flat", run_of("x")) == "x"
+    assert qbrt_run.unexpected(known, "other", "flat", run_of()) is None
