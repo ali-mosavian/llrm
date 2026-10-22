@@ -569,7 +569,7 @@ mod legalize_types {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -661,7 +661,7 @@ mod legalize_dag {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -752,7 +752,7 @@ mod expand_node {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -832,7 +832,7 @@ mod x86_conditions {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -944,7 +944,7 @@ mod setcc_result {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -1089,7 +1089,7 @@ mod combiner {
     fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
         dag.get_load(vt, chain, ptr, info)
     }
 
@@ -1209,7 +1209,7 @@ mod far_load {
         let mut dag = dag();
         let ptr = dag.get_register(EVT::I16, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: MVT::Far.into(), align: 2, volatile: false, base: MemBase::Stack(1) };
+        let info = MemInfo { mem_vt: MVT::Far.into(), align: 2, volatile: false, base: MemBase::Stack(1), ext: None };
         let far = dag.get_load(MVT::Far.into(), chain, ptr, info);
         let offset = dag.get_node(ISD::Truncate, EVT::I16, &[far]);
         dag.set_root(offset);
@@ -1374,7 +1374,7 @@ mod wide_shifts {
         let x = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1) };
+        let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1), ext: None };
         let amount = dag.get_load(EVT::I8, chain, ptr, info);
         let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
         let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
@@ -1394,7 +1394,7 @@ mod wide_shifts {
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
         let load = |dag: &mut SelectionDAG, vt: EVT, slot: i32| {
-            let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+            let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
             dag.get_load(vt, chain, ptr, info)
         };
         let (lo, hi, amount) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I8, 3));
@@ -1419,12 +1419,41 @@ mod wide_shifts {
         let x = dag.get_constant_with(5, EVT::I64, false, true);
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1) };
+        let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1), ext: None };
         let amount = dag.get_load(EVT::I8, chain, ptr, info);
         let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
         let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
         dag.set_root(low);
         let error = TypeLegalizer::new(&mut dag, &tli).run().unwrap_err();
         assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
+    }
+}
+
+mod extload {
+    use super::super::actions::LoadExt;
+    use super::super::dump::normalized;
+    use super::*;
+
+    /// An extending load keeps its narrow memory type and prints the
+    /// extension as the pin does (`zext from i8`); a plain load prints
+    /// neither. Loads were never extending, so a combine could not make one.
+    #[test]
+    fn an_extending_load_dumps_its_extension() {
+        let mut dag = dag();
+        let entry = dag.entry_node();
+        let ptr = dag.get_global_address(EVT::I32, 0, 0);
+        dag.global_names = vec!["g".into()];
+        let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Global(0), ext: None };
+        let plain = dag.get_load(EVT::I8, entry, ptr, info);
+        let wide = dag.get_ext_load(LoadExt::ZExtLoad, EVT::I32, entry, ptr, info);
+        assert_ne!(plain, wide, "the extension is part of the node");
+        assert_eq!(dag.value_type(wide), EVT::I32);
+        let joined = dag.get_token_factor(&[SDValue { node: plain.node, res: 1 }, SDValue { node: wide.node, res: 1 }]);
+        dag.set_root(joined);
+        let dump = dag.dump();
+        assert!(dump.contains("i32,ch = load<(load (s8) from @g), zext from i8>"), "{dump}");
+        let flat = normalized(&dump);
+        assert!(flat.contains("load<zext from i8>"), "{flat}");
+        assert!(flat.contains("i8,ch = load t"), "{flat}");
     }
 }

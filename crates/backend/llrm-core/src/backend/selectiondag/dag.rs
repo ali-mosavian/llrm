@@ -78,6 +78,8 @@ pub struct MemInfo {
     pub align: u32,
     pub volatile: bool,
     pub base: MemBase,
+    /// The extension of a load narrower than its result (`LoadExtType`); none for a plain load.
+    pub ext: Option<super::actions::LoadExt>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -482,6 +484,14 @@ impl SelectionDAG {
     /// `getLoad` (unindexed, non-extending): `load chain, ptr, poison`.
     pub fn get_load(&mut self, vt: EVT, chain: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
         let offset = self.get_poison(self.value_type(ptr));
+        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
+    /// `getExtLoad`: a load of `info.mem_vt` extended to `vt`.
+    pub fn get_ext_load(&mut self, ext: super::actions::LoadExt, vt: EVT, chain: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
+        assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
+        let offset = self.get_poison(self.value_type(ptr));
+        let info = MemInfo { ext: Some(ext), ..info };
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 

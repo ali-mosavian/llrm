@@ -99,10 +99,10 @@ impl Builder<'_> {
             }
             let vt = EVT::integer(width as u32 * 8);
             let from = self.dag.get_object_ptr_offset(src, src_off as i64);
-            let info = MemInfo { mem_vt: vt, align: common_alignment(src_align, src_off) as u32, volatile: false, base: MemBase::Unknown };
+            let info = MemInfo { mem_vt: vt, align: common_alignment(src_align, src_off) as u32, volatile: false, base: MemBase::Unknown, ext: None };
             let value = self.dag.get_load(vt, chain, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
-            let info = MemInfo { mem_vt: vt, align: common_alignment(dst_align, dst_off) as u32, volatile: false, base: MemBase::Unknown };
+            let info = MemInfo { mem_vt: vt, align: common_alignment(dst_align, dst_off) as u32, volatile: false, base: MemBase::Unknown, ext: None };
             let store = self.dag.get_store(chain, value, to, info);
             chains.push(SDValue { node: value.node, res: 1 });
             chains.push(store);
@@ -130,7 +130,7 @@ impl Builder<'_> {
             let vt = EVT::integer(width as u32 * 8);
             let fill = if width < largest { self.dag.get_node(ISD::Truncate, vt, &[splat]) } else { splat };
             let to = self.dag.get_object_ptr_offset(dst, off as i64);
-            let info = MemInfo { mem_vt: vt, align: common_alignment(align, off) as u32, volatile: false, base: MemBase::Unknown };
+            let info = MemInfo { mem_vt: vt, align: common_alignment(align, off) as u32, volatile: false, base: MemBase::Unknown, ext: None };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;
             left = left.saturating_sub(width);

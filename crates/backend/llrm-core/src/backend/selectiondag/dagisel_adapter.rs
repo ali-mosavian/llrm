@@ -328,8 +328,16 @@ impl Dag for DagisAdapter<'_> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
     }
     fn load_ext_type(&self, node: u32) -> Option<LoadExt> {
-        // Our `Load` never extends (SD300).
-        (self.dag.nodes()[node as usize].opcode == ISD::Load).then_some(LoadExt::NonExt)
+        let node = &self.dag.nodes()[node as usize];
+        (node.opcode == ISD::Load).then(|| match node.data {
+            NodeData::Mem(info) => match info.ext {
+                None => LoadExt::NonExt,
+                Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,
+                Some(super::actions::LoadExt::SExtLoad) => LoadExt::SExt,
+                Some(super::actions::LoadExt::ZExtLoad) => LoadExt::ZExt,
+            },
+            _ => LoadExt::NonExt,
+        })
     }
     fn is_indexed(&self, _: u32) -> bool {
         false
