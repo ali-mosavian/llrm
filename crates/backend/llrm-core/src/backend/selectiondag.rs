@@ -1,5 +1,6 @@
-//! SelectionDAG: value types, opcodes, the node arena and `getNode` with
-//! CSE and constant folding (pin `SelectionDAG.cpp`).
+//! SelectionDAG: value types, opcodes, the node arena, `getNode` with CSE and
+//! constant folding (pin `SelectionDAG.cpp`), and the builder that makes one
+//! DAG per block of MIR (pin `SelectionDAGBuilder.cpp`, scalar subset).
 //!
 //! # How it works
 //! Nodes live in an arena ([`SelectionDAG`]); a value is `SDValue { node,
@@ -10,8 +11,17 @@
 //! on. Glue results are never shared. Constants hold their bits at the
 //! node's width (up to 128).
 //!
+//! The builder (`builder::build_block`) visits a block's instructions in order
+//! and keeps the pin's chain bookkeeping: pending loads, pending exports,
+//! `getRoot` / `getControlRoot`. A value used outside its block or by a phi
+//! lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+//! block that defines it ends in `CopyToReg`, the blocks that read it start
+//! from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+//! predecessor. `dump::normalized` makes a dump comparable with the pin's.
+//! Calls, returns, arguments and switches are refused (`Refused`) until A2.
+//!
 //! # Runs
-//! Nothing runs it yet: the builder (A1) and legalizer are the callers. The
+//! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
 //!
 //! DEVIATE SD10: no `SDLoc`; debug locations and IR order are not carried.
@@ -35,6 +45,22 @@
 //! `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
 //! vector MIR. Owner sdag-a. Review 2026-11-13.
 //!
+//! DEVIATE SD15: `FindMergedConditions` (`a && b` branches split into two
+//! branches) is not ported; the condition stays one `setcc`/`and`. Exit: the
+//! switch-lowering piece (A2). Owner sdag-a. Review 2026-11-13.
+//!
+//! DEVIATE SD16: no `LiveOutRegInfo`: a value copied out of a block reads
+//! back without `AssertZext`/`AssertSext`. Exit: with `computeKnownBits`
+//! (sdag-b). Owner sdag-a. Review 2026-11-13.
+//!
+//! DEVIATE SD17: virtual register numbers differ from the pin's, whose
+//! selection of earlier blocks allocates registers between the exported
+//! ones; comparisons renumber them. Exit: none. Owner sdag-a.
+//!
+//! DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
+//! `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
+//! Owner sdag-a. Review 2026-11-13.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -43,16 +69,28 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
+pub mod actions;
+pub mod builder;
 mod dag;
+pub mod dump;
 pub mod fold;
+pub mod function_lowering;
 pub mod isd;
+pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
+pub mod opcodes;
+pub mod schedule;
 
-pub use dag::{BooleanContents, DagConfig, NodeData, SDNode, SDNodeFlags, SDValue, SelectionDAG};
+pub use actions::{Action, Features, LoadExt, TargetLowering};
+pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod opcodes_tests;
+#[cfg(test)]
+mod schedule_tests;
 #[cfg(test)]
 mod tests;

@@ -22,6 +22,17 @@ impl SDNodeFlags {
     pub const NO_SIGNED_WRAP: SDNodeFlags = SDNodeFlags(2);
     pub const EXACT: SDNodeFlags = SDNodeFlags(4);
     pub const NON_NEG: SDNodeFlags = SDNodeFlags(8);
+    pub const DISJOINT: SDNodeFlags = SDNodeFlags(16);
+    pub const SAME_SIGN: SDNodeFlags = SDNodeFlags(32);
+    pub const IN_BOUNDS: SDNodeFlags = SDNodeFlags(64);
+
+    pub fn union(self, other: SDNodeFlags) -> SDNodeFlags {
+        SDNodeFlags(self.0 | other.0)
+    }
+
+    pub fn with(self, flag: SDNodeFlags, on: bool) -> SDNodeFlags {
+        if on { self.union(flag) } else { self }
+    }
 
     pub fn intersect(self, other: SDNodeFlags) -> SDNodeFlags {
         SDNodeFlags(self.0 & other.0)
@@ -47,6 +58,25 @@ pub enum NodeData {
     Global { symbol: u32, offset: i64 },
     Block(u32),
     Symbol(u32),
+    Mem(MemInfo),
+}
+
+/// What identifies a memory access beyond its operands: the pin's
+/// `MachineMemOperand` as far as `CSEMap` and the dump use it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MemInfo {
+    pub mem_vt: EVT,
+    pub align: u32,
+    pub volatile: bool,
+    pub base: MemBase,
+}
+
+/// `MachinePointerInfo`'s value: what the access is relative to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MemBase {
+    Unknown,
+    Global(u32),
+    Stack(i32),
 }
 
 #[derive(Clone, Debug)]
@@ -73,13 +103,25 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// The pointer type (`TLI->getPointerTy`).
+    pub pointer: EVT,
 }
 
 impl Default for DagConfig {
-    /// x86: 0 or 1, and symbol offsets fold.
+    /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false for the default PIC model).
     fn default() -> DagConfig {
-        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: true }
+        DagConfig { boolean_contents: BooleanContents::ZeroOrOne, offset_folding: false, pointer: EVT::I32 }
     }
+}
+
+/// What a `replace_all_uses_with` did to a user of the replaced value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rauw {
+    /// The user reads the new value and is still its own node.
+    Updated(u32),
+    /// The user became equal to an existing node and its results were
+    /// replaced by that node's in turn.
+    Merged { from: u32, into: u32 },
 }
 
 type CseKey = (ISD, Vec<EVT>, Vec<SDValue>, NodeData);
@@ -87,20 +129,155 @@ type CseKey = (ISD, Vec<EVT>, Vec<SDValue>, NodeData);
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
 pub struct SelectionDAG {
     nodes: Vec<SDNode>,
+    /// Per node, the nodes that have read one of its results (may hold
+    /// stale or repeated entries; `users` filters them).
+    uses: Vec<Vec<u32>>,
     cse: HashMap<CseKey, u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
+    root: SDValue,
+    /// Names the dump prints for `Global`/`Block` payloads, by id.
+    pub global_names: Vec<String>,
+    pub block_names: Vec<String>,
 }
 
 impl SelectionDAG {
     pub fn new(config: DagConfig) -> SelectionDAG {
-        let mut dag = SelectionDAG { nodes: Vec::new(), cse: HashMap::new(), config, entry: SDValue { node: 0, res: 0 } };
-        dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None);
+        let zero = SDValue { node: 0, res: 0 };
+        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
+        dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
+        dag.root = dag.entry;
         dag
     }
 
     pub fn entry_node(&self) -> SDValue {
         self.entry
+    }
+
+    pub fn get_root(&self) -> SDValue {
+        self.root
+    }
+
+    pub fn set_root(&mut self, root: SDValue) {
+        self.root = root;
+    }
+
+    pub fn config(&self) -> &DagConfig {
+        &self.config
+    }
+
+    /// How many results of other nodes read `value`'s node (`use_size`).
+    pub fn use_count(&self, node: u32) -> usize {
+        self.nodes.iter().flat_map(|other| &other.ops).filter(|op| op.node == node).count()
+    }
+
+    pub fn nodes(&self) -> &[SDNode] {
+        &self.nodes
+    }
+
+    /// Every node id in creation order (`allnodes()`).
+    pub fn node_ids(&self) -> std::ops::Range<u32> {
+        0..self.nodes.len() as u32
+    }
+
+    /// The nodes that read `value` as an operand, in creation order, once
+    /// each (`SDValue::users()`).
+    pub fn users(&self, value: SDValue) -> impl Iterator<Item = u32> + '_ {
+        let mut users: Vec<u32> = self.uses.get(value.node as usize).into_iter().flatten().copied().filter(|&user| self.nodes[user as usize].ops.contains(&value)).collect();
+        users.sort_unstable();
+        users.dedup();
+        users.into_iter()
+    }
+
+    fn note_uses(&mut self, user: u32) {
+        for at in 0..self.nodes[user as usize].ops.len() {
+            let operand = self.nodes[user as usize].ops[at].node as usize;
+            self.uses[operand].push(user);
+        }
+    }
+
+    fn key_of(&self, node: u32) -> Option<CseKey> {
+        let data = &self.nodes[node as usize];
+        (!data.values.contains(&EVT::GLUE)).then(|| (data.opcode, data.values.clone(), data.ops.clone(), data.data))
+    }
+
+    /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
+    /// user that then equals an existing node is replaced by it in turn
+    /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
+    /// stay in it with no users. The root follows.
+    pub fn replace_all_uses_with(&mut self, from: SDValue, to: SDValue) -> Vec<Rauw> {
+        let mut events = Vec::new();
+        if from == to {
+            return events;
+        }
+        let mut work = vec![(from, to)];
+        while let Some((from, to)) = work.pop() {
+            if self.root == from {
+                self.root = to;
+            }
+            for user in self.users(from).collect::<Vec<_>>() {
+                if let Some(key) = self.key_of(user) {
+                    if self.cse.get(&key) == Some(&user) {
+                        self.cse.remove(&key);
+                    }
+                }
+                for op in &mut self.nodes[user as usize].ops {
+                    if *op == from {
+                        *op = to;
+                    }
+                }
+                self.uses[to.node as usize].push(user);
+                let Some(key) = self.key_of(user) else {
+                    events.push(Rauw::Updated(user));
+                    continue;
+                };
+                match self.cse.get(&key) {
+                    Some(&existing) if existing != user => {
+                        events.push(Rauw::Merged { from: user, into: existing });
+                        let flags = self.nodes[existing as usize].flags.intersect(self.nodes[user as usize].flags);
+                        self.nodes[existing as usize].flags = flags;
+                        let results = self.nodes[user as usize].values.len() as u8;
+                        for res in 0..results {
+                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }));
+                        }
+                    }
+                    _ => {
+                        events.push(Rauw::Updated(user));
+                        self.cse.insert(key, user);
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    /// `UpdateNodeOperands`: `node` reads `ops` instead. If that equals an
+    /// existing node, that node is returned (and `node` stays as it was,
+    /// unused); else `node` itself, re-entered in the CSE map.
+    pub fn update_node_operands(&mut self, node: u32, ops: &[SDValue]) -> u32 {
+        if let Some(key) = self.key_of(node) {
+            if self.cse.get(&key) == Some(&node) {
+                self.cse.remove(&key);
+            }
+        }
+        let old = std::mem::replace(&mut self.nodes[node as usize].ops, ops.to_vec());
+        self.note_uses(node);
+        match self.key_of(node) {
+            Some(key) => match self.cse.get(&key) {
+                Some(&existing) if existing != node => {
+                    self.nodes[node as usize].ops = old;
+                    if let Some(key) = self.key_of(node) {
+                        self.cse.insert(key, node);
+                    }
+                    existing
+                }
+                _ => {
+                    self.cse.insert(key, node);
+                    node
+                }
+            },
+            None => node,
+        }
     }
 
     pub fn node_count(&self) -> usize {
@@ -168,6 +345,8 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode { opcode, values: key.1.clone(), ops: key.2.clone(), flags, data });
+        self.uses.push(Vec::new());
+        self.note_uses(index);
         if shareable {
             self.cse.insert(key, index);
         }
@@ -217,6 +396,81 @@ impl SelectionDAG {
             BooleanContents::ZeroOrOne => (bits <= 1).then_some(bits == 1),
             BooleanContents::ZeroOrNegativeOne => (bits == 0 || bits == all_ones).then_some(bits != 0),
             BooleanContents::Undefined => Some(bits != 0),
+        }
+    }
+
+    pub fn get_basic_block(&mut self, block: u32) -> SDValue {
+        self.intern(ISD::BasicBlock, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Block(block))
+    }
+
+    pub fn get_frame_index(&mut self, vt: EVT, index: i32) -> SDValue {
+        self.intern(ISD::FrameIndex, &[vt], &[], SDNodeFlags::default(), NodeData::FrameIndex(index))
+    }
+
+    /// `getTokenFactor`.
+    pub fn get_token_factor(&mut self, chains: &[SDValue]) -> SDValue {
+        self.get_node(ISD::TokenFactor, EVT::OTHER, chains)
+    }
+
+    /// `getCopyToReg` without glue.
+    pub fn get_copy_to_reg(&mut self, chain: SDValue, reg: u32, value: SDValue) -> SDValue {
+        let reg_node = self.get_register(self.value_type(value), reg);
+        self.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, reg_node, value])
+    }
+
+    /// `getCopyFromReg`: the value is result 0, the chain result 1.
+    pub fn get_copy_from_reg(&mut self, chain: SDValue, reg: u32, vt: EVT) -> SDValue {
+        let reg_node = self.get_register(vt, reg);
+        self.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER], &[chain, reg_node])
+    }
+
+    /// `getLoad` (unindexed, non-extending): `load chain, ptr, poison`.
+    pub fn get_load(&mut self, vt: EVT, chain: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
+        let offset = self.get_poison(self.value_type(ptr));
+        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
+    /// `getStore` (unindexed, not truncating): `store chain, value, ptr, poison`.
+    pub fn get_store(&mut self, chain: SDValue, value: SDValue, ptr: SDValue, info: MemInfo) -> SDValue {
+        let offset = self.get_poison(self.value_type(ptr));
+        self.intern(ISD::Store, &[EVT::OTHER], &[chain, value, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
+    /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
+    /// target asks to preserve pointer arithmetic, and ours does not).
+    pub fn get_mem_base_plus_offset(&mut self, ptr: SDValue, offset: SDValue, flags: SDNodeFlags) -> SDValue {
+        let vt = self.value_type(ptr);
+        let flags = SDNodeFlags(flags.0 & !SDNodeFlags::IN_BOUNDS.0);
+        self.get_node_flags(ISD::Add, vt, &[ptr, offset], flags)
+    }
+
+    /// `getObjectPtrOffset` with a constant offset; the constant node exists
+    /// even when it is zero and the add folds away, as in the pin.
+    pub fn get_object_ptr_offset(&mut self, ptr: SDValue, offset: i64) -> SDValue {
+        let vt = self.value_type(ptr);
+        let index = self.get_constant(offset as u128, vt);
+        self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
+    }
+
+    pub fn get_zext_or_trunc(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    pub fn get_sext_or_trunc(&mut self, value: SDValue, vt: EVT) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::SignExtend, vt, &[value])
         }
     }
 

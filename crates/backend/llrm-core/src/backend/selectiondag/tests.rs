@@ -150,7 +150,7 @@ fn select_on_a_constant_condition_and_equal_arms() {
 
 #[test]
 fn a_global_plus_a_constant_folds_into_the_symbol() {
-    let mut dag = dag();
+    let mut dag = SelectionDAG::new(DagConfig { offset_folding: true, ..DagConfig::default() });
     let global = dag.get_global_address(EVT::I32, 7, 4);
     let eight = dag.get_constant(8, EVT::I32);
     let sum = dag.get_node(ISD::Add, EVT::I32, &[global, eight]);
@@ -180,6 +180,26 @@ fn bit_counts_of_constants() {
     let bswap = dag.get_constant(0x1234, EVT::I16);
     let swapped = dag.get_node(ISD::BSwap, EVT::I16, &[bswap]);
     assert_eq!(dag.constant(swapped), Some(0x3412));
+}
+
+/// Replacing a value rewrites its users; two users that become equal are one
+/// node after (the pin's `AddModifiedNodeToCSEMaps`), or a later `getNode` of
+/// the rewritten expression would build a second copy.
+#[test]
+fn replacing_a_value_rewrites_users_and_merges_equal_ones() {
+    let mut dag = dag();
+    let (x, y, z) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2), arg(&mut dag, EVT::I32, 3));
+    let xz = dag.get_node(ISD::Add, EVT::I32, &[x, z]);
+    let yz = dag.get_node(ISD::Add, EVT::I32, &[y, z]);
+    let outer_x = dag.get_node(ISD::Mul, EVT::I32, &[xz, z]);
+    let outer_y = dag.get_node(ISD::Mul, EVT::I32, &[yz, z]);
+    assert_eq!(dag.users(xz).collect::<Vec<_>>(), vec![outer_x.node]);
+    dag.replace_all_uses_with(x, y);
+    assert_eq!(dag.users(x).count(), 0);
+    assert_eq!(dag.get_node(ISD::Add, EVT::I32, &[y, z]), yz, "x+z became y+z, the existing node");
+    assert_eq!(dag.get_node(ISD::Mul, EVT::I32, &[yz, z]), outer_y, "and (x+z)*z the existing (y+z)*z");
+    assert_eq!(dag.node(outer_x).ops[0], yz);
+    assert_eq!(dag.node_ids().count(), dag.node_count());
 }
 
 mod type_actions {
@@ -230,5 +250,285 @@ mod type_actions {
         assert_eq!(conv(&TargetLoweringInfo::x86_16(), MVT::Far.into()), (TypeAction::ExpandInteger, EVT::I16));
         let m32 = std::panic::catch_unwind(|| TargetLoweringInfo::x86_32().type_action(MVT::Far.into()));
         assert!(m32.is_err());
+    }
+}
+
+mod action_table {
+    use super::*;
+
+    fn p5() -> TargetLowering {
+        TargetLowering::x86_32(Features::default(), MVT::I32)
+    }
+
+    fn act(t: &TargetLowering, op: ISD, vt: MVT) -> Action {
+        t.operation_action(op, vt.into())
+    }
+
+    /// The pin's X86 makes `select` and `setcc` Custom at every integer width
+    /// on a CPU with no CMOV, and `LowerSELECT` branches; with the table empty
+    /// they are Legal and a select reaches the matcher with no instruction.
+    #[test]
+    fn select_is_custom_without_cmov() {
+        let t = p5();
+        for vt in [MVT::I8, MVT::I16, MVT::I32, MVT::F32, MVT::F64, MVT::F80] {
+            assert_eq!(act(&t, ISD::Select, vt), Action::Custom, "{vt:?}");
+            assert_eq!(act(&t, ISD::SetCC, vt), Action::Custom, "{vt:?}");
+        }
+        let empty = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        assert_eq!(act(&empty, ISD::Select, MVT::I32), Action::Legal);
+    }
+
+    /// Wide integers: the type is expanded (B0a) and the division family is
+    /// `Expand` for every width, so `SDIVREM` is the two-result form.
+    #[test]
+    fn i64_expands_and_division_is_expanded() {
+        let t = p5();
+        assert_eq!(t.types.type_action(EVT::I64), TypeAction::ExpandInteger);
+        for vt in [MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
+            for op in [ISD::SDiv, ISD::UDiv, ISD::SRem, ISD::URem, ISD::MulHS, ISD::MulHU] {
+                assert_eq!(act(&t, op, vt), Action::Expand, "{op:?} {vt:?}");
+            }
+        }
+        assert_eq!(act(&t, ISD::Add, MVT::I32), Action::Legal);
+    }
+
+    /// An `i8` conversion to float promotes; a table without the x87 arm left
+    /// `i8 sitofp` Legal, which no instruction takes.
+    #[test]
+    fn byte_conversions_promote() {
+        let t = p5();
+        assert_eq!(act(&t, ISD::SIntToFp, MVT::I8), Action::Promote);
+        assert_eq!(act(&t, ISD::UIntToFp, MVT::I16), Action::Promote);
+        assert_eq!(act(&t, ISD::FpToSInt, MVT::I8), Action::Promote);
+        assert_eq!(act(&t, ISD::SIntToFp, MVT::I32), Action::Custom);
+        assert_eq!(act(&t, ISD::FpToUInt, MVT::I32), Action::Custom);
+    }
+
+    /// The bit counts of a CPU with no BMI, LZCNT or POPCNT: byte and word
+    /// `cttz` promote to `i32`, `ctlz` and `ctpop` are Custom (the expansion
+    /// `bitcounts.rs` makes today); with POPCNT the small `ctpop`s promote.
+    #[test]
+    fn bit_counts_follow_the_cpu() {
+        let t = p5();
+        assert_eq!(act(&t, ISD::CtTz, MVT::I8), Action::Promote);
+        assert_eq!(t.type_to_promote_to(ISD::CtTz, MVT::I16), MVT::I32);
+        assert_eq!(act(&t, ISD::CtTz, MVT::I32), Action::Custom);
+        assert_eq!(act(&t, ISD::CtLz, MVT::I32), Action::Custom);
+        assert_eq!(act(&t, ISD::CtPop, MVT::I32), Action::Custom);
+        let pop = TargetLowering::x86_32(Features { popcnt: true, ..Features::default() }, MVT::I32);
+        assert_eq!(act(&pop, ISD::CtPop, MVT::I8), Action::Promote);
+        assert_eq!(pop.type_to_promote_to(ISD::CtPop, MVT::I8), MVT::I32);
+    }
+
+    /// No `br_cc` or `select_cc` node survives; `brcond` is lowered by hand;
+    /// `frem` is a library call and `bswap` of a word is expanded.
+    #[test]
+    fn branches_and_odd_operations() {
+        let t = p5();
+        for vt in [MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
+            assert_eq!(act(&t, ISD::BrCC, vt), Action::Expand);
+            assert_eq!(act(&t, ISD::SelectCC, vt), Action::Expand);
+        }
+        assert_eq!(act(&t, ISD::BrCond, MVT::Other), Action::Custom);
+        assert_eq!(act(&t, ISD::BrJT, MVT::Other), Action::Expand);
+        assert_eq!(act(&t, ISD::FRem, MVT::F64), Action::LibCall);
+        assert_eq!(act(&t, ISD::BSwap, MVT::I16), Action::Expand);
+        assert_eq!(act(&t, ISD::BSwap, MVT::I32), Action::Legal);
+    }
+
+    /// Loads, truncating stores and condition codes.
+    #[test]
+    fn memory_and_condition_code_actions() {
+        let t = p5();
+        for vt in [MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
+            assert_eq!(t.load_ext_action(LoadExt::SExtLoad, vt, MVT::I1), Action::Promote);
+        }
+        assert_eq!(t.trunc_store_action(MVT::I32, MVT::I16), Action::Expand);
+        assert_eq!(t.trunc_store_action(MVT::F64, MVT::F32), Action::Expand);
+        assert_eq!(t.cond_code_action(CondCode::SetOEq, MVT::F64), Action::Expand);
+        assert_eq!(t.cond_code_action(CondCode::SetOLt, MVT::F64), Action::Legal);
+    }
+
+    /// The initial defaults: an integer type with no simple form is Expand,
+    /// the overflow and carry family is Expand until the constructor makes
+    /// some of it Custom, and a later call overwrites an earlier one.
+    #[test]
+    fn defaults_and_overwriting() {
+        let t = p5();
+        assert_eq!(t.operation_action(ISD::Add, EVT::Int(12)), Action::Expand);
+        assert_eq!(act(&t, ISD::AddC, MVT::I32), Action::Expand);
+        assert_eq!(act(&t, ISD::UAddO, MVT::I32), Action::Custom);
+        assert_eq!(act(&t, ISD::UAddO, MVT::I64), Action::Expand, "i64 stays expanded");
+        let mut t = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        t.set_operation_action(ISD::Select, MVT::I32, Action::Expand);
+        t.set_operation_action(ISD::Select, MVT::I32, Action::Custom);
+        assert_eq!(act(&t, ISD::Select, MVT::I32), Action::Custom);
+    }
+}
+
+mod builder {
+    use std::collections::BTreeMap;
+
+    use llrm_mir::datalayout::DataLayout;
+
+    use super::super::builder::{BuilderTarget, build_block};
+    use super::super::dump::normalized;
+    use super::super::function_lowering::FunctionLoweringInfo;
+
+    /// The pin's "Initial selection DAG" dumps by block name (`f:b1`).
+    fn pin_blocks(text: &str) -> BTreeMap<String, String> {
+        let mut blocks = BTreeMap::new();
+        let mut current: Option<(String, String)> = None;
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("Initial selection DAG: ") {
+                if let Some((name, body)) = current.take() {
+                    blocks.insert(name, body);
+                }
+                let name = rest.split('\'').nth(1).expect("quoted name").to_string();
+                current = Some((name, String::new()));
+            } else if let Some((_, body)) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
+        blocks.extend(current);
+        blocks.into_iter().map(|(name, body)| (name, normalized(&body))).collect()
+    }
+
+    /// Our dump of every block the builder takes, by the pin's block name.
+    fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
+        let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
+        let target = BuilderTarget::m32();
+        let mut built = BTreeMap::new();
+        let mut refused = Vec::new();
+        for (_, global, function) in module.functions() {
+            let mut info = FunctionLoweringInfo::new(function);
+            for &block in function.layout() {
+                let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap());
+                match build_block(&module, function, &layout, &target, &mut info, block) {
+                    Ok(done) => {
+                        built.insert(name, normalized(&done.dag.dump()));
+                    }
+                    Err(why) => refused.push(format!("{name}: {}", why.0)),
+                }
+            }
+        }
+        (built, refused)
+    }
+
+    /// A `ret` is refused with its reason, not built wrongly.
+    #[test]
+    fn a_return_is_refused_until_calls_and_returns_land() {
+        let (built, refused) = our_blocks("define void @f() {\nb0:\n  ret void\n}\n");
+        assert!(built.is_empty());
+        assert_eq!(refused, vec!["f:b0: ret (A2)".to_string()]);
+    }
+
+    /// Every block of the scalar function the builder takes has the DAG the
+    /// pin builds for the same IR (ids, register numbers, memory operand text
+    /// and block addresses aside). Without the builder, nothing is built.
+    #[test]
+    fn scalar_blocks_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/scalar.ll");
+        let pin = pin_blocks(include_str!("golden/scalar.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4, "all four blocks are built");
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+}
+
+mod legalize_types {
+    use super::super::legalize_types::{LegalizeError, TypeLegalizer};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn legalize(dag: &mut SelectionDAG, tli: &TargetLowering) -> Result<bool, LegalizeError> {
+        TypeLegalizer::new(dag, tli).run()
+    }
+
+    fn all_legal(dag: &mut SelectionDAG, tli: &TargetLowering) -> bool {
+        TypeLegalizer::new(dag, tli).all_legal()
+    }
+
+    /// `trunc(load i12 + load i12)` to a byte: before legalization the root
+    /// reads an `i12`, which no register holds. After it the add is an `i16`
+    /// add of extending loads, and the root is rewritten to read it.
+    #[test]
+    fn an_odd_width_add_is_promoted_and_its_user_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let i12 = EVT::Int(12);
+        let (a, b) = (load(&mut dag, i12, 1), load(&mut dag, i12, 2));
+        let sum = dag.get_node(ISD::Add, i12, &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[sum]);
+        dag.set_root(byte);
+        assert!(!all_legal(&mut dag, &tli));
+        assert_eq!(legalize(&mut dag, &tli), Ok(true));
+        assert!(all_legal(&mut dag, &tli));
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Truncate);
+        let wide = dag.operand(root, 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::Add, EVT::I16));
+        assert_ne!(dag.operand(wide, 0), dag.operand(wide, 1), "each operand is its own promoted load");
+        for operand in [dag.operand(wide, 0), dag.operand(wide, 1)] {
+            assert_eq!((dag.opcode(operand), dag.value_type(operand)), (ISD::Load, EVT::I16));
+        }
+    }
+
+    /// The load's chain result stands for the promoted load's: a node that
+    /// read the old chain would read a load nothing uses.
+    #[test]
+    fn a_promoted_loads_chain_users_follow() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let chain_user = dag.get_node(ISD::TokenFactor, EVT::OTHER, &[SDValue { node: a.node, res: 1 }, dag.entry_node()]);
+        dag.set_root(chain_user);
+        legalize(&mut dag, &tli).unwrap();
+        // A token factor of one chain and the entry is that chain.
+        let chain = dag.get_root();
+        assert_eq!(chain.res, 1);
+        assert_eq!(dag.value_type(SDValue { node: chain.node, res: 0 }), EVT::I16, "the promoted load");
+    }
+
+    /// An `i64` load truncated to a word reads the low half; the constants of
+    /// an `i64` are two `i32`.
+    #[test]
+    fn an_i64_constant_is_two_halves_and_logic_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let k = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
+        let word = dag.get_node(ISD::Truncate, EVT::I32, &[k]);
+        dag.set_root(word);
+        legalize(&mut dag, &tli).unwrap();
+        assert!(all_legal(&mut dag, &tli));
+        assert_eq!(dag.constant(dag.get_root()), Some(0x5566_7788), "trunc of the low half is the low half");
+    }
+
+    /// A node nothing translated handles is refused by name rather than left
+    /// with an illegal type.
+    #[test]
+    fn an_unhandled_node_is_refused_by_name() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let b = load(&mut dag, EVT::Int(12), 2);
+        let shifted = dag.get_node(ISD::Shl, EVT::Int(12), &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+        dag.set_root(byte);
+        let error = legalize(&mut dag, &tli).unwrap_err();
+        assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
     }
 }

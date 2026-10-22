@@ -1,12 +1,13 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:571e4340f3c3441347dab92058f8f988e65bf1e20eb9453ed78f355257dd43ad -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:3865f4be1f01feebe53429cb22ec3169166be4fe67974c7e847651380d23bf4b -->
 
 # precse
 
 The same pure computation made twice, made once: `MachineCSE` before PHI
 elimination, where a value has one definition. Translated from
 [MachineCSE.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp)
-(`ProcessBlockCSE`, `isCSECandidate`, `isProfitableToCSE`).
+(`ProcessBlockCSE`, `isCSECandidate`, `isProfitableToCSE`,
+`PerformSimplePRE`).
 
 ## How it works
 The dominator tree is walked with a scoped table from an instruction's
@@ -31,21 +32,48 @@ asked with its sources swapped if the first form is not there.
 An operation that sets flags is shared only where nothing after it in its
 block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
 
-DEVIATE E1 (no number): no `PerformSimplePRE` (hoisting an expression
-computed in sibling blocks to their dominator) and no load of an invariant
-cell (`isDereferenceableInvariantLoad`). Exit: both translated.
+An invariant load (a load of a constant global the module defines,
+`isDereferenceableInvariantLoad`; selection marks it `Insn::invariant`) is
+a candidate like any other, and a removed instruction no longer counts as a
+reader of its operands.
 
-DEVIATE E2 (no number): the readers of a value are counted from the body as
-it was, plus the readers merged in by earlier removals; the pin counts the
-live use lists. Same decisions on a body where one removal does not change
-another's readers.
+`PerformSimplePRE` runs first: an expression computed in two blocks, where
+neither dominates the other and one reaches the other, is also computed
+before the terminator of their nearest common dominator (when that block
+runs no more often than the two together); the walk above then removes the
+two. A copy no one reads is dropped again (the pin leaves it to
+`DeadMachineInstructionElim`).
 
-DEVIATE E3 (no number): an operation with no register operand (a constant,
-the address of a global or a frame cell) is not a candidate. The pin shares
-it and rematerializes it where it is wanted; ours cannot once TwoAddress
-and the coalescer write over it in place: compare_to_int64.c -Os 346 to 361
-bytes, grep -O2 -m32 +21.9% instructions. Exit: the allocator remakes a
-value with two defs.
+DEVIATE CSE1 (owner funcattrs-port, exit 2026-11-13):
+`isProfitableToHoistInto` reads the block frequencies selection estimated
+(`LirBody::frequencies`, kept through rewrites), not
+`MachineBlockFrequencyInfo` of the current CFG; a body with no table gets no
+PRE. No `hasMinSize` shortcut (the selector has no minsize flag, isel.rs I2)
+and no `isLegalToHoistInto` test (no block says it is a landing pad).
+
+DEVIATE CSE2 (owner funcattrs-port, exit 2026-11-13): an operation with no
+register operand is not a candidate, a load of a constant global with a
+fixed address among them (the pin shares and rematerializes it; ours cannot
+once TwoAddress and the coalescer write over it in place: compare_to_int64.c
+-Os 346 to 361 bytes, grep -O2 -m32 +21.9% instructions). Exit: the
+allocator remakes a value with two defs. (This was E3.)
+
+DEVIATE CSE3 (owner funcattrs-port, exit 2026-11-13): only a load selected
+by a pattern from a constant global is invariant. The pin also takes
+`!invariant.load`, GOT and constant-pool loads and the immutable fixed stack
+objects (incoming arguments); those loads are kept.
+
+DEVIATE CSE4 (owner funcattrs-port, exit 2026-11-13):
+`PerformTrivialCopyPropagation` renames an operand in the table's key
+without moving the instruction's read to the copy's source, so the readers
+of a copy's source are counted from the body as it was. Heuristics 2 and 3
+see the pin's lists except for that.
+
+DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
+same elimination after allocation, is ours alone (the pin runs MachineCSE
+once, before allocation). Removed, 10 of 568 objects grow and none shrinks
+(shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
+it stays until what it finds there is found before allocation.
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
