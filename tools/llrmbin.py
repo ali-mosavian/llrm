@@ -6,6 +6,7 @@ import atexit
 import hashlib
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -23,7 +24,22 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     stale = stale_binaries(found, repo)
     if stale:
         raise SystemExit(f"stale binaries in {found}: {', '.join(stale)} older than the source they are built from; run `cargo build --release --bins` (`cargo build -p X` builds only the library)")
+    stamped(found)
     return found
+
+
+def stamped(found: Path) -> None:
+    """Prints the commit llrm-c was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import stamp
+
+    expect = os.environ.get("LLRM_EXPECT_SHA") or None
+    if (found / "llrm-c").is_file():
+        try:
+            stamp.check(found / "llrm-c", expect, allow_dirty=True, label=str(found))
+        except SystemExit:
+            if expect:
+                raise  # a binary without a stamp is only refused where a sha is named
 
 
 def declared(repo: Path) -> set[str]:
