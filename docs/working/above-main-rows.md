@@ -16,8 +16,6 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-8 | quicksort m32 | O3 | clocks | 178429 | 201984 | +23555 (+13.2%) | D10 copies; cause not examined | w-6 | 2026-10-25 | #3507 |
 | AM-9 | recfloat m32 | O1 | clocks | 84605 | 86394 | +1789 (+2.1%) | `decay` becomes a loop (good) but the entry gains a table lookup (`G$5[eax*8]`, cmp/jae) for its first calls: +141 B | w-6 | 2026-10-25 | |
 | AM-10 | x_hanoi2 m32 | O3 | clocks | 134926 | 164043 | +29117 (+21.6%) | D10 copies at depth 3; no depth reaches main (best 148561 at depth 2); main's -O3 does something else with the recursion | w-6 | 2026-11-30, D10 review | #3507 |
-| AM-11 | hanoi m32 | O2,O3 | clocks | 96 | 103 | +7 (+7.3%) | the chain of differences `n-1==0`... in D10 copies; SimplifyCFG's branch-compare to switch fold | w-4 | after #3422 re-measure, 2026-10-24 | #3422 |
-| AM-12 | recsum m32 | O1 | clocks | 127296 | 131065 | +3769 (+3.0%) | as AM-11 | w-4 | after #3422 re-measure, 2026-10-24 | #3422 |
 | AM-13 | recmany m32 | O1 | clocks | 214706 | 218101 | +3395 (+1.6%) | allocation: the specialised clone leaves 4 spills an iteration | splitkit | after RECMANY-TCE-1 (w-2), allocation freeze | |
 | AM-14 | x_popcount m32 | O1,O2,O3 | bytes | 1795 | 1840 | +45 (+2.5%) | isel folds an add into an LEA, then needs a `test` the pin's flags reuse avoids (only with #3497) | w-2 | with #3497, 2026-10-27 | #3497 |
 | AM-15 | QCport host/demo | Os | bytes | 5673 | 5852 | +179 (+3.2%) | phi temporary with no register class of its own (QO-1, QO-13b); base already above main | splitkit | 2026-10-30, QO-13b | |
@@ -42,7 +40,8 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-GEP-2 | lru m32 | O3 | clocks | 169 | 210 | +41 (+24.3%); +20 (+10.5%) over base | as AM-GEP-1 (code 459 on main, 444 base, 508) | splitkit | as AM-GEP-1 | #3569 |
 | AM-GEP-3 | lru m32 | Os | clocks | 315 | 374 | +59 (+18.7%); +20 (+5.6%) over base | as AM-GEP-1 (code 396 on main, 404 base, 473, +17.1% over base) | splitkit | as AM-GEP-1 | #3569 |
 | AM-GEP-4 | x_nbody_f m32 | O2 | clocks | 378197 | 381606 | +3409 (+0.9%); +5229 (+1.4%) over base | as AM-GEP-1; base is 376377, below main | splitkit | as AM-GEP-1 | #3569 |
+| AM-NB-1 | nbody m32 | O2,O3 | clocks | 355537 / 336281 | 377442 / 372067 | +21905 (+6.2%) / +35786 (+10.6%) | first bad 7761d2b672 (LoopFullUnroll cost half): x87 spill traffic, 9 live doubles against 8 slots; re-taken 2026-10-22 on parity a9a0289b53, same numbers | w-1 (with w-4) | 2026-10-31, allocation rows | |
 
 ## To add by their owners
 
-Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, nbody, lru m32, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
+Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, lru m32, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
