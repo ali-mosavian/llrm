@@ -23,6 +23,9 @@ fn type_text(vt: EVT) -> String {
 }
 
 fn types(node: &SDNode) -> String {
+    if node.opcode == ISD::RegisterMask {
+        return "Untyped".into();
+    }
     node.values.iter().map(|vt| type_text(*vt)).collect::<Vec<_>>().join(",")
 }
 
@@ -206,11 +209,16 @@ fn renumber_registers(line: &str, regs: &mut Vec<String>) -> String {
     out
 }
 
-/// `<(...)>` memory operands and `0x...` addresses are not compared.
+/// `<(...)>` memory operands, `[TF=n]` relocation flags (SD100) and `0x...`
+/// addresses are not compared.
 fn strip_decorations(line: &str) -> String {
     let mut text = line.to_string();
     while let Some(start) = text.find("<(") {
         let end = text[start..].find(")>").map_or(text.len(), |end| start + end + 2);
+        text.replace_range(start..end, "");
+    }
+    while let Some(start) = text.find(" [TF=") {
+        let end = text[start..].find(']').map_or(text.len(), |end| start + end + 1);
         text.replace_range(start..end, "");
     }
     while let Some(start) = text.find(" 0x") {

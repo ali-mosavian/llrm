@@ -43,6 +43,13 @@ use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet};
 
+// How many `LiveIntervals` this thread has built, for a test that a phase that
+// does not need the intervals builds none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -66,6 +73,8 @@ pub struct LiveIntervals {
 
 impl LiveIntervals {
     pub fn new(body: &LirBody) -> Self {
+        #[cfg(test)]
+        BUILT.with(|one| one.set(one.get() + 1));
         assert!(body.blocks.iter().all(|block| block.phis.is_empty()), "phis are eliminated before allocation");
         let indexes = SlotIndexes::new(body);
         let cfg = Cfg::of(body);
