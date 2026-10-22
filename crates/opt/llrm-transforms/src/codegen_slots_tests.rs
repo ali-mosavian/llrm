@@ -779,9 +779,9 @@ const ROWS: &[Row] = &[
     row(
         "X86 Byte/Word Instruction Fixup",
         Deviate,
-        "peephole.peep group byte_word_fixup",
+        "fixupbw.rs",
         "",
-        "CG8: a peephole group (W2), one rule per pin function with its permalink, not a pass; reason: the liveness and encoding facts are the peephole's; cost: none known; exit: a Rust pass once those facts reach LIRTransforms; owner w-5; review 2026-11-19. W1: real mode only if not longer. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with two deviations: W1 real mode rewrites only if not longer (the 0x66 prefix), W3 a movsx within one register is refused; reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
     ),
     row(
         "X86 Atom pad short functions",
