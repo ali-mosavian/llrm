@@ -1328,3 +1328,80 @@ b2:
     assert!(error.contains("scev"), "{error}");
     run(PreservedAnalyses::none()).expect("an edit that drops Scevs is fine");
 }
+
+/// `Annotated` solved the counted loops' intervals (`Bounded`) to narrow one
+/// variable-index access: 118 M of 1252 M instructions on d_faces -O2. It asks
+/// `computeConstantRange` at the access (BasicAA's `analyzeVariableOffsets`).
+#[test]
+fn annotated_solves_no_counted_loop() {
+    let module = parsed(&format!(
+        "{DOS}define i16 @f() {{
+entry:
+  %a = alloca [10 x i16]
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %entry ], [ %n, %h ]
+  %p = getelementptr [10 x i16], ptr %a, i16 0, i16 %i
+  store i16 1, ptr %p
+  %n = add nsw i16 %i, 1
+  %c = icmp slt i16 %n, 10
+  br i1 %c, label %h, label %x
+
+x:
+  ret i16 0
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut outer = Outer::of(&module, None);
+    outer.require::<Summaries>(&module);
+    let mut analyses = Analyses::new(Rc::new(outer));
+    let solved = ranges::loops_solved();
+    analyses.get::<Annotated>(&module.context, &layout, function(&module, "f")).as_ref().as_ref().unwrap();
+    assert_eq!(ranges::loops_solved() - solved, 0, "Annotated solved the counted loops' intervals");
+}
+
+/// The alias answers of every pair of accesses of every corpus function, by
+/// `memoryssa::may_clobber` over `Annotated`: `LLRM_AA_EVAL=1 cargo test
+/// aa_eval -- --nocapture`. No partial answer exists at this level.
+#[test]
+fn aa_eval_over_the_corpus() {
+    if !llrm_support::env_flag!("LLRM_AA_EVAL") {
+        return;
+    }
+    let (mut no, mut may, mut must, mut narrow) = (0_u64, 0_u64, 0_u64, 0_u64);
+    for (_, module) in corpus() {
+        let layout = layout(&module);
+        let mut outer = Outer::of(&module, None);
+        outer.require::<Summaries>(&module);
+        let outer = Rc::new(outer);
+        for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            let unit = crate::testing::with_manager_registers(Unit::of(&module, &layout, function));
+            let mut analyses = Analyses::new(Rc::clone(&outer));
+            let found = analyses.get::<Annotated>(&module.context, &layout, function);
+            let Ok(found) = found.as_ref() else { continue };
+            let accesses: Vec<_> = found.values().filter(|one| one.pointer.is_some()).take(150).collect();
+            narrow += accesses
+                .iter()
+                .filter(|one| {
+                    one.provenance
+                        .as_ref()
+                        .is_some_and(|p| p.slices.iter().any(|s| s.object.extent != Some(s.high - s.low)))
+                })
+                .count() as u64;
+            for (at, one) in accesses.iter().enumerate() {
+                for other in &accesses[at + 1..] {
+                    if one.pointer == other.pointer && one.width == other.width {
+                        must += 1;
+                    } else if crate::memoryssa::may_clobber(&unit, None, one, other) {
+                        may += 1;
+                    } else {
+                        no += 1;
+                    }
+                }
+            }
+        }
+    }
+    println!("AA_EVAL no={no} may={may} must={must} partial=0 slices_narrowed={narrow}");
+}

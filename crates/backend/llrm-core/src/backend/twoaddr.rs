@@ -70,8 +70,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 /// Operations that read their destination.
 pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
 
-/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE TA-4,
-/// twoaddress.rs).
+/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
+/// TA-4, twoaddress.rs).
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
@@ -133,7 +133,8 @@ pub fn tied(
                 changed = true;
                 one = Arc::clone(chosen);
             }
-            // `rescheduleMIBelowKill`: a tied instruction whose source dies in a later reader goes below it.
+            // `rescheduleMIBelowKill`: a tied instruction whose source dies in
+            // a later reader goes below it.
             if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
                 changed = true;
                 continue;
@@ -409,8 +410,15 @@ fn _untied(
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
-    let movement =
+    let mut movement =
         _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
+    // The copy of an undef source reads it as undef
+    // (TwoAddressInstructionPass.cpp: `RegBUndef`).
+    if let Some(value) = first_value.filter(|value| one.undefs.contains(value)) {
+        let copy = Arc::make_mut(&mut movement);
+        copy.uses.retain(|used| *used != value);
+        copy.undefs.push(value);
+    }
     let remaining: BTreeSet<u32> = what.sources[1..].iter().flat_map(ir::values).map(|value| value.value).collect();
     let uses: Vec<u32> = one
         .uses
@@ -423,6 +431,7 @@ fn _untied(
     sources.extend(what.sources[1..].iter().cloned());
     fixed.what = Some(Semantics { sources, ..what.clone() });
     fixed.uses = std::iter::once(into.value).chain(uses).collect::<IndexSet<u32>>().into_iter().collect();
+    fixed.undefs.retain(|value| first_value != Some(*value) || remaining.contains(value));
     Some(vec![movement, Arc::new(fixed)])
 }
 
@@ -913,16 +922,26 @@ mod tests {
         LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
     }
 
-    /// pop's `x &= x - 1`: the pin's `convertInstTo3Addr` makes the `dec` of a live `x` a `lea`
-    /// (TwoAddressInstructionPass.cpp#L1402), so no `t := mov x` pins `t` to `x`'s register; the
-    /// old pass copied, and x_popcount kept a `mov` per iteration (+10.4% clocks, AM-TA-1).
+    /// pop's `x &= x - 1`: the pin's `convertInstTo3Addr` makes the `dec` of a
+    /// live `x` a `lea` (TwoAddressInstructionPass.cpp#L1402), so no `t :=
+    /// mov x` pins `t` to `x`'s register; the old pass copied, and
+    /// x_popcount kept a `mov` per iteration (+10.4% clocks, AM-TA-1).
     #[test]
     fn test_an_add_of_a_live_source_with_dead_flags_is_a_lea_not_a_copy() {
         let got = tied(&of(live_source_add(-1, "add")), All);
         let names = names_of(&got);
         assert_eq!(names.iter().filter(|name| *name == "lea").count(), 1, "{names:?}");
-        assert_eq!(names.iter().filter(|name| *name == "mov").count(), 2, "the def of v7 and the copy for the tied and: {names:?}");
-        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().unwrap();
+        assert_eq!(
+            names.iter().filter(|name| *name == "mov").count(),
+            2,
+            "the def of v7 and the copy for the tied and: {names:?}"
+        );
+        let lea = got
+            .insns()
+            .iter()
+            .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+            .cloned()
+            .unwrap();
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), -1));
     }
@@ -930,13 +949,18 @@ mod tests {
     #[test]
     fn test_a_sub_of_an_immediate_is_a_lea_of_its_negation() {
         let got = tied(&of(live_source_add(5, "sub")), All);
-        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().expect("a lea");
+        let lea = got
+            .insns()
+            .iter()
+            .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+            .cloned()
+            .expect("a lea");
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!(cell.offset, -5);
     }
 
-    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`, `[a*8]`; a shift of 4 or a
-    /// shift of a register stays.
+    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`,
+    /// `[a*8]`; a shift of 4 or a shift of a register stays.
     #[test]
     fn test_a_shift_by_one_to_three_of_a_live_source_is_a_scaled_lea() {
         for (shift, scale, base) in [(1, 1, true), (2, 4, false), (3, 8, false)] {
@@ -953,9 +977,10 @@ mod tests {
         assert!(!names_of(&tied(&of(live_source_add(4, "shl")), All)).contains(&"lea".to_owned()));
     }
 
-    /// A commuted instruction is a new one, which the intervals do not know: the kill of its tied
-    /// source is asked of the instruction as it was (the sweep failed 120 of 568 objects with "Instruction
-    /// not found in maps" on the first version of the conversion).
+    /// A commuted instruction is a new one, which the intervals do not know:
+    /// the kill of its tied source is asked of the instruction as it was
+    /// (the sweep failed 120 of 568 objects with "Instruction not found in
+    /// maps" on the first version of the conversion).
     #[test]
     fn test_a_commuted_add_is_still_asked_about_its_kills_by_the_instruction_it_was() {
         let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 1), read(4, 3)];
@@ -963,8 +988,9 @@ mod tests {
         assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
     }
 
-    /// A target that reads addresses through a prefix (m16) converts adds and subs and leaves a shift to
-    /// the peephole, which fuses it with the add after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
+    /// A target that reads addresses through a prefix (m16) converts adds and
+    /// subs and leaves a shift to the peephole, which fuses it with the add
+    /// after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
     /// `lea eax, [ecx+ecx]; add eax, ecx` (test_m16_emits_386_forms).
     #[test]
     fn test_the_prefixed_mode_converts_an_add_and_leaves_a_shift() {
@@ -974,7 +1000,8 @@ mod tests {
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
     }
 
-    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied instruction.
+    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied
+    /// instruction.
     fn lea_of(
         at: i64,
         into: u32,
@@ -998,8 +1025,9 @@ mod tests {
         names_of(body).iter().position(|one| one == name).unwrap_or_else(|| panic!("no {name}"))
     }
 
-    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more, by a `lea`, and dies
-    /// there: the add goes below the `lea`, so `v1` dies at the add and the copy it needs joins.
+    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more,
+    /// by a `lea`, and dies there: the add goes below the `lea`, so `v1`
+    /// dies at the add and the copy it needs joins.
     #[test]
     fn test_a_tied_add_goes_below_the_one_reader_that_kills_its_source() {
         let add = live_source_add(5, "add")[1].clone();
@@ -1009,13 +1037,16 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
 
-    /// The pin's checks: a kill that is a copy, or a call between, leaves the add where it was.
+    /// The pin's checks: a kill that is a copy, or a call between, leaves the
+    /// add where it was.
     #[test]
     fn test_a_tied_add_stays_where_the_kill_is_a_copy_or_something_stands_between() {
         let add = || live_source_add(5, "add")[1].clone();
         let copy_kill = vec![imm_def(0, 7), add(), copy_insn(2, 5, 7), read(3, 8), read(4, 5)];
         let got = tied(&of(copy_kill), Off);
-        assert!(position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2);
+        assert!(
+            position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2
+        );
         let call = {
             let what = Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) };
             Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![], vec![]))
@@ -1166,8 +1197,9 @@ mod tests {
         let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
-        // The pin shares one LiveIntervals with the coalescer; here the kills are one backward scan
-        // over the live-out rows and none is built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        // The pin shares one LiveIntervals with the coalescer; here the kills
+        // are one backward scan over the live-out rows and none is
+        // built (TA-6): building one per phase cost +3.0 M Ir at m32.
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
         assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);

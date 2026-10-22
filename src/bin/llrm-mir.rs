@@ -73,6 +73,10 @@ fn main() -> ExitCode {
     if counts {
         arguments.remove(0);
     }
+    let branch_prob = arguments.first().is_some_and(|one| one == "--branch-prob");
+    if branch_prob {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -403,6 +407,10 @@ fn main() -> ExitCode {
             }
             if counts {
                 print!("{}", llrm_analysis::scev::values::print_module_counts(&module));
+                return ExitCode::SUCCESS;
+            }
+            if branch_prob {
+                print!("{}", llrm_analysis::bpi::print_module_branch_prob(&module));
                 return ExitCode::SUCCESS;
             }
             if loops {
