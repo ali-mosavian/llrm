@@ -289,7 +289,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch),
+            private: private_convention(arch, std::env::var_os("LLRM_PIN_FASTCC").is_some()),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
@@ -782,10 +782,16 @@ mod tests {
 }
 
 /// The convention `arch`'s description gives a private function, and the ones
-/// that may take it.
-fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
+/// that may take it. `pin_fastcc` (`LLRM_PIN_FASTCC`, the CC1 instrument)
+/// gives it the description's `fastcc` instead, where it states one.
+fn private_convention(
+    arch: &dyn Target,
+    pin_fastcc: bool,
+) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let to = llrm_target::calling::Calling::number_of(calling.private()?.cc.as_deref())?;
+    let private = calling.private()?;
+    let private = calling.by_cc("fast").filter(|_| pin_fastcc).unwrap_or(private);
+    let to = llrm_target::calling::Calling::number_of(private.cc.as_deref())?;
     let mut from: Vec<u32> = calling
         .conventions
         .iter()
@@ -795,6 +801,25 @@ fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConv
     from.sort_unstable();
     from.dedup();
     Some(llrm_mir::target::PrivateConvention { to, from })
+}
+
+#[cfg(test)]
+mod private_convention_tests {
+    use super::*;
+
+    /// CC1: `LLRM_PIN_FASTCC` makes a private m32 function take the pin's
+    /// `fastcc` (ECX, EDX; the caller pops) instead of `watcall32`; a target
+    /// that states no `fastcc` is not changed by it.
+    #[test]
+    fn test_the_pin_fastcc_instrument_replaces_the_private_convention() {
+        use llrm_mir::opcode::{FAST, WATCALL};
+        let ours = private_convention(&llrm_x86_m32::M32, false).expect("m32 states one");
+        let pin = private_convention(&llrm_x86_m32::M32, true).expect("m32 states one");
+        assert_eq!((ours.to, pin.to), (WATCALL, FAST));
+        let found = llrm_x86_m32::M32.calling().by_number(FAST).expect("fastcc is stated");
+        assert_eq!(found.argument_registers, ["ecx", "edx"]);
+        assert_eq!(found.cleanup, llrm_target::calling::Cleanup::Caller);
+    }
 }
 
 #[cfg(test)]
