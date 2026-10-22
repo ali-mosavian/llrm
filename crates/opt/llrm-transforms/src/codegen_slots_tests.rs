@@ -157,10 +157,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Canonicalize Freeze Instructions in Loops",
-        Missing,
+        Match,
+        "canonfreeze.rs",
         "",
-        "",
-        "funcattrs-port; 2026-11-13: (premise below: start only where ours exceeds pin-with) MIR has `freeze`; LSR's canon-freeze is not run. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
+        "translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
     ),
     row(
         "Induction Variable Users",
@@ -664,10 +664,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
-        Missing,
+        Match,
+        "latecleanup.rs",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 13 (-O2) and 12 (-Os) of 77 IRs",
+        "translated (slot latecleanup@13, after prologue); DEVIATE LC1: immediates only, no frame-register load-address. Pin: changed code in 13 (-O2) and 12 (-Os) of 77 IRs. Ours on the 71 bench programs: 6 objects change, all smaller (-17..-24 B)",
     ),
     row(
         "Control Flow Optimizer",
@@ -792,10 +792,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Fixup",
-        Missing,
+        Deviate,
+        "peephole.rs (`addresses`, `increments`)",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: i486 runs only `optTwoAddrLEA`; it is not translated; reason: ours makes an LEA only where it prices below the add (`addresses`), so no scale-1 LEA has its destination as a source (0 of 3855 LEAs, 115 tests/run/c programs, -O2 m32 sysv i486); cost: none measured; exit: pre-RA LEA formation (row 62) or a site found (docs/working/lea-fixup-plan.md, LF-2); owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",
