@@ -5983,7 +5983,7 @@ impl Selector<'_, '_, '_> {
                     match (proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD)) {
                         (true, false) => self.memcpy(arguments, false, at, out),
                         (false, true) => self.memcpy(arguments, true, at, out),
-                        _ => refuse("a memmove whose direction no pass proved"),
+                        _ => self.memmove_loads_then_stores(arguments, at, out),
                     }
                 }
                 Some(Intrinsic::Unary(function)) => {
@@ -6911,6 +6911,68 @@ impl Selector<'_, '_, '_> {
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
         let constant = self.length(length);
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
+    }
+
+    /// `llvm.memmove` whose direction no pass proved, of a constant length that
+    /// fits the inline limit: every chunk is loaded before any is stored, so
+    /// the sides may overlap however they lie
+    /// (`getMemmoveLoadsAndStores`,
+    /// [SelectionDAG.cpp#L9687](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L9687)).
+    /// DEVIATE: past the limit LLVM calls `memmove`; here the call is refused,
+    /// as before. The limit is `MEMCPY_MOVES` (x86's `MaxStoresPerMemmove` is
+    /// 8, 4 when optimizing for size; the memcpy expansion does not tell
+    /// them apart either).
+    fn memmove_loads_then_stores(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else {
+            return refuse("a memmove of other than four operands");
+        };
+        let refused = || refuse("a memmove whose direction no pass proved");
+        if self.is_huge(destination) || self.is_huge(source) {
+            return refused();
+        }
+        let Some(length) = self.length(length) else { return refused() };
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
+        if length / 4 + (length % 4).count_ones() as i64 > most {
+            return refused();
+        }
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let regs = self.regs();
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                chunks.push((offset, width));
+                offset += i64::from(width);
+            }
+        }
+        let mut held = Vec::new();
+        for &(offset, width) in &chunks {
+            let value = self.fresh_held(width);
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(value)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(offset), width))],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+            held.push(value);
+        }
+        for (&(offset, width), value) in chunks.iter().zip(held) {
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(offset), width))],
+                vec![Loc::Held(value)],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+        }
+        Ok(())
     }
 
     /// `memcpy`'s lowering, between pointers made by the caller: a constant
