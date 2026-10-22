@@ -4,12 +4,13 @@ use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
 use llrm_target::Target;
 
-use super::emit::{EmitContext, EmitError, RegisterFile, emit};
+use super::emit::{EmitContext, EmitError, emit};
 use super::opcodes::OpcodeMap;
 use super::schedule::{SchedInfo, schedule};
 use super::*;
 use crate::model::ir::{Loc, Reg};
 
+const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];
 
 struct Info;
@@ -37,15 +38,15 @@ impl SchedInfo for Info {
     }
 }
 
-/// Physical register 1 is EAX; everything else is virtual.
-struct Regs;
+struct NoFrame;
 
-impl RegisterFile for Regs {
-    fn physical(
+impl super::emit::FrameMap for NoFrame {
+    fn cell(
         &self,
-        reg: u32,
-    ) -> Option<Reg> {
-        (reg == 1).then_some(Reg { register: RegId::EAX, width: 32 })
+        _index: i32,
+        _width: u32,
+    ) -> Option<crate::model::ir::Mem> {
+        None
     }
 }
 
@@ -57,7 +58,7 @@ fn context(f: impl FnOnce(&EmitContext<'_>)) {
     let target = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
-    f(&EmitContext { map: &map, names: &names, regs: &Regs });
+    f(&EmitContext { frame: &NoFrame, map: &map, names: &names });
 }
 
 fn text(insns: &[std::sync::Arc<crate::model::lir::Insn>]) -> Vec<String> {
@@ -85,7 +86,8 @@ fn copy_to(
     reg: u32,
     value: SDValue,
 ) -> SDValue {
-    let register = dag.get_register(EVT::I32, reg);
+    let register =
+        if reg == EAX { dag.get_phys_register(EVT::I32, RegId::EAX) } else { dag.get_register(EVT::I32, reg) };
     dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[chain, register, value])
 }
 
@@ -130,7 +132,7 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let five = dag.get_constant(5, EVT::I32);
-    let root = copy_to(&mut dag, entry, 1, five);
+    let root = copy_to(&mut dag, entry, EAX, five);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits");

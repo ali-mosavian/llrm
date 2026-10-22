@@ -34,7 +34,8 @@
 //! Nothing runs it yet: the shadow harness calls it once the matcher's output
 //! reaches a whole function (D1c). The old selector stays the default.
 //!
-//! DEVIATE SD39: not translated yet: frame indices, globals, segment
+//! DEVIATE SD39: not translated yet: frame indices of locals (fixed objects are
+//! cells), globals, segment
 //! overrides, inline assembly and the custom inserters but `CMOV_GR*`.
 //! Each is an [`EmitError::Unsupported`], never a skipped operand. Reason:
 //! the builder (A2) and matcher output do not produce them yet. Exit: with
@@ -68,21 +69,22 @@ pub enum EmitError {
     Unmapped(String),
 }
 
-/// What the emitter asks of the target's register file.
-pub trait RegisterFile {
-    /// The register a physical register number is, with its width; `None`
-    /// for a virtual register.
-    fn physical(
+/// Where the frame's fixed objects are.
+pub trait FrameMap {
+    /// The cell of fixed object `index` (`FrameIndex<-1>` is the first stack
+    /// argument), `width` bits wide, or `None` if there is no such object.
+    fn cell(
         &self,
-        reg: u32,
-    ) -> Option<Reg>;
+        index: i32,
+        width: u32,
+    ) -> Option<Mem>;
 }
 
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    pub frame: &'a dyn FrameMap,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
-    pub regs: &'a dyn RegisterFile,
 }
 
 /// One block of the emitted code: `phis` first, then `insns`. A custom
@@ -160,19 +162,20 @@ impl Emitter<'_, '_> {
                 Ok(())
             }
             ISD::CopyFromReg => {
-                let reg = self.register_number(node.ops[1])?;
                 let result = SDValue { node: n, res: 0 };
-                match self.ctx.regs.physical(reg) {
+                match self.dag.node(node.ops[1]).data {
                     // `EmitCopyFromReg`: a virtual source is the value itself.
-                    None => {
+                    NodeData::Register(reg) => {
                         let value = self.vreg(reg);
                         self.values.insert(result, value);
                     }
-                    Some(phys) => {
+                    NodeData::PhysReg(register) => {
+                        let phys = Reg { register, width: width_of(self.dag, result) };
                         let held = self.fresh(width_of(self.dag, result));
                         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(phys)]);
                         self.values.insert(result, held.value);
                     }
+                    _ => return Err(EmitError::Unsupported("CopyFromReg without a register".to_owned())),
                 }
                 Ok(())
             }
@@ -324,6 +327,12 @@ impl Emitter<'_, '_> {
         group: &[SDValue],
         cell_width: u32,
     ) -> Result<Mem, EmitError> {
+        if matches!(
+            self.dag.opcode(group[0]),
+            ISD::FrameIndex | ISD::TargetFrameIndex
+        ) {
+            return self.frame_cell(group, cell_width);
+        }
         let base = self.address_register(group[0])?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2])?;
@@ -334,12 +343,34 @@ impl Emitter<'_, '_> {
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
 
+    /// A cell of the frame: the fixed object plus the displacement operand.
+    fn frame_cell(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+    ) -> Result<Mem, EmitError> {
+        let NodeData::FrameIndex(index) = self.dag.node(group[0]).data else {
+            return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
+        };
+        if self.address_register(group[2])?.is_some() || self.address_register(group[4])?.is_some() {
+            return Err(EmitError::Unsupported("an indexed or segment-overridden frame cell".to_owned()));
+        }
+        let disp = self.constant(group[3])?;
+        let cell = self
+            .ctx
+            .frame
+            .cell(index, cell_width)
+            .ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+        Ok(Mem { offset: cell.offset + disp, ..cell })
+    }
+
     /// An address component: a value, or the `$noreg` register.
     fn address_register(
         &mut self,
         value: SDValue,
     ) -> Result<Option<Held>, EmitError> {
-        if self.dag.opcode(value) == ISD::Register && self.register_number(value)? == 0 {
+        // `$noreg` is virtual register 0.
+        if self.dag.node(value).data == NodeData::Register(0) {
             return Ok(None);
         }
         match self.operand(value)? {
@@ -375,25 +406,17 @@ impl Emitter<'_, '_> {
         }
     }
 
-    fn register_number(
-        &self,
-        value: SDValue,
-    ) -> Result<u32, EmitError> {
-        match self.dag.node(value).data {
-            NodeData::Register(reg) => Ok(reg),
-            _ => Err(EmitError::Unsupported("a register operand without a register".to_owned())),
-        }
-    }
-
+    /// A `Register` node: a physical register, or a virtual one's value.
     fn register(
         &mut self,
         value: SDValue,
     ) -> Result<Loc, EmitError> {
-        let reg = self.register_number(value)?;
-        Ok(match self.ctx.regs.physical(reg) {
-            Some(phys) => Loc::Reg(phys),
-            None => Loc::Held(Held { value: self.vreg(reg), width: width_of(self.dag, value) }),
-        })
+        let width = width_of(self.dag, value);
+        match self.dag.node(value).data {
+            NodeData::PhysReg(register) => Ok(Loc::Reg(Reg { register, width })),
+            NodeData::Register(reg) => Ok(Loc::Held(Held { value: self.vreg(reg), width })),
+            _ => Err(EmitError::Unsupported("a register operand without a register".to_owned())),
+        }
     }
 
     fn vreg(

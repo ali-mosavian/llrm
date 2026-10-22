@@ -75,6 +75,7 @@
 pub mod actions;
 pub mod builder;
 mod dag;
+pub mod dag_select;
 pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
@@ -98,12 +99,14 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod dag_select_tests;
+#[cfg(test)]
+mod dagisel_tests;
+#[cfg(test)]
 mod emit_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
-#[cfg(test)]
-mod dagisel_tests;
 #[cfg(test)]
 mod tests;

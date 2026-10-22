@@ -24,7 +24,6 @@ llrm-hir = { workspace = true }
 llrm-instr = { workspace = true }
 llrm-dagisel = { path = "../llrm-dagisel" }
 llrm-lir = { workspace = true }
-llrm-dagisel = { path = "../llrm-dagisel" }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
