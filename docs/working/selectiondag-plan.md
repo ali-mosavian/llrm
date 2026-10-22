@@ -1,0 +1,157 @@
+# Translating SelectionDAG instruction selection
+
+Pin d1106deb71cc. Codegen slot row 28 ([codegen-slot-table](codegen-slot-table.md)): "X86 DAG->DAG Instruction Selection", DEVIATE CG1, "no SelectionDAG". This is the plan to close it: structure of the pin, what replaces each part today, how the generated matcher is made, pieces in order with dates and tests. Plan only; 2026-10-22. Paths under `llvm/lib/` unless noted; line numbers are the pin's.
+
+## 1. The pin's structure
+
+`SelectionDAGISel::runOnMachineFunction` ([L599][isel-run]) selects each block with `CodeGenAndEmitDAG` ([L941][isel-cg]), which runs, in this order:
+
+| Step | Pin | Size |
+|---|---|---|
+| build the DAG from IR | `SelectionDAGBuilder` ([visitICmp L3808][b-icmp], [visitSelect L3863][b-sel], [visitGetElementPtr L4493][b-gep], [visitLoad L4735][b-load], [visitStore L4917][b-store], [LowerCallTo L9256][b-call], [visitSwitch L12878][b-switch], [lowerWorkItem L12492][b-work]) | 13.2k lines |
+| combine 1 | `DAGCombiner::Run` ([L1845][c-run]), `combine` ([L2157][c-combine]), one `visit*` per opcode (`visitADD` [L3295][c-add], `visitAND` [L7861][c-and], `visitSETCC` [L15048][c-setcc], `visitLOAD` [L22110][c-load], `visitSTORE` [L24689][c-store]) | 32.5k |
+| legalize types | `DAGTypeLegalizer::run` ([L196][lt-run]) with `LegalizeIntegerTypes` (promote, expand), `LegalizeFloatTypes`; `LegalizeVectorOps` is skipped (no vectors until 32-bit parity) | 1.0k + 6.7k + 3.3k |
+| combine 2, legalize DAG, combine 3 | `SelectionDAG::Legalize` ([L6301][ld-legalize]), `LegalizeOp` ([L982][ld-op]), then `X86TargetLowering` (ctor [L131][x-ctor] sets every action; `LowerOperation` [L34783][x-lower], `ReplaceNodeResults` [L34968][x-replace], `PerformDAGCombine` [L63938][x-combine], calls and arguments in `X86ISelLoweringCall.cpp` [L1710][x-formal]) | 6.4k + 65.6k + 3.2k |
+| select | `DoInstructionSelection` ([L1281][isel-do]) calls `X86DAGToDAGISel::Select` ([L5513][x-select]), which tries hand matchers (`foldLoadStoreIntoMemOperand` [L3925][x-rmw], `matchBitExtract` [L4149][x-bext], `tryShiftAmountMod` [L4664][x-shamt]) then `SelectCode`; addresses by `matchAddress` ([L2053][x-addr]), `matchAddressRecursively` ([L2677][x-addrrec]), `selectAddr` ([L3202][x-seladdr]), `selectLEAAddr` ([L3329][x-lea]); `PreprocessISelDAG` ([L988][x-pre]) and `PostprocessISelDAG` ([L1643][x-post]) around it | 7.1k |
+| matcher | `SelectCodeCommon` ([L3351][isel-common]) interprets `X86GenDAGISel.inc`, a byte table the pin's tblgen makes from the `.td` files (`DAGISelEmitter` [L152][tg-emit], `EmitMatcherTable` [L1602][tg-table]) | 11.3 MB, 254k opcodes in the assert build |
+| schedule and emit | `ScheduleDAGSDNodes::Run` ([L55][s-run]), `BuildSchedGraph` ([L536][s-build]), the register-pressure list scheduler (`createBURRListDAGScheduler` [L3113][s-burr]; X86 asks for it at 32 bits, [L148][x-sched]), `InstrEmitter::EmitMachineNode` ([L1003][e-node]) | 1.1k + 3.2k + 1.5k |
+
+`FastISel` (-O0) is out of scope: we have one path. The `.td` side: `X86InstrFragments.td`, `X86InstrCompiler.td`, `X86InstrArithmetic.td`, `X86InstrFPStack.td`, `X86InstrMisc.td`, `X86InstrShiftRotate.td`, `X86InstrCMovSetCC.td`, `X86InstrControl.td`, `X86InstrExtension.td`. In the pin's `--dump-json` of `X86.td`: 5,909 `Pat` and 22,770 `Instruction` records; about 800 and 3,400 carry no vector, AVX, MMX, FMA, APX or NDD predicate (a coarse filter on `Predicates`, an upper bound for the subset, not a count).
+
+## 2. What replaces each part today
+
+Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/backend/llrm-core/src/backend/isel.rs), [isel/matcher.rs](../../crates/backend/llrm-core/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
+
+| Pin part | Ours today | What is missing against the pin |
+|---|---|---|
+| SelectionDAGBuilder | `Selector::body` and `instruction`; `selects.rs` (select to branch), `booleans.rs` (setcc chains priced by the cost table), `compares.rs`, `bitcounts.rs`, `funnel.rs`, `fpconvert.rs` (intrinsic and wide-FP expansions in MIR); `addresssink.rs` (CGP, row 23, not this plan) | switch lowering (jump tables, bit tests, `SwitchPeelThreshold` [L133][b-peel]), `FindMergedConditions` for `&&`/`||` branches, per-block DAGs with `CopyToReg`/`CopyFromReg` across blocks |
+| SelectionDAG + DAGCombiner | none as a pass. Fragments: `arithmetic.rs` (multiply by constant), `division.rs` (reciprocal multiply, = `BuildSDIV`/`BuildUDIV`), `storecombine.rs` (= `mergeConsecutiveStores`), `rmw.rs`, `comparefold.rs`, `floatfold.rs` (load folds), `peep/` and `peephole.rs` (post-isel rewrites; 2,065 + 3,154 lines) | `getNode` constant folding and CSE, the worklist combiner, `SimplifyDemandedBits`, `visitSETCC`/`visitSELECT_CC` folds, load/store combining, the X86 `PerformDAGCombine` set. The peephole groups (`groups.list`) are mostly compensations for this |
+| LegalizeTypes / LegalizeDAG | `legalize.rs` (promote i2..i63 to a machine width, = `PromoteIntegerResult`), `isel/expand.rs` + `isel/wide.rs` + `lower_int64.rs` (i64 as two dwords, = `ExpandIntegerResult`), `isel/huge.rs` (huge-pointer memory intrinsics) | action tables (`setOperationAction`), `Expand`/`Custom`/`LibCall` per opcode and type, truncating stores and extending loads as actions |
+| X86ISelLowering | `target.rs`, `cpu.rs`, the target descriptions (`calling.toml`, `registers.regs`, cost tables), `Convention::place` in `isel.rs` | the lowering of select/setcc/brcond to flags (`EmitCmp` [L24085][x-cmp], `LowerSETCC` [L25293][x-setcc], `LowerSELECT` [L25834][x-select2]), shifts, FP conversions, call and return lowering as DAG nodes |
+| X86ISelDAGToDAG + matcher | `isel/matcher.rs` runtime, `addressforms.rs`, `addressvalues.rs`, `exactaddress.rs`, `upperzero.rs` (address operands) | the generated matcher, `X86ISelAddressMode`, LEA matching, the hand matchers above |
+| ScheduleDAG / InstrEmitter | LIR is emitted in MIR order; `schedule.rs` reorders after allocation (latency, not pressure) | the pre-RA register-pressure list scheduler and the node-to-instruction emitter (three-address, virtual registers, no ties; `twoaddr.rs` and the TwoAddress port stay downstream) |
+
+### m16 against m32
+
+m32 (i486/P5) is the pin's x86-32 with `-sse`: GR8/GR16/GR32, x87 `RFP32/64/80`, `[base + index*scale + disp32]`. Everything above applies; the work is choosing the legal subset, not new ideas.
+
+m16 is real mode, and the pin has no model for it. What it keeps, as numbered DEVIATEs (reason, owner, exit, review date each; the first review on 2026-11-13 with row 28):
+
+- **SD1** MIR is the builder's input, not LLVM IR. Same shape, so `visit*` ports one to one; the difference is the opcode set (`opcode.rs`: no atomics, `indirectbr`, vectors). Exit: none.
+- **SD2** `far` is a value type: selector and offset, two i16. The type legalizer expands it like an integer (`ExpandIntegerResult` shape) and `far_load`/`far_store`/`far_cast` become `les`/`lds` matches (today `farload.rs`, `hook_far_*`). The pin's address spaces 256..258 are segment overrides on an i32 pointer and do not fit.
+- **SD3** Addresses are `[bx|bp] + [si|di] + disp16` with a segment, registers from the `base` and `index` classes of `registers.regs`, no scale. `X86ISelAddressMode` gets a 16-bit component set; the pin's only 16-bit branch ([L1926][x-16]) picks the 67h form of 32-bit components, which `addressforms.rs` also uses today and stays an alternative. Exit: none; the class split is the target.
+- **SD4** Register classes. DAGToDAG constrains a value to `BX|SI|DI|BP` when it is an address component (a class on the virtual register, [vreg-class-field-plan](vreg-class-field-plan.md)), where the pin's GR16 has no sub-class for it. Depends on that plan landing.
+- **SD5** Calling conventions come from `Convention::place` (`calling.toml`: watcall16, regparm3, pascal16), not `X86CallingConv.td`; `LowerCall`/`LowerFormalArguments` call it and build `CopyToReg` nodes from its answer.
+- **SD6** x87: values are `RFP` virtual registers until our `fpstack.rs` (= `X86FloatingPoint`); selection emits the `*_Fp` pseudo-forms from `X86InstrFPStack.td` patterns, as the pin does. Long double (f80) and the `FPStack` predicates stay the family's; m16 differs only in the 16-bit `fnstsw`/`sahf` sequences.
+- **SD7** i64 is two dwords at both sizes (`MVT::i64` illegal on both m16 and m32, as in the pin at 32 bits). No change; listed because m16 expands through 16-bit pairs for `far` only.
+- **SD8** Cost: our `x86.instr` columns (cycles per CPU) replace `X86Sched*.td` where a pattern group competes; the pin's pattern complexity (`PatternComplexity`, the order `SelectCode` tries) stays the first key and cost only breaks ties inside our `group`s until each group is retired by a translated pattern.
+
+## 3. The generated matcher
+
+Requirement: from the pin's `.td`, by a tool, nothing hand-copied. Two ways, and the choice:
+
+- Port `utils/TableGen/DAGISelEmitter` and `DAGISelMatcherGen` to Rust: a Rust `.td` reader, then `CodeGenDAGPatterns`' type inference. About 20k lines of C++ (`Common/CodeGenDAGPatterns.cpp` alone is 5k); the largest and riskiest piece of the plan, for an output the pin already makes.
+- **Chosen: read the pin's own table.** The pin's `llvm-tblgen -gen-dag-isel X86.td` (built from the pin; `~/scratch/llvm-build-assert/bin/llvm-tblgen` exists) writes `X86GenDAGISel.inc`. A Rust tool, `llrm-dagisel-gen` (crate beside `llrm-iselgen`), decodes the byte table into a tree (`Matcher` enum: `Scope`, `RecordNode`, `CheckOpcode`, `CheckType`, `CheckInteger`, `CheckPatternPredicate`, `CheckComplexPat`, `MoveChild`, `EmitNode`, `MorphNodeTo`, ...; the opcode list is `enum BuiltinOpcodes` in `SelectionDAGISel.h`), drops what the subset excludes, and writes a Rust `static` table plus the predicate and complex-pattern dispatch (`CheckPatternPredicate`, `CheckNodePredicate`, `CheckComplexPattern`: 292 pattern predicates in the pin's file, of which the subset keeps those over `Not64BitMode`, `HasX87`, `HasCMOV`, `FPStackf32/64`, `OptForSize`, `UseIncDec` and drops the vector, AVX, BMI and APX ones). The interpreter is a translation of `SelectCodeCommon` ([L3351][isel-common]) over the enum, with its `MatchScope` stack and `RecordedNodes`.
+
+Subset by the target description, not by hand: the CPU's feature set (i486: no CMOV before P6, so `NoCMOV`; P5: cmpxchg8b, no CMOV) selects predicates; a record whose predicates all hold at that CPU stays, the rest is pruned. m16 is the same table with SD2..SD4 applied: `far` patterns and the 16-bit address matchers are added by the target's own `.td`-shaped file (`patterns.isel` shrinks to exactly those, in the pin's pattern syntax, read by the same tool).
+
+Regeneration is a script (`tools/dagisel/regen.sh`: build the pin's tblgen, run both tools) and the generated Rust is checked in with a test that regenerates into a temp dir and diffs (a stale table is a failing test). `ISel` patterns the `.td` lacks for our targets (segment loads, string ops with `ES`) are `.td`-syntax additions in our own file, numbered SD9 as a block.
+
+Open until piece D1 prices it: the table for the subset in bytes, and the interpreter's compile time per function against the 1.5x clang goal. Fallback inside the plan, not a switch: if the byte table is slow to walk, the tool emits the decision tree as nested `match` (the pin's `-gen-dag-isel` has no such mode; this would be a numbered DEVIATE).
+
+## 4. Plan
+
+Owner groups are new sessions the coordinator names; none comes from `splitkit` or `w-1`, and none edits their files (`allocate.rs`, `splitkit*`, `spiller.rs`, `twoaddr.rs`, `phielim.rs`). The interface to them is today's: LIR over virtual registers, three-address, class-less except SD4. At most three writers at once, so the other backend rows keep their workers. Groups: **sdag-a** (DAG core, builder, calls), **sdag-b** (legalizer, X86 lowering, combiner), **sdag-c** (generator, matcher, DAGToDAG), **sdag-d** (scheduler, emitter, shadow harness, corpus). Dates are targets, reviewed weekly with the coordinator.
+
+Rules for every piece: idiomatic Rust (`SDNode` in an arena indexed by `SDValue { node: u32, res: u8 }`, `ISD` and `MVT` enums, `Option`/`Result`, no raw-pointer emulation); permalinks and the pin's order, caps (`cl::opt` defaults) and worklist; wrong output and compile failures first; size, clock and compile rows are numbered in the PR, never blocking; fail-first test in the commit; release builds only, two target dirs; read the whole lib run of the changed crate before ready.
+
+### Phase 0: shadow mode (new isel behind a flag, old one still the default)
+
+| Id | Piece | Group | Due | Premise test (fail first) |
+|---|---|---|---|---|
+| A0 | `selectiondag` module: `MVT`/`EVT`, `ISD`, arena `SelectionDAG`, `getNode` with CSE and constant folding (`SelectionDAG.cpp`) | sdag-a | 2026-11-05 | `x + 0`, `x * 1`, `3 + 4` built twice give one node, constant folded; fails on an empty DAG |
+| A1 | Builder, scalar subset: arithmetic, casts, `icmp`/`select`/`br`, load/store, GEP, `phi` as `CopyToReg`; per-block DAG | sdag-a | 2026-11-19 | a MIR block of `a+b; store` dumps the DAG the pin's `-debug-only=isel` shows for the same IR (text compare, pin run through `pin.py`) |
+| A2 | Calls, returns, arguments through `Convention::place` (SD5); switch lowering (`SwitchCG`: clusters, jump tables, bit tests, peel) | sdag-a | 2026-12-10 | a 6-way `switch` makes the pin's jump table or bit test at m32; the DAG for a `watcall16` call has `CopyToReg AX, DX, BX, CX` in that order |
+| B0 | Type legalizer: promote and expand integers, `far` (SD2); `X86TargetLowering` action table for m32 from the target description | sdag-b | 2026-11-26 | an i64 add at m32 becomes `add`/`adc` nodes; the same at m16 for a `far` pair; fails with the action table empty (node stays illegal) |
+| B1 | `LegalizeDAG` (`LegalizeOp`, `ExpandNode`), `LowerOperation` subset: setcc/select/brcond to `X86ISD::CMP`/`SETCC`/`BRCOND`, shifts, FP conversions | sdag-b | 2026-12-17 | `select` at i486 (no CMOV) gets the branch expansion `EmitLoweredSelect` makes; at P6-less CPU a `cmov` never appears |
+| B2 | `DAGCombiner` core: worklist `Run`/`combine`, `visitADD`, `visitAND`, `visitSHL`, `visitMUL`, `visitSETCC`, `visitLOAD`/`visitSTORE`; then `PerformDAGCombine` visitors in the order the corpus counts them (first: `combineSetCC`, `combineSelect`, `combineLoad`, `combineStore`, `combineMul`) | sdag-b | first 2027-01-14, then one visitor per PR | one test per visitor: a MIR/IR shape the pin folds, the DAG after combine matches the pin's dump |
+| C0 | `llrm-dagisel-gen` decoder and interpreter, m32 subset, with `regen.sh` and the stale-table test | sdag-c | 2026-11-19 | the decoded table for the subset selects `add reg, reg` and `mov reg, [base+idx*4+8]` from a hand-built DAG; the interpreter fails on a table with a bad opcode byte |
+| C1 | `X86DAGToDAG`: `X86ISelAddressMode`, `matchAddress*`, `selectAddr`, `selectLEAAddr`, `tryFoldLoad`, `foldLoadStoreIntoMemOperand` | sdag-c | 2026-12-10 | `a[i+2]` at m32 gives one `[base+idx*4+8]` operand; the memory-destination `add [m], r` is one instruction (today's `rmw.rs` case) |
+| C2 | m16: SD3 address mode and SD4 classes, `far` patterns, string-op and segment forms in our `.td`-shaped file | sdag-c | 2027-01-14 | `p->x` through a far pointer is one `les` + `[es:di+disp]`; a word address never uses AX or DX as base |
+| C3 | x87 pseudo patterns (SD6) and the remaining hand matchers (`matchBitExtract`, `tryShiftAmountMod`) | sdag-c | 2027-01-28 | `fld [m]; faddp` is `fadd [m]` (today's `floatfold.rs` case) |
+| D0 | Harness: `--isel=dag` flag, per-function LIR dump from both selectors (`ISEL_DUMP`), `tools/pairs/isel_shadow.py` (counts instructions, bytes, copies, executed instructions per function) feeding `objsweep` | sdag-d | 2026-11-05 | the report on old-vs-old is empty; a seeded one-instruction difference shows as one function |
+| D1 | Scheduler (RegPressure list scheduler, `ScheduleDAGRRList`) and `InstrEmitter` to LIR; the first end-to-end function through the DAG path | sdag-d | 2026-12-03 | `x = a+b; y = x*c` returns the right value through the emulator on the new path (tests/run `c`), fails when the emitter drops a `CopyToReg` |
+| D2 | Shadow runs on the corpus: objsweep, QCport -Os (65 modules, `tools/rows/qcport.py`, m16), the rows, `tests/run` (c, nib, qb, alias, huge), qbrt. First on the pieces that exist (functions the DAG path refuses fall back to the old selector only inside the shadow harness, counted) | sdag-d | from 2026-12-03, weekly | per run: correctness failures (must be 0 before the switch), refused functions, rows above main |
+
+The ordering inside a group is the table's; groups run in parallel from 2026-10-26, so by 2026-12-03 an end-to-end function exists (A0, A1, B0, C0, D0 done; D1 joins them). Shadow means the old selector produces the output; the new one runs in `--isel=dag` and in the harness.
+
+### Phase 1: the switch
+
+Gate (all must hold on the head, measured by D2): zero compile failures and zero wrong outputs across the corpus; the DAG path refuses no function of QCport, tests/run or qbrt; allocator stack switched over first ; the full gate green on `feat/parity`. Size, clock and compile rows are numbered with owners and do not hold the gate. Earliest date: **2027-02-04**. Owner: sdag-d with the coordinator's go. The default flips by deleting the flag's off arm in the same PR, not by adding a second switch.
+
+### Phase 2: delete the old selector
+
+One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG path has done its work for 1 week of corpus runs: `isel/matcher.rs`, `llrm-iselgen` and `family.isel`/`patterns.isel` (2027-02-18); the MIR pre-expansions the legalizer covers (`legalize.rs`, `isel/expand.rs`, `isel/wide.rs`, `lower_int64.rs` wide paths, `bitcounts.rs`, `funnel.rs`, `compares.rs`) once their cases are in the table (2027-03-04); fragments the combiner and matcher cover (`arithmetic.rs`, `division.rs`, `storecombine.rs`, `rmw.rs`, `comparefold.rs`, `floatfold.rs`) and each `peep/` group the ablation shows idle (2027-03-18). What stays and is retargeted, not deleted: `farload.rs`/`farcall.rs` (SD2), `addressforms.rs`/`addressvalues.rs` (SD3 alternatives), `fpstack.rs`. Row 28 becomes MATCH; CG1 closes.
+
+### Not to starve the rest
+
+- No sdag group takes `splitkit`, `w-1` or the workers on rows 23, 34, MachineSink, Peephole, the scheduler row and the X86 passes; the coordinator starts sdag sessions as new ones, three at a time (A and C first, then B, then D1).
+- Shared files are few: `isel.rs` (the dispatch only, at the switch), `registers.regs`/`x86.instr` (read by both), the vreg class field (SD4 waits on its plan).
+- If the allocator stack slips past 2027-02-04, the switch slips with it; the phases before it do not touch the allocator's inputs.
+
+## 5. Risks, numbered
+
+1. **The table's size and walk cost** (§3): priced at C0 with callgrind on the interpreter; no estimate yet.
+2. **Combiner scale**: 32.5k lines of C++ plus X86's `PerformDAGCombine`; the plan lands visitors by corpus frequency and leaves the rest as numbered MISSING rows in this file's table (to be added at B2), not as a gap with no owner.
+3. **m16 patterns the pin lacks** (SD2..SD4, SD9): the largest source of DEVIATEs; each carries a pin-dump premise test that shows the pin cannot express it.
+4. **Quality regressions against the hand-tuned selector**: the shadow report is the instrument; per [pr-rules](pr-rules.md) rows above main are fixed generally or kept by a numbered DEVIATE with the row as evidence, never by a shape patch.
+
+[isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
+[isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
+[isel-do]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L1281
+[isel-common]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
+[b-icmp]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L3808
+[b-sel]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L3863
+[b-gep]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L4493
+[b-load]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L4735
+[b-store]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L4917
+[b-call]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9256
+[b-switch]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L12878
+[b-work]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L12492
+[b-peel]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L133
+[c-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1845
+[c-combine]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2157
+[c-add]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3295
+[c-and]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L7861
+[c-setcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15048
+[c-load]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L22110
+[c-store]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24689
+[lt-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L196
+[ld-legalize]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L6301
+[ld-op]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L982
+[s-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L55
+[s-build]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536
+[s-burr]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3113
+[e-node]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L1003
+[x-ctor]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L131
+[x-sched]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L148
+[x-lower]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L34783
+[x-replace]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L34968
+[x-combine]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L63938
+[x-cmp]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085
+[x-setcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L25293
+[x-select2]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L25834
+[x-formal]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLoweringCall.cpp#L1710
+[x-select]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5513
+[x-rmw]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3925
+[x-bext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L4149
+[x-shamt]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L4664
+[x-addr]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2053
+[x-addrrec]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2677
+[x-seladdr]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3202
+[x-lea]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3329
+[x-pre]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L988
+[x-post]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L1643
+[x-16]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L1926
+[tg-emit]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/utils/TableGen/DAGISelEmitter.cpp#L152
+[tg-table]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/utils/TableGen/DAGISelMatcherEmitter.cpp#L1602
