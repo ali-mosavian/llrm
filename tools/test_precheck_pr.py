@@ -145,3 +145,28 @@ def test_the_precheck_tool_itself_names_neither_the_assistant_nor_its_config_dir
     for name in ("precheck_pr.py", "test_precheck_pr.py"):
         for number, line in enumerate((Path(__file__).resolve().parent / name).read_text().splitlines(), 1):
             assert not pattern.search(line), f"{name}:{number}: {line[:80]}"
+
+
+def test_a_pass_slot_needs_a_pipeline_level_test(tmp_path):
+    """#3732's JumpTableToSwitch passed its unit tests and never fired in a compile: x_funcptr asm was identical before and after."""
+    root = repo(tmp_path)
+    (root / "crates").mkdir()
+    (root / "crates" / "parity.rs").write_text('entry("a@1", Backend, "x", Old, ""),\n')
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base slots")
+    git(root, "branch", "-f", "parity")
+    git(root, "checkout", "-q", "-B", "pr", "parity")
+    (root / "crates" / "parity.rs").write_text('entry("a@1", Backend, "x", Old, ""),\nentry("jts@2", Backend, "jump-table", Translated, ""),\n')
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a slot")
+    assert len(pc.slot_without_pipeline_test(root, "parity")) == 1
+    (root / "crates" / "pipeline_tests.rs").write_text("#[test]\nfn the_pass_fires_in_a_compile() {}\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "its pipeline test")
+    assert pc.slot_without_pipeline_test(root, "parity") == []
+
+
+def test_a_pr_that_adds_no_slot_needs_no_pipeline_test(tmp_path):
+    root = repo(tmp_path)
+    commit(root, "notes.md", "nothing\n", "pr")
+    assert pc.slot_without_pipeline_test(root, "parity") == []
