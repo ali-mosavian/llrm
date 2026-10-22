@@ -6693,3 +6693,41 @@ done:
         "no offset compare before the selector's borrow: {lines:#?}"
     );
 }
+
+/// A phi of two far pointers read through ES in a loop: the selector came
+/// through AX (`mov ax, [bp+8]`, `mov ax, bx` in the other arm, `mov es, ax`
+/// at the join), where it is loaded into ES in each arm. #3441 gave the phi's
+/// temporary no class of its own, so the coalescer refused the copies between
+/// it and the segment-class result (render/dl -O2: `mov es, [bp-8]` was three
+/// instructions, +14 in the module).
+#[test]
+fn test_a_far_pointers_phi_is_not_copied_through_ax() {
+    let text = "define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %r, i1 %c, i16 %n) addrspace(1) {
+b0:
+  br i1 %c, label %b1, label %b2
+b1:
+  br label %b3
+b2:
+  br label %b3
+b3:
+  %q = phi ptr addrspace(1) [ %p, %b1 ], [ %r, %b2 ]
+  br label %b4
+b4:
+  %i = phi i16 [ 0, %b3 ], [ %i2, %b5 ]
+  %o = mul i16 %i, 30
+  %a = getelementptr i8, ptr addrspace(1) %q, i16 %o
+  %v = load i16, ptr addrspace(1) %a
+  %t = icmp eq i16 %v, 1
+  br i1 %t, label %b6, label %b5
+b5:
+  %i2 = add i16 %i, 1
+  %d = icmp eq i16 %i2, %n
+  br i1 %d, label %b6, label %b4
+b6:
+  ret i16 %i
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov es, di".to_owned()) && got.contains(&"mov es, bx".to_owned()), "{got:?}");
+    assert!(!got.iter().any(|line| line == "mov ax, bx" || line.starts_with("mov ax, word ptr [bp+8]")), "{got:?}");
+}
