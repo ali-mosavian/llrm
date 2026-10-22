@@ -13,7 +13,9 @@
 //! # Runs
 //! As `Hooks::lower_operation` of [`super::legalize_dag::DagLegalizer`] for
 //! the nodes the action table makes Custom (integer types only here; floats
-//! are B1d).
+//! are B1d). A global address is the static, non-PIC form (`Wrapper` of the
+//! target address); the GOT, PIC, DLL-import and TLS forms are not here, and
+//! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
 //! DEVIATE SD42: not translated yet, so the nodes are the plain forms: the
 //! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
@@ -33,7 +35,7 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
-use super::dag::{SDValue, SelectionDAG};
+use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_dag::Hooks;
 use super::mvt::EVT;
@@ -50,6 +52,7 @@ pub mod x86isd {
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SUB: ISD = ISD::Target(762);
+    pub const WRAPPER: ISD = ISD::Target(953);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -80,6 +83,7 @@ impl Hooks for X86Lowering {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
+            ISD::GlobalAddress => lower_global_address(dag, node),
             _ => None,
         }
     }
@@ -251,4 +255,21 @@ fn lower_brcond(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
+/// (TargetGlobalAddress sym+offset)`. A non-negative offset folds into the
+/// symbol; a negative one is added after.
+fn lower_global_address(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+    let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (folded, rest) = if offset >= 0 && offset <= i64::from(i32::MAX) { (offset, 0) } else { (0, offset) };
+    let target = dag.intern(ISD::TargetGlobalAddress, &[vt], &[], SDNodeFlags::default(), NodeData::Global { symbol, offset: folded });
+    let wrapped = dag.get_node(x86isd::WRAPPER, vt, &[target]);
+    Some(if rest == 0 {
+        wrapped
+    } else {
+        let delta = dag.get_constant(rest as u128, vt);
+        dag.get_node(ISD::Add, vt, &[wrapped, delta])
+    })
 }
