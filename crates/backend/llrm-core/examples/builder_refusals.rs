@@ -1,9 +1,12 @@
-//! What the DAG builder refuses in LLVM IR files: one line per refused block, `REFUSED name:block reason`, and
-//! `FILE path functions=N blocks=B refused=R` per file.
+//! What the DAG builder refuses in LLVM IR files: one line per refused block,
+//! `REFUSED name:block reason`, and `FILE path functions=N blocks=B refused=R`
+//! per file.
 //!
-//!     cargo run --release -p llrm-core --example builder_refusals -- m16|m32 FILE.ll...
+//!     cargo run --release -p llrm-core --example builder_refusals -- m16|m32
+//! FILE.ll...
 //!
-//! `tools/dagisel/builder_corpus.py` runs it over a corpus and tabulates the reasons.
+//! `tools/dagisel/builder_corpus.py` runs it over a corpus and tabulates the
+//! reasons.
 
 use llrm_core::backend::selectiondag::builder::{BuilderTarget, build_block};
 use llrm_core::backend::selectiondag::function_lowering::FunctionLoweringInfo;
@@ -24,7 +27,8 @@ fn main() {
             }
         };
         let _ = llrm_core::backend::memsetpattern::expanded(&mut module);
-        let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
+        let layout =
+            module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
         let target = if m16 { BuilderTarget::m16() } else { BuilderTarget::m32() };
         let arch: &dyn llrm_target::Target = if m16 { &llrm_x86_m16::M16 } else { &llrm_x86_m32::M32 };
         let (mut functions, mut blocks, mut refused) = (0, 0, 0);
@@ -42,7 +46,8 @@ fn main() {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 blocks += 1;
-                if let Err(why) = build_block(&module, function, &layout, &target, arch, &convention, &mut info, block) {
+                if let Err(why) = build_block(&module, function, &layout, &target, arch, &convention, &mut info, block)
+                {
                     refused += 1;
                     println!("REFUSED {name}:{} {}", function.block(block).name.as_deref().unwrap_or(""), why.0);
                 }

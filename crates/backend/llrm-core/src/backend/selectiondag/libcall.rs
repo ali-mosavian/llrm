@@ -8,7 +8,8 @@
 //! with the register operands and mask, `callseq_end`, then a `CopyFromReg`
 //! of each result register, each on the chain and glue of the one before.
 //! Where each argument goes is the caller's: a [`Place`] per argument, from
-//! the helper's register contract or a [`Convention`](crate::backend::isel::Convention).
+//! the helper's register contract or a
+//! [`Convention`](crate::backend::isel::Convention).
 //!
 //! # Example
 //! Two `i32` stack arguments and a result in `eax`:
@@ -106,7 +107,12 @@ pub fn lib_call(
     ops.push(dag.get_register_mask());
     ops.extend(glue);
     let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
-    let end = dag.get_callseq_end(SDValue { node: call.node, res: 0 }, stack_bytes, popped, SDValue { node: call.node, res: 1 });
+    let end = dag.get_callseq_end(
+        SDValue { node: call.node, res: 0 },
+        stack_bytes,
+        popped,
+        SDValue { node: call.node, res: 1 },
+    );
     let mut chain = SDValue { node: end.node, res: 0 };
     let mut glue = SDValue { node: end.node, res: 1 };
     let mut results = Vec::new();

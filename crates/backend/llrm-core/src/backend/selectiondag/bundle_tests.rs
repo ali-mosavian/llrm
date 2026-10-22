@@ -1,5 +1,5 @@
-//! The builder pieces of the bundle PR against the pin: `i64` parts, byval and sret, the `memset.pattern`
-//! loop, and `lib_call`.
+//! The builder pieces of the bundle PR against the pin: `i64` parts, byval and
+//! sret, the `memset.pattern` loop, and `lib_call`.
 
 use std::collections::BTreeMap;
 
@@ -32,17 +32,23 @@ fn pin_blocks(text: &str) -> BTreeMap<String, String> {
 
 /// Our dump of every block the builder takes, by the pin's block name.
 fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
-    let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+    let text: String =
+        text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
-    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
     let target = BuilderTarget::m32();
     let mut built = BTreeMap::new();
     let mut refused = Vec::new();
     for (id, global, function) in module.functions() {
-        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         for &block in function.layout() {
-            let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
+            let name =
+                format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
             match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                 Ok(done) => {
                     built.insert(name, normalized(&done.dag.dump()));
@@ -53,7 +59,6 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
     }
     (built, refused)
 }
-
 
 /// An `i64` at m32 travels as two `i32` registers: parameters are two
 /// loads and a `build_pair`, a value across blocks is two
@@ -77,8 +82,12 @@ fn two_register_integers_match_the_pins_initial_dag() {
 /// returned in eax: the pin's. Each was refused.
 #[test]
 fn byval_and_sret_match_the_pins_initial_dag() {
-    // the pin's i486-linux is the System V convention: the callee pops the sret slot
-    let ll = include_str!("golden/byval.ll").replace("define ", "define sysvcc ").replace("declare ", "declare sysvcc ").replace("call ", "call sysvcc ");
+    // the pin's i486-linux is the System V convention: the callee pops the sret
+    // slot
+    let ll = include_str!("golden/byval.ll")
+        .replace("define ", "define sysvcc ")
+        .replace("declare ", "declare sysvcc ")
+        .replace("call ", "call sysvcc ");
     let pin = pin_blocks(include_str!("golden/byval.pin.txt"));
     let (ours, refused) = our_blocks(&ll);
     assert_eq!(refused, Vec::<String>::new());
@@ -88,8 +97,10 @@ fn byval_and_sret_match_the_pins_initial_dag() {
     }
 }
 
-
-fn flat(done: &BlockDag, out: &mut Vec<String>) {
+fn flat(
+    done: &BlockDag,
+    out: &mut Vec<String>,
+) {
     out.push(normalized(&done.dag.dump()));
     for (_, extra) in &done.extra {
         flat(extra, out);
@@ -98,7 +109,8 @@ fn flat(done: &BlockDag, out: &mut Vec<String>) {
 
 /// The blocks of each function, ours and the pin's, as sorted dumps.
 fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
-    let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+    let text: String =
+        text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
     let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     crate::backend::memsetpattern::expanded(&mut module).expect("the memset patterns expand");
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
@@ -107,12 +119,22 @@ fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
         if function.is_declaration() {
             continue;
         }
-        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         let mut dumps = Vec::new();
         for &block in function.layout() {
-            let done = build_block(&module, function, &layout, &BuilderTarget::m32(), &llrm_x86_m32::M32, &convention, &mut info, block)
-                .unwrap_or_else(|why| panic!("{} {block:?}: {}", global.name.as_deref().unwrap(), why.0));
+            let done = build_block(
+                &module,
+                function,
+                &layout,
+                &BuilderTarget::m32(),
+                &llrm_x86_m32::M32,
+                &convention,
+                &mut info,
+                block,
+            )
+            .unwrap_or_else(|why| panic!("{} {block:?}: {}", global.name.as_deref().unwrap(), why.0));
             flat(&done, &mut dumps);
         }
         dumps.sort();
@@ -144,7 +166,6 @@ fn pins(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     all
 }
 
-
 /// `memset.pattern` is a store loop before selection (the pin's
 /// `PreISelIntrinsicLowering`): the blocks of the expanded functions are
 /// the pin's. The intrinsic was a builder refusal (shadow: scroll).
@@ -157,7 +178,6 @@ fn memset_pattern_loops_match_the_pins_initial_dags() {
     }
 }
 
-
 mod libcall_shape {
     use super::super::libcall::{CallEnv, Place, Returned, lib_call};
     use super::*;
@@ -166,7 +186,11 @@ mod libcall_shape {
         SelectionDAG::new(DagConfig::default())
     }
 
-    fn arg(dag: &mut SelectionDAG, vt: EVT, reg: u32) -> SDValue {
+    fn arg(
+        dag: &mut SelectionDAG,
+        vt: EVT,
+        reg: u32,
+    ) -> SDValue {
         dag.get_register(vt, reg)
     }
 
@@ -183,9 +207,19 @@ mod libcall_shape {
         let eax = llrm_target::Target::register_named(&llrm_x86_m32::M32, "eax");
         let edx = llrm_target::Target::register_named(&llrm_x86_m32::M32, "edx");
         let root = dag.entry_node();
-        let (chain, results) = lib_call(&mut dag, &env, root, callee, &[(a, Place::Stack(0)), (b, Place::Register(edx))], 4, 0, &[Returned { reg: eax, vt: EVT::I32 }]);
+        let (chain, results) = lib_call(
+            &mut dag,
+            &env,
+            root,
+            callee,
+            &[(a, Place::Stack(0)), (b, Place::Register(edx))],
+            4,
+            0,
+            &[Returned { reg: eax, vt: EVT::I32 }],
+        );
         let opcodes: Vec<String> = dag.nodes().iter().map(|node| node.opcode.name()).collect();
-        let position = |name: &str| opcodes.iter().position(|one| one == name).unwrap_or_else(|| panic!("{name} in {opcodes:?}"));
+        let position =
+            |name: &str| opcodes.iter().position(|one| one == name).unwrap_or_else(|| panic!("{name} in {opcodes:?}"));
         assert!(position("callseq_start") < position("store") && position("store") < position("CopyToReg"));
         assert!(position("CopyToReg") < position("X86ISD::CALL") && position("X86ISD::CALL") < position("callseq_end"));
         assert_eq!(results.len(), 1);

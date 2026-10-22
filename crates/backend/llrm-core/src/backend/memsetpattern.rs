@@ -45,8 +45,11 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
         |intrinsic| matches!(intrinsic, Intrinsic::MemSetPattern).then_some(()),
         |context, function, call, ()| {
             let instruction = function.instruction(call).clone();
-            let (dst, value, len, volatile) = (instruction.operands[0], instruction.operands[1], instruction.operands[2], instruction.operands[3]);
-            let int = |context: &llrm_mir::context::Context, operand: Operand| function.operand_type(context, operand).ok_or("a typed operand");
+            let (dst, value, len, volatile) =
+                (instruction.operands[0], instruction.operands[1], instruction.operands[2], instruction.operands[3]);
+            let int = |context: &llrm_mir::context::Context, operand: Operand| {
+                function.operand_type(context, operand).ok_or("a typed operand")
+            };
             let (pointer_type, element, length_type) = (int(context, dst)?, int(context, value)?, int(context, len)?);
             let zero = context.constant(Constant { ty: length_type, kind: ConstantKind::Int(0) });
             let one = context.constant(Constant { ty: length_type, kind: ConstantKind::Int(1) });
@@ -62,7 +65,10 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
                 function.erase(call).map_err(|why| why.to_string())?;
                 return Ok(());
             }
-            let volatile = matches!(volatile, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(1)));
+            let volatile = matches!(
+                volatile,
+                Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(1))
+            );
             let dst_align = match &instruction.opcode {
                 Opcode::Call(info) => info
                     .argument_attrs
@@ -91,25 +97,71 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
             let entry = if constant_len.is_some() {
                 function.create_instruction(Opcode::Br, void, vec![Operand::Block(main)], Flags::default(), None)
             } else {
-                let test = function.create_instruction(Opcode::ICmp(IntPredicate::Ne), bool_type, vec![len, Operand::Constant(zero)], Flags::default(), None);
+                let test = function.create_instruction(
+                    Opcode::ICmp(IntPredicate::Ne),
+                    bool_type,
+                    vec![len, Operand::Constant(zero)],
+                    Flags::default(),
+                    None,
+                );
                 function.insert(test, Position::End(pre)).map_err(|why| why.to_string())?;
                 let test = Operand::Value(function.instruction(test).result.ok_or("a compare result")?);
-                function.create_instruction(Opcode::Br, void, vec![test, Operand::Block(main), Operand::Block(post)], Flags::default(), None)
+                function.create_instruction(
+                    Opcode::Br,
+                    void,
+                    vec![test, Operand::Block(main), Operand::Block(post)],
+                    Flags::default(),
+                    None,
+                )
             };
             function.insert(entry, Position::End(pre)).map_err(|why| why.to_string())?;
-            let phi = function.create_instruction(Opcode::Phi, length_type, Vec::new(), Flags::default(), Some("loop-index"));
+            let phi =
+                function.create_instruction(Opcode::Phi, length_type, Vec::new(), Flags::default(), Some("loop-index"));
             let index = Operand::Value(function.instruction(phi).result.ok_or("a phi result")?);
-            let address = function.create_instruction(Opcode::GetElementPtr { source: element }, pointer_type, vec![dst, index], Flags::INBOUNDS, None);
-            let store = function.create_instruction(Opcode::Store { align: Some(align), volatile }, void, vec![value, Operand::Value(function.instruction(address).result.ok_or("an address")?)], Flags::default(), None);
-            let next = function.create_instruction(Opcode::Binary(BinaryOp::Add), length_type, vec![index, Operand::Constant(one)], Flags::default(), None);
+            let address = function.create_instruction(
+                Opcode::GetElementPtr { source: element },
+                pointer_type,
+                vec![dst, index],
+                Flags::INBOUNDS,
+                None,
+            );
+            let store = function.create_instruction(
+                Opcode::Store { align: Some(align), volatile },
+                void,
+                vec![value, Operand::Value(function.instruction(address).result.ok_or("an address")?)],
+                Flags::default(),
+                None,
+            );
+            let next = function.create_instruction(
+                Opcode::Binary(BinaryOp::Add),
+                length_type,
+                vec![index, Operand::Constant(one)],
+                Flags::default(),
+                None,
+            );
             let next_value = Operand::Value(function.instruction(next).result.ok_or("a sum")?);
-            let again = function.create_instruction(Opcode::ICmp(IntPredicate::Ult), bool_type, vec![next_value, len], Flags::default(), None);
+            let again = function.create_instruction(
+                Opcode::ICmp(IntPredicate::Ult),
+                bool_type,
+                vec![next_value, len],
+                Flags::default(),
+                None,
+            );
             let again_value = Operand::Value(function.instruction(again).result.ok_or("a compare result")?);
-            let back = function.create_instruction(Opcode::Br, void, vec![again_value, Operand::Block(main), Operand::Block(post)], Flags::default(), None);
+            let back = function.create_instruction(
+                Opcode::Br,
+                void,
+                vec![again_value, Operand::Block(main), Operand::Block(post)],
+                Flags::default(),
+                None,
+            );
             for inst in [phi, address, store, next, again, back] {
                 function.insert(inst, Position::End(main)).map_err(|why| why.to_string())?;
             }
-            function.set_operands(phi, vec![Operand::Constant(zero), Operand::Block(pre), next_value, Operand::Block(main)]);
+            function.set_operands(
+                phi,
+                vec![Operand::Constant(zero), Operand::Block(pre), next_value, Operand::Block(main)],
+            );
             function.erase(call).map_err(|why| why.to_string())?;
             Ok(())
         },
