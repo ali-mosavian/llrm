@@ -37,5 +37,14 @@ pub fn render(ids: &Ids, extras: &[String]) -> String {
         }
         writeln!(out, "}}").unwrap();
     }
+    // The pin's number of an `X86ISD::` node by its name: the builders spell their own target
+    // codes and name them.
+    writeln!(out, "\n/// The pin's number of the `X86ISD::<name>` node.\npub fn x86isd_id(name: &str) -> Option<u16> {{\n    Some(match name {{").unwrap();
+    let mut x86isd: Vec<_> = ids.0.iter().filter(|(n, _)| n.starts_with("X86ISD::")).collect();
+    x86isd.sort();
+    for (name, value) in x86isd {
+        writeln!(out, "        {:?} => {value},", &name["X86ISD::".len()..]).unwrap();
+    }
+    writeln!(out, "        _ => return None,\n    }})\n}}").unwrap();
     out
 }

@@ -27,6 +27,7 @@ import pin  # noqa: E402
 
 FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
+FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
 BOOKKEEPING = {"COPY", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
 
 
@@ -53,7 +54,10 @@ def pin_opcodes(mir: str) -> dict[str, Counter]:
             text = line.strip()
             if "=" in text.split(" ::")[0]:
                 text = text.split("=", 1)[1].strip()
-            op = text.split(" ")[0].rstrip(",")
+            words = text.split(" ")
+            while words and words[0] in FLAG_WORDS:
+                words = words[1:]
+            op = (words[0] if words else "").rstrip(",")
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", op):
                 out[current][op] += 1
     return out
@@ -122,8 +126,9 @@ def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
                 if want == have:
                     bucket = "equal"
                 else:
-                    delta = (want - have) + (have - want)
-                    bucket = "differs " + max(delta, key=delta.get)
+                    pin_only, ours_only = want - have, have - want
+                    top = max((pin_only + ours_only).items(), key=lambda kv: kv[1])[0]
+                    bucket = f"differs: {'pin only' if top in pin_only else 'ours only'} {top}"
             rows.append((source.stem, name, bucket))
         return rows
 

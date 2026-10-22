@@ -1059,3 +1059,12 @@ mod nodes_before_the_table {
         assert!(dag.nodes[asserted as usize].dead);
     }
 }
+
+#[test]
+fn an_x86isd_node_is_found_by_name_in_the_pins_numbers() {
+    // Builders spell their own target codes and name them; the pin's number comes from the name.
+    use crate::generated::ids::{x86isd, x86isd_id};
+    assert_eq!(x86isd_id("RET_GLUE"), Some(x86isd::RET_GLUE));
+    assert_eq!(x86isd_id("CMOV"), Some(x86isd::CMOV));
+    assert_eq!(x86isd_id("NO_SUCH_NODE"), None);
+}
