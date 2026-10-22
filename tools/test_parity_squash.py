@@ -820,6 +820,16 @@ def test_two_offenders_are_both_dropped_and_the_others_land():
     assert refused == ["2", "3"] and landed == ["1", "4"]
 
 
+def test_a_refusal_line_names_the_prs_own_reason_not_the_batchs_first_failure():
+    """22:26: the queue printed the log's first REFUSED line (#3841's `mut`) for eight PRs; seven of them had been refused for failing units."""
+    named = {"3841": "alone on the head it does not build: how_many.rs:1527: variable does not need to be mutable"}
+    build = ["how_many.rs:1527:17: error: variable does not need to be mutable"]
+    assert "does not build" in ps.refusal_line("3841", named, build, set())
+    assert "how_many" not in ps.refusal_line("3843", named, [], {"unit llrm-mir::tests::no_file_gains_a_slice_read_of_a_use_list"})
+    assert "no_file_gains" in ps.refusal_line("3843", named, [], {"unit llrm-mir::tests::no_file_gains_a_slice_read_of_a_use_list"})
+    assert ps.refusal_line("3846", {}, [], set()).startswith("#3846: REFUSED: ")
+
+
 def test_a_head_with_a_conflict_marker_in_an_added_line_is_left_out_by_name(tmp_path):
     """sdag-a pushed markers to open branches twice in a day."""
     def run(*args):

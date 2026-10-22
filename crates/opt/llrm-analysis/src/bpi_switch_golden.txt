@@ -1,0 +1,18 @@
+Printing analysis 'Branch Probability Analysis' for function 'sw':
+---- Branch Probabilities ----
+  edge %entry -> %dflt probability is 0x3e0f83c3 / 0x80000000 = 48.48%
+  edge %entry -> %a probability is 0x3e0f83c3 / 0x80000000 = 48.48%
+  edge %entry -> %b probability is 0x03e0f499 / 0x80000000 = 3.03%
+  edge %entry -> %c probability is 0x000003e1 / 0x80000000 = 0.00%
+  edge %entry -> %d probability is 0x00000000 / 0x80000000 = 0.00%
+Printing analysis 'Branch Probability Analysis' for function 'sw2':
+---- Branch Probabilities ----
+  edge %entry -> %dflt probability is 0x09d89d8a / 0x80000000 = 7.69%
+  edge %entry -> %a probability is 0x4ec4ec4f / 0x80000000 = 61.54%
+  edge %entry -> %b probability is 0x27627627 / 0x80000000 = 30.77%
+  edge %entry -> %a probability is 0x4ec4ec4f / 0x80000000 = 61.54%
+Printing analysis 'Branch Probability Analysis' for function 'sw3':
+---- Branch Probabilities ----
+  edge %entry -> %dflt probability is 0x00000000 / 0x80000000 = 0.00%
+  edge %entry -> %a probability is 0x40000000 / 0x80000000 = 50.00%
+  edge %entry -> %b probability is 0x40000000 / 0x80000000 = 50.00%

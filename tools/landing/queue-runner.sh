@@ -55,6 +55,6 @@ while true; do
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log ) 9>"$W.checkout.lock"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
-    else echo "$m: REFUSED: batch $log: $(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' ' | cut -c1-400)"; fi
+    else why=$(grep -E "#$m: REFUSED" $log | head -1); [ -n "$why" ] || why=$(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' '); echo "$m: REFUSED: batch $log: $(echo "$why" | cut -c1-400)"; fi
   done
 done
