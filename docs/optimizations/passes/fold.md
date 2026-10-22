@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:17db1df24b2ac132811677b5bb03f13191c0562647a32ac2e00643d7b40378b9 -->
+<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:9c11d0dcd1a397b15a0fe22d4afad8911c84f454adaf4ed3f17698c507494b78 -->
 
 # fold
 
@@ -23,11 +23,11 @@ own, and the definition is left unread for [`crate::dead`](dead.md) to take. A
 commutative operation that ends up with the constant on the left gets it
 back on the right; an ordered one (`sub`, shifts) keeps its operand order.
 
-A call kills only the cells its writes may overlap (`CallEffects`, from
-`Summaries` and the call's `memory(...)`, `readonly` and `readnone`
-attributes); one that states writes without an effect list clears every
-cell. A fact about reaching an edge says nothing about a callee, so edge
-facts clear all cells at a call.
+A call kills only the cells its writes may overlap
+(`alias::calls_by_attributes`, from the call's `memory(...)`, `readonly` and
+`readnone` attributes and `GlobalsModRef`); one that states writes without
+an effect list clears every cell. A fact about reaching an edge says nothing
+about a callee, so edge facts clear all cells at a call.
 
 ```text
  store i16 9, ptr @g          store i16 9, ptr @g

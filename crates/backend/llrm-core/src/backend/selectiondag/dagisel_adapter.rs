@@ -7,7 +7,7 @@
 //! [`DagisAdapter`] keeps the set of nodes that selection removed and every use query skips them.
 //!
 //! Numbered deviations (reason / owner / exit / review):
-//! - **SD42** `have_no_common_bits_set`, `ConstantFP` to target form, memory operands on machine
+//! - **SD44** `have_no_common_bits_set`, `ConstantFP` to target form, memory operands on machine
 //!   nodes (kept in [`DagisAdapter::mem_refs`]) and extending loads are not in our DAG yet; the
 //!   adapter answers conservatively. Owner sdag-c. Exit: the combiner (sdag-b) brings known bits.
 //!   Review 2026-12-10.
@@ -323,7 +323,7 @@ impl Dag for DagisAdapter<'_> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
     }
     fn load_ext_type(&self, node: u32) -> Option<LoadExt> {
-        // Our `Load` never extends (SD42).
+        // Our `Load` never extends (SD44).
         (self.dag.nodes()[node as usize].opcode == ISD::Load).then_some(LoadExt::NonExt)
     }
     fn is_indexed(&self, _: u32) -> bool {
