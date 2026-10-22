@@ -55,7 +55,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 47 | Live Range Shrink | MISSING | pressuresink.rs stands in |  | lir-cleanup-port; 2026-11-13: registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs |
 | 48 | X86 Fixup SetCC | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 41 (-O2) and 40 (-Os) of 77 IRs |
 | 49 | X86 LEA Optimize | MISSING |  | `-disable-x86-lea-opt` | funcattrs-port; 2026-11-13: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ |
-| 50 | X86 Optimize Call Frame | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
+| 50 | X86 Optimize Call Frame | DEVIATE | pushfold.rs |  | CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
 | 51 | X86 Avoid Store Forwarding Blocks | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 52 | X86 Suppress APX features for relocation | N/A |  |  | APX is 64-bit; features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 53 | X86 speculative load hardening | N/A |  |  | acts on the `speculative_load_hardening` attribute, never set. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |

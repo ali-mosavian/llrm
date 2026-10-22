@@ -443,10 +443,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 Optimize Call Frame",
-        Missing,
+        Deviate,
+        "pushfold.rs",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",

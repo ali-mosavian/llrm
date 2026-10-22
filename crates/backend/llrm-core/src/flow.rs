@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 9] = [
+const UNOPTIMIZED: [&str; 10] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -68,6 +68,7 @@ const UNOPTIMIZED: [&str; 9] = [
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "PushFold",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -81,6 +82,7 @@ const SLOTS: [(&str, &str); 22] = [
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FloatFold", "floatfold@6"),
+    ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
     ("FloatAlloc", "floatalloc@8"),
@@ -150,6 +152,9 @@ pub fn machine_with<'a>(
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        // A pushed value a load made, read nowhere else, is pushed from the
+        // load's cell (the pin: X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         if crate::backend::allocate::rfp_on() {
             Box::new(floatassign::FloatPrep {
