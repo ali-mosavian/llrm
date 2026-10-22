@@ -18,6 +18,8 @@ ISD::DELETED_NODE
 ISD::EH_LABEL
 ISD::EntryToken
 ISD::ExternalSymbol
+ISD::FADD
+ISD::FMUL
 ISD::FrameIndex
 ISD::GlobalAddress
 ISD::HANDLENODE

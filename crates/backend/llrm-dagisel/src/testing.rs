@@ -237,6 +237,10 @@ impl Dag for TestDag {
         n.ops = operands.to_vec();
         (node, Vec::new())
     }
+    fn update_node_operands(&mut self, node: u32, operands: &[SDValue]) -> u32 {
+        self.nodes[node as usize].ops = operands.to_vec();
+        node
+    }
     fn replace_uses(&mut self, from: SDValue, to: SDValue) {
         for n in self.nodes.iter_mut().filter(|n| !n.dead) {
             for op in &mut n.ops {

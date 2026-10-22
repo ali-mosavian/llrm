@@ -25,6 +25,7 @@ pub mod x86_addr;
 pub mod x86_classes;
 pub mod x86_hooks;
 pub mod x86_rmw;
+pub mod x86_shift;
 
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;

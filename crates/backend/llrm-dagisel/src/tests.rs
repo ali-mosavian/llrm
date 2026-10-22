@@ -824,3 +824,123 @@ mod segment_overrides {
         assert_eq!(dag.nodes[segment.node as usize].register, Some(0), "register 0 is no segment");
     }
 }
+
+mod shift_amount_mod {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_shift::try_shift_amount_mod;
+
+    /// `x << amount(n)`.
+    fn shl(dag: &mut TestDag, amount: impl FnOnce(&mut TestDag, SDValue) -> SDValue) -> (u32, SDValue) {
+        let x = dag.input(1, mvt::i32);
+        let n = dag.input(2, mvt::i8);
+        let count = amount(dag, n);
+        (dag.node(isd::SHL, &[mvt::i32], &[x, count]), n)
+    }
+
+    /// The count of the shift after the rewrite: `(n' & 31)`; returns `n'`.
+    fn masked_source(dag: &TestDag, shift: u32) -> SDValue {
+        let count = dag.nodes[shift as usize].ops[1];
+        assert_eq!(dag.nodes[count.node as usize].opcode, isd::AND, "the count is masked");
+        assert_eq!(dag.nodes[dag.nodes[count.node as usize].ops[1].node as usize].constant, Some(31));
+        dag.nodes[count.node as usize].ops[0]
+    }
+
+    #[test]
+    fn n_plus_32_shifts_by_n() {
+        let mut dag = TestDag::new();
+        let (shift, n) = shl(&mut dag, |d, n| {
+            let c = d.make_constant(32, mvt::i8);
+            SDValue::new(d.node(isd::ADD, &[mvt::i8], &[n, c]), 0)
+        });
+
+        assert_eq!(try_shift_amount_mod(&mut dag, shift), Some(shift));
+
+        assert_eq!(masked_source(&dag, shift), n);
+    }
+
+    #[test]
+    fn thirty_one_minus_n_shifts_by_not_n() {
+        let mut dag = TestDag::new();
+        let (shift, n) = shl(&mut dag, |d, n| {
+            let c = d.make_constant(31, mvt::i8);
+            SDValue::new(d.node(isd::SUB, &[mvt::i8], &[c, n]), 0)
+        });
+
+        assert_eq!(try_shift_amount_mod(&mut dag, shift), Some(shift));
+
+        let not = masked_source(&dag, shift);
+        assert_eq!(dag.nodes[not.node as usize].opcode, isd::XOR, "n ^ -1");
+        assert_eq!(dag.nodes[not.node as usize].ops[0], n);
+    }
+
+    #[test]
+    fn thirty_two_minus_n_shifts_by_minus_n() {
+        let mut dag = TestDag::new();
+        let (shift, n) = shl(&mut dag, |d, n| {
+            let c = d.make_constant(32, mvt::i8);
+            SDValue::new(d.node(isd::SUB, &[mvt::i8], &[c, n]), 0)
+        });
+
+        assert_eq!(try_shift_amount_mod(&mut dag, shift), Some(shift));
+
+        let neg = masked_source(&dag, shift);
+        assert_eq!(dag.nodes[neg.node as usize].opcode, isd::SUB, "0 - n");
+        assert_eq!(dag.nodes[neg.node as usize].ops[1], n);
+    }
+
+    #[test]
+    fn an_ordinary_count_is_left_alone() {
+        let mut dag = TestDag::new();
+        let (shift, _) = shl(&mut dag, |d, n| {
+            let c = d.make_constant(5, mvt::i8);
+            SDValue::new(d.node(isd::ADD, &[mvt::i8], &[n, c]), 0)
+        });
+
+        assert_eq!(try_shift_amount_mod(&mut dag, shift), None);
+    }
+}
+
+mod x87_pseudos {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_addr::AddrMode;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn hooks() -> X86Hooks {
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: AddrMode::Flat32 })
+    }
+
+    #[test]
+    fn a_double_add_of_two_registers_is_the_pseudo_for_the_stack_machine() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let sum = dag.node(isd::FADD, &[mvt::f64], &[a, b]);
+
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks(), sum), Outcome::Selected);
+
+        assert_eq!(selected(&dag, sum), "ADD_Fp64");
+    }
+
+    #[test]
+    fn a_double_add_of_a_loaded_operand_folds_the_load_into_the_add() {
+        let mut dag = TestDag::new();
+        let a = dag.input(1, mvt::f64);
+        let p = dag.input(2, mvt::i32);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::f64, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::f64),
+            ..Node::default()
+        });
+        let sum = dag.node(isd::FADD, &[mvt::f64], &[a, SDValue::new(load, 0)]);
+
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks(), sum), Outcome::Selected);
+
+        assert_eq!(selected(&dag, sum), "ADD_Fp64m", "fadd [m], not fld then faddp");
+    }
+}
