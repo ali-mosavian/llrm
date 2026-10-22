@@ -1,73 +1,119 @@
-//! `FunctionLoweringInfo`: which values live in virtual registers across
-//! blocks, and which allocas are frame indices.
+//! What the target lets the legalizer assume: which integer types a register
+//! holds and what becomes of the others (the pin's `TargetLoweringBase`
+//! type half).
+//!
+//! # How it works
+//! [`TargetLoweringInfo::new`] is `computeRegisterProperties` for integers:
+//! every integer type wider than the widest legal one expands to the
+//! previous type, and every smaller illegal one promotes to the nearest legal
+//! type above it. [`TargetLoweringInfo::type_conversion`] is
+//! `getTypeConversion`: a simple type reads that table; any other integer is
+//! first rounded to a power of two (at least `i8`), promoted when the rounded
+//! type promotes, else that rounded type, and an exact power of two that is
+//! not a simple type expands to half.
+//!
+//! # Runs
+//! Built once per target from its description; read by the type legalizer.
+//!
+//! DEVIATE SD2: [`MVT::Far`] (m16) expands into two `i16` as an integer of
+//! twice the width would. The pin has no far pointer; its address spaces
+//! 256..258 are segment overrides on an `i32`. Exit: none. Owner sdag-b.
+//! Review 2026-11-13.
+//!
+//! DEVIATE SD14: the floating types are always legal (x87 register classes);
+//! the pin's `SoftenFloat` and `ExpandFloat` arms are not translated. Reason:
+//! no target of ours lacks the x87. Exit: none. Owner sdag-b. Review
+//! 2026-11-13.
+//!
+//! # See also
+//! LLVM's `computeRegisterProperties`
+//! ([L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L1425))
+//! and `getTypeConversion`
+//! ([L1100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L1100)).
 
-use std::collections::{HashMap, HashSet};
+use super::mvt::{EVT, MVT};
 
-use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::Opcode;
-
-/// What `FunctionLoweringInfo::set` decides before any block is selected.
-pub struct FunctionLoweringInfo {
-    /// `ValueMap`: a value used outside its block (or by a phi) and the
-    /// virtual register that carries it.
-    pub value_regs: HashMap<ValueId, u32>,
-    /// `StaticAllocaMap`.
-    pub static_allocas: HashMap<ValueId, i32>,
-    next_reg: u32,
-    next_frame_index: i32,
+/// `LegalizeTypeAction`, for the integer, float and far types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeAction {
+    Legal,
+    PromoteInteger,
+    ExpandInteger,
 }
 
-impl FunctionLoweringInfo {
-    /// `FunctionLoweringInfo::set`: one walk in layout order, numbering
-    /// registers and frame indices as the pin does.
-    pub fn new(function: &Function) -> FunctionLoweringInfo {
-        let mut outside: HashSet<ValueId> = HashSet::new();
-        for &block in function.layout() {
-            for inst in function.iter_block(block) {
-                let instruction = function.instruction(inst);
-                let is_phi = instruction.opcode == Opcode::Phi;
-                for operand in &instruction.operands {
-                    let Operand::Value(value) = operand else { continue };
-                    let ValueDef::Instruction(def) = function.value(*value).def else { continue };
-                    if is_phi || function.parent(def) != Some(block) {
-                        outside.insert(*value);
-                    }
-                }
+/// The simple integer types, narrowest first (the pin's `i1`..`i128` without
+/// the odd widths, which are [`EVT::Int`]).
+const INTEGERS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
+
+#[derive(Clone, Debug)]
+pub struct TargetLoweringInfo {
+    /// Per entry of `INTEGERS`: its action and the type it becomes.
+    integers: [(TypeAction, MVT); 6],
+    far: bool,
+}
+
+impl TargetLoweringInfo {
+    /// `legal` are the integer types a register class holds (`addRegisterClass`);
+    /// `far` says the target has the far pointer type.
+    pub fn new(legal: &[MVT], far: bool) -> TargetLoweringInfo {
+        let is_legal = |vt: MVT| legal.contains(&vt);
+        let largest = INTEGERS.iter().rposition(|&vt| is_legal(vt)).expect("no integer register class");
+        let mut integers = INTEGERS.map(|vt| (TypeAction::Legal, vt));
+        for above in largest + 1..INTEGERS.len() {
+            integers[above] = (TypeAction::ExpandInteger, INTEGERS[above - 1]);
+        }
+        let mut nearest_legal = INTEGERS[largest];
+        for below in (0..largest).rev() {
+            if is_legal(INTEGERS[below]) {
+                nearest_legal = INTEGERS[below];
+            } else {
+                integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        let mut info = FunctionLoweringInfo { value_regs: HashMap::new(), static_allocas: HashMap::new(), next_reg: 0, next_frame_index: 0 };
-        let entry = function.entry();
-        for &block in function.layout() {
-            for inst in function.iter_block(block) {
-                let instruction = function.instruction(inst);
-                let Some(result) = instruction.result else { continue };
-                if let Opcode::Alloca { .. } = instruction.opcode {
-                    if Some(block) == entry && instruction.operands.iter().all(|op| matches!(op, Operand::Constant(_))) {
-                        info.static_allocas.insert(result, info.next_frame_index);
-                        info.next_frame_index += 1;
-                        continue;
-                    }
+        TargetLoweringInfo { integers, far }
+    }
+
+    /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
+    pub fn x86_32() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], false)
+    }
+
+    /// m16: the same registers, and the far pointer (SD2).
+    pub fn x86_16() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)
+    }
+
+    /// `getTypeConversion`: the action for `vt` and the type it becomes.
+    pub fn type_conversion(&self, vt: EVT) -> (TypeAction, EVT) {
+        match vt {
+            EVT::Simple(MVT::Far) => {
+                assert!(self.far, "this target has no far pointer");
+                (TypeAction::ExpandInteger, EVT::I16)
+            }
+            EVT::Simple(mvt) => match INTEGERS.iter().position(|&int| int == mvt) {
+                Some(at) => {
+                    let (action, to) = self.integers[at];
+                    (action, EVT::Simple(to))
                 }
-                let phi_used = instruction.opcode == Opcode::Phi && !function.users(result).is_empty();
-                if phi_used || outside.contains(&result) {
-                    info.create_reg(result);
+                None => (TypeAction::Legal, vt),
+            },
+            EVT::Int(bits) => {
+                if bits < 8 || !bits.is_power_of_two() {
+                    let rounded = EVT::integer(if bits < 8 { 8 } else { bits.next_power_of_two() });
+                    let next = self.type_conversion(rounded);
+                    // Avoid multi-step promotion.
+                    return if next.0 == TypeAction::PromoteInteger { next } else { (TypeAction::PromoteInteger, rounded) };
                 }
+                (TypeAction::ExpandInteger, EVT::integer(bits / 2))
             }
         }
-        info
     }
 
-    /// `CreateRegs`: the next virtual register, recorded for `value`.
-    pub fn create_reg(&mut self, value: ValueId) -> u32 {
-        let reg = self.new_reg();
-        self.value_regs.insert(value, reg);
-        reg
+    pub fn type_action(&self, vt: EVT) -> TypeAction {
+        self.type_conversion(vt).0
     }
 
-    /// A register with no value of its own (a constant a phi receives).
-    pub fn new_reg(&mut self) -> u32 {
-        let reg = self.next_reg;
-        self.next_reg += 1;
-        reg
+    pub fn is_type_legal(&self, vt: EVT) -> bool {
+        self.type_action(vt) == TypeAction::Legal
     }
 }

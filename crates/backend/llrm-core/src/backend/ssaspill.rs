@@ -2159,9 +2159,9 @@ fn written(
     let in_memory = |value: &u32| stored.contains(value) && !remakes.contains_key(value);
     let reload = |beside: &Insn, value: u32| match remakes.get(&value) {
         Some(one) => remade(one, beside),
-        None => spiller::_reload(beside, value, &cells[&value]),
+        None => crate::greedy::tii::load_reg_from_stack_slot(beside, value, &cells[&value]),
     };
-    let store = |beside: &Insn, value: u32| spiller::_store(beside, value, &cells[&value]);
+    let store = |beside: &Insn, value: u32| crate::greedy::tii::store_reg_to_stack_slot(beside, value, &cells[&value]);
     // The code on each edge.
     let mut crossing: IndexMap<(i64, i64), Crossing> = IndexMap::default();
     for (edge, values) in across {
@@ -2210,7 +2210,7 @@ fn written(
                 if !edits[&from].w_out.contains(&value) {
                     made.push(reload(beside, value));
                 }
-                made.push(spiller::_store(beside, value, &cells[&result]));
+                made.push(crate::greedy::tii::store_reg_to_stack_slot(beside, value, &cells[&result]));
                 made
             }
         }

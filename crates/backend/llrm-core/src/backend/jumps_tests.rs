@@ -1886,3 +1886,35 @@ fn test_placement_reads_the_frequencies_the_body_already_has() {
     let worked = crate::analysis::frequency::WORKED.with(|one| one.get());
     assert_eq!(worked, 0, "{worked} frequency runs for frequencies the body had");
 }
+
+/// `Loop: xxx; jcc Out; jmp Loop` in `OptimizeBranches` alone: the pin reverses
+/// it (`OptimizeBlock` L1685) so the loop is `jncc Loop; jmp Out`.
+#[test]
+fn test_a_one_block_loop_is_folded_into_a_branch_back() {
+    let blocks: Vec<Block> = vec![
+        block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+        block(4, vec![_compare(4), _branch(5, "je", 9), _jump(6, 4)], vec![9, 4]).into(),
+        block(7, vec![_move(7, bx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ];
+    let folded = branchfold::folded(&body("f", 1, blocks), &std::collections::BTreeSet::new());
+    let tail: Vec<(String, Option<i64>)> = physical(&folded)
+        .into_iter()
+        .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
+        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
+}
+
+/// A block that is one conditional branch identical to the branch that ends
+/// the block before it: the earlier one is redundant (`OptimizeBlock` L1586).
+#[test]
+fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_branch(5, "je", 9)], vec![9, 7]).into(),
+        block(7, vec![_move(7, cx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
+}

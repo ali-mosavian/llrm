@@ -13,7 +13,7 @@ use llrm_mir::types::{Type, TypeId};
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::{CondCode, ISD};
-use super::lowering::FunctionLoweringInfo;
+use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::EVT;
 
 /// An instruction the builder does not translate yet; the shadow harness

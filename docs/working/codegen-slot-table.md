@@ -13,7 +13,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 5 | Lower AMX intrinsics | N/A |  |  | AMX is a 64-bit extension; target features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 6 | Lower AMX type for load/store | N/A |  |  | as above. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 7 | Canonicalize natural loops | EXECUTED | loopsimplify.rs (mid-end) |  | loop-simplify runs in the mid-end; LSR relies on it. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
-| 8 | Canonicalize Freeze Instructions in Loops | MISSING |  |  | funcattrs-port; 2026-11-13: MIR has `freeze`; LSR's canon-freeze is not run. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
+| 8 | Canonicalize Freeze Instructions in Loops | MATCH | canonfreeze.rs |  | translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 9 | Induction Variable Users | MATCH | ivusers.rs |  | translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 10 | Loop Strength Reduction | MATCH | lsr_*.rs (registry `lsr`) | `-disable-lsr` | translated; runs at the end of the mid-end, the pin's runs after it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs; -disable-lsr -O2: -37 instr, +40 B, 61 IRs differ; -disable-lsr -Os: +283 instr, +876 B, 63 IRs differ |
 | 11 | Lower Garbage Collection Instructions | N/A |  |  | no GC strategy in any frontend. Pin: changed code in 62 (-O2) and 64 (-Os) of 77 IRs |
@@ -53,14 +53,14 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 45 | Peephole Optimizations | MISSING | peephole.rs and peep/ | `-disable-peephole` | lir-cleanup-port; 2026-11-13: registry peephole@14 is ours-own, not a translation. Pin: changed code in 72 (-O2) and 72 (-Os) of 77 IRs; -disable-peephole -O2: +2189 instr, +7527 B, 67 IRs differ; -disable-peephole -Os: +1763 instr, +6048 B, 69 IRs differ |
 | 46 | Remove dead machine instructions (run 2) | EXECUTED | machinedce.rs | `-disable-machine-dce` | as above, after the peephole. Pin: changed code in 61 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-dce -O2: +11 instr, +50 B, 14 IRs differ; -disable-machine-dce -Os: +19 instr, +131 B, 14 IRs differ |
 | 47 | Live Range Shrink | MISSING | pressuresink.rs stands in |  | lir-cleanup-port; 2026-11-13: registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs |
-| 48 | X86 Fixup SetCC | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 41 (-O2) and 40 (-Os) of 77 IRs |
+| 48 | X86 Fixup SetCC | MATCH | fixupsetcc.rs |  | translated (registry fixupsetcc@5). Pin: changed code in 41 (-O2) and 40 (-Os) of 77 IRs |
 | 49 | X86 LEA Optimize | MISSING |  | `-disable-x86-lea-opt` | funcattrs-port; 2026-11-13: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ |
 | 50 | X86 Optimize Call Frame | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
 | 51 | X86 Avoid Store Forwarding Blocks | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 52 | X86 Suppress APX features for relocation | N/A |  |  | APX is 64-bit; features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 53 | X86 speculative load hardening | N/A |  |  | acts on the `speculative_load_hardening` attribute, never set. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 54 | X86 EFLAGS copy lowering | MISSING | flag lanes (liveness.rs), stepflags.rs |  | funcattrs-port; 2026-11-13: changed code in 2 (-O2) and 2 (-Os) of 77 IRs |
-| 55 | X86 DynAlloca Expander | MISSING |  |  | funcattrs-port; 2026-11-09: dynamic alloca needs an HIR op (builtins row B2). Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
+| 55 | X86 DynAlloca Expander | N/A |  |  | the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: for `alloca i8, i32 %n` on i486-linux its llc emits the rounded `sub esp` with no pseudo and no probe; `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin |
 | 56 | Tile Register Pre-configure | N/A |  |  | AMX; features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 57 | Detect Dead Lanes | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs; ours has lanes.rs with no pin counterpart on the i486 |
 | 58 | Init Undef Pass | N/A |  |  | acts only where a register class has a pseudo init-undef (RISC-V); X86 has none. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
@@ -105,7 +105,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 97 | X86 vzeroupper inserter | N/A |  |  | AVX only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 98 | X86 Byte/Word Instruction Fixup | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 63 (-O2) and 62 (-Os) of 77 IRs |
 | 99 | X86 Atom pad short functions | N/A |  |  | acts on Atom (`padShortFunctions`); not i486. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
-| 100 | X86 LEA Fixup | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 37 (-O2) and 41 (-Os) of 77 IRs |
+| 100 | X86 LEA Fixup | DEVIATE | peephole.peep `lea_fixup`; peephole.rs (`lea_fixed`) |  | CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`, an LEA before a `sub`) is not; reason: no site found yet; cost: none measured; exit: translate it by 2026-11-09; owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs |
 | 101 | X86 Fixup Inst Tuning | N/A |  |  | tunes SSE shuffles and blends; features -sse. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 102 | X86 Fixup Vector Constants | N/A |  |  | vector constants; no vectors. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 103 | Compressing EVEX instrs when possible | N/A |  |  | AVX-512 only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
