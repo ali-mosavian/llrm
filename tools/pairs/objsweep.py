@@ -49,14 +49,14 @@ def main() -> int:
     import stamp
 
     args, named, allow = parser.parse_args(stamp.options(sys.argv[1:])[0]), *stamp.options(sys.argv[1:])[1:]
-    stamp.check(args.old, named["base_sha"], allow, "old")
-    stamp.check(args.new, named["sha"], allow, "new")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import voidpair
 
     if why := voidpair.void(args.old, args.new):
         print(why)
         return 2
+    stamp.check(args.old, named["base_sha"], allow, "old")
+    stamp.check(args.new, named["sha"], allow, "new")
     sources = sorted(Path(args.src).glob("*.c"))
     if args.programs:
         keep = set(args.programs.split(","))

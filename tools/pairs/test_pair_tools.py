@@ -18,7 +18,7 @@ def load(name: str):
 
 def fake_llrm(path: Path, body: str) -> str:
     """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
-    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    path.write_text(f'#!/bin/bash\n[ "$1" = --version ] && {{ echo "llrm-c stub"; exit 0; }}\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
     path.chmod(0o755)
     return str(path)
 

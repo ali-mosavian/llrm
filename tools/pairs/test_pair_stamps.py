@@ -1,4 +1,4 @@
-"""Two builds at once, each of its own sha: each binary's stamp is its own sha (stub cargo, no real build)."""
+"""Two builds at once, each of its own sha: each binary prints its own sha (stub cargo, no real build; the stamp is what build.rs gives)."""
 from __future__ import annotations
 
 import os
@@ -7,7 +7,6 @@ import textwrap
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "build_sha.sh"
 
 
 def git(repo: Path, *args: str) -> str:
@@ -30,7 +29,7 @@ def test_concurrent_builds_of_two_shas_each_carry_their_own_sha(tmp_path):
     # The tools the script reaches from its own path.
     tools = tmp_path / "tools"
     (tools / "pairs").mkdir(parents=True)
-    for name in ("build_sha.sh", "pair_build.sh"):
+    for name in ("pair_build.sh",):
         (tools / "pairs" / name).write_text((HERE / name).read_text())
     (tools / "stamp.py").write_text((HERE.parent / "stamp.py").read_text())
     scratch = tmp_path / "scratch"
@@ -49,7 +48,7 @@ def test_concurrent_builds_of_two_shas_each_carry_their_own_sha(tmp_path):
     stub.chmod(0o755)
     env = {**os.environ, "PAIR_CARGO": f"{stub} cargo"}
     running = [
-        subprocess.Popen(["bash", str(tools / "pairs" / "build_sha.sh"), str(repo), str(scratch), sha], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        subprocess.Popen(["bash", str(tools / "pairs" / "pair_build.sh"), str(scratch), sha], cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for sha in shas
     ]
     for one in running:
