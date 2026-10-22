@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:8f9034a07b9b40a7f81d98e4054058e610b2dfed6d7a3efe08dcc4872c96c192 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:d6fa9e2b42092f1bc18bb883915b9ba046087de758cdf51fb61a63ac1c8e3739 -->
 
 # interprocedural
 
@@ -141,7 +141,7 @@ follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
 
 ## Needs
 [`crate::inline`](inline.md), [`crate::ipacp`](ipacp.md), [`crate::profit`](profit.md), and
-`llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+`llrm_analysis`' `Summaries`, `GlobalsAA`,
 `interprocedural` and `parameter_ranges`.
 
 ## See also

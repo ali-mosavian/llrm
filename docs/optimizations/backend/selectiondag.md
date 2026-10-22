@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:f32389043d093bdb0e28602df6df0fb432908f1f233e358fee2ce8b4916290b6 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:b01b0f71b72244083a976d0c6030287aaae0672991399e290e69e9a3748f0bf1 -->
 
 # selectiondag
 
@@ -19,9 +19,9 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`lowering::FunctionLoweringInfo`): the block
-that defines it ends in `CopyToReg`, the blocks that read it start from
-`CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+block that defines it ends in `CopyToReg`, the blocks that read it start
+from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
 Calls, returns, arguments and switches are refused (`Refused`) until A2.
 
