@@ -120,3 +120,5 @@ mod opcodes_tests;
 mod schedule_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_mul;

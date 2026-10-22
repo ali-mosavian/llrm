@@ -559,6 +559,7 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
+            ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
@@ -726,6 +727,28 @@ impl<'a> TypeLegalizer<'a> {
         } else {
             self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, carry])
         };
+        Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
+    /// halves, plus the two cross products in the high half. The cases that
+    /// need known bits (a zero-extended or sign-extended operand, SD202) and
+    /// the library call are not translated.
+    fn expand_mul(&mut self, value: SDValue, half: EVT) -> Result<(SDValue, SDValue), LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
+            let both = self.dag.get_node_multi(ISD::UMulLoHi, &[half, half], &[ll, rl]);
+            (both, SDValue { node: both.node, res: 1 })
+        } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
+            (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
+        } else {
+            return Err(LegalizeError::Unsupported { op: ISD::Mul, ty: self.dag.value_type(value), what: "expand multiply without a widening multiply" });
+        };
+        let cross_right = self.dag.get_node(ISD::Mul, half, &[ll, rh]);
+        let cross_left = self.dag.get_node(ISD::Mul, half, &[lh, rl]);
+        let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_right]);
+        let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_left]);
         Ok((lo, hi))
     }
 
