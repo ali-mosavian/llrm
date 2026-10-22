@@ -868,3 +868,31 @@ def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tm
     run("add", "-A")
     run("commit", "-q", "-m", "pr")
     assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))
+
+
+def test_a_batch_that_does_not_build_drops_the_pr_that_breaks_the_build_alone_and_lands_the_rest():
+    """The 21:02 batch failed to build (#3763 added ISD variants #3806's code did not cover) and every PR in it was refused."""
+    broken = {"3763"}
+    merged = []
+
+    def merge_alone(number):
+        merged.append(number)
+        return number != "3807"  # cannot join: skipped, not blamed
+
+    check = lambda: "dagisel_adapter.rs:33: non-exhaustive patterns" if merged[-1] in broken else ""  # noqa: E731
+    group = ["3763", "3812", "3736", "3807", "3793"]
+    assert ps.build_offenders(group, merge_alone, check) == ["3763"]
+    landed, refused, tested = [], [], []
+
+    def passes(prs):
+        tested.append(list(prs))
+        return not broken & set(prs)
+
+    ps.batch(group, passes, landed.append, refused.append, lambda prs: ps.build_offenders(prs, merge_alone, check))
+    assert refused == ["3763"] and landed == ["3812", "3736", "3807", "3793"]
+    assert tested == [group, ["3812", "3736", "3807", "3793"]]
+
+
+def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved():
+    group = ["1", "2", "3", "4"]
+    assert ps.build_offenders(group, lambda number: True, lambda: "") == []

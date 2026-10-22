@@ -494,6 +494,12 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
+def build_offenders(group: list[str], merge_alone, check) -> list[str]:
+    """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
+    fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR."""
+    return [number for number in group if merge_alone(number) and check()]
+
+
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
     """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     if FAST and info["mergeable"] == "CONFLICTING":
@@ -667,6 +673,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     left_out: dict[str, str] = {}
     failed_units: set[str] = set()
+    failed_build: list[str] = []
 
     def passes_fast(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
@@ -689,6 +696,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return ""
 
         failed_units.clear()
+        failed_build.clear()
         kept, out = fast_merge(group, merge_one)
         left_out.update(out)
         for number, why in out.items():
@@ -697,6 +705,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return True
         if broken := _workspace_check(ROOT):
             print(f"REFUSED: the batch does not build: {broken[:300]}")
+            failed_build.append(broken)
             return False
         # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
         if os.environ.get("LAND_FAST_TESTS") == "1":
@@ -707,24 +716,26 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return False
         return True
 
+    def merge_alone(number: str) -> bool:
+        """PR `number` merged alone onto a clean head in the batch's checkout."""
+        clean_checkout(BASE)
+        git("fetch", "-q", "origin", infos[number]["headRefOid"])
+        if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+            subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+            return False
+        return True
+
     def offending(group: list[str]) -> list[str]:
-        """The PRs of `group` that fail the unit the batch failed, each merged alone on the head (the unit asked exactly, a minute at most per PR); none when no unit failed."""
+        """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
+        if failed_build:
+            return build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
             by_package.setdefault(package, set()).add(test)
         if not by_package:
             return []
-        named = []
-        for number in group:
-            clean_checkout(BASE)
-            git("fetch", "-q", "origin", infos[number]["headRefOid"])
-            if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
-                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
-                continue
-            if any(failing_on_checkout(package, tests) for package, tests in by_package.items()):
-                named.append(number)
-        return named
+        return [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
 
     def passes(group: list[str]) -> bool:
         if FAST:
