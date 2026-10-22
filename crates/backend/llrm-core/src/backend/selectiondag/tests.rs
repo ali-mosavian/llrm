@@ -1010,6 +1010,191 @@ mod switches {
     }
 }
 
+mod global_address {
+    use super::super::legalize_dag::DagLegalizer;
+    use super::super::x86_lowering::{x86isd, X86Lowering};
+    use super::*;
+
+    fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let global = dag.get_global_address(EVT::I32, 3, offset);
+        dag.set_root(global);
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
+        let root = dag.get_root();
+        (dag, root)
+    }
+
+    /// 71 of 158 functions of the shadow corpus stopped at "GlobalAddress:
+    /// convert node to libcall". The pin makes `Wrapper (TargetGlobalAddress g)`,
+    /// which the matcher turns into `mov reg, offset g`.
+    #[test]
+    fn a_global_is_a_wrapper_of_the_target_address() {
+        let (dag, root) = legalized(0);
+        assert_eq!(dag.opcode(root), x86isd::WRAPPER);
+        let target = dag.operand(root, 0);
+        assert_eq!(dag.opcode(target), ISD::TargetGlobalAddress);
+        assert_eq!(dag.node(target).data, NodeData::Global { symbol: 3, offset: 0 });
+    }
+
+    /// `&g[2]` folds into the symbol; a negative offset is added after, as the
+    /// pin does when the code model would not take it.
+    #[test]
+    fn a_non_negative_offset_folds_and_a_negative_one_is_added() {
+        let (dag, root) = legalized(8);
+        assert_eq!(dag.node(dag.operand(root, 0)).data, NodeData::Global { symbol: 3, offset: 8 });
+        let (dag, root) = legalized(-4);
+        assert_eq!(dag.opcode(root), ISD::Add);
+        assert_eq!(dag.node(dag.operand(dag.operand(root, 0), 0)).data, NodeData::Global { symbol: 3, offset: 0 });
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(0xFFFF_FFFC));
+    }
+}
+
+mod combiner {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+    use super::super::x86_lowering::{x86isd, X86Lowering};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn mul_by(dag: &mut SelectionDAG, x: SDValue, c: u128) -> SDValue {
+        let c = dag.get_constant(c, EVT::I32);
+        dag.get_node(ISD::Mul, EVT::I32, &[x, c])
+    }
+
+    fn generic(dag: &mut SelectionDAG) {
+        DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    }
+
+    fn x86(dag: &mut SelectionDAG, level: CombineLevel) {
+        DagCombiner::new(dag, &mut X86Lowering { cmov: false }, level).run();
+    }
+
+    /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
+    /// (A0: identity folds are the combiner's), so a matcher sees an `imul`.
+    #[test]
+    fn multiply_by_one_and_by_a_power_of_two() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let one = mul_by(&mut dag, x, 1);
+        dag.set_root(one);
+        generic(&mut dag);
+        assert_eq!(dag.get_root(), x);
+
+        let eight = mul_by(&mut dag, x, 8);
+        dag.set_root(eight);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Shl);
+        let amount = dag.operand(root, 1);
+        assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(3), EVT::I8));
+    }
+
+    /// `x * -8` is `0 - (x << 3)`.
+    #[test]
+    fn multiply_by_a_negated_power_of_two() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let product = mul_by(&mut dag, x, (-8i32) as u32 as u128);
+        dag.set_root(product);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Sub);
+        assert!(dag.is_null_constant(dag.operand(root, 0)));
+        assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Shl);
+    }
+
+    /// The worklist revisits what a rewrite made: `(x * 2) * 3` is
+    /// `(x << 1) * 3`, then `x * 6`.
+    #[test]
+    fn a_rewrite_is_combined_again() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let twice = mul_by(&mut dag, x, 2);
+        let thrice = mul_by(&mut dag, twice, 3);
+        dag.set_root(thrice);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Mul);
+        assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(6)));
+    }
+
+    /// Before types are legal the target leaves a multiply alone (the pin's
+    /// `isBeforeLegalize`); after, `x * 5` is `MUL_IMM`, one `lea`. The shadow
+    /// found `x * 5` as an `imul` where the pin has `lea`.
+    #[test]
+    fn multiply_by_five_is_a_lea_after_types_are_legal() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let five = mul_by(&mut dag, x, 5);
+        dag.set_root(five);
+        x86(&mut dag, CombineLevel::BeforeLegalizeTypes);
+        assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+        x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), x86isd::MUL_IMM);
+        assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(5)));
+    }
+
+    /// The other constants (root and first operand): 15 is `(x*5)*3`, 10 is `(x<<1)*5`, 11 is
+    /// `(x*5 << 1) + x`, -5 is `0 - x*5`, 7 is `(x << 3) - x`.
+    #[test]
+    fn multiply_by_other_constants_is_leas_shifts_and_adds() {
+        let shape = |c: i32| {
+            let mut dag = dag();
+            let x = load(&mut dag, EVT::I32, 1);
+            let product = mul_by(&mut dag, x, c as u32 as u128);
+            dag.set_root(product);
+            x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+            let root = dag.get_root();
+            let opcodes = |dag: &SelectionDAG, v: SDValue| (dag.opcode(v), dag.opcode(dag.operand(v, 0)));
+            opcodes(&dag, root)
+        };
+        assert_eq!(shape(15), (x86isd::MUL_IMM, x86isd::MUL_IMM));
+        assert_eq!(shape(10), (x86isd::MUL_IMM, ISD::Shl));
+        assert_eq!(shape(11), (ISD::Add, ISD::Shl));
+        assert_eq!(shape(-5).0, ISD::Sub);
+        assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+    }
+}
+
+mod far_load {
+    use super::super::legalize_types::TypeLegalizer;
+    use super::super::x86_lowering::{x86isd, ES};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    /// A far load is one `les`: the offset is its result and the selector is
+    /// read from `ES` after it, on its chain. Two word loads cost two
+    /// instructions and let anything between them change `ES`.
+    #[test]
+    fn a_far_load_is_les_and_a_read_of_es() {
+        let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+        let mut dag = dag();
+        let ptr = dag.get_register(EVT::I16, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: MVT::Far.into(), align: 2, volatile: false, base: MemBase::Stack(1) };
+        let far = dag.get_load(MVT::Far.into(), chain, ptr, info);
+        let offset = dag.get_node(ISD::Truncate, EVT::I16, &[far]);
+        dag.set_root(offset);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let les = dag.get_root();
+        assert_eq!((dag.opcode(les), les.res, dag.value_type(les)), (x86isd::LES, 0, EVT::I16), "the offset is the les result");
+        assert_eq!((dag.operand(les, 0), dag.operand(les, 1)), (chain, ptr));
+        // The chain users of the original load follow the read of ES.
+        let copy_chain = dag.users(SDValue { node: les.node, res: 1 }).next().expect("something reads the les chain");
+        let copy = SDValue { node: copy_chain, res: 0 };
+        assert_eq!((dag.opcode(copy), dag.value_type(copy)), (ISD::CopyFromReg, EVT::I16));
+        assert_eq!(dag.node(dag.operand(copy, 1)).data, NodeData::Register(ES));
+    }
+}
+
 mod switch_dags {
     use llrm_mir::datalayout::DataLayout;
 

@@ -82,6 +82,7 @@
 
 pub mod actions;
 pub mod builder;
+pub mod dag_combiner;
 mod dag;
 pub mod dump;
 pub mod emit;
