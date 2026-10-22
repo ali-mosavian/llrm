@@ -33,6 +33,25 @@
 //! A function some call of which is not a plain call in its convention keeps
 //! its convention.
 //!
+//! # Translation
+//! | LLVM | Rust | Kind |
+//! |---|---|---|
+//! | [`OptimizeFunctions`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L2019): `fastcc` for a function with a changeable convention | `CalleePop::run` | MATCH |
+//! | [`hasChangeableCCImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1700) | `direct_only` and the plain-call test | MATCH |
+//! | [`ChangeCalleesToFastCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1673) | the call-site loop in `run` | MATCH |
+//! | [`useFastCCForInternalCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8196): always true here | none | MATCH |
+//! | what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `watcall32` at m32, the callee-pop twin at m16 | DEVIATE CC1 |
+//!
+//! DEVIATE CC1 (owner funcattrs-port, review 2026-11-05). Reason: on the 486 and
+//! P5 an argument register costs no more than a stack slot, and `watcall32` has
+//! four of them. Cost, ours against the pin's `fastcc` (`LLRM_PIN_FASTCC=1`
+//! builds the latter), m32, 486 model, f36fd3559b: the 71 rows' clocks (code
+//! bytes) at -O1 -0.9% (+0.1%), -O2 -0.2% (+0.6%), -O3 -0.2% (+0.4%), -Os +0.2%
+//! (-0.1%); recursion moves it most, `rectwo` -9.6% at -O1, `x_hanoi2` +32% at
+//! -Os. QCport, 62 modules, bytes ours/pin: -O1 299137/299678, -O2
+//! 317103/317209, -O3 342916/343179, -Os 238865/239002 (+0.06%). Exit: adopt the
+//! pin's `fastcc` when its rows are no worse; they are mixed, so not yet.
+//!
 //! # Example
 //! Before:
 //!
