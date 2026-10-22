@@ -53,7 +53,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 45 | Peephole Optimizations | MISSING | peephole.rs and peep/ | `-disable-peephole` | lir-cleanup-port; 2026-11-13: registry peephole@14 is ours-own, not a translation. Pin: changed code in 72 (-O2) and 72 (-Os) of 77 IRs; -disable-peephole -O2: +2189 instr, +7527 B, 67 IRs differ; -disable-peephole -Os: +1763 instr, +6048 B, 69 IRs differ |
 | 46 | Remove dead machine instructions (run 2) | EXECUTED | machinedce.rs | `-disable-machine-dce` | as above, after the peephole. Pin: changed code in 61 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-dce -O2: +11 instr, +50 B, 14 IRs differ; -disable-machine-dce -Os: +19 instr, +131 B, 14 IRs differ |
 | 47 | Live Range Shrink | MISSING | pressuresink.rs stands in |  | lir-cleanup-port; 2026-11-13: registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs |
-| 48 | X86 Fixup SetCC | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 41 (-O2) and 40 (-Os) of 77 IRs |
+| 48 | X86 Fixup SetCC | MATCH | fixupsetcc.rs |  | translated (registry fixupsetcc@5). Pin: changed code in 41 (-O2) and 40 (-Os) of 77 IRs |
 | 49 | X86 LEA Optimize | MISSING |  | `-disable-x86-lea-opt` | funcattrs-port; 2026-11-13: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ |
 | 50 | X86 Optimize Call Frame | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
 | 51 | X86 Avoid Store Forwarding Blocks | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs |

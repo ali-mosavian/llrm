@@ -429,10 +429,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 Fixup SetCC",
-        Missing,
+        Match,
+        "fixupsetcc.rs",
         "",
-        "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 41 (-O2) and 40 (-Os) of 77 IRs",
+        "translated (registry fixupsetcc@5). Pin: changed code in 41 (-O2) and 40 (-Os) of 77 IRs",
     ),
     row(
         "X86 LEA Optimize",
