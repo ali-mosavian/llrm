@@ -353,7 +353,8 @@ fn passing(
             let Some(found) = entry(arch, convention, variadic) else {
                 return refuse(format!("calling convention {convention}"));
             };
-            // `fastcc` is C's callee-pop twin unless the description states a `fastcc` of its own.
+            // `fastcc` is C's callee-pop twin unless the description states a
+            // `fastcc` of its own.
             let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
@@ -854,6 +855,9 @@ const MEMSET_STORES: i64 = 16;
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
 /// MaxStoresPerMemcpy; past it, `rep movs`.
 const MEMCPY_MOVES: i64 = 8;
+/// `MaxStoresPerMemcpyOptSize` (X86ISelLowering.cpp#L2939 at d1106deb71cc): a
+/// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
+const MEMCPY_MOVES_SIZE: i64 = 4;
 
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
@@ -6874,10 +6878,10 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
-    /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
-    /// from it, widest first, where only the bytes it names are read; else
-    /// `rep movsd` through es:di, the tail by `movsw` and `movsb`, as `memset`
-    /// does its fill.
+    /// most `MEMCPY_MOVES` pairs (`MEMCPY_MOVES_SIZE` tuned for size), each a
+    /// load into a register and a store from it, widest first, where only
+    /// the bytes it names are read; else `rep movsd` through es:di, the
+    /// tail by `movsw` and `movsb`, as `memset` does its fill.
     fn memcpy(
         &mut self,
         arguments: &[Operand],
@@ -6914,8 +6918,9 @@ impl Selector<'_, '_, '_> {
         let regs = self.regs();
         let length = length.filter(|_| constant.is_none());
         let counted_operand = || length.expect("a length that is no constant is an operand");
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
         if let Some(length) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
+            && length / 4 + (length % 4).count_ones() as i64 <= most
         {
             let mut offset = 0;
             let mut chunks = Vec::new();
