@@ -19,8 +19,9 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
-//! DEVIATE P1 (no number): a phi with an edge from outside the body is left
-//! alone, as before. Fact: LLVM's phis list only blocks of their function.
+//! No deviation for a phi that reads from a block outside the body: LLVM's phis list
+//! only predecessors in their function, so it is an error here too (the verifier
+//! says the same, `a phi ... is not a predecessor`); it was left alone before.
 //!
 //! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
 //! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
@@ -134,6 +135,16 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         return Ok(body.clone());
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            if let Some((pre, _)) = phi.incoming.iter().find(|(pre, _)| !at_of.contains_key(pre)) {
+                return Err(format!(
+                    "{}: the phi at {:#06x} reads from {pre:#06x}, which is not a block of the body",
+                    body.name, block.at
+                ));
+            }
+        }
+    }
     let widths = phielim::_widths(body);
     let kept_phis = |body: &LirBody| -> IndexMap<i64, Vec<Phi>> {
         body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect()
@@ -183,7 +194,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || x87.contains(&phi.result) {
+            if x87.contains(&phi.result) {
                 stays.push(phi.clone());
                 continue;
             }
