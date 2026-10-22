@@ -3640,6 +3640,10 @@ impl<'a, 't> Body<'a, 't> {
                         None => refuse(format!("{}: __builtin_{name} called with no argument", self.name())),
                     }
                 }
+                Some(other) => refuse(format!(
+                    "{}: __builtin_{name} is {other:?}, a define of the predefined header, and reached the translator",
+                    self.name()
+                )),
                 None => refuse(format!("{}: unsupported builtin __builtin_{name}", self.name())),
             };
         }
