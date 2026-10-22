@@ -41,7 +41,7 @@ fn stores(
 #[test]
 fn four_byte_stores_are_one_memset() {
     let after = merged(&stores(4, 8, "0"), &[&[7]]);
-    assert!(after.contains("@llvm.memset.p0.i16(ptr %p0, i8 0, i16 4, i1 false)"), "{after}");
+    assert!(after.contains("@llvm.memset.p0.i16(ptr align 1 %p0, i8 0, i16 4, i1 false)"), "{after}");
     assert!(!after.contains("store i8 0, ptr %p1"), "{after}");
 }
 
@@ -88,7 +88,7 @@ fn a_load_ends_the_scan() {
 fn an_i8_value_is_the_byte() {
     let text = stores(4, 8, "%b").replace("(i16 %x)", "(i16 %x)").replace("b0:\n", "b0:\n  %b = trunc i16 %x to i8\n");
     let after = merged(&text, &[&[7]]);
-    assert!(after.contains("llvm.memset.p0.i16(ptr %p0, i8 %b, i16 4, i1 false)"), "{after}");
+    assert!(after.contains("llvm.memset.p0.i16(ptr align 1 %p0, i8 %b, i16 4, i1 false)"), "{after}");
 }
 
 /// A memset beside two stores of its byte is one memset (always worth it).
