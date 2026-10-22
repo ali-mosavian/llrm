@@ -19,10 +19,10 @@
 //! by name ([`LegalizeError::Unsupported`]), and the cases are added in the
 //! pin's order by later pieces.
 //!
-//! DEVIATE SD33: no `NodeUpdateListener`: [`SelectionDAG::replace_all_uses_with`]
-//! returns what it did to each user ([`Rauw`]). Nodes replaced stay in the
-//! arena with no users (no `RemoveDeadNodes`). Exit: none. Owner sdag-b.
-//! Review 2026-11-13.
+//! DEVIATE SD33: no `NodeUpdateListener`:
+//! [`SelectionDAG::replace_all_uses_with`] returns what it did to each user
+//! ([`Rauw`]). Nodes replaced stay in the arena with no users (no
+//! `RemoveDeadNodes`). Exit: none. Owner sdag-b. Review 2026-11-13.
 //!
 //! # See also
 //! LLVM's `DAGTypeLegalizer::run`
@@ -39,7 +39,7 @@ use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, Selectio
 use super::isd::ISD;
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
-use super::x86_lowering::{x86isd, ES};
+use super::x86_lowering::{ES, x86isd};
 
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,15 +70,33 @@ pub struct TypeLegalizer<'a> {
 }
 
 impl<'a> TypeLegalizer<'a> {
-    pub fn new(dag: &'a mut SelectionDAG, tli: &'a TargetLowering) -> TypeLegalizer<'a> {
-        TypeLegalizer { dag, tli, ids: Vec::new(), worklist: Vec::new(), replaced: HashMap::new(), promoted: HashMap::new(), expanded: HashMap::new() }
+    pub fn new(
+        dag: &'a mut SelectionDAG,
+        tli: &'a TargetLowering,
+    ) -> TypeLegalizer<'a> {
+        TypeLegalizer {
+            dag,
+            tli,
+            ids: Vec::new(),
+            worklist: Vec::new(),
+            replaced: HashMap::new(),
+            promoted: HashMap::new(),
+            expanded: HashMap::new(),
+        }
     }
 
-    fn id(&self, node: u32) -> NodeId {
+    fn id(
+        &self,
+        node: u32,
+    ) -> NodeId {
         self.ids.get(node as usize).copied().unwrap_or(NodeId::Unanalyzed)
     }
 
-    fn set_id(&mut self, node: u32, id: NodeId) {
+    fn set_id(
+        &mut self,
+        node: u32,
+        id: NodeId,
+    ) {
         if self.ids.len() <= node as usize {
             self.ids.resize(node as usize + 1, NodeId::Unanalyzed);
         }
@@ -87,11 +105,20 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `IgnoreNodeResults`: constants and registers of a target have no type
     /// to legalize.
-    fn ignores_results(&self, node: u32) -> bool {
-        matches!(self.dag.opcode(SDValue { node, res: 0 }), ISD::TargetConstant | ISD::Register)
+    fn ignores_results(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(
+            self.dag.opcode(SDValue { node, res: 0 }),
+            ISD::TargetConstant | ISD::Register
+        )
     }
 
-    fn action(&self, vt: EVT) -> TypeAction {
+    fn action(
+        &self,
+        vt: EVT,
+    ) -> TypeAction {
         self.tli.types.type_action(vt)
     }
 
@@ -122,8 +149,12 @@ impl<'a> TypeLegalizer<'a> {
         Ok(changed)
     }
 
-    /// The first illegal result of `n` is promoted or expanded; true if one was.
-    fn legalize_results(&mut self, n: u32) -> Result<bool, LegalizeError> {
+    /// The first illegal result of `n` is promoted or expanded; true if one
+    /// was.
+    fn legalize_results(
+        &mut self,
+        n: u32,
+    ) -> Result<bool, LegalizeError> {
         let results = self.dag.node(SDValue { node: n, res: 0 }).values.clone();
         for (res, vt) in results.into_iter().enumerate() {
             let value = SDValue { node: n, res: res as u8 };
@@ -144,7 +175,10 @@ impl<'a> TypeLegalizer<'a> {
 
     /// The first illegal operand of `n` is dealt with. If `n` must be looked
     /// at again it is replaced by its re-analysed self and `n` is not done.
-    fn legalize_operands(&mut self, n: u32) -> Result<bool, LegalizeError> {
+    fn legalize_operands(
+        &mut self,
+        n: u32,
+    ) -> Result<bool, LegalizeError> {
         let ops = self.dag.node(SDValue { node: n, res: 0 }).ops.clone();
         for (at, op) in ops.into_iter().enumerate() {
             if self.ignores_results(op.node) {
@@ -171,7 +205,10 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// Each user of `n` has one operand fewer to wait for.
-    fn release_users(&mut self, n: u32) {
+    fn release_users(
+        &mut self,
+        n: u32,
+    ) {
         let results = self.dag.node(SDValue { node: n, res: 0 }).values.len();
         let mut users = Vec::new();
         for res in 0..results as u8 {
@@ -207,7 +244,10 @@ impl<'a> TypeLegalizer<'a> {
     /// `AnalyzeNewNode`: look at a node made by legalization, after its
     /// operands. Returns the node to use in its place (its operands may have
     /// been replaced, which can make it equal to another node).
-    fn analyze_new_node(&mut self, n: u32) -> u32 {
+    fn analyze_new_node(
+        &mut self,
+        n: u32,
+    ) -> u32 {
         if !matches!(self.id(n), NodeId::New | NodeId::Unanalyzed) {
             return n;
         }
@@ -241,18 +281,20 @@ impl<'a> TypeLegalizer<'a> {
         n
     }
 
-    fn analyze_new_value(&mut self, value: SDValue) -> SDValue {
+    fn analyze_new_value(
+        &mut self,
+        value: SDValue,
+    ) -> SDValue {
         let node = self.analyze_new_node(value.node);
         let value = SDValue { node, res: value.res };
-        if self.id(node) == NodeId::Processed {
-            self.remap(value)
-        } else {
-            value
-        }
+        if self.id(node) == NodeId::Processed { self.remap(value) } else { value }
     }
 
     /// `RemapValue`: follow the replacements to the value now standing.
-    fn remap(&self, mut value: SDValue) -> SDValue {
+    fn remap(
+        &self,
+        mut value: SDValue,
+    ) -> SDValue {
         while let Some(&next) = self.replaced.get(&value) {
             value = next;
         }
@@ -261,7 +303,11 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `ReplaceValueWith`: `to` stands for `from` in every user; users that
     /// changed are analysed again.
-    fn replace_value_with(&mut self, from: SDValue, to: SDValue) {
+    fn replace_value_with(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+    ) {
         assert_ne!(from.node, to.node, "potential legalization loop");
         let to = self.analyze_new_value(to);
         let mut pending: Vec<(SDValue, SDValue)> = vec![(from, to)];
@@ -313,20 +359,30 @@ impl<'a> TypeLegalizer<'a> {
     // --- promotion -------------------------------------------------------
 
     /// `GetPromotedInteger`.
-    fn promoted_integer(&self, value: SDValue) -> SDValue {
+    fn promoted_integer(
+        &self,
+        value: SDValue,
+    ) -> SDValue {
         let value = self.remap(value);
         *self.promoted.get(&value).expect("operand promoted before its user")
     }
 
     /// `SetPromotedInteger`.
-    fn set_promoted_integer(&mut self, value: SDValue, result: SDValue) {
+    fn set_promoted_integer(
+        &mut self,
+        value: SDValue,
+        result: SDValue,
+    ) {
         let value = self.remap(value);
         let result = self.analyze_new_value(result);
         self.promoted.insert(value, result);
     }
 
     /// `PromoteIntegerResult`.
-    fn promote_integer_result(&mut self, value: SDValue) -> Result<(), LegalizeError> {
+    fn promote_integer_result(
+        &mut self,
+        value: SDValue,
+    ) -> Result<(), LegalizeError> {
         let vt = self.dag.value_type(value);
         let to = self.tli.types.type_conversion(vt).1;
         let result = match self.dag.opcode(value) {
@@ -342,8 +398,8 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
             ISD::SetCC => {
-                // Compare into the target's own result type, then sign extend or
-                // truncate to the promoted type.
+                // Compare into the target's own result type, then sign extend
+                // or truncate to the promoted type.
                 let ops = self.dag.node(value).ops.clone();
                 let in_vt = self.dag.value_type(ops[0]);
                 let wide = self.tli.types.set_cc_result_type(in_vt);
@@ -360,7 +416,9 @@ impl<'a> TypeLegalizer<'a> {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
                 let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
-                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("a load has a memory operand")
+                };
                 let loaded = self.dag.get_load(to, chain, ptr, info);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded
@@ -373,7 +431,11 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `PromoteIntegerOperand`: true if `n` was updated in place and must be
     /// looked at again.
-    fn promote_integer_operand(&mut self, n: u32, at: usize) -> Result<bool, LegalizeError> {
+    fn promote_integer_operand(
+        &mut self,
+        n: u32,
+        at: usize,
+    ) -> Result<bool, LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         let result = match self.dag.opcode(node) {
             ISD::Truncate => {
@@ -393,8 +455,10 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::And, vt, &[wide, mask])
             }
             ISD::Select if at == 0 => {
-                // The condition becomes the target's boolean type (`PromoteTargetBoolean`).
-                let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                // The condition becomes the target's boolean type
+                // (`PromoteTargetBoolean`).
+                let (cond, then, other) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
                 let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
                 let extend = match self.dag.config().boolean_contents {
                     BooleanContents::ZeroOrOne => ISD::ZeroExtend,
@@ -405,7 +469,28 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[cond, then, other]);
                 SDValue { node: updated, res: 0 }
             }
-            op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "promote operand" }),
+            ISD::BrCond if at == 1 => {
+                // `PromoteIntOp_BRCOND`: the condition to the target's boolean
+                // type.
+                let (chain, cond, dest) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let bool_vt = self.tli.types.set_cc_result_type(EVT::OTHER);
+                let extend = match self.dag.config().boolean_contents {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                let updated = self.dag.update_node_operands(n, &[chain, cond, dest]);
+                SDValue { node: updated, res: 0 }
+            }
+            op => {
+                return Err(LegalizeError::Unsupported {
+                    op,
+                    ty: self.dag.value_type(self.dag.operand(node, at)),
+                    what: "promote operand",
+                });
+            }
         };
         if result.node == n {
             return Ok(true);
@@ -417,20 +502,31 @@ impl<'a> TypeLegalizer<'a> {
     // --- expansion -------------------------------------------------------
 
     /// `GetExpandedInteger`: low and high halves.
-    fn expanded_integer(&self, value: SDValue) -> (SDValue, SDValue) {
+    fn expanded_integer(
+        &self,
+        value: SDValue,
+    ) -> (SDValue, SDValue) {
         let value = self.remap(value);
         *self.expanded.get(&value).expect("operand expanded before its user")
     }
 
     /// `SetExpandedInteger`.
-    fn set_expanded_integer(&mut self, value: SDValue, lo: SDValue, hi: SDValue) {
+    fn set_expanded_integer(
+        &mut self,
+        value: SDValue,
+        lo: SDValue,
+        hi: SDValue,
+    ) {
         let value = self.remap(value);
         let (lo, hi) = (self.analyze_new_value(lo), self.analyze_new_value(hi));
         self.expanded.insert(value, (lo, hi));
     }
 
     /// `ExpandIntegerResult`.
-    fn expand_integer_result(&mut self, value: SDValue) -> Result<(), LegalizeError> {
+    fn expand_integer_result(
+        &mut self,
+        value: SDValue,
+    ) -> Result<(), LegalizeError> {
         let vt = self.dag.value_type(value);
         let half = self.tli.types.type_conversion(vt).1;
         let (lo, hi) = match self.dag.opcode(value) {
@@ -445,8 +541,18 @@ impl<'a> TypeLegalizer<'a> {
                 // A far pointer is `les`: the offset, with the selector left in
                 // `ES` and read back on the chain (SD2).
                 let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
-                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
-                let les = self.dag.intern(x86isd::LES, &[half, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("a load has a memory operand")
+                };
+                let les = self
+                    .dag
+                    .intern(
+                        x86isd::LES,
+                        &[half, EVT::OTHER],
+                        &[chain, ptr],
+                        SDNodeFlags::default(),
+                        NodeData::Mem(info),
+                    );
                 let selector = self.dag.get_copy_from_reg(SDValue { node: les.node, res: 1 }, ES, half);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
                 (les, selector)
@@ -466,7 +572,13 @@ impl<'a> TypeLegalizer<'a> {
     /// `ExpandIntRes_Shift`: by a constant, or as the target's double-width
     /// shift (`SHL_PARTS`, ...). `ExpandShiftWithKnownAmountBit` needs known
     /// bits (SD202) and the library calls are not translated.
-    fn expand_shift(&mut self, value: SDValue, op: ISD, vt: EVT, half: EVT) -> Result<(SDValue, SDValue), LegalizeError> {
+    fn expand_shift(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        vt: EVT,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
         let (input, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         if let Some(amt) = self.dag.constant(amount) {
             return Ok(self.expand_shift_by_constant(op, input, amt, vt, half));
@@ -492,7 +604,14 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandShiftByConstant`.
-    fn expand_shift_by_constant(&mut self, op: ISD, input: SDValue, amt: u128, vt: EVT, half: EVT) -> (SDValue, SDValue) {
+    fn expand_shift_by_constant(
+        &mut self,
+        op: ISD,
+        input: SDValue,
+        amt: u128,
+        vt: EVT,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
         let (in_lo, in_hi) = self.expanded_integer(input);
         if amt == 0 {
             return (in_lo, in_hi);
@@ -573,7 +692,11 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntegerOperand`.
-    fn expand_integer_operand(&mut self, n: u32, at: usize) -> Result<bool, LegalizeError> {
+    fn expand_integer_operand(
+        &mut self,
+        n: u32,
+        at: usize,
+    ) -> Result<bool, LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         let result = match self.dag.opcode(node) {
             ISD::Truncate => {
@@ -581,7 +704,13 @@ impl<'a> TypeLegalizer<'a> {
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[lo])
             }
-            op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "expand operand" }),
+            op => {
+                return Err(LegalizeError::Unsupported {
+                    op,
+                    ty: self.dag.value_type(self.dag.operand(node, at)),
+                    what: "expand operand",
+                });
+            }
         };
         if result.node == n {
             return Ok(true);

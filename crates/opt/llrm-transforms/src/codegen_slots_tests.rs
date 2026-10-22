@@ -524,7 +524,7 @@ const ROWS: &[Row] = &[
         Missing,
         "phielim.rs, phielimination.rs",
         "",
-        "w-1; 2026-11-13: registry phielim@4 is ours-own. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "w-1; 2026-11-13: registry phielim@4 is ours-own; a phi from a non-predecessor is an error (verifier rule, #3850). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Two-Address instruction pass",

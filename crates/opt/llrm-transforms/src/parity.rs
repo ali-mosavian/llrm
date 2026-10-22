@@ -326,6 +326,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("cmpsub@1", Backend, "x86 EmitCmp: SUB shares flags with the difference", Translated, ""),
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
+    entry("processimpdefs@2", Backend, "process-implicit-defs (ProcessImplicitDefs.cpp)", Translated, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     entry("machinelicm@4", Backend, "early-machinelicm", Translated, ""),
     partial(

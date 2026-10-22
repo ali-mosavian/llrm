@@ -114,6 +114,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check_backend(
         &[
             "cmpsub@1",
+            "processimpdefs@2",
             "optimizephis@1",
             "fixupsetcc@5",
             "machinelicm@4",
