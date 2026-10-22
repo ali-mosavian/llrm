@@ -90,6 +90,7 @@ pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
+pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;

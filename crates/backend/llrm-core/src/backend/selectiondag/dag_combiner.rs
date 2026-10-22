@@ -164,8 +164,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     fn visit(&mut self, node: SDValue) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
+            ISD::And => self.visit_and(node),
             _ => None,
         }
+    }
+
+    /// `visitAND`, the part `SimplifyDemandedBits` does for it: `(and x, c)` is
+    /// `x` when every bit is either set in `c` or known zero in `x`, so
+    /// `and (setcc), 1` is the `setcc` (it is 0 or 1 already).
+    fn visit_and(&mut self, node: SDValue) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(n0);
+        let all = super::fold::mask(vt.size_in_bits());
+        for (other, constant) in [(n0, n1), (n1, n0)] {
+            if let Some(c) = self.dag.constant(constant) {
+                if self.dag.is_opaque(constant) {
+                    continue;
+                }
+                let known = super::known_bits::known_bits(self.dag, other);
+                if all & !(known.zero | c) == 0 {
+                    return Some(other);
+                }
+            }
+        }
+        None
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.
@@ -216,4 +238,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         None
     }
+}
+
+/// One run of the combiner at `level` (`SelectionDAG::Combine`).
+pub fn combine<H: CombineHooks>(dag: &mut SelectionDAG, hooks: &mut H, level: CombineLevel) {
+    DagCombiner::new(dag, hooks, level).run();
 }
