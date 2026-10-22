@@ -141,3 +141,10 @@ def test_isel_shadow_counts_a_refused_compile_and_never_as_equal(tmp_path):
     done = shadow(tmp_path, fake_selector(tmp_path / "llrm", refuse=True))
     assert done.returncode == 1
     assert "1 refused" in done.stdout and "REFUSED p m32 -O2: old: ok; new: @f: --isel=dag: cannot select" in done.stdout
+
+
+def test_isel_shadow_reads_m16_function_bytes_from_a_jwasm_listing():
+    """m16 bytes were the object's total: a function that grew by one byte moved nothing the report named."""
+    shadow = load("isel_shadow")
+    listing = "00000000                        _id@3 proc far\n00000001                        _id@3 endp\n00000001                        _sum@3 proc far\n00000015                        _sum@3 endp\n"
+    assert shadow.parse_listing(listing) == {"id": "1", "sum": "20"}

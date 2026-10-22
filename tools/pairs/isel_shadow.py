@@ -5,7 +5,8 @@
 
 Each cell (program, target, level) is compiled by `LLRM_C --isel=OLD` and `LLRM_C2 (default LLRM_C) --isel=NEW` with `LLRM_DEBUG=isel`; the rows
 (`[isel] NAME selector=.. instructions=.. copies=.. executed=.. memory=..`, see backend/shadow.rs) and, at m32, the bytes of each function
-(ELF symbol sizes) are compared by function. At m16 (OMF has no sizes) only the object's total bytes are compared, as one pseudo-function `<object>`. Prints one summary line, then each function that differs and each cell one side refused. A compile that
+(ELF symbol sizes) and at m16 (jwasm's listing of `-S`, offsets from `proc` to `endp`; calibrated against the OMF code bytes by
+~/scratch/w3-qo/bytes.py) are compared by function. jwasm is $JWASM, else beside LLRM_C, else on PATH. Prints one summary line, then each function that differs and each cell one side refused. A compile that
 fails is a refusal and is never counted as equal. The sources are objsweep's. Exit 1 on any difference or refusal.
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,8 +39,32 @@ def parse_rows(stderr: str) -> dict[str, dict[str, str]]:
 
 
 def parse_sizes(readelf: str) -> dict[str, str]:
-    """{function: bytes} from `readelf -sW`; the leading underscore of the compiler's decoration is dropped, as the rows' names drop it."""
-    return {found[2].lstrip("_"): found[1] for line in readelf.splitlines() if (found := SYMBOL.match(line))}
+    """{function: bytes} from `readelf -sW`."""
+    return {plain(found[2]): found[1] for line in readelf.splitlines() if (found := SYMBOL.match(line))}
+
+
+def parse_listing(listing: str) -> dict[str, str]:
+    """{function: bytes} from a jwasm listing: the offset of `NAME endp` less that of `NAME proc`; the decoration (`_f@3`) is dropped."""
+    starts, sizes = {}, {}
+    for line in listing.splitlines():
+        if found := re.match(r"([0-9A-F]{8})\s+(\S+) (proc|endp)\b", line):
+            at, name, what = int(found[1], 16), plain(found[2]), found[3]
+            if what == "proc":
+                starts[name] = at
+            elif name in starts:
+                sizes[name] = str(at - starts[name])
+    return sizes
+
+
+def plain(name: str) -> str:
+    return re.sub(r"@\d+$", "", name).lstrip("_")
+
+
+def jwasm_for(binary: str) -> str:
+    found = os.environ.get("JWASM") or (Path(binary).parent / "jwasm").is_file() and str(Path(binary).parent / "jwasm") or shutil.which("jwasm")
+    if not found:
+        raise SystemExit("jwasm not found: set JWASM or put it beside the compiler (m16 bytes come from its listing)")
+    return found
 
 
 def differences(old: dict, new: dict) -> list[str]:
@@ -59,13 +85,21 @@ def compile_cell(binary: str, isel: str, source: Path, target: str, level: str, 
     done = subprocess.run([binary, *FLAGS[target], *(["-fobject-format=elf"] if target == "m32" else []), f"-{level}", f"--isel={isel}", "-o", str(out), str(source)], capture_output=True, text=True, env=env, timeout=600)
     if done.returncode != 0:
         return None, (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:140]
-    rows = {name.lstrip("_"): row for name, row in parse_rows(done.stderr).items()}
+    rows = {plain(name): row for name, row in parse_rows(done.stderr).items()}
     if target == "m32":
         sizes = parse_sizes(subprocess.run(["readelf", "-sW", str(out)], capture_output=True, text=True).stdout)
         for name, row in rows.items():
             row["bytes"] = sizes.get(name, "-")
     else:
-        rows["<object>"] = {"bytes": str(out.stat().st_size)}
+        asm = out.with_suffix(".asm")
+        made = subprocess.run([binary, *FLAGS[target], f"-{level}", f"--isel={isel}", "-S", "-o", str(asm), str(source)], capture_output=True, text=True)
+        if made.returncode != 0:
+            return None, (made.stderr.strip().splitlines() or ["-S failed"])[-1][:140]
+        lst = out.with_suffix(".lst")
+        subprocess.run([jwasm_for(binary), "-nologo", f"-Fl={lst}", f"-Fo={out.with_suffix('.jo')}", str(asm)], capture_output=True)
+        sizes = parse_listing(lst.read_text(errors="replace")) if lst.exists() else {}
+        for name, row in rows.items():
+            row["bytes"] = sizes.get(name, "-")
     return rows, ""
 
 
