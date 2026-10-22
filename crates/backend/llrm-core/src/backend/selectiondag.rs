@@ -129,6 +129,8 @@ pub use mvt::{EVT, MVT};
 #[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
+mod switchbpi_tests;
+#[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]
 mod dag_select_tests;
