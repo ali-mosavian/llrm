@@ -408,7 +408,11 @@ mod builder {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
+<<<<<<< HEAD
                 match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
+=======
+                match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
+>>>>>>> sdag-a2
                     Ok(done) => {
                         built.insert(name, normalized(&done.dag.dump()));
                     }
@@ -450,6 +454,7 @@ mod builder {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }
     }
+<<<<<<< HEAD
 
     /// A direct call: `callseq_start`, the stack stores, `X86ISD::CALL`,
     /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
@@ -487,6 +492,8 @@ mod builder {
         assert_eq!(registers, ["ax", "dx", "bx", "cx", "ax"], "four arguments, then the result:\n{dump}");
         assert!(!dump.contains("store"), "{dump}");
     }
+=======
+>>>>>>> sdag-a2
 }
 
 mod legalize_types {

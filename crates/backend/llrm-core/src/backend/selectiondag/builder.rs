@@ -11,7 +11,11 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+<<<<<<< HEAD
 use crate::backend::isel::{Convention, Parameter, convention_for};
+=======
+use crate::backend::isel::{Convention, Parameter};
+>>>>>>> sdag-a2
 use llrm_lir::registers::RegId;
 
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
@@ -63,7 +67,10 @@ pub fn build_block(
     function: &Function,
     layout: &DataLayout,
     target: &BuilderTarget,
+<<<<<<< HEAD
     arch: &dyn llrm_target::Target,
+=======
+>>>>>>> sdag-a2
     convention: &Convention,
     info: &mut FunctionLoweringInfo,
     block: BlockId,
@@ -73,7 +80,10 @@ pub fn build_block(
         function,
         layout,
         target,
+<<<<<<< HEAD
         arch,
+=======
+>>>>>>> sdag-a2
         convention,
         info,
         live_ins: Vec::new(),
@@ -104,7 +114,10 @@ struct Builder<'a> {
     function: &'a Function,
     layout: &'a DataLayout,
     target: &'a BuilderTarget,
+<<<<<<< HEAD
     arch: &'a dyn llrm_target::Target,
+=======
+>>>>>>> sdag-a2
     convention: &'a Convention,
     live_ins: Vec<(RegId, u32)>,
     info: &'a mut FunctionLoweringInfo,
