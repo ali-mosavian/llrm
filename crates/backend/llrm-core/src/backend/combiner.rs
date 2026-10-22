@@ -164,8 +164,19 @@ fn names(
     operands.max(listed).max(required)
 }
 
+thread_local! {
+    static FACTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has tabled a body's read counts and latencies,
+/// for a test that a body with no chain to rebuild tables none.
+pub fn facts_made() -> usize {
+    FACTS_MADE.with(std::cell::Cell::get)
+}
+
 impl Facts {
     fn of(body: &LirBody) -> Self {
+        FACTS_MADE.with(|made| made.set(made.get() + 1));
         let mut reads: HashMap<u32, u32> = HashMap::default();
         let mut latency = HashMap::default();
         let mut defined = HashSet::default();
@@ -418,26 +429,46 @@ fn same_operation(
     }
 }
 
+/// Whether an associative operation of `body` reads the result of another: the
+/// shape a reassociation starts from. The pin finds a root from the use lists
+/// it keeps; here the read counts and latencies are tabled only for a body that
+/// has one (the table was 1.7 M of d_faces -O2's compile, 0.47 M in the pin).
+fn has_chain(body: &LirBody) -> bool {
+    let mut produced: HashSet<u32> = HashSet::default();
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            let Some((_, left, right)) = operands(one) else { continue };
+            if produced.contains(&left.value) || produced.contains(&right.value) {
+                return true;
+            }
+            produced.extend(one.defines.iter().copied());
+        }
+    }
+    false
+}
+
 /// `MachineCombiner::runOnMachineFunction`.
 pub fn combined(body: LirBody) -> LirBody {
+    if !has_chain(&body) {
+        return body;
+    }
     let mut facts = Facts::of(&body);
     let mut next = body.next_value();
     let mut like: Vec<(u32, u32)> = Vec::new();
-    let mut changed = false;
+    let found: Vec<Option<Vec<Arc<Insn>>>> =
+        body.blocks.iter().map(|block| combine_block(&mut facts, block, &mut next, &mut like)).collect();
+    if found.iter().all(Option::is_none) {
+        return body;
+    }
     let blocks: Vec<Block> = body
         .blocks
         .iter()
-        .map(|block| match combine_block(&mut facts, block, &mut next, &mut like) {
-            Some(insns) => {
-                changed = true;
-                block.with_insns(insns)
-            }
+        .zip(found)
+        .map(|(block, insns)| match insns {
+            Some(insns) => block.with_insns(insns),
             None => block.clone(),
         })
         .collect();
-    if !changed {
-        return body;
-    }
     let mut out = body.with_blocks(blocks);
     let table = Arc::make_mut(&mut out.class_like);
     for (value, old) in like {
@@ -643,5 +674,19 @@ mod tests {
         let before =
             with_leaves(vec![binary("add", 10, 1, 9), binary("add", 11, 10, 2), jump, binary("add", 12, 11, 3)]);
         assert!(result(&combined(before.clone())) == result(&before), "left alone");
+    }
+
+    /// The read counts of every instruction were tabled for every body before
+    /// a chain was looked for (1.7 M of d_faces -O2, the pin's pass 0.47 M): a
+    /// body whose associative operations read none of each other's results
+    /// tables nothing, and one with a chain tables once.
+    #[test]
+    fn a_body_with_no_chain_tables_no_read_counts() {
+        let before = facts_made();
+        let flat = with_leaves(vec![binary("add", 10, 1, 2), binary("add", 11, 3, 4)]);
+        assert!(result(&combined(flat.clone())) == result(&flat), "left alone");
+        assert_eq!(facts_made() - before, 0, "tabled for a body with no chain");
+        let _ = combined(late_chain("add"));
+        assert_eq!(facts_made() - before, 1, "a chain tables once");
     }
 }
