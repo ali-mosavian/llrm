@@ -136,7 +136,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::frame::Frame;
 use crate::backend::regclass::{self, Classes};
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit, ssarepair, twoaddr};
+use crate::backend::{spiller, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -2256,7 +2256,7 @@ fn written(
     let mut blocks: Vec<Block> = Vec::new();
     for block in &body.blocks {
         let edit = &edits[&block.at];
-        let tail = splitkit::_tail(block);
+        let tail = _tail(block);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // A phi's result is written when control enters; its store comes first.
         {
@@ -2356,6 +2356,13 @@ fn written(
     let mut out = body.with_blocks(blocks);
     out.odds = odds;
     Ok(out)
+}
+
+/// Where `block`'s closing jumps start: a two-way block ends `jcc; jmp`.
+fn _tail(block: &LirBlock) -> usize {
+    let terminates =
+        |one: &Insn| one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
+    block.insns.len() - block.insns.iter().rev().take_while(|one| terminates(one)).count()
 }
 
 #[cfg(test)]
