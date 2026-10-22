@@ -304,11 +304,14 @@ impl<'a> AliasQuery<'a> {
         } else {
             LocationSize::Precise(u64::from(loc.effective.width))
         };
-        let found = crate::basicaa::BasicAA::new(self.unit).get_mod_ref_info(
-            call,
-            Some(&MemoryLocation::new(pointer, size)),
-            &mut self.basic.borrow_mut(),
-        );
+        // `AAResults`: the providers the pin's default pipeline asks of a call,
+        // BasicAA and, where the module analysis is held, GlobalsAA.
+        let mut aa = crate::aggregate::AggregateAA::new();
+        aa.add_aa_result(crate::basicaa::BasicAA::new(self.unit));
+        if let Some(info) = self.unit.globals_mr {
+            aa.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(self.unit, info));
+        }
+        let found = aa.get_mod_ref_info(call, Some(&MemoryLocation::new(pointer, size)), &mut self.basic.borrow_mut());
         ModRef { reads: found.is_ref_set(), writes: found.is_mod_set() }
     }
 
@@ -494,7 +497,20 @@ impl<'a> AliasQuery<'a> {
         };
         let (reads, writes) = (touches(self.accesses.reads(inst)), touches(self.accesses.writes(inst)));
         if reads.is_some() && writes.is_some() {
-            return ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
+            let listed = ModRef { reads: reads.unwrap_or(false), writes: writes.unwrap_or(false) };
+            // A call's lists say what its attributes and `GlobalsModRef` allow;
+            // `AAResults` adds what escapes before it (`getModRefInfo(Call,
+            // Loc)`), and the answer is what both leave.
+            if (listed.reads || listed.writes)
+                && matches!(
+                    self.unit.function.instruction(inst).opcode,
+                    Opcode::Call(_) | Opcode::Invoke(_)
+                )
+            {
+                let asked = self.unknown_call_mod_ref(inst, loc);
+                return ModRef { reads: listed.reads && asked.reads, writes: listed.writes && asked.writes };
+            }
+            return listed;
         }
         let unknown = self.unknown_call_mod_ref(inst, loc);
         ModRef { reads: reads.unwrap_or(unknown.reads), writes: writes.unwrap_or(unknown.writes) }

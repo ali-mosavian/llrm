@@ -600,8 +600,8 @@ b0:
     assert!(!covers(&unit, &pointed, &long), "unrelated roots");
 }
 
-/// `@g` and `@h` are apart only once alias names each access's object; a
-/// call is apart only once its callee's summary says it writes `@h` alone.
+/// `@g` and `@h` are apart only once alias names each access's object; a call
+/// is asked of `AAResults` (BasicAA, GlobalsAA) and not kept in the accesses.
 #[test]
 fn test_resolved_accesses_prove_two_globals_apart() {
     let parsed = Parsed::new(&format!(
@@ -624,21 +624,10 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let seth = Procedure::of(crate::testing::with_registers(Unit::of(
-        &parsed.module,
-        &parsed.layout,
-        function(&parsed.module, "seth"),
-    )));
-    let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
-    let (first, second, call, load) =
-        (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
-    for (accesses, clobber) in [
-        (Accesses::plain(&unit, &Calls::default()), call),
-        (Accesses::resolved(&unit, &IndexMap::default()).unwrap(), call),
-        (Accesses::resolved(&unit, &known).unwrap(), first),
-    ] {
+    let (second, call, load) = (site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
+    for accesses in [Accesses::plain(&unit, &Calls::default()), Accesses::resolved(&unit).unwrap()] {
         let graph = built(&unit, &accesses);
-        assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(clobber).id]));
+        assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(call).id]));
     }
     let plain = Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from([]))]));
     assert_eq!(
@@ -801,7 +790,7 @@ fn a_store_to_another_object_is_ruled_out_without_alias_reasoning() {
         "@h = global [8 x i8] zeroinitializer\n\ndefine void @f() {{\nb0:\n{stores}  %y = load i16, ptr {CELL}\n  ret void\n}}\n"
     ));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, "b0", 20);
     let before = MAY_CLOBBERS.with(std::cell::Cell::get);
@@ -829,7 +818,7 @@ fn test_a_walk_for_a_load_to_be_served_stops_once_more_writes_reach_it_than_can_
         "define i16 @f(i1 %c) {{\nb0:\n  store i16 7, ptr {CELL}\n{diamonds}  %loaded = load i16, ptr {CELL}\n  ret i16 %loaded\n}}\n"
     ));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, &format!("j{}", joins - 1), 0);
     let reference = &accesses.references[&load];
@@ -855,7 +844,7 @@ fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_ot
     let loads: String = (0..200).map(|at| format!("  %y{at} = load i8, ptr {}\n", cell(at))).collect();
     let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let before = STEPS.with(std::cell::Cell::get);
     for at in 0..200 {
@@ -1037,7 +1026,7 @@ fn test_a_walk_stops_at_the_step_limit_with_the_access_it_stopped_at() {
     let parsed =
         Parsed::new(&format!("define i8 @f(ptr %p) {{\nb0:\n{stores}  %y = load i8, ptr %p\n  ret i8 %y\n}}\n"));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, "b0", 6000);
     let before = STEPS.with(std::cell::Cell::get);
