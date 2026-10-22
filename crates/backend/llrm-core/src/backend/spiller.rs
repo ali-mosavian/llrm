@@ -378,7 +378,7 @@ pub fn materialized(
     plain: &BTreeSet<u32>,
 ) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
     let regs = body.regs();
-    let mut fresh = crate::backend::splitkit::_next_value_following(body).max(floor);
+    let mut fresh = _next_value_following(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
@@ -4979,6 +4979,18 @@ fn _tied(
         insn.defines = one.defines.iter().copied().filter(|v| *v != value).collect();
         insn.uses = one.uses.iter().copied().filter(|v| *v != value).collect();
     })))
+}
+
+/// `LirBody::next_value`, from the postings the allocator follows the body
+/// with: the largest value they hold and the phis' results, not a walk of
+/// every instruction.
+pub(crate) fn _next_value_following(body: &LirBody) -> u32 {
+    let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
+    let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
+        assert_eq!(found, body.next_value(), "{}: the next value from the postings differs from the walk", body.name);
+    }
+    found
 }
 
 #[cfg(test)]

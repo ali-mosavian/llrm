@@ -451,6 +451,7 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
                 (les, selector)
             }
+            op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
                 let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
@@ -460,6 +461,115 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.set_expanded_integer(value, lo, hi);
         Ok(())
+    }
+
+    /// `ExpandIntRes_Shift`: by a constant, or as the target's double-width
+    /// shift (`SHL_PARTS`, ...). `ExpandShiftWithKnownAmountBit` needs known
+    /// bits (SD202) and the library calls are not translated.
+    fn expand_shift(&mut self, value: SDValue, op: ISD, vt: EVT, half: EVT) -> Result<(SDValue, SDValue), LegalizeError> {
+        let (input, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        if let Some(amt) = self.dag.constant(amount) {
+            return Ok(self.expand_shift_by_constant(op, input, amt, vt, half));
+        }
+        let parts = match op {
+            ISD::Shl => ISD::ShlParts,
+            ISD::Srl => ISD::SrlParts,
+            _ => ISD::SraParts,
+        };
+        let action = self.tli.operation_action(parts, half);
+        if !(action == crate::backend::selectiondag::Action::Custom || self.tli.is_operation_legal(parts, half)) {
+            return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
+        }
+        let (lo, hi) = self.expanded_integer(input);
+        let shift_vt = EVT::I8;
+        let amount = match self.dag.value_type(amount).size_in_bits().cmp(&8) {
+            std::cmp::Ordering::Greater => self.dag.get_node(ISD::Truncate, shift_vt, &[amount]),
+            std::cmp::Ordering::Less => self.dag.get_node(ISD::ZeroExtend, shift_vt, &[amount]),
+            std::cmp::Ordering::Equal => amount,
+        };
+        let both = self.dag.get_node_multi(parts, &[half, half], &[lo, hi, amount]);
+        Ok((both, SDValue { node: both.node, res: 1 }))
+    }
+
+    /// `ExpandShiftByConstant`.
+    fn expand_shift_by_constant(&mut self, op: ISD, input: SDValue, amt: u128, vt: EVT, half: EVT) -> (SDValue, SDValue) {
+        let (in_lo, in_hi) = self.expanded_integer(input);
+        if amt == 0 {
+            return (in_lo, in_hi);
+        }
+        let vt_bits = u128::from(vt.size_in_bits());
+        let n = u128::from(half.size_in_bits());
+        let by = |dag: &mut SelectionDAG, k: u128| dag.get_constant(k, EVT::I8);
+        let zero = self.dag.get_constant(0, half);
+        let funnel_legal = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal(op, half);
+        match op {
+            ISD::Shl => {
+                if amt >= vt_bits {
+                    (zero, zero)
+                } else if amt > n {
+                    let k = by(self.dag, amt - n);
+                    (zero, self.dag.get_node(ISD::Shl, half, &[in_lo, k]))
+                } else if amt == n {
+                    (zero, in_lo)
+                } else {
+                    let k = by(self.dag, amt);
+                    let lo = self.dag.get_node(ISD::Shl, half, &[in_lo, k]);
+                    let hi = if funnel_legal(self, ISD::FShl) {
+                        self.dag.get_node(ISD::FShl, half, &[in_hi, in_lo, k])
+                    } else {
+                        let up = self.dag.get_node(ISD::Shl, half, &[in_hi, k]);
+                        let back = by(self.dag, n - amt);
+                        let down = self.dag.get_node(ISD::Srl, half, &[in_lo, back]);
+                        self.dag.get_node(ISD::Or, half, &[up, down])
+                    };
+                    (lo, hi)
+                }
+            }
+            ISD::Srl => {
+                if amt >= vt_bits {
+                    (zero, zero)
+                } else if amt > n {
+                    let k = by(self.dag, amt - n);
+                    (self.dag.get_node(ISD::Srl, half, &[in_hi, k]), zero)
+                } else if amt == n {
+                    (in_hi, zero)
+                } else {
+                    let k = by(self.dag, amt);
+                    let lo = if funnel_legal(self, ISD::FShr) {
+                        self.dag.get_node(ISD::FShr, half, &[in_hi, in_lo, k])
+                    } else {
+                        let down = self.dag.get_node(ISD::Srl, half, &[in_lo, k]);
+                        let back = by(self.dag, n - amt);
+                        let up = self.dag.get_node(ISD::Shl, half, &[in_hi, back]);
+                        self.dag.get_node(ISD::Or, half, &[down, up])
+                    };
+                    (lo, self.dag.get_node(ISD::Srl, half, &[in_hi, k]))
+                }
+            }
+            _ => {
+                let sign = by(self.dag, n - 1);
+                if amt >= vt_bits {
+                    let fill = self.dag.get_node(ISD::Sra, half, &[in_hi, sign]);
+                    (fill, fill)
+                } else if amt > n {
+                    let k = by(self.dag, amt - n);
+                    (self.dag.get_node(ISD::Sra, half, &[in_hi, k]), self.dag.get_node(ISD::Sra, half, &[in_hi, sign]))
+                } else if amt == n {
+                    (in_hi, self.dag.get_node(ISD::Sra, half, &[in_hi, sign]))
+                } else {
+                    let k = by(self.dag, amt);
+                    let lo = if funnel_legal(self, ISD::FShr) {
+                        self.dag.get_node(ISD::FShr, half, &[in_hi, in_lo, k])
+                    } else {
+                        let down = self.dag.get_node(ISD::Srl, half, &[in_lo, k]);
+                        let back = by(self.dag, n - amt);
+                        let up = self.dag.get_node(ISD::Shl, half, &[in_hi, back]);
+                        self.dag.get_node(ISD::Or, half, &[down, up])
+                    };
+                    (lo, self.dag.get_node(ISD::Sra, half, &[in_hi, k]))
+                }
+            }
+        }
     }
 
     /// `ExpandIntegerOperand`.
