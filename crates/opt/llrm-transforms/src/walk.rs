@@ -266,6 +266,14 @@ impl ProgramPass for Walk {
                     let spliced =
                         crate::inline::expanded_all(context, function, &by, &peeled, Some(&constant), &mut declared)?
                             > 0;
+                    // A recursive callee's peeled copies spliced here make this
+                    // body one with self-copies too (`SELF_COPIED`).
+                    if spliced && !peeled.is_empty() {
+                        function_mut(module, id)
+                            .1
+                            .attrs
+                            .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                    }
                     // DEVIATE (recursion): a tree-recursive function waits for
                     // its tail-call elimination until its copies are made
                     // (`SelfInline`, after ipa-cp has seen it whole).
@@ -456,7 +464,8 @@ fn self_calls(
     Some(frequencies)
 }
 
-/// The flag a body that had copies of itself made (D10) carries from then on:
+/// The flag a body that had copies of itself made (D10), or took a recursive
+/// callee's peeled copies, carries from then on:
 /// the simplifier folds the chains of tests those copies make (`n - 1 == 0`,
 /// `n - 2 == 0`, ...) through `algebraic::_offset_compared` whoever else reads
 /// the sum, which the pin does only with one use.
