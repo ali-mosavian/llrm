@@ -71,6 +71,7 @@
 
 pub mod builder;
 mod dag;
+pub mod dagisel_adapter;
 pub mod actions;
 pub mod dump;
 pub mod fold;
@@ -85,5 +86,7 @@ pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod tests;
