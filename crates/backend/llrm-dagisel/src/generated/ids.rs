@@ -349,6 +349,8 @@ pub mod x86isd {
     pub const LCMPXCHG16_DAG: u16 = 659;
     pub const LCMPXCHG8_DAG: u16 = 660;
     pub const LCMPXCHG_DAG: u16 = 661;
+    pub const LDS: u16 = 24577;
+    pub const LES: u16 = 24576;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
