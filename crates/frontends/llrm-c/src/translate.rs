@@ -2768,22 +2768,6 @@ impl<'a, 't> Body<'a, 't> {
         );
     }
 
-    /// `pointer` moved `by` constant bytes, inside its object.
-    fn displaced(
-        &mut self,
-        pointer: i64,
-        by: i64,
-    ) -> i64 {
-        if by == 0 {
-            return pointer;
-        }
-        let at = self.int(self.types.word(), by);
-        let result = self.value(self.type_of(pointer));
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
-        self.stated_instructions.push((id, Fact::InBounds));
-        result
-    }
-
     /// `value`, of C type `from`, as `to`.
     fn converted(
         &mut self,
