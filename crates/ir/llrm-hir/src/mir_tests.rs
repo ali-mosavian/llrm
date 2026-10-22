@@ -2045,3 +2045,14 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     let refused = crate::mir::emit(&huge, &flat).remove(0).refused;
     assert!(refused.iter().any(|(_, why)| why.contains("no huge address space")), "{refused:?}");
 }
+
+/// BASIC's float math runs on the x87 at extended precision: a function the
+/// lowering makes carries `"llrm-fp-eval"="x87-extended"`, which tells the
+/// constant folder not to fold `llvm.log` and its kin to a host double (a
+/// different last digit from BC's FLDLN2; FXCH; FYL2X).
+#[test]
+fn a_lowered_function_says_its_float_math_is_extended() {
+    let emitted = emit(&program(difference())).remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("\"llrm-fp-eval\"=\"x87-extended\""), "{text}");
+}

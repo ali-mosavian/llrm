@@ -194,3 +194,42 @@ b0:
     assert!(dump(&text(base)).expect("parses").contains("100"), "premise: an integral middle space folds");
     assert!(!dump(&text(&format!("{base}-ni:2"))).expect("parses").contains("100"));
 }
+
+/// `log(10.0)` in C is the host libm's double. Constant folding had no float
+/// arm, so `llvm.log` of a constant stayed a call.
+#[test]
+fn a_libm_intrinsic_of_a_constant_folds_in_a_function_that_evaluates_in_double() {
+    let text = "declare double @llvm.log.f64(double)
+declare double @llvm.floor.f64(double)
+
+define double @f() {
+b0:
+  %v = call double @llvm.log.f64(double 1.0e1)
+  ret double %v
+}
+";
+    let folded = dump(text).expect("parses");
+    assert!(folded.contains(&format!("f 0 call double 0x{:016X}", 10f64.ln().to_bits())), "{folded}");
+}
+
+/// BASIC's `LOG` is computed in 80 bits (FLDLN2; FXCH; FYL2X): a double
+/// constant is a different last digit (tests/run/qb/log_exp_digits). A
+/// function the HIR lowering made carries `"llrm-fp-eval"="x87-extended"` and
+/// keeps the call; the rounding group is exact at any width and folds anyway.
+#[test]
+fn a_libm_intrinsic_in_an_extended_precision_function_is_left_but_floor_folds() {
+    let text = "declare double @llvm.log.f64(double)
+declare double @llvm.floor.f64(double)
+
+define double @f() \"llrm-fp-eval\"=\"x87-extended\" {
+b0:
+  %v = call double @llvm.log.f64(double 1.0e1)
+  %w = call double @llvm.floor.f64(double 2.5)
+  %r = fadd double %v, %w
+  ret double %r
+}
+";
+    let folded = dump(text).expect("parses");
+    assert!(folded.contains("f 0 call -\n"), "the log is left: {folded}");
+    assert!(folded.contains("f 1 call double 0x4000000000000000"), "the floor folds: {folded}");
+}
