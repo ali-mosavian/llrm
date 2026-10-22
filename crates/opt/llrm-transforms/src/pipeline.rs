@@ -914,7 +914,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                fold("fold@837"),
                 dead("dead@837"),
             ]);
             list
