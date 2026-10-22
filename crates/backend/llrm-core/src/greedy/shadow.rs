@@ -761,7 +761,19 @@ pub fn decide_with_split(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
-    tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
+    let invariant = crate::backend::postings::following(body, |postings| {
+        let defined: std::collections::BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        crate::backend::spiller::_stable_loads_by(body, &defined, &Default::default(), postings)
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<u32>>()
+    });
+    tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
     let pins = inputs
         .pins
         .iter()
