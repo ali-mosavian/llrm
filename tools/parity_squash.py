@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -548,6 +549,33 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+def new_lib_failures(
+    files: list[str],
+    on_merged=None,
+    on_head=None,
+) -> set[str]:
+    """The failing lib tests of the crates `files` change (not their dependants) on the merged tree that the head, checked out where `on_head` runs them again, passes: a red test in a
+    changed crate. #3578 landed four of them because the fast path builds the tests (cargo check --all-targets) and runs none. `on_merged(packages)` -> failing `unit <pkg>::<test>`
+    names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
+    smoke = parity_smoke_module()
+    packages, _ = smoke.workspace_graph()
+    touched = smoke.touched_packages(files, packages)
+    failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
+    if not failed:
+        return set()
+    by_package: dict[str, set[str]] = {}
+    for name in failed:
+        package, test = name[len("unit "):].split("::", 1)
+        by_package.setdefault(package, set()).add(test)
+    also = (on_head or _failing_on_head)(by_package)
+    return failed - also
+
+
+def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
+    clean_checkout(BASE)
+    return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
+
+
 def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
     """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
     it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
@@ -611,6 +639,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if broken := _workspace_check(ROOT):
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             return False
+        # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
+        if os.environ.get("LAND_FAST_TESTS") == "1":
+            changed = git("diff", "--name-only", BASE, "HEAD").split()
+            if new := sorted(new_lib_failures(changed)):
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                return False
         return True
 
     def passes(group: list[str]) -> bool:
@@ -665,11 +699,22 @@ def claims_fix(description: str) -> bool:
     return bool(FIXES_RED.search(description or ""))
 
 
+def new_names(head: set[str], merged: set[str]) -> list[str]:
+    """The failing names of `merged` that `head` does not fail. Names are per test or program (`ratchet:x::t`, `run p [-O2]`, `unit crate::t`), so a test that goes red inside a
+    step that was red already is new. A bare step name in `head` (a failure set cached before steps named their tests, or a step whose output names none) covers its own."""
+    return sorted(n for n in merged - head if not any(n.startswith((f"{h}::", f"{h} ")) for h in head))
+
+
+def fixed_names(head: set[str], merged: set[str]) -> list[str]:
+    """The failing names of `head` that `merged` no longer fails."""
+    return sorted(head - merged)
+
+
 def subset_refusals(head: set[str], merged: set[str], fixes: bool) -> list[str]:
     """Why the merged tree may not land on a head that fails `head`: it fails a check the head passes, or (a PR that says it fixes a red) fails as many as the head.
     The gate must not deadlock on a red head, and must not let a PR add a red. Both sets are in the reason."""
     shown = f"head fails {{{', '.join(sorted(head)) or '-'}}}, merged tree fails {{{', '.join(sorted(merged)) or '-'}}}"
-    if new := sorted(merged - head):
+    if new := new_names(head, merged):
         return [f"the merged tree fails {', '.join(new)}, which the head passes ({shown})"]
     if fixes and head and len(merged) >= len(head):
         return [f"the PR says it fixes a red but the merged tree fails as many checks as the head ({shown})"]
@@ -785,6 +830,54 @@ def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
     return smoke_failures(known)[0]
 
 
+def parity_smoke_module():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parity_smoke  # noqa: PLC0415
+
+    return parity_smoke
+
+
+def compute_head_qbrt_failures() -> set[str]:
+    """The tests/qbrt differential's failing results on the head itself (binaries built), once per head sha."""
+    stage("head-qbrt")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().qbrt_failures(smoke_bins())
+
+
+def compute_head_group_failures() -> set[str]:
+    """The tests/run groups' failing programs on the head itself (check origin/feat/parity out, build its binaries when stale), once per head sha."""
+    stage("head-groups")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().group_failures(smoke_bins())
+
+
+def compute_head_lib_failures(packages: set[str]) -> set[str]:
+    """Every workspace lib test's failures on the head itself, once per head sha: a PR's dependants-lib run is compared with it by name."""
+    stage("head-lib")
+    git("checkout", "-q", "--detach", BASE)
+    return parity_smoke_module().dependants_lib_failures(packages)
+
+
+def compute_head_integration_failures(targets: list[str]) -> set[str]:
+    """The failing tests of the same root integration `targets` on the head itself, once per head sha and target set."""
+    stage("head-integration")
+    git("checkout", "-q", "--detach", BASE)
+    return parity_smoke_module().integration_failures(targets)
+
+
+def compute_head_qcport_failures() -> set[str]:
+    """Every QCport module's failing compiles on the head itself, once per head sha (the PR's own run is never cached)."""
+    stage("head-qcport")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().qcport_failures(smoke_bins())
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
     with land_lock():
         return _merge(number, known)
@@ -801,6 +894,24 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
     head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
+    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
+    whole = parity_smoke_module().runs_whole_groups(files)
+    if whole:
+        head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
+        head_failed = head_failed | head_failures(tested_base, compute_head_qbrt_failures, cache=HEAD_FAILURES / "qbrt")
+    smoke = parity_smoke_module()
+    packages, graph = smoke.workspace_graph()
+    touched = smoke.touched_packages(files, packages)
+    closure = smoke.dependants(touched, graph)
+    targets = smoke.integration_targets_for(files, touched, smoke.integration_map())
+    if targets:
+        key = hashlib.sha1(" ".join(targets).encode()).hexdigest()[:12]
+        head_failed = head_failed | head_failures(tested_base, lambda: compute_head_integration_failures(targets), cache=HEAD_FAILURES / "integration" / key)
+    if closure:
+        head_failed = head_failed | head_failures(tested_base, lambda: compute_head_lib_failures(set(packages)), cache=HEAD_FAILURES / "lib")
+    compiler = parity_smoke_module().touches_the_compiler(files)
+    if compiler:
+        head_failed = head_failed | head_failures(tested_base, compute_head_qcport_failures, cache=HEAD_FAILURES / "qcport")
     merged, why = merged_result(info["headRefOid"])
     if merged is None:
         print(f"REFUSED: {why}")
@@ -813,14 +924,23 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         return 1
     merged_failed, last = smoke_failures(known)
     print(last)
+    if whole:
+        merged_failed = merged_failed | parity_smoke_module().group_failures(smoke_bins()) | parity_smoke_module().qbrt_failures(smoke_bins())
+    if compiler:
+        merged_failed = merged_failed | parity_smoke_module().qcport_failures(smoke_bins())
+    if closure:
+        merged_failed = merged_failed | smoke.dependants_lib_failures(closure)
+    if targets:
+        merged_failed = merged_failed | smoke.integration_failures(targets)
     if unit_tests_of(merged_failed - head_failed):
         git("checkout", "-q", "--detach", BASE)
         head_failed = head_expanded(head_failed, merged_failed, failing_on_checkout)
         git("checkout", "-q", "--detach", merged)
+    if fixed := fixed_names(head_failed, merged_failed):
+        print(f"FIXED: {', '.join(fixed)}")
     if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
-    files = {f["path"] for f in json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "files"], capture_output=True, text=True, check=True).stdout)["files"]}
     if why := stale_at_the_call(merged):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1

@@ -229,8 +229,12 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
-            // An undef initializer is any bytes: zero.
-            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Undef => {
+            // An undef initializer is any bytes: zero. A poison one is a hole
+            // of a switch lookup table (the pin's holes are `poison` too),
+            // which the guard never indexes. `emitGlobalConstantImpl` writes
+            // zeros for both:
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4560
+            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison => {
                 self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize])
             }
             ConstantKind::Bytes(bytes) => self.bytes(bytes),
@@ -253,7 +257,6 @@ impl Initializer<'_> {
                 }
             },
             ConstantKind::Global(_) | ConstantKind::Expr(_) => self.address(id)?,
-            ConstantKind::Poison => return Err("a poison initializer".to_owned()),
         }
         Ok(())
     }

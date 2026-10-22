@@ -211,11 +211,26 @@ impl ScevSession {
         mark: llrm_mir::module::Mark,
     ) {
         match function.touched_since(mark) {
-            Some(touched) if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() => {
+            Some(touched)
+                if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() =>
+            {
                 self.ask_within(context, layout, globals, metadata, function, |se, cx| se.forget_touched(cx, &touched));
             }
             _ => self.forget_expressions(),
         }
+    }
+
+    /// `ScalarEvolution::verify` over the function as it is now: the first
+    /// kept expression that a new one would not give, said.
+    pub fn verify(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+    ) -> Result<(), String> {
+        self.ask_within(context, layout, globals, metadata, function, |se, cx| se.verify(cx))
     }
 
     /// Runs `query` with the expressions and the context they are read in.

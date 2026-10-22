@@ -606,7 +606,7 @@ pub fn materialized(
             if let Some(folded) = _source(&one, &stored, frame)? {
                 one = folded;
             }
-            let direct = match _in_place(&one, &stored, frame)? {
+            let direct = match _in_place(&one, &stored, frame, &|value| value)? {
                 Some(direct) => Some(direct),
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
@@ -1444,6 +1444,26 @@ fn _color_slots(
     Ok(())
 }
 
+/// The colours of the homes from their `LiveStacks` ranges, the allocator's
+/// own: the ranges of what was spilled to each, not the liveness of the cell
+/// worked out again. None where a home has no range (it was not made by an
+/// inline spill).
+fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interval>)>> {
+    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
+    homes.sort_unstable();
+    let first = u32::MAX - homes.len() as u32;
+    homes
+        .iter()
+        .enumerate()
+        .map(|(index, home)| {
+            let segments = frame.stacks.get(home)?;
+            let capacity = frame.capacities.get(home).map_or(WORD, |one| *one as u32).max(WORD);
+            let segments = segments.iter().map(|(start, end)| Segment { start: *start, end: *end }).collect();
+            Some((*home, capacity, vec![Interval::new(first + index as u32, segments)]))
+        })
+        .collect()
+}
+
 /// The spill slots of `body` shared by what is never live together, once, as
 /// the allocation is kept: LLVM's `StackSlotColoring`, which runs after
 /// register allocation over the slots `InlineSpiller` gave each spilled
@@ -1469,7 +1489,21 @@ pub fn slots_colored(
     if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
         return body.clone();
     }
-    let (colors, _live) = _existing_colors(body, frame);
+    if llrm_support::env_flag!("LLRM_STACKS_DEBUG") {
+        let homes: std::collections::BTreeSet<i64> = frame.slots.values().copied().collect();
+        let covered = homes.iter().filter(|home| frame.stacks.contains_key(*home)).count();
+        eprintln!("stacks {}: {} homes, {} with a LiveStacks range", body.name, homes.len(), covered);
+    }
+    let colors = match _stacked_colors(frame) {
+        Some(colors) if !llrm_support::env_flag!("LLRM_NO_STACKS") => {
+            COLOURED.with(|one| one.set((one.get().0 + 1, one.get().1)));
+            colors
+        }
+        _ => {
+            COLOURED.with(|one| one.set((one.get().0, one.get().1 + 1)));
+            _existing_colors(body, frame).0
+        }
+    };
     let by_home: IndexMap<i64, &(i64, u32, Vec<Interval>)> = colors.iter().map(|color| (color.0, color)).collect();
     // The order the homes were made in.
     let mut order: Vec<i64> = Vec::new();
@@ -1626,7 +1660,13 @@ pub fn slots_colored(
     if body.bits >= 32 {
         ranked.reverse();
     }
-    let mut again = Frame { slots: IndexMap::default(), capacities: IndexMap::default(), ..frame.clone() };
+    // The homes move: their ranges are of the old ones.
+    let mut again = Frame {
+        slots: IndexMap::default(),
+        capacities: IndexMap::default(),
+        stacks: IndexMap::default(),
+        ..frame.clone()
+    };
     let mut first_key: Vec<Option<SlotKey>> = vec![None; shared.len()];
     for (key, home) in &frame.slots {
         if let Some(color) = into.get(home) {
@@ -1655,10 +1695,12 @@ pub fn slots_colored(
 fn _cell_move(
     one: &Insn,
     load: bool,
+    floats: bool,
 ) -> Option<(u32, (i64, u32))> {
     let what = one.what.as_ref()?;
-    if what.op != Operation::Move
-        || what.name.as_deref() != Some("mov")
+    // An x87 value read from or written to its cell is the same move.
+    let float = floats && what.op == if load { Operation::FloatLoad } else { Operation::FloatStore };
+    if !float && (what.op != Operation::Move || what.name.as_deref() != Some("mov"))
         || one.group.is_some()
         || !one.requires.is_empty()
         || !one.delivers.is_empty()
@@ -1675,7 +1717,7 @@ fn _cell_move(
     if cell.index.is_some() || cell.index_through != RegId::None {
         return None;
     }
-    (held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
+    (float || held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
 }
 
 /// The cells a value is reloaded from and stored back to in the next
@@ -1694,7 +1736,8 @@ fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
     let mut found = Vec::new();
     for block in &body.blocks {
         for pair in block.insns.windows(2) {
-            if let (Some((value, from)), Some((stored, to))) = (_cell_move(&pair[0], true), _cell_move(&pair[1], false))
+            if let (Some((value, from)), Some((stored, to))) =
+                (_cell_move(&pair[0], true, false), _cell_move(&pair[1], false, false))
             {
                 if value == stored && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
                     found.push((from, to));
@@ -1705,9 +1748,16 @@ fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
     found
 }
 
-/// `body` without the copies of a slot to itself that sharing slots made: a
-/// reload of a cell into a value that only the store back into that cell reads
-/// (a move between two spilled values that now share one slot).
+/// `StackSlotColoring::RemoveDeadStores`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/StackSlotColoring.cpp#L482>):
+/// `body` without the store that follows a load of the same value from the
+/// same cell (a move between two spilled values that sharing slots put in one
+/// cell, or a reload a hoisted spill stores back). The load goes too when the
+/// store is the last read of its value.
+///
+/// DEVIATE D-SSC1: the store may follow copies of the loaded value. LLVM runs
+/// this after the rewriter, which has dropped the copies whose two ends got one
+/// register; the body here still has them. Exit: run after the rewrite.
 fn _identities_dropped(body: &LirBody) -> LirBody {
     let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
     let mut candidates = 0usize;
@@ -1723,26 +1773,35 @@ fn _identities_dropped(body: &LirBody) -> LirBody {
     if candidates == 0 {
         return body.clone();
     }
-    let cell_move = _cell_move;
+    let cell_move = |one: &Insn, load: bool| _cell_move(one, load, true);
     let mut changed = false;
     let mut blocks = Vec::with_capacity(body.blocks.len());
     for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
-        let mut at = 0;
-        while at < block.insns.len() {
-            if let (Some((value, cell)), Some(next)) = (cell_move(&block.insns[at], true), block.insns.get(at + 1)) {
-                if cell_move(next, false) == Some((value, cell))
-                    && defined.get(&value) == Some(&1)
-                    && used.get(&value) == Some(&1)
-                {
-                    changed = true;
-                    at += 2;
-                    continue;
+        let mut gone = vec![false; block.insns.len()];
+        for at in 0..block.insns.len() {
+            let Some((value, cell)) = cell_move(&block.insns[at], true) else { continue };
+            // The value and the copies of it before the store.
+            let mut same = vec![value];
+            let mut next = at + 1;
+            while let Some(one) = block.insns.get(next) {
+                match crate::backend::coalesce::_copy(one) {
+                    Some((to, from)) if same.contains(&from) && one.group.is_none() => same.push(to),
+                    _ => break,
                 }
+                next += 1;
             }
-            insns.push(Arc::clone(&block.insns[at]));
-            at += 1;
+            let Some(store) = block.insns.get(next) else { continue };
+            if !same.iter().any(|alias| cell_move(store, false) == Some((*alias, cell))) {
+                continue;
+            }
+            changed = true;
+            gone[next] = true;
+            if next == at + 1 && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
+                gone[at] = true;
+            }
         }
+        let insns: Vec<Arc<Insn>> =
+            block.insns.iter().zip(&gone).filter(|(_, gone)| !**gone).map(|(one, _)| Arc::clone(one)).collect();
         blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
@@ -1878,6 +1937,16 @@ fn _same_liveness(
 // with the homes in it is worked out at once.
 thread_local! {
     static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// (colourings from the allocator's `LiveStacks`, colourings that worked
+    /// the homes' liveness out of the body) on this thread.
+    static COLOURED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// How many colourings of homes this thread made from `LiveStacks`, and how
+/// many by working the liveness of the cells out, for a test that a spilling
+/// allocation does not do the second.
+pub fn colourings() -> (usize, usize) {
+    COLOURED.with(std::cell::Cell::get)
 }
 
 /// How many instructions this thread has made again with the homes among their
@@ -2960,6 +3029,27 @@ fn _stable_loads_from(
                                 && source.addr.is_some()
                                 && one.defines == [*value]
                                 && one.uses.is_empty()
+                                && one.clobbers.is_empty()
+                                && one.group.is_none()
+                                && one.spread.is_empty()
+                                && !one.volatile
+                                && one.symbol != Some(true)
+                            {
+                                cell = Some(source.clone());
+                            }
+                        }
+                    }
+                    // An x87 load of a fixed cell (a frame cell, a global):
+                    // made again where it is read, as the
+                    // integer load above.
+                    if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
+                        if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
+                            (what.dests.as_slice(), what.sources.as_slice())
+                        {
+                            if dest.value == *value
+                                && (_fixed_data(source).is_some() || _incoming_frame(source))
+                                && one.uses.is_empty()
+                                && one.defines == [*value]
                                 && one.clobbers.is_empty()
                                 && one.group.is_none()
                                 && one.spread.is_empty()
@@ -4885,6 +4975,7 @@ pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
+    home: &dyn Fn(u32) -> u32,
 ) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {
         return Ok(None);
@@ -4901,8 +4992,8 @@ pub(crate) fn _in_place(
         return Ok(None);
     }
     if !into.is_empty() && !outof.is_empty() {
-        let dest = frame.cell(into[0], _width(one, into[0]))?;
-        let source = frame.cell(outof[0], _width(one, outof[0]))?;
+        let dest = frame.cell(home(into[0]), _width(one, into[0]))?;
+        let source = frame.cell(home(outof[0]), _width(one, outof[0]))?;
         return Ok(Some(_with(one, |made| {
             made.what =
                 Some(Semantics { dests: vec![Loc::Mem(dest)], sources: vec![Loc::Mem(source)], ..what.clone() });
@@ -4911,7 +5002,7 @@ pub(crate) fn _in_place(
         })));
     }
     let value = if into.is_empty() { outof[0] } else { into[0] };
-    let cell = frame.cell(value, _width(one, value))?;
+    let cell = frame.cell(home(value), _width(one, value))?;
     if !into.is_empty() {
         return Ok(Some(_with(one, |made| {
             made.what = Some(Semantics { dests: vec![Loc::Mem(cell)], ..what.clone() });
@@ -7611,6 +7702,19 @@ mod tests {
         let owner = insns.iter().find(|one| one.covers == Some((3, 6))).unwrap();
         assert!(owner.is_meta(), "{owner:?}");
         assert!(select::emit(owner.what.as_ref().unwrap(), 3, None, false, false, None).unwrap().code.is_empty());
+    }
+
+    /// `slots_colored` worked the liveness of every spill cell out of the body
+    /// again (11.5 M of the 15.2 M it cost on d_faces -O2) although the spills
+    /// had been written with the range of each home (`LiveStacks`). A spilling
+    /// allocation colours its homes from those ranges and works nothing out.
+    #[test]
+    fn test_a_spilling_allocation_colours_its_homes_from_the_live_stacks() {
+        let (stacked, recomputed) = super::colourings();
+        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
+        let (stacked_now, recomputed_now) = super::colourings();
+        assert!(stacked_now > stacked, "premise: some body spilled to a home and was coloured");
+        assert_eq!(recomputed_now - recomputed, 0, "colourings that worked the homes' liveness out");
     }
 
     #[test]

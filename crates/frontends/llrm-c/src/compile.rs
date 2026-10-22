@@ -112,6 +112,7 @@ pub(crate) fn prepared(
     unit.wrapv = wrapv;
     let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
     profile.lifetimes = codegen.pipeline.optimize;
+    profile.expects = codegen.pipeline.optimize;
     // Only a program linked against the target's own start-up library asks
     // for it.
     if !entry_requests {
@@ -257,6 +258,10 @@ pub struct Profile {
     /// Whether a block's locals are marked with `llvm.lifetime` (the pipeline
     /// optimizes: clang's `ShouldEmitLifetimeMarkers`).
     pub lifetimes: bool,
+    /// Whether `__builtin_expect` is the `llvm.expect` intrinsic, which
+    /// `lower-expect` turns into branch weights: clang's at -O1 and up; below
+    /// it is its argument.
+    pub expects: bool,
 }
 
 impl Profile {
@@ -352,6 +357,7 @@ impl Profile {
             header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
             lifetimes: false,
+            expects: false,
             // Only a target that has inline code naming registers states them.
             hardware: match frontend.get("registers").and_then(toml::Value::as_table) {
                 Some(table) => crate::hwreg::Registers::parse(table)?,
@@ -2888,8 +2894,11 @@ mod tests {
     fn test_m32_an_absolute_address_keeps_its_32_bits() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("vm.c");
-        std::fs::write(&source, "void __cdecl f(void) { *(volatile char *)0xB8000 = 65; *(volatile char *)0xB8001 = 66; }\n")
-            .unwrap();
+        std::fs::write(
+            &source,
+            "void __cdecl f(void) { *(volatile char *)0xB8000 = 65; *(volatile char *)0xB8001 = 66; }\n",
+        )
+        .unwrap();
         let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
             .expect("wccq records vm.c");
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
@@ -2924,9 +2933,10 @@ mod tests {
     }
 
     /// Ten floats live across a loop spill x87 values. Every spill cell was a
-    /// qword, so a float reloaded from it kept double precision and nbody_single
-    /// printed 86015, the pin 86016. The cell is the float's own dword, as the
-    /// pin's RFP32 `fst dword` rounds; a double keeps its qword.
+    /// qword, so a float reloaded from it kept double precision and
+    /// nbody_single printed 86015, the pin 86016. The cell is the float's
+    /// own dword, as the pin's RFP32 `fst dword` rounds; a double keeps its
+    /// qword.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -2947,15 +2957,15 @@ mod tests {
                 ),
             )
             .unwrap();
-            let text =
-                super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
-                    .expect("wccq records spill.c");
+            let text = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap())
+                .expect("wccq records spill.c");
             let argv: Vec<String> = ["-m32", "-O2", "-march=i486", "x.c"].map(str::to_owned).to_vec();
             let built = super::selected(&text, "spill", None, &super::parse_args(&argv).unwrap().codegen).unwrap();
             llrm_core::backend::masm::text(&built).unwrap()
         };
         let spills = |asm: &str, width: &str| {
-            asm.lines().filter(|line| line.trim().starts_with("fstp") && line.contains(&format!("{width} ptr [e")))
+            asm.lines()
+                .filter(|line| line.trim().starts_with("fstp") && line.contains(&format!("{width} ptr [e")))
                 .count()
         };
         let single = listing("float");

@@ -303,6 +303,29 @@ impl ModuleAnalysis for GlobalsModRefAnalysis {
     }
 }
 
+/// Whether the module forges a pointer into the data segment
+/// (`forging::forges_selector`): worked out once for the module and read by
+/// `GlobalsAA`.
+pub struct ForgedSelectors;
+
+impl ModuleAnalysis for ForgedSelectors {
+    type Result = bool;
+    const NAME: &'static str = "forged-selectors";
+    /// A held `true` claims more than a fresh `false`, never less.
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        *stale || !*fresh
+    }
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::forging::forges_selector(module, analyses.program().spaces)
+    }
+}
+
 /// Each defined function's memory effects, by name: `alias::summaries` of
 /// the whole module, its globals as `GlobalsAA` finds them and the bodies
 /// other modules define as the cached `ProgramSummaries` says.
@@ -1043,7 +1066,7 @@ pub fn call_effects(
     alias::calls_annotated(&Procedure::of(*unit), known)
 }
 
-/// Every value known without solving memory: `consts::known` of no calls.
+/// The constants the body holds as values, which is none: see `Registers::run`.
 pub struct Registers;
 
 /// The loads from a constant global by an index (`consts::is_table_load`), in
@@ -1135,108 +1158,20 @@ impl Analysis for TableLoads {
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
-    const INCREMENTAL: bool = true;
+    const READS_OUTER: bool = false;
 
-    /// A fact is of the values its value is made from alone (the edges of the
-    /// CFG are not read: a phi meets what its arms are), so the facts of
-    /// the values a change did not reach, by the uses of what it
-    /// touched, stand; the others are worked out again from them.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
-    }
-
-    fn update_owned(
-        previous: Rc<Self::Result>,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let tables = analyses.get::<TableLoads>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        // A load from a table is known by the bounds of its whole index,
-        // whatever it is made of: it is asked again with the values a
-        // change touched.
-        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
-        // The values touched, and the facts that were made from them, which no
-        // longer stand.
-        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
-        let mut work = Vec::<ValueId>::new();
-        for &inst in tables.iter() {
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        for change in changes {
-            let inst = match *change {
-                Change::Inserted { inst, .. }
-                | Change::Erased { inst, .. }
-                | Change::Moved { inst, .. }
-                | Change::Rewritten(inst) => inst,
-                Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_)
-                | Change::BlockErased(_)
-                | Change::Operand { .. }
-                | Change::Operands { .. }
-                | Change::Substituted { .. } => {
-                    continue;
-                }
-                // An argument's fact is of its position.
-                Change::Parameters => return None,
-            };
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        // Every value to settle again: the touched, those whose fact was made
-        // from them, and the users of each, whose operands may now be
-        // known.
-        let mut dirty = touched.clone();
-        let mut seen = touched;
-        while let Some(value) = work.pop() {
-            kept.swap_remove(&value);
-            for user in function.users(value) {
-                if function.parent(user.user).is_none() {
-                    continue;
-                }
-                let Some(result) = function.instruction(user.user).result else { continue };
-                dirty.insert(result);
-                if kept.contains_key(&result) && seen.insert(result) {
-                    work.push(result);
-                }
-            }
-        }
-        Some(consts::known_from(&unit, kept, Some(&dirty), &tables))
-    }
-
+    /// Empty: a constant is folded into the body where it appears (SCCP,
+    /// InstSimplify, `fold`), as the pin does, so no map of them is kept. The
+    /// fixed point this used to derive (`consts::known`) found 72 values in
+    /// 25033 instructions of d_faces -O2, and every object, row, run and
+    /// QCport module was the same without it.
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::known(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_exposed(&exposed),
-        )
+        IndexMap::default()
     }
 }
 
@@ -1472,12 +1407,32 @@ pub struct MssaGraph {
 
 /// Two graphs are equal when every access says the same (`shadow::said`): the
 /// manager's check of a preserved set compares a graph with the one made again.
+/// A use the walker answered for is optimized: its defining access is the
+/// walker's result, not the nearest def ([`setDefiningAccess(DMA,
+/// Optimized)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L293),
+/// [`MemoryUse::isOptimized`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L337)),
+/// so those names are not compared.
 impl PartialEq for MssaGraph {
     fn eq(
         &self,
         other: &Self,
     ) -> bool {
-        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        let (mut held, mut fresh) = (crate::mssa::shadow::said(&self.mssa), crate::mssa::shadow::said(&other.mssa));
+        // A use the walker moved up stands for the same load as the nearest
+        // def of a graph made afresh.
+        for inst in crate::mssa::shadow::optimized_uses(&self.mssa) {
+            if let (Some(kept), Some(now)) = (held.instructions.get_mut(&inst), fresh.instructions.get_mut(&inst))
+                && !kept.0
+                && !now.0
+            {
+                kept.1 = crate::mssa::shadow::Name::Live;
+                now.1 = crate::mssa::shadow::Name::Live;
+            }
+        }
+        held == fresh
     }
 }
 

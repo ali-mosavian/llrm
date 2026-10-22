@@ -160,6 +160,10 @@ pub struct Profile {
     /// the language allows to stay (Nib and BASIC: only a store the program
     /// writes rounds).
     pub rounds_float_spills: bool,
+    /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
+    /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
+    /// pin rounds; QB follows real BC text.
+    pub spills_extended: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -285,7 +289,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch),
+            private: private_convention(arch, std::env::var_os("LLRM_PRIVATE_WATCALL").is_some()),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
@@ -309,6 +313,7 @@ impl Profile {
             aggressive: false,
             float_store: false,
             rounds_float_spills: false,
+            spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -445,7 +450,7 @@ fn _profile(
 static _MADE: LazyLock<
     std::sync::Mutex<
         crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool),
+            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool),
             &'static Profile,
         >,
     >,
@@ -502,7 +507,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false, false, false, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -518,12 +523,25 @@ pub fn tuned_optimizing(
     float_store: bool,
     aggressive: bool,
     rounds_float_spills: bool,
+    spills_extended: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store, aggressive, rounds_float_spills);
+    let key = (
+        arch.name(),
+        name.to_owned(),
+        size,
+        search,
+        exhaustive,
+        routes,
+        optimized,
+        float_store,
+        aggressive,
+        rounds_float_spills,
+        spills_extended,
+    );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -536,6 +554,7 @@ pub fn tuned_optimizing(
         float_store,
         aggressive,
         rounds_float_spills,
+        spills_extended,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -763,10 +782,16 @@ mod tests {
 }
 
 /// The convention `arch`'s description gives a private function, and the ones
-/// that may take it.
-fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
+/// that may take it. `instrument` (`LLRM_PRIVATE_WATCALL`, the CC1 comparison)
+/// gives it the description's `private_instrument` instead, where it states one.
+fn private_convention(
+    arch: &dyn Target,
+    instrument: bool,
+) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let to = llrm_target::calling::Calling::number_of(calling.private()?.cc.as_deref())?;
+    let private = calling.private()?;
+    let private = calling.private_instrument().filter(|_| instrument).unwrap_or(private);
+    let to = llrm_target::calling::Calling::number_of(private.cc.as_deref())?;
     let mut from: Vec<u32> = calling
         .conventions
         .iter()
@@ -776,6 +801,26 @@ fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConv
     from.sort_unstable();
     from.dedup();
     Some(llrm_mir::target::PrivateConvention { to, from })
+}
+
+#[cfg(test)]
+mod private_convention_tests {
+    use super::*;
+
+    /// CC1: a private m32 function takes the pin's `fastcc` (ECX, EDX; the
+    /// caller pops); `LLRM_PRIVATE_WATCALL` (the comparison instrument) gives
+    /// it `watcall32` instead. A default of `watcall32` priced the rows against
+    /// the pin's convention and lost -O1..-O3 clocks (`rectwo` -9.6%).
+    #[test]
+    fn test_a_private_function_takes_the_pin_fastcc_and_the_instrument_watcall32() {
+        use llrm_mir::opcode::{FAST, WATCALL};
+        let ours = private_convention(&llrm_x86_m32::M32, false).expect("m32 states one");
+        let old = private_convention(&llrm_x86_m32::M32, true).expect("m32 states one");
+        assert_eq!((ours.to, old.to), (FAST, WATCALL));
+        let found = llrm_x86_m32::M32.calling().by_number(FAST).expect("fastcc is stated");
+        assert_eq!(found.argument_registers, ["ecx", "edx"]);
+        assert_eq!(found.cleanup, llrm_target::calling::Cleanup::Caller);
+    }
 }
 
 #[cfg(test)]

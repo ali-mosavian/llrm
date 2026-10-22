@@ -353,7 +353,10 @@ fn passing(
             let Some(found) = entry(arch, convention, variadic) else {
                 return refuse(format!("calling convention {convention}"));
             };
-            let pops = convention == llrm_mir::opcode::FAST || found.cleanup == Cleanup::Callee;
+            // `fastcc` is C's callee-pop twin unless the description states a
+            // `fastcc` of its own.
+            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
                 pops,
@@ -829,7 +832,7 @@ fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
 /// The x87 operation on st(0) each float function is. One no x87
 /// instruction is -- `fatan`, `flog2`, `fexp2` -- a frontend's finalizer
 /// spells as the sequence that computes it.
-pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
+pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 10] = [
     (FloatFunction::Fabs, "fabs"),
     (FloatFunction::Sqrt, "fsqrt"),
     (FloatFunction::Rint, "frndint"),
@@ -838,6 +841,8 @@ pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
     (FloatFunction::Atan, "fatan"),
     (FloatFunction::Log2, "flog2"),
     (FloatFunction::Exp2, "fexp2"),
+    (FloatFunction::Log, "fln"),
+    (FloatFunction::Exp, "fexp"),
 ];
 
 /// The width of a float value in LIR: x87's extended precision.
@@ -850,6 +855,9 @@ const MEMSET_STORES: i64 = 16;
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
 /// MaxStoresPerMemcpy; past it, `rep movs`.
 const MEMCPY_MOVES: i64 = 8;
+/// `MaxStoresPerMemcpyOptSize` (X86ISelLowering.cpp#L2939 at d1106deb71cc): a
+/// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
+const MEMCPY_MOVES_SIZE: i64 = 4;
 
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
@@ -1101,8 +1109,8 @@ pub fn selected_with<'c>(
     }
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
-    if cpu.rounds_float_spills {
-        body.float_bytes = Arc::new(float_bytes(module, function, &selector.values));
+    if cpu.rounds_float_spills || cpu.spills_extended {
+        body.float_bytes = Arc::new(float_bytes(module, function, &selector.values, cpu.spills_extended));
     }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
@@ -1236,11 +1244,13 @@ fn float_bytes(
     module: &Module,
     function: &Function,
     values: &IndexMap<ValueId, u32>,
+    extended: bool,
 ) -> std::collections::BTreeMap<u32, u32> {
     let mut bytes = std::collections::BTreeMap::new();
     for (&id, &number) in values {
         let Type::Float(kind) = module.context.types.get(function.value(id).ty) else { continue };
-        let size = match kind {
+        // D-RFP5: BASIC spills every x87 value at the register's width.
+        let size = match if extended { &FloatKind::X86Fp80 } else { kind } {
             FloatKind::Float => 4,
             FloatKind::Double => 8,
             FloatKind::X86Fp80 => 10,
@@ -2258,6 +2268,33 @@ impl Selector<'_, '_, '_> {
             self.function,
         );
         let mut odds = BlockOdds::default();
+        // A branch on a tree of compares is several branches; the probabilities
+        // of the one are shared out among them as FindMergedConditions does,
+        // so that the chain leaves by each target with the probability the
+        // branch gave it.
+        let mut merged: IndexMap<(i64, i64), f64> = IndexMap::default();
+        for block in made.keys() {
+            let terminator = self.function.terminator(*block).expect("a terminator");
+            let Some(merge) = self.merges.get(&terminator) else { continue };
+            let [_, Operand::Block(taken), Operand::Block(otherwise)] =
+                self.function.instruction(terminator).operands[..]
+            else {
+                continue;
+            };
+            let (on_taken, on_otherwise) = (
+                bpi.get_edge_probability_to(self.function, *block, taken).to_f64(),
+                bpi.get_edge_probability_to(self.function, *block, otherwise).to_f64(),
+            );
+            let chain = self.chains.get(&terminator).cloned().unwrap_or_default();
+            merged_odds(
+                merge,
+                block_at[block],
+                [block_at[&taken], block_at[&otherwise]],
+                [on_taken, on_otherwise],
+                &mut chain.iter().copied(),
+                &mut merged,
+            );
+        }
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
@@ -2269,6 +2306,19 @@ impl Selector<'_, '_, '_> {
             for one in chain {
                 if one.succ.len() < 2 {
                     continue;
+                }
+                if one.succ.iter().all(|to| merged.contains_key(&(one.at, *to))) {
+                    let total: f64 = one.succ.iter().map(|to| merged[&(one.at, *to)]).sum();
+                    if total > 0.0 {
+                        for to in &one.succ {
+                            odds.taken.insert(
+                                (one.at, *to),
+                                (merged[&(one.at, *to)] / total * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX))
+                                    as u32,
+                            );
+                        }
+                        continue;
+                    }
                 }
                 let known: f64 = one.succ.iter().filter_map(|to| taken.get(to)).sum();
                 let inner = one.succ.iter().filter(|to| !taken.contains_key(*to)).count();
@@ -3841,6 +3891,27 @@ impl Selector<'_, '_, '_> {
             let word = Loc::Imm(Imm { value: high, width: 2, address: None });
             self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
             return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset });
+        }
+        // A selector alone cast back to a far pointer is that selector:0 (the
+        // offset the near address had was dropped when the selector was
+        // taken).
+        if let ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) =
+            &self.module.context.get(id).kind
+            && let Type::Pointer(from) = self.types().get(self.module.context.get(*value).ty)
+            && self.layout.is_non_integral_address_space(*from)
+            && let Ok((global, _)) = crate::backend::globals::target(self.module, &self.layout, *value)
+        {
+            let Some(block) = self.current else { return refuse("a far constant outside a block") };
+            let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
+            let (space, index) = if self.module.global(global).address_space == self.spaces.near {
+                crate::hir::symbols::DGROUP
+            } else {
+                (Space::Group, crate::backend::globals::segment_of(global))
+            };
+            let selector = self.fresh_held(2);
+            let word = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
+            self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![word])));
+            return Ok(Pointer::Far { selector, base: None, index: None, scale: 1, offset: 0 });
         }
         // An address no global owns, near: its number, read as a direct
         // address.
@@ -5912,7 +5983,7 @@ impl Selector<'_, '_, '_> {
                     match (proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD)) {
                         (true, false) => self.memcpy(arguments, false, at, out),
                         (false, true) => self.memcpy(arguments, true, at, out),
-                        _ => refuse("a memmove whose direction no pass proved"),
+                        _ => self.memmove_loads_then_stores(arguments, at, out),
                     }
                 }
                 Some(Intrinsic::Unary(function)) => {
@@ -5921,10 +5992,15 @@ impl Selector<'_, '_, '_> {
                     };
                     let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                    out.push(insn(
+                    let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
-                    ));
+                    );
+                    // The sequence pushes above its operand: the stack's top
+                    // slots are not free for a value live across it.
+                    let scratch = llrm_x86::select::x87_scratch(name);
+                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    out.push(Arc::new(one));
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
@@ -6802,10 +6878,22 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
-    /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
-    /// from it, widest first, where only the bytes it names are read; else
-    /// `rep movsd` through es:di, the tail by `movsw` and `movsb`, as `memset`
-    /// does its fill.
+    /// most `MEMCPY_MOVES` pairs (`MEMCPY_MOVES_SIZE` tuned for size), each a
+    /// load into a register and a store from it, widest first, where only the
+    /// bytes it names are read; else `rep movsd` through es:di, the tail by
+    /// `movsw` and `movsb`, as `memset` does its fill.
+    ///
+    /// DEVIATE I1 (no number yet): beyond the moves the pin's
+    /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
+    /// the generic path, a `memcpy` libcall, for a size over
+    /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
+    /// `rep movsd` for both, the runtime having no `memcpy`. Exit: a runtime
+    /// `memcpy` (the C runtime's owner, runtime/c), then the libcall here.
+    ///
+    /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
+    /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
+    /// ours is `rep movsd` and a tail, `cpu.size` not telling -Os from -Oz.
+    /// Exit: a minsize flag from the driver options to the selector.
     fn memcpy(
         &mut self,
         arguments: &[Operand],
@@ -6825,6 +6913,68 @@ impl Selector<'_, '_, '_> {
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
     }
 
+    /// `llvm.memmove` whose direction no pass proved, of a constant length that
+    /// fits the inline limit: every chunk is loaded before any is stored, so
+    /// the sides may overlap however they lie
+    /// (`getMemmoveLoadsAndStores`,
+    /// [SelectionDAG.cpp#L9687](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L9687)).
+    /// DEVIATE: past the limit LLVM calls `memmove`; here the call is refused,
+    /// as before. The limit is `MEMCPY_MOVES` (x86's `MaxStoresPerMemmove` is
+    /// 8, 4 when optimizing for size; the memcpy expansion does not tell
+    /// them apart either).
+    fn memmove_loads_then_stores(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else {
+            return refuse("a memmove of other than four operands");
+        };
+        let refused = || refuse("a memmove whose direction no pass proved");
+        if self.is_huge(destination) || self.is_huge(source) {
+            return refused();
+        }
+        let Some(length) = self.length(length) else { return refused() };
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
+        if length / 4 + (length % 4).count_ones() as i64 > most {
+            return refused();
+        }
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let regs = self.regs();
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                chunks.push((offset, width));
+                offset += i64::from(width);
+            }
+        }
+        let mut held = Vec::new();
+        for &(offset, width) in &chunks {
+            let value = self.fresh_held(width);
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(value)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(offset), width))],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+            held.push(value);
+        }
+        for (&(offset, width), value) in chunks.iter().zip(held) {
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(offset), width))],
+                vec![Loc::Held(value)],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+        }
+        Ok(())
+    }
+
     /// `memcpy`'s lowering, between pointers made by the caller: a constant
     /// `length` (or the operand that holds it).
     #[allow(clippy::too_many_arguments)]
@@ -6842,8 +6992,9 @@ impl Selector<'_, '_, '_> {
         let regs = self.regs();
         let length = length.filter(|_| constant.is_none());
         let counted_operand = || length.expect("a length that is no constant is an operand");
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
         if let Some(length) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
+            && length / 4 + (length % 4).count_ones() as i64 <= most
         {
             let mut offset = 0;
             let mut chunks = Vec::new();
@@ -7800,6 +7951,43 @@ fn insn(
     what: Semantics,
 ) -> Arc<Insn> {
     Arc::new(insn_of(at, what))
+}
+
+/// The probabilities of the blocks of `merge`, started in `cur`, which goes to
+/// `targets` (taken, otherwise) with `probs`: FindMergedConditions'
+/// ([SelectionDAGBuilder.cpp#L2661](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L2661))
+/// split. `X | Y` gives its first branch A/2 and A/2+B and normalises the same
+/// pair for the second; `X & Y` gives A+B/2 and B/2 and normalises (A, B/2).
+/// What the blocks leave by is added to `out` by edge.
+fn merged_odds(
+    merge: &Merge,
+    cur: i64,
+    [taken, otherwise]: [i64; 2],
+    [on_taken, on_otherwise]: [f64; 2],
+    chain: &mut impl Iterator<Item = i64>,
+    out: &mut IndexMap<(i64, i64), f64>,
+) {
+    let normal = |a: f64, b: f64| if a + b > 0.0 { (a / (a + b), b / (a + b)) } else { (0.5, 0.5) };
+    match merge {
+        Merge::Leaf(_) => {
+            *out.entry((cur, taken)).or_insert(0.0) += on_taken;
+            *out.entry((cur, otherwise)).or_insert(0.0) += on_otherwise;
+        }
+        Merge::Node { conjunction, left, right, .. } => {
+            let next = chain.next().expect("a block for each node");
+            if *conjunction {
+                let first = [on_taken + on_otherwise / 2.0, on_otherwise / 2.0];
+                let (a, b) = normal(on_taken, on_otherwise / 2.0);
+                merged_odds(left, cur, [next, otherwise], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            } else {
+                let first = [on_taken / 2.0, on_taken / 2.0 + on_otherwise];
+                let (a, b) = normal(on_taken / 2.0, on_otherwise);
+                merged_odds(left, cur, [taken, next], first, chain, out);
+                merged_odds(right, next, [taken, otherwise], [a, b], chain, out);
+            }
+        }
+    }
 }
 
 /// The predicate of a compare of the flags of `x` against zero that tests

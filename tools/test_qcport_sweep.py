@@ -72,7 +72,7 @@ def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
     assert q.first_bad(commits, lambda c: None if c in unbuildable else int(c[1:]) >= 10) == "c13"
 
 
-def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(tmp_path):
+def test_the_sweep_compiles_the_basic_corpus_at_m16_and_m32_and_never_a_64_bit_machine(tmp_path):
     """ownf_local_pds71 and ownf_local_vbdos failed at -m32 with `@TOP: ptrtoint` (140 compiles in a full-corpus run) while tests/run, BASIC on m16 only, reported 0 fail."""
     corpus = tmp_path / "tests/run/qb"
     corpus.mkdir(parents=True)
@@ -82,5 +82,99 @@ def test_the_sweep_compiles_the_basic_corpus_at_m32_which_tests_run_never_does(t
     (corpus / "flat.bas").write_text("PRINT 1\n")
     (corpus / "huge.bas").write_text("' targets: x86-m16\nPRINT 2\n")
     jobs = q.extra_jobs(tmp_path)
-    assert [(s.name, m, l) for t, s, m, l in jobs if s.parent == corpus] == [("flat.bas", "-m32", "-O1"), ("flat.bas", "-m32", "-O2")]
+    assert sorted((s.name, m, l) for t, s, m, l in jobs if s.parent == corpus) == [("flat.bas", m, l) for m in ("-m16", "-m32") for l in ("-O1", "-O2")]
     assert {t for t, *_ in jobs} == {"llrm-nib", "llrm-qb"}
+
+
+def test_a_64_bit_machine_is_never_swept(tmp_path):
+    """The 64-bit targets have no Nib runtime and OMF has no 64-bit records: 238 of a sweep's failed compiles were `-m64`, none a finding."""
+    for crate, mode in (("a", 16), ("b", 32), ("c", 64), ("d", 64)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    (tmp_path / "tests/run/qb/flat.bas").write_text("PRINT 1\n")
+    assert {m for _, _, m, _ in q.extra_jobs(tmp_path)} == {"-m16", "-m32"}
+
+
+def test_a_program_is_swept_with_its_own_header_flags_and_a_by_design_refusal_is_not_a_failure(tmp_path):
+    """hugelp and hugerg (`--huge-arrays`, pds71) were swept bare and failed with a backend selection error, and the m16-only far_* programs failed at -m32 with the policy
+    refusal: both read as new compile failures. Seven kinds, none a finding, two of them stop-the-line rows."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "hugelp.bas").write_text("' dialect: pds71\n' flags: -O2 --huge-arrays\nPRINT 1\n")
+    (corpus / "far_poke.bas").write_text("PRINT 2\n")
+    (corpus / "broken.bas").write_text("PRINT 3\n")
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    fake = bins / "llrm-qb"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  *hugelp*) case "$*" in *--huge-arrays*) exit 0;; *) echo "Semantics(op=MOVE) failed to select" >&2; exit 1;; esac;;\n'
+        '  *far_poke*) case "$*" in *-m32*) echo "DEF SEG with a non-constant segment is not supported at one address space" >&2; exit 1;; *) exit 0;; esac;;\n'
+        '  *broken*) echo "internal error" >&2; exit 1;;\n'
+        "esac\nexit 0\n"
+    )
+    fake.chmod(0o755)
+    (bins / "llrm-nib").write_text("#!/bin/sh\nexit 0\n")
+    (bins / "llrm-nib").chmod(0o755)
+    failed = q.sweep_extra(bins, root=tmp_path)
+    assert sorted({program for program, _, _ in failed}) == ["broken.bas"], failed
+
+
+def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(tmp_path):
+    """farchk, hugelp, intrinsics_vbdos, stackdeep and their kin failed at -m32 with three messages (relocation overlaps, a far call in flat code) that were policy, not findings."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "flat.bas").write_text("PRINT 1\n")
+    (corpus / "far.bas").write_text("' dialect: pds71\nPRINT 2\n")
+    (corpus / "huge.bas").write_text("' flags: -O2 --huge-arrays\nPRINT 3\n")
+    (corpus / "frames.bas").write_text("' flags: -O2 --own-frames -fsanitize=stack\nPRINT 4\n")
+    (corpus / "vb.bas").write_text("' dialect: qb45 vbdos\nPRINT 5\n")
+    (corpus / "ms_runtime.bas").write_text("' flags: -O1 | -O2\n' dialect: qb45\nPRINT 6\n")
+    machines = {}
+    for tool, source, machine, level in q.extra_jobs(tmp_path):
+        if source.parent == corpus:
+            machines.setdefault(source.name, set()).add(machine)
+    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}, "ms_runtime.bas": {"-m16"}}, machines
+
+
+def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
+    """origin/feat/parity moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
+    binary.chmod(0o755)
+    moved = "f" * 40
+    real_run = q.subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return real_run(["echo", moved], *args, **kwargs)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(q.subprocess, "run", run)
+    monkeypatch.setattr(q, "sweep", lambda *a, **k: [])
+    monkeypatch.setattr(q, "sweep_extra", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    q.main()
+    header = capsys.readouterr().out.splitlines()[0]
+    assert "aaaaaaaaa" in header and "fffffffff" not in header
+
+
+def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho usage: llrm-c [-h] source\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    try:
+        q.main()
+    except SystemExit as why:
+        assert "no build stamp" in str(why)
+    else:
+        raise AssertionError("an unstamped binary was swept")

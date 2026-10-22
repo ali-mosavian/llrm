@@ -11,7 +11,7 @@
 //! (:2602) are not translated.
 //!
 //! DEVIATE 2: `narrowMathIfNoOverflow` (in `TryToNarrowDeduceFlags`),
-//! `foldUsingDistributiveLaws`, `isFreeToInvert` (`~X - ~Y`, :2587),
+//! `isFreeToInvert` (`~X - ~Y`, :2587),
 //! `tryFoldInstWithCtpopWithNot`, `foldSubOfMinMax` and everything from the
 //! select-of-sub fold (:2799) on are the next strip.
 //!
@@ -43,6 +43,7 @@ use llrm_mir::valuetracking::{known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_addsub::{add_to, factorize_math_with_shl_ops, will_not_overflow_signed_sub};
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_muldivrem::number::is_negated_power2;
 use crate::combine_shared::{binop, commutative, fold_constants, has_one_use, parts, query, simplify_visited, width};
 
@@ -592,7 +593,9 @@ pub fn visit_sub(
     if let Some(found) = fold_with_negator(c, inst, op0, op1, flags) {
         return found;
     }
-    // DEVIATE 2: foldUsingDistributiveLaws.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
     if width(c, op0) == 1 {
         return c.replace_with_binop(inst, BinaryOp::Xor, op0, op1, Flags::default());
     }

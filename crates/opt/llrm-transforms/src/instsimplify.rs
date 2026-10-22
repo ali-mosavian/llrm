@@ -32,17 +32,17 @@
 //! %b = mul i32 %a, 2   ; reads %x after the pass
 //! ```
 
+use llrm_analysis::effects::Declarations;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_analysis::effects::Declarations;
 use llrm_mir::memory::Callees;
+use llrm_mir::module::{Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::simplify::simplify_instruction_in;
+use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::local::is_instruction_trivially_dead;
-use llrm_mir::valuetracking::FunctionAnalyses;
 
 /// `RecursivelyDeleteTriviallyDeadInstructions`: `dead` erased, then each
 /// operand's defining instruction that nothing reads now.
@@ -55,7 +55,9 @@ fn delete_dead(
 ) {
     while let Some(inst) = dead.pop() {
         // One whose reader is still to go is met again through that reader.
-        if function.parent(inst).is_none() || !is_instruction_trivially_dead(context, callees, declarations, function, inst) {
+        if function.parent(inst).is_none()
+            || !is_instruction_trivially_dead(context, callees, declarations, function, inst)
+        {
             continue;
         }
         let operands = function.instruction(inst).operands.to_vec();

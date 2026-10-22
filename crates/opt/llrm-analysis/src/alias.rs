@@ -2286,16 +2286,30 @@ impl Effect {
             |one: &MemRef| one.pointer.is_none() && one.root.is_none() && one.base.is_none() && one.segment.is_none();
         let within = |old: &[MemRef], new: &[MemRef]| {
             let kept_slices = || old.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter());
-            let unknown_whole = kept_slices().any(|one| {
-                one.object.kind == MemoryKind::Unknown && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31
-            });
+            let whole = |kind: MemoryKind| {
+                kept_slices().any(|one| one.object.kind == kind && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31)
+            };
+            // `objects_may_alias` asks both objects addressed first, then the
+            // other one captured.
+            let reached = |slice: &Slice| slice.object.addressed() && slice.object.captured();
+            let unknown_whole = whole(MemoryKind::Unknown);
+            // What a callee may reach (`Nonlocal`) meets what escaped, a frame
+            // object aside: `objects_may_alias`' own rule.
+            let nonlocal_whole = whole(MemoryKind::Nonlocal);
             new.iter().all(|one| {
                 old.contains(one)
                     || (names_nothing(one)
                         && one.provenance.as_ref().is_some_and(|provenance| {
-                            provenance.slices.iter().all(|slice| {
-                                slice_covered(slice, kept_slices()) || (unknown_whole && slice.object.captured())
-                            })
+                            provenance
+                                .slices
+                                .iter()
+                                .all(
+                                    |slice| slice_covered(slice, kept_slices())
+                                        || (unknown_whole && reached(slice))
+                                        || (nonlocal_whole
+                                            && reached(slice)
+                                            && !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)),
+                                )
                         }))
             })
         };

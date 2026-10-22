@@ -317,8 +317,8 @@ cd:
     );
 }
 
-/// Cases 1 and 2 of `b0` go to `b1`, which is only a `switch` on `%x`: `b0` stayed a switch
-/// that sends them to `b1` for a second switch.
+/// Cases 1 and 2 of `b0` go to `b1`, which is only a `switch` on `%x`: `b0`
+/// stayed a switch that sends them to `b1` for a second switch.
 #[test]
 fn test_a_block_of_a_switch_folds_into_the_cases_that_reach_it() {
     check(
@@ -396,7 +396,8 @@ ce:
     );
 }
 
-/// The default of `b0` is `b1`, a lone `switch` on `%x` of other cases: they stayed two switches.
+/// The default of `b0` is `b1`, a lone `switch` on `%x` of other cases: they
+/// stayed two switches.
 #[test]
 fn test_a_switch_that_is_the_default_of_another_is_merged_into_it() {
     check(
@@ -478,8 +479,9 @@ ce:
     );
 }
 
-/// `b0` and `b1` both go to `end`, whose phi takes 10 from one and 20 from the other: the
-/// fold needs a block on `b1`'s edge, `end.fold.split`, or the phi would lose a value.
+/// `b0` and `b1` both go to `end`, whose phi takes 10 from one and 20 from the
+/// other: the fold needs a block on `b1`'s edge, `end.fold.split`, or the phi
+/// would lose a value.
 #[test]
 fn test_a_shared_successor_with_different_phi_inputs_is_split_first() {
     check(
@@ -558,7 +560,8 @@ end:
     );
 }
 
-/// `b0` branches on `%x == 1` to `b1`, a lone `switch` on `%x`: a branch and a switch stayed.
+/// `b0` branches on `%x == 1` to `b1`, a lone `switch` on `%x`: a branch and a
+/// switch stayed.
 #[test]
 fn test_a_switch_that_is_the_false_edge_of_a_compare_is_merged_into_it() {
     check(
@@ -629,8 +632,8 @@ ce:
     );
 }
 
-/// `b1` is its own default: the merged switch sends the rest to a block `infloop` that
-/// loops, as `b1` did.
+/// `b1` is its own default: the merged switch sends the rest to a block
+/// `infloop` that loops, as `b1` did.
 #[test]
 fn test_a_switch_whose_default_is_itself_gets_a_block_that_loops() {
     check(
@@ -697,8 +700,8 @@ infloop:
     );
 }
 
-/// `b2` is only a `switch` on `%x` and is reached from `entry` and `q`: each of them
-/// stayed a switch to `b2`.
+/// `b2` is only a `switch` on `%x` and is reached from `entry` and `q`: each of
+/// them stayed a switch to `b2`.
 #[test]
 fn test_a_lone_switch_is_folded_into_each_of_its_predecessors() {
     check(
@@ -796,8 +799,9 @@ cf:
     );
 }
 
-/// `b0` compares a pointer with `null` and `b1` switches on its `ptrtoint`: they stayed a
-/// branch and a switch; the merged switch takes a fresh `ptrtoint`, `%magicptr`.
+/// `b0` compares a pointer with `null` and `b1` switches on its `ptrtoint`:
+/// they stayed a branch and a switch; the merged switch takes a fresh
+/// `ptrtoint`, `%magicptr`.
 #[test]
 fn test_a_pointer_null_compare_and_a_switch_on_its_address_fold_through_magicptr() {
     check(
@@ -873,8 +877,8 @@ ce:
     );
 }
 
-/// `%key` is 3 for `%x == 5` and `%x` else: the switch stayed on `%key`. On `%x` it needs a
-/// case 5 to `%cb`, where 3 goes.
+/// `%key` is 3 for `%x == 5` and `%x` else: the switch stayed on `%key`. On
+/// `%x` it needs a case 5 to `%cb`, where 3 goes.
 #[test]
 fn test_a_select_of_the_value_adds_a_case_that_goes_where_its_constant_did() {
     check(
@@ -935,8 +939,8 @@ cd:
     );
 }
 
-/// `%key` is `%x` for `%x != 7` and 3 else: the switch stayed on `%key`. Case 7 now goes to
-/// `%cb` like 3, and `%cc` is gone.
+/// `%key` is `%x` for `%x != 7` and 3 else: the switch stayed on `%key`. Case 7
+/// now goes to `%cb` like 3, and `%cc` is gone.
 #[test]
 fn test_an_inverted_select_of_the_value_retargets_its_case() {
     check(
@@ -992,7 +996,8 @@ cd:
     );
 }
 
-/// `%key` is 3 or 7 by `%neg`: the switch on it stayed, with an edge to the default left over.
+/// `%key` is 3 or 7 by `%neg`: the switch on it stayed, with an edge to the
+/// default left over.
 #[test]
 fn test_a_select_of_two_constants_is_a_branch_on_its_condition() {
     check(
@@ -1047,7 +1052,8 @@ cc:
     );
 }
 
-/// `%key` is 3 or 5, and 5 is no case: the branch goes to `%cb` and the default.
+/// `%key` is 3 or 5, and 5 is no case: the branch goes to `%cb` and the
+/// default.
 #[test]
 fn test_a_select_of_a_case_and_a_value_none_has_goes_to_the_default() {
     check(
@@ -1101,8 +1107,8 @@ cd:
     );
 }
 
-/// Case 7 moves to `%end`, which already has an edge from `b0` through case 3: its phi
-/// needs a second input from `b0`, and loses the one it had from `%cc`.
+/// Case 7 moves to `%end`, which already has an edge from `b0` through case 3:
+/// its phi needs a second input from `b0`, and loses the one it had from `%cc`.
 #[test]
 fn test_a_retargeted_case_gives_the_new_destination_a_phi_input_per_edge() {
     check(
@@ -1153,5 +1159,296 @@ end:
 }
 ",
         &[&[0], &[3], &[7], &[9]],
+    );
+}
+
+/// A conditional branch on `%x == 1` reached only from a branch on the same
+/// compare, taking its false arm: its own true arm is dead (`opt` leaves one
+/// branch and drops `%u`). `simplifyCondBranch`'s call of
+/// `simplifyEqualityComparisonWithOnlyPredecessor` was not made.
+#[test]
+fn test_a_branch_on_the_value_its_only_predecessor_compared_is_a_jump() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  %d = icmp eq i16 %x, 1
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  store i16 3, ptr @g
+  br label %common.ret
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[1], &[7]],
+    );
+}
+
+/// A branch block of only its compare folds into the predecessor that compares
+/// the same value, which becomes a `switch`
+/// (`foldValueComparisonIntoPredecessors` for a `br`).
+#[test]
+fn test_a_branch_of_only_its_compare_folds_into_the_predecessors_branch() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 1
+  br i1 %c, label %t, label %b1
+
+b1:
+  %d = icmp eq i16 %x, 7
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %v [
+    i16 1, label %t
+    i16 7, label %u
+  ]
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 2, %u ], [ 3, %v ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+
+u:
+  store i16 2, ptr @g
+  br label %common.ret
+
+v:
+  store i16 3, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[1], &[7]],
+    );
+}
+
+/// The same with `ne`: the compare's sense picks which arm is the case.
+#[test]
+fn test_a_ne_branch_reached_by_the_equal_value_is_a_jump_to_the_other_arm() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp ne i16 %x, 3
+  br i1 %c, label %b1, label %t
+
+b1:
+  %d = icmp eq i16 %x, 3
+  br i1 %d, label %u, label %v
+
+t:
+  store i16 1, ptr @g
+  ret i16 1
+
+u:
+  store i16 2, ptr @g
+  ret i16 2
+
+v:
+  store i16 3, ptr @g
+  ret i16 3
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp ne i16 %x, 3
+  br i1 %c, label %b1, label %t
+
+b1:
+  store i16 3, ptr @g
+  br label %common.ret
+
+common.ret:
+  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  ret i16 %common.op
+
+t:
+  store i16 1, ptr @g
+  br label %common.ret
+}
+",
+        &[&[0], &[3], &[7]],
+    );
+}
+
+/// QCport `_pl_trace_box`: a chain `v == 0`, `v == 1`, `v == 2` on one value,
+/// each arm a store joining one block. The pin makes one `switch`; ours kept
+/// three `br i1` (5 more branches in the function, +73 B at -Os).
+#[test]
+fn test_a_chain_of_equality_branches_on_one_value_is_one_switch() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c0 = icmp eq i16 %x, 0
+  br i1 %c0, label %a, label %b
+
+b:
+  %c1 = icmp eq i16 %x, 1
+  br i1 %c1, label %c, label %d
+
+d:
+  %c2 = icmp eq i16 %x, 2
+  br i1 %c2, label %e, label %join
+
+a:
+  store i16 10, ptr @g
+  br label %join
+
+c:
+  store i16 11, ptr @g
+  br label %join
+
+e:
+  store i16 12, ptr @g
+  br label %join
+
+join:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %join [
+    i16 0, label %a
+    i16 1, label %c
+    i16 2, label %e
+  ]
+
+a:
+  store i16 10, ptr @g
+  br label %join
+
+c:
+  store i16 11, ptr @g
+  br label %join
+
+e:
+  store i16 12, ptr @g
+  br label %join
+
+join:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+",
+        &[&[0], &[1], &[2], &[3]],
+    );
+}
+
+/// hanoi (D10 copies): compares `x == 0, 1, 2` into one block with a phi of
+/// constants. The pin makes one `switch` (`out.fold.split` blocks); ours kept
+/// every compare.
+#[test]
+fn test_a_chain_of_equality_branches_into_one_phi_is_one_switch() {
+    check(
+        "define i32 @f(i32 %x) {
+b0:
+  %a = icmp eq i32 %x, 0
+  br i1 %a, label %out, label %b1
+
+b1:
+  %b = icmp eq i32 %x, 1
+  br i1 %b, label %out, label %b2
+
+b2:
+  %c = icmp eq i32 %x, 2
+  br i1 %c, label %out, label %b3
+
+b3:
+  %d = mul i32 %x, 7
+  br label %out
+
+out:
+  %r = phi i32 [ 0, %b0 ], [ 1, %b1 ], [ 3, %b2 ], [ %d, %b3 ]
+  ret i32 %r
+}
+",
+        "define i32 @f(i32 %x) {
+b0:
+  switch i32 %x, label %b3 [
+    i32 0, label %out
+    i32 1, label %out.fold.split
+    i32 2, label %out.fold.split1
+  ]
+
+b3:
+  %d = mul i32 %x, 7
+  br label %out
+
+out.fold.split:
+  br label %out
+
+out.fold.split1:
+  br label %out
+
+out:
+  %r = phi i32 [ 0, %b0 ], [ %d, %b3 ], [ 1, %out.fold.split ], [ 3, %out.fold.split1 ]
+  ret i32 %r
+}
+",
+        &[&[0], &[1], &[2], &[3], &[9]],
     );
 }

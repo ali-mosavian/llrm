@@ -181,7 +181,7 @@ pub(super) fn numbered(
 }
 
 /// Each handler `function`'s ON ERROR GOTOs name, in the order they first do.
-fn handlers(function: &model::Function) -> Emit<Vec<i64>> {
+pub(super) fn handlers(function: &model::Function) -> Emit<Vec<i64>> {
     let mut handlers: Vec<i64> = function.error_handler.into_iter().collect();
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
         let Some((handler, _)) = instruction
@@ -431,7 +431,7 @@ impl Body<'_, '_, '_> {
             self.blocks.insert(block.id, id);
         }
         self.b.position(entry);
-        self.allocate(None)?;
+        self.allocate(None, &[])?;
         let word = self.b.context.types.int(16);
         let (err, erl) = (self.b.parameter(0), self.b.parameter(1));
         self.b.store(erl, handler.last_erl, false);

@@ -393,7 +393,7 @@ pub fn drop_poison_generating_flags(
 
 /// Sets `flag` on `inst` to `on` (`setHasNoUnsignedWrap`,
 /// `setHasNoSignedWrap`).
-fn set_flag(
+pub(crate) fn set_flag(
     c: &mut Combiner,
     inst: InstId,
     flag: Flags,
@@ -412,7 +412,7 @@ fn set_flag(
 }
 
 /// `simplifyBinOp(Opcode, L, R, SQ.getWithInstruction(&I))`.
-fn simplify_binop(
+pub(crate) fn simplify_binop(
     c: &Combiner,
     inst: InstId,
     op: BinaryOp,

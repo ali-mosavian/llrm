@@ -1362,16 +1362,7 @@ impl<'a> Unit<'a> {
     /// not seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
-            Some(registers) => {
-                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
-                    let fresh = crate::consts::known(&Unit { registers: None, ..*self });
-                    assert!(
-                        *registers == fresh,
-                        "the registers a unit carries are not those of the body it stands over: stale"
-                    );
-                }
-                Cow::Borrowed(registers)
-            }
+            Some(registers) => Cow::Borrowed(registers),
             None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
@@ -1887,9 +1878,11 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
-/// The accesses worked out for a version of a function, and which version.
+/// The accesses worked out for a version of a function, and which version:
+/// of its text, the spaces and the globals the unit lists (a unit with none
+/// finds no root a global variable, `object`).
 struct Held {
-    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces, usize),
     seen: std::rc::Rc<
         std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, (Option<std::rc::Rc<MemRef>>, Option<u32>)>>,
     >,
@@ -2064,7 +2057,7 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let key = (unit.function.mark(), unit.spaces());
+        let key = (unit.function.mark(), unit.spaces(), unit.globals.len());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
             held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))

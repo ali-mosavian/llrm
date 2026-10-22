@@ -55,7 +55,8 @@ pub fn canonicalized(
     canonicalized_in(&mut session, context, layout, function, outer)
 }
 
-/// [`canonicalized`] over `session`, whose expressions are valid for `function`.
+/// [`canonicalized`] over `session`, whose expressions are valid for
+/// `function`.
 pub fn canonicalized_in(
     session: &mut ScevSession,
     context: &mut Context,
@@ -67,6 +68,7 @@ pub fn canonicalized_in(
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
+        crate::loopfilter::retain(&mut headers);
         headers
     };
     let mut changed = false;
@@ -76,10 +78,7 @@ pub fn canonicalized_in(
         let (simple, exiting) = {
             let cx = env.cx(&*context, &*function);
             match cx.loops.get_loop_for(header) {
-                Some(found) => (
-                    found.is_loop_simplify_form(cx.function),
-                    found.get_exiting_blocks(cx.function),
-                ),
+                Some(found) => (found.is_loop_simplify_form(cx.function), found.get_exiting_blocks(cx.function)),
                 None => continue,
             }
         };

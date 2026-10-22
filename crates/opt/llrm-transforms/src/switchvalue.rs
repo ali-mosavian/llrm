@@ -1,6 +1,7 @@
 //! The value-comparison steps of `simplifySwitch`
-//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)): a `switch` on a value its predecessors compare with
-//! constants too, folded with them, and a `switch` on a `select`. LLVM's
+//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)):
+//! a `switch` on a value its predecessors compare with constants too, folded
+//! with them, and a `switch` on a `select`. LLVM's
 //! [`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973),
 //! [`foldValueComparisonIntoPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1475)
 //! with
@@ -14,8 +15,10 @@
 //! with the helpers
 //! [`isValueEqualityComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L866),
 //! [`getValueEqualityComparisonCases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L899),
-//! `eliminateBlockCases` ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
-//! and `valuesOverlap` ([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
+//! `eliminateBlockCases`
+//! ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
+//! and `valuesOverlap`
+//! ([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
 //!
 //! # How it works
 //! A block with one predecessor that compares the same value (a `switch`, or
@@ -46,10 +49,10 @@
 //! |---|---|
 //! | D1 | No branch weights, no `DomTreeUpdater`. |
 //! | D2 | A pointer compared with `inttoptr` of a constant is not a value comparison (`getConstantInt`'s `inttoptr` arm); `null` is. |
-//! | D3 | The calls from `simplifyCondBranch` ([L8963](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8963)) are not made: only a `switch` is rewritten, a conditional branch is only read as a predecessor. Exit: call them from `simplifycfg::block_simplified` (llrm-w-4, 2026-10-27). |
 //!
 //! # Used by
-//! `switchopt::simplified`, the first step.
+//! `switchopt::simplified`, the first step, and `simplifycfg::block_simplified`
+//! for a conditional branch (`simplifyCondBranch`'s value comparisons).
 
 use std::collections::BTreeMap;
 
@@ -276,6 +279,14 @@ fn only_predecessor_simplified(
         if !values_overlap(&pred_cases, &this_cases) {
             return false;
         }
+        if function.instruction(switch).opcode == Opcode::Br {
+            // Okay, one of the successors of this condbr is dead: it becomes a
+            // jump to the default, and the dead edge loses its phi input.
+            assert_eq!(this_cases.len(), 1, "a branch has one case");
+            function.predecessor_removed(context, this_cases[0].dest, pred_default, false);
+            jump_made(context, spec, function, switch, this_default);
+            return true;
+        }
         let dead: HashSet<u128> = pred_cases.iter().map(|case| case.value).collect();
         let mut operands = function.instruction(switch).operands.clone();
         let mut at = operands.len();
@@ -341,10 +352,10 @@ impl NewSuccessors {
     }
 }
 
-/// `performValueComparisonIntoPredecessorFolding`: the terminator `pred_terminator`
-/// of a predecessor rebuilt as a `switch` that does what it and the `switch`
-/// of `block` did together. A compared pointer is cast to an integer first,
-/// and `value` becomes the cast.
+/// `performValueComparisonIntoPredecessorFolding`: the terminator
+/// `pred_terminator` of a predecessor rebuilt as a `switch` that does what it
+/// and the `switch` of `block` did together. A compared pointer is cast to an
+/// integer first, and `value` becomes the cast.
 fn folded_into_predecessor(
     context: &Context,
     spec: &Speculation,
@@ -491,7 +502,8 @@ fn folded_into_predecessors(
         }
         for successor in incompatible_successors(function, block, pred) {
             let split = edges::split_block_predecessors(function, successor, &[block]);
-            // `SplitBlockPredecessors(.., ".fold.split")` places it before `successor`.
+            // `SplitBlockPredecessors(.., ".fold.split")` places it before
+            // `successor`.
             let name = format!("{}.fold.split", function.block(successor).name.as_deref().unwrap_or(""));
             function.set_block_name(split, &name);
             let before = function.layout().iter().position(|&one| one == successor).and_then(|at| at.checked_sub(1));
@@ -516,8 +528,9 @@ fn destination_of(
 }
 
 /// `simplifySwitchOnSelectRemap`
-/// ([L5083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)): `switch (select (icmp eq %x, C), K, %x)`
-/// switches on `%x`, `C` going where `K` did. `negate` is for `icmp ne`.
+/// ([L5083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)):
+/// `switch (select (icmp eq %x, C), K, %x)` switches on `%x`, `C` going
+/// where `K` did. `negate` is for `icmp ne`.
 #[allow(clippy::too_many_arguments)]
 fn select_remapped(
     context: &Context,
@@ -667,16 +680,27 @@ pub fn folded(
     {
         return true;
     }
+    // `simplifySwitchOnSelect` is a step of `simplifySwitch` alone.
     let select = defining(function, function.instruction(switch).operands[0])
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Select);
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Select)
+        .filter(|_| function.instruction(switch).opcode == Opcode::Switch);
     if let Some(select) = select
         && switch_on_select_simplified(context, spec, function, block, switch, select)
     {
         return true;
     }
-    // A block of only the switch folds into its predecessors.
-    function.iter_block(block).next() == Some(switch)
-        && folded_into_predecessors(context, spec, function, block, switch, value)
+    // A block of only the terminator, and for a branch the compare it reads,
+    // folds into its predecessors.
+    let condition = defining(function, function.instruction(switch).operands[0]);
+    let empty = {
+        let mut instructions = function.iter_block(block);
+        match instructions.next() {
+            Some(first) if first == switch => true,
+            Some(first) => Some(first) == condition && instructions.next() == Some(switch),
+            None => false,
+        }
+    };
+    empty && folded_into_predecessors(context, spec, function, block, switch, value)
 }
 
 #[cfg(test)]

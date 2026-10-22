@@ -113,6 +113,7 @@ pub fn program(
         valueless: &valueless,
         param_facts: &param_facts,
         lifetimes: profile.lifetimes,
+        expects: profile.expects,
     };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
@@ -677,6 +678,8 @@ struct Shared<'a> {
     /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and
     /// up).
     lifetimes: bool,
+    /// Whether `__builtin_expect` is the `llvm.expect` intrinsic.
+    expects: bool,
 }
 
 /// The blocks (by order of opening) that a jump enters from outside them: their
@@ -3621,6 +3624,61 @@ impl<'a, 't> Body<'a, 't> {
             Got::Function(symbol) => &unit.symbols[&symbol],
             _ => &unit.symbols[&call.symbol],
         };
+        // GNU C's builtins: the table lowers them, or the unit is refused.
+        if matches!(target, Got::Function(_))
+            && symbol.imported()
+            && let Some(name) = symbol.name.strip_prefix("__builtin_")
+        {
+            return match crate::builtins::lowering(name) {
+                Some(crate::builtins::Lowering::Identity) => {
+                    // `parms` lists the arguments last first: the first
+                    // argument of the source is the last of
+                    // them.
+                    let mut values = Vec::new();
+                    for (node, type_) in &call.parms {
+                        values.push(self.value_as(node, type_)?);
+                    }
+                    let Some(&first) = values.last() else {
+                        return refuse(format!("{}: __builtin_{name} called with no argument", self.name()));
+                    };
+                    // clang's `__builtin_expect`: the intrinsic where it
+                    // optimizes (`lower-expect` makes it branch weights), the
+                    // argument below.
+                    if self.shared.expects
+                        && name == "expect"
+                        && let [expected, _] = values[..]
+                        && let Shape::Int(width, _) = self.shape(first)
+                    {
+                        let ty = self.type_of(first);
+                        let expected = self.fitted(expected, ty);
+                        let callee = format!("llvm.expect.i{}", width * 8);
+                        self.callable(&callee);
+                        let result = self.value(ty);
+                        self.call_site(
+                            Some(&callee),
+                            Some(result),
+                            vec![value_ref(first), value_ref(expected)],
+                            // Passed last operand first, as the call sites
+                            // above list them.
+                            vec![1, 0],
+                            StackCleanup::Caller,
+                            CallDistance::Near,
+                            None,
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                        );
+                        return Ok(Got::Returned(Some(result)));
+                    }
+                    Ok(Got::Returned(Some(first)))
+                }
+                Some(other) => refuse(format!(
+                    "{}: __builtin_{name} is {other:?}, a define of the predefined header, and reached the translator",
+                    self.name()
+                )),
+                None => refuse(format!("{}: unsupported builtin __builtin_{name}", self.name())),
+            };
+        }
         // bcc -O's builtin: the library's fabs is the x87 instruction.
         if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
             && symbol.name == "fabs"
@@ -4238,6 +4296,51 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
+    }
+
+    /// `__builtin_expect(x, 0)` is clang's `llvm.expect` where it optimizes
+    /// (the arguments in source order: the value, then the expected one) and
+    /// its argument below: without the intrinsic `lower-expect` had nothing to
+    /// make branch weights of.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn builtin_expect_is_the_intrinsic_when_optimizing_and_its_argument_below() {
+        let source = "int __cdecl f(int x) { return __builtin_expect(x, 0); }\n";
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let record = |expects: bool| {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("x.c");
+            std::fs::write(&path, source).unwrap();
+            let mut profile = crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap();
+            profile.expects = expects;
+            let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+            let program =
+                super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
+            let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+            assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+            defined(&emitted.module, "_f")
+        };
+        let optimized = record(true);
+        let call = optimized.lines().find(|line| line.contains("@llvm.expect.i16(")).expect("the intrinsic");
+        assert!(call.contains(", i16 0)") && !call.contains("i16 0,"), "{optimized}");
+        assert!(!record(false).contains("llvm.expect"));
+    }
+
+    /// A GNU C builtin the table lacks was a call of an undefined extern,
+    /// found by the linker if at all: it is refused here, by name.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn an_unknown_builtin_is_refused_with_its_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, "int __cdecl f(int x) { return __builtin_popcount(x); }\n").unwrap();
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let profile = crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let refused = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile)
+            .err()
+            .expect("refused");
+        assert!(format!("{refused:?}").contains("unsupported builtin __builtin_popcount"), "{refused:?}");
     }
 
     /// CGCall.cpp `DetermineNoUndef`: a scalar argument of a call is

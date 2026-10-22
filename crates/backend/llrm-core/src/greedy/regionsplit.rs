@@ -1132,7 +1132,7 @@ impl Splitter<'_> {
         let crosses_mask = self.matrix_crosses_reg_mask(virt);
         if crosses_mask {
             let (bstart, bend) = *self.lis.indexes.get_mbb_range(bi.mbb);
-            let masks = self.matrix.fixed().reg_mask_range(bstart, bend);
+            let masks = self.matrix.fixed().reg_mask_range_in_block(bi.mbb, bstart, bend);
             // Only the instructions that destroy registers are regmasks
             // (`getRegMaskSlotsInBlock`).
             let fixed = self.matrix.fixed();

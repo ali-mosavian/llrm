@@ -271,6 +271,11 @@ pub struct UnrollingPreferences {
     pub force: bool,
     pub upper_bound: bool,
     pub max_iterations_count_to_analyze: u32,
+    /// `UnrollAndJam`: unroll and jam the loop nest (the pin's default: no).
+    pub unroll_and_jam: bool,
+    /// `UnrollAndJamInnerLoopThreshold`: the size the jammed inner loop may
+    /// have (the pin's default: 60).
+    pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
 /// The target a cost is for.
@@ -288,12 +293,20 @@ pub trait Tti {
         true
     }
 
-    /// The most an `optsize` caller's inline may add over the call it removes,
-    /// in inline-cost units, where the target prices it apart from LLVM's
-    /// `OptSizeThreshold` (SZ1); none: the pin's 50. X86: 0, a callee that
-    /// stays is not copied into a caller that is built for size.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        None
+    /// Whether an `optsize` caller's inline of a callee that stays must not
+    /// grow the code: the callee's `CodeSize` over the instructions the
+    /// inline cost did not fold, against the call and the pushes of its
+    /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        false
+    }
+
+    /// How many percent of its `CodeSize` units a call and the pushes of its
+    /// arguments take in code, where they are bigger than the average
+    /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
+    /// 3 for an ALU instruction); 100: as counted.
+    fn call_code_size_percent(&self) -> i64 {
+        100
     }
 
     /// The cost of an integer-to-float cast whose operand is a load, where the
@@ -436,6 +449,22 @@ pub trait Tti {
         scale: i64,
     ) -> bool;
 
+    /// `isLegalAddressingMode` in address space `addr_space` (LLVM's `AS`): a
+    /// space can have fewer forms than the machine's, as a huge pointer's
+    /// offset carries into its selector and takes no index. By default every
+    /// space has the target's forms.
+    fn is_legal_addressing_mode_in(
+        &self,
+        addr_space: u32,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = addr_space;
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -544,6 +573,15 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// Instructions a scaled index (`base + scale * index`, scale above 1)
+    /// costs beyond the address itself, once for each scaled register: the
+    /// backend forms it once and every use of the register shares it. 0
+    /// where the scale is part of the address form, as at the pin (DEVIATE
+    /// LU1, `lsr_use.rs`).
+    fn scaled_index_insns(&self) -> u32 {
+        0
     }
 
     /// `getCastInstrCost`.
@@ -916,6 +954,17 @@ mod access_tests {
                 self.0.is_legal_addressing_mode(gv, offset, base, scale)
             }
 
+            fn is_legal_addressing_mode_in(
+                &self,
+                addr_space: u32,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> bool {
+                self.0.is_legal_addressing_mode_in(addr_space, gv, offset, base, scale)
+            }
+
             fn cast_cost(
                 &self,
                 op: CastKind,
@@ -956,6 +1005,8 @@ mod access_tests {
             force: false,
             upper_bound: false,
             max_iterations_count_to_analyze: 0,
+            unroll_and_jam: false,
+            unroll_and_jam_inner_loop_threshold: 0,
         };
         Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
         assert_eq!(up.max_count, 7);

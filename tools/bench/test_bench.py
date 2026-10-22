@@ -703,3 +703,59 @@ def test_lang_keeps_the_other_languages_out_of_the_run(monkeypatch):
     assert {one.language for one in bench.variants(bench.BENCH / "fib")} == {"c"}
     monkeypatch.setattr(bench, "ONLY", None)
     assert {"c", "bas"} <= {one.language for one in bench.variants(bench.BENCH / "fib")}
+
+
+def test_a_row_whose_kernel_the_compiler_folded_away_is_marked_and_out_of_the_geomeans(tmp_path, monkeypatch):
+    """parity branch, loop, qlight and qmove at bq32 -Os ran, printed the right text and counted 0 instructions: the kernel is a constant. A zero
+    is no ratio and no clocks, and the row was silently absent from the table."""
+    root = tmp_path
+    for name, instructions in (("kept", 10), ("gone", 0)):
+        (root / name).mkdir()
+        (root / name / "bench.toml").write_text('[region]\nc = "f"\n')
+        bench.write_expected(root / name, {(name, "bcc", "O2"): {"instructions": 20, "memory_operands": 4, "code_bytes": 40, "data_bytes": 0, "bss_bytes": 0}}, name, "t")
+    measured = {(n, "c", "O2"): {"instructions": i, "memory_operands": 2, "code_bytes": 20, "data_bytes": 0, "bss_bytes": 0} for n, i in (("kept", 10), ("gone", 0))}
+    monkeypatch.setattr(bench, "BENCH", root)
+    text = "\n".join(bench.standing(measured, [], ["O2"]))
+    assert "instructions -50.0% (n=1)" in text and "folded, out of the geomeans: gone" in text, text
+    assert bench.clock_lines({("gone", "c", "O2"): {"instructions": 0}}, ["gone"]) == ["gone c -O2: folded (the kernel is never entered)"]
+    assert not bench.folded({"error": "run: timeout", "instructions": 0}) and not bench.folded({"instructions": 3})
+
+
+def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline():
+    """`-fno-inline=NAME` (DEVIATE 1 of driver/flags.rs): without `-fno-inline-functions`, fib's and frames' kernels inline into main, and the harness
+    has no kernel to enter ("region never entered", 112 of 287 rows of the flag table). Marked by name, the kernel is a call and crc's helpers
+    (B$FMID, B$FASC) still inline into it."""
+    import re
+    import subprocess
+    import tempfile
+
+    def asm(program: str, *extra: str) -> str:
+        with tempfile.TemporaryDirectory() as where:
+            out = Path(where) / "p.s"
+            done = subprocess.run(
+                [str(bench.BIN / "llrm-qb"), str(bench.BENCH / program / f"{program}.bas"), "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-finline-functions", "-fno-inline-functions-called-once", *extra, "-S", "-o", str(out)],
+                capture_output=True,
+                text=True,
+            )
+            assert done.returncode == 0, done.stderr
+            return out.read_text()
+
+    def calls(text: str, name: str) -> int:
+        return len(re.findall(rf"call.*\b{name}\b", text))
+
+    assert calls(asm("fib"), "BENCHFIB") == 0, "unmarked, the kernel inlines into main"
+    assert calls(asm("fib", "-fno-inline=BenchFib"), "BENCHFIB") == 1
+    crc = asm("crc", "-fno-inline=BenchCrc")
+    kernel = crc.split("BENCHCRC proc")[1].split("BENCHCRC endp")[0]
+    assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
+
+
+def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
+    import subprocess
+
+    done = subprocess.run(
+        [str(bench.BIN / "llrm-qb"), str(bench.BENCH / "fib" / "fib.bas"), "--dialect", "qb45", "-fqb-runtime=llrm", "-fno-inline=NoSuchKernel", "-o", "/dev/null"],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode != 0 and "defines no function of that name" in done.stderr
