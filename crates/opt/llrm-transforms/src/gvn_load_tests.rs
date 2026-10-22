@@ -166,6 +166,43 @@ fn test_a_load_partly_available_is_loaded_in_the_predecessor_that_lacks_it() {
     assert!(!text.contains("b3:\n  %r = load"), "{text}");
 }
 
+/// x_heapsort's sift loop: the child's element is loaded on the arm that chose
+/// it by a select of two indexes, not on the other arm. The GEPs off `@g` are
+/// in blocks that dominate both arms, but the translation of the address into an
+/// arm found none (a global has no use list), so the load stayed in the join:
+/// one load more per trip.
+const SELECTED: &str = "define i16 @f(i16 %i, i1 %c) {
+b0:
+  %p0 = getelementptr i16, ptr @g, i16 %i
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %v0 = load i16, ptr %p0
+  %j = add i16 %i, 1
+  %p1 = getelementptr i16, ptr @g, i16 %j
+  %v1 = load i16, ptr %p1
+  %lt = icmp slt i16 %v0, %v1
+  %s = select i1 %lt, i16 %j, i16 %i
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %k = phi i16 [ %s, %b1 ], [ %i, %b2 ]
+  %pk = getelementptr i16, ptr @g, i16 %k
+  %r = load i16, ptr %pk
+  ret i16 %r
+}
+";
+
+#[test]
+fn test_a_load_of_a_global_array_element_chosen_by_a_select_is_loaded_in_the_arm_that_lacks_it() {
+    let (text, changed) = loaded(SELECTED, &[&[0, 1], &[0, 0], &[3, 1], &[3, 0]]);
+    assert!(changed && text.contains(".pre = load i16, ptr %p0"), "{text}");
+    assert!(!text.contains("b3:\n  %k = phi i16 [ %s, %b1 ], [ %i, %b2 ]\n  %pk"), "{text}");
+}
+
 /// The unrelated arm must not acquire a read that could fault or observe
 /// memory: the load goes on the edge, taken or not.
 #[test]
