@@ -197,9 +197,12 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD21 | sdag-c | no `mayRaiseFPException`/`NoFPExcept` in the interpreter | `llrm-dagisel/src/interp.rs` |
 | SD22 | sdag-c | no `MatchStateUpdater` around complex patterns | `llrm-dagisel/src/interp.rs` |
 | SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
+| SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
+| SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
 | SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
 
-Next free: **SD33**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
+Next free: **SD34**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
