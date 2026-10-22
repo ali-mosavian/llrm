@@ -1918,3 +1918,19 @@ fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
     ]);
     assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
 }
+
+/// `HoistCommonCodeInSuccs` (L2043): both ways begin with `mov cx, 5` and this
+/// block is the only way into either; it runs once, ahead of the compare.
+#[test]
+fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let set = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![imm(5)], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![set(4), _move(5, bx()), _return(6)], vec![]).into(),
+        block(9, vec![set(9), _move(10, cx()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "mov cx, 5").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
+    let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
+    assert!(at < compare, "{lines:?}");
+}
