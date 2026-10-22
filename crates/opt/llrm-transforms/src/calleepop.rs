@@ -25,7 +25,7 @@
 //! (`return_pops`).
 //!
 //! Where the description gives a private function a convention of its own
-//! (`private`, as the x86 m32 description does with `watcall32`), every
+//! (`private`, as the x86 m32 description does with `fastcc32`), every
 //! internal, non-variadic function whose convention may be replaced takes that
 //! one, with the calls of it, under any ABI the program has. No price is asked:
 //! registers cost no more than the stack at either end.
