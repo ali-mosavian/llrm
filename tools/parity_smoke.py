@@ -443,6 +443,29 @@ def group_failures(
     return names
 
 
+def touches_the_compiler(files: list[str] | set[str]) -> bool:
+    """Whether a PR changes a crate: any of them can change what a QCport module compiles to, and QCport's `item` stopped compiling at four levels on a mid-end PR
+    (#3422) the gate passed, because it compiled four QCport modules at -O2."""
+    return any(path.startswith("crates/") for path in files)
+
+
+def qcport_failures(
+    bins: Path | str,
+    sweep=None,
+) -> set[str]:
+    """The failing `qc <module> <level>` of every QCport module (all 65) at all four levels on `bins`: 260 compiles, 3 s of wall at 8 at a time. Nothing when the QCport sources are
+    not on this host (the `qc_modules` step says so)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
+    import qcport_sweep  # noqa: PLC0415
+
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    if not qcport.is_dir() or not include.is_dir():
+        return set()
+    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / "llrm-c", qcport, include)}
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:

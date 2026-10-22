@@ -812,6 +812,15 @@ def compute_head_group_failures() -> set[str]:
     return parity_smoke_module().group_failures(smoke_bins())
 
 
+def compute_head_qcport_failures() -> set[str]:
+    """Every QCport module's failing compiles on the head itself, once per head sha (the PR's own run is never cached)."""
+    stage("head-qcport")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().qcport_failures(smoke_bins())
+
+
 def merge(number: str, known: dict[str, str] | None = None) -> int:
     with land_lock():
         return _merge(number, known)
@@ -832,6 +841,9 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     whole = parity_smoke_module().runs_whole_groups(files)
     if whole:
         head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
+    compiler = parity_smoke_module().touches_the_compiler(files)
+    if compiler:
+        head_failed = head_failed | head_failures(tested_base, compute_head_qcport_failures, cache=HEAD_FAILURES / "qcport")
     merged, why = merged_result(info["headRefOid"])
     if merged is None:
         print(f"REFUSED: {why}")
@@ -846,6 +858,8 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     print(last)
     if whole:
         merged_failed = merged_failed | parity_smoke_module().group_failures(smoke_bins())
+    if compiler:
+        merged_failed = merged_failed | parity_smoke_module().qcport_failures(smoke_bins())
     if unit_tests_of(merged_failed - head_failed):
         git("checkout", "-q", "--detach", BASE)
         head_failed = head_expanded(head_failed, merged_failed, failing_on_checkout)
