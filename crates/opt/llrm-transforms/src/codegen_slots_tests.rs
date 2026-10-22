@@ -157,10 +157,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Canonicalize Freeze Instructions in Loops",
-        Missing,
+        Match,
+        "canonfreeze.rs",
         "",
-        "",
-        "funcattrs-port; 2026-11-13: (premise below: start only where ours exceeds pin-with) MIR has `freeze`; LSR's canon-freeze is not run. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
+        "translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
     ),
     row(
         "Induction Variable Users",
@@ -329,10 +329,10 @@ const ROWS: &[Row] = &[
     // Machine SSA.
     row(
         "Early Tail Duplication",
-        Missing,
+        Deviate,
         "jumps/ (late tail duplication only)",
         "-disable-early-taildup",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry slot early-tailduplication. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ",
+        "CG3: early tail duplication is not translated; reason: on our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs (-O3 the same); cost: that; exit: decide with the ret duplication of STRISTMP-1 (main duplicates `ret` into both arms, ours does not) and re-measure; owner w-3; review 2026-11-20. Registry slot early-tailduplication. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ",
     ),
     row(
         "Optimize machine instruction PHIs",
@@ -389,7 +389,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "licm (mid-end), loopslots.rs for reloads",
         "-disable-machine-licm",
-        "CG2: the mid-end `licm` hoists, `loopslots.rs` hoists reloads, and no machine pass with a register-pressure gate follows; reason: the premise test (docs/working/early-machinelicm.md) shows the pin's pass worth 7 of 4190 (m32 -O2) and 12 of 2675 (m32 -Os) in-loop instructions, 754 of 47619 (1.6%) at m16 -O2 and 204 of 36905 at m16 -Os; cost: that m16 -O2 residual; exit: attribute the 754 by kind on mdl_ai, cmd, sc, ent and weapons, then a mid-end fix or the pass; owner w-3; review 2026-11-13. Pin: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 584 instr 1788 B, pin-with 506 instr 1645 B, pin-without 504 instr 1645 B (3 programs); -Os: ours 188 instr 494 B, pin-with 180 instr 511 B, pin-without 177 instr 506 B (2 programs)",
+        "CG2: the mid-end `licm` hoists, `loopslots.rs` hoists reloads, and no machine pass with a register-pressure gate follows; reason: the premise test (docs/working/early-machinelicm.md) shows the pin's pass worth 7 of 4190 (m32 -O2) and 12 of 2675 (m32 -Os) in-loop instructions, 754 of 47619 (1.6%) at m16 -O2 and 204 of 36905 at m16 -Os; cost: that m16 -O2 residual; attribution (tools/pairs/mlicm_kinds.py): the net 657 in mdl_ai, cmd, sc, ent and weapons is diffuse (moves 82, loads 80, push/add-esp/call 136, lea 23, x87 loads and stores 70): no kind the mid-end `licm` could take; exit: none planned; owner w-3; review 2026-11-13. Pin: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 584 instr 1788 B, pin-with 506 instr 1645 B, pin-without 504 instr 1645 B (3 programs); -Os: ours 188 instr 494 B, pin-with 180 instr 511 B, pin-without 177 instr 506 B (2 programs)",
     ),
     row(
         "Machine Common Subexpression Elimination",
@@ -429,10 +429,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 Fixup SetCC",
-        Missing,
+        Match,
+        "fixupsetcc.rs",
         "",
-        "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 41 (-O2) and 40 (-Os) of 77 IRs",
+        "translated (registry fixupsetcc@5). Pin: changed code in 41 (-O2) and 40 (-Os) of 77 IRs",
     ),
     row(
         "X86 LEA Optimize",
@@ -478,10 +478,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 DynAlloca Expander",
-        Missing,
+        Na,
         "",
         "",
-        "funcattrs-port; 2026-11-13: (premise below: start only where ours exceeds pin-with) dynamic alloca needs an HIR op (builtins row B2). Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
+        "the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: for `alloca i8, i32 %n` on i486-linux its llc emits the rounded `sub esp` with no pseudo and no probe (a `probe-stack` function gets an inline probe loop, no frontend sets it); `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin",
     ),
     row(
         "Tile Register Pre-configure",
@@ -664,10 +664,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
-        Missing,
+        Match,
+        "latecleanup.rs",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 13 (-O2) and 12 (-Os) of 77 IRs",
+        "translated (slot latecleanup@13, after prologue); DEVIATE LC1: immediates only, no frame-register load-address. Pin: changed code in 13 (-O2) and 12 (-Os) of 77 IRs. Ours on the 71 bench programs: 6 objects change, all smaller (-17..-24 B)",
     ),
     row(
         "Control Flow Optimizer",
@@ -678,10 +678,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Tail Duplication",
-        Missing,
+        Deviate,
         "jumps/ ",
         "-disable-tail-duplicate",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ",
+        "CG4: late tail duplication is not translated; reason: -disable-tail-duplicate changes no clock, instruction or branch of 70 bench programs at m32 -O2 and -O3 (m16 -O2: 220 of 46865 in-loop instructions); cost: none measured; exit: re-measure with the ret duplication of STRISTMP-1; owner w-3; review 2026-11-20. Registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ",
     ),
     again(
         "Machine Copy Propagation Pass",
@@ -728,10 +728,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Branch Probability Basic Block Placement",
-        Missing,
+        Deviate,
         "jumps/placement",
         "-disable-block-placement",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry jumps@17, chains and loops (#2629). Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
+        "CG5: placement is translated in part (jumps/placement, #2629); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%) and 917988 without the pass; clocks without it +0.84% of 32.19 M; -O3 733888 against 726139 (+1.1%); executed `jmp` 112791 against 94444 at -O2; cost: the 1.5% of taken branches (nbody_single, queens, x_adler, x_ll_div, x_crc32 the largest); exit: per-program attribution by w-2 (docs/working/tail-dup-placement.md), translate what it names; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
     ),
     row(
         "Insert fentry calls",
@@ -792,10 +792,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Fixup",
-        Missing,
+        Deviate,
+        "peephole.peep `lea_fixup`; peephole.rs (`lea_fixed`)",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`, an LEA before a `sub`) is not; reason: no site found yet; cost: none measured; exit: translate it by 2026-11-09; owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",

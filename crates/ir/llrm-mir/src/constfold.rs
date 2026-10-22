@@ -29,7 +29,7 @@
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
-use crate::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate};
+use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
 /// A number and its width: `ConstantInt`, and the zero a `Null` or `Zero` is.
@@ -424,6 +424,79 @@ pub fn compare_float(
         return None;
     }
     Some(result(predicate.holds(x.partial_cmp(&y))))
+}
+
+/// `ConstantFoldFPInstOperands`' arithmetic
+/// ([ConstantFolding.cpp:1574](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/ConstantFolding.cpp#L1574)):
+/// `fadd`, `fsub`, `fmul`, `fdiv` and `frem` of two numbers of one format.
+///
+/// DEVIATE (narrower than the pin, docs/working/fp-constant-fold-plan.md): the
+/// pin rounds to the format; QB, Nib and C on an x87 target evaluate wider, so
+/// an inexact fold could change a printed value. This folds only when the
+/// result is exact in the format, which every evaluation width at least the
+/// format's reproduces. It refuses a non-finite operand or result, an
+/// `x86_fp80`, an inexact result, and (as the pin does when non-deterministic
+/// results are not allowed) `nsz`, `reassoc`, `contract` and `arcp`. Exit: a
+/// "strict float width" fact in the profile, true only under the
+/// standard-precision flag (every assignment rounded), where the pin's fold in
+/// the format is faithful.
+pub fn float_binary(
+    context: &Context,
+    op: BinaryOp,
+    flags: Flags,
+    c1: ConstantId,
+    c2: ConstantId,
+) -> Option<ConstantId> {
+    if flags.contains(Flags::NSZ) || flags.contains(Flags::REASSOC) || flags.contains(Flags::CONTRACT) || flags.contains(Flags::ARCP)
+    {
+        return None;
+    }
+    let ((kind, x), (kind2, y)) = (float_number(context, c1)?, float_number(context, c2)?);
+    if kind != kind2 || kind == FloatKind::X86Fp80 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    // Operands of an f32 are exact in f64; an f32 result must also be exact.
+    let r = match op {
+        BinaryOp::FAdd | BinaryOp::FSub => {
+            let y = if op == BinaryOp::FSub { -y } else { y };
+            let s = x + y;
+            let bb = s - x;
+            let err = (x - (s - bb)) + (y - bb);
+            if err != 0.0 {
+                return None;
+            }
+            s
+        }
+        BinaryOp::FMul => {
+            let p = x * y;
+            if x.mul_add(y, -p) != 0.0 {
+                return None;
+            }
+            p
+        }
+        BinaryOp::FDiv => {
+            if y == 0.0 {
+                return None;
+            }
+            let q = x / y;
+            if q.mul_add(y, -x) != 0.0 {
+                return None;
+            }
+            q
+        }
+        BinaryOp::FRem => {
+            if y == 0.0 {
+                return None;
+            }
+            x % y
+        }
+        _ => return None,
+    };
+    if !r.is_finite() || (kind == FloatKind::Float && f64::from(r as f32) != r) {
+        return None;
+    }
+    let ty = context.get(c1).ty;
+    Some(float_constant(context, ty, kind, r))
 }
 
 /// What `evaluateICmpRelation` finds of two pointer constants (an

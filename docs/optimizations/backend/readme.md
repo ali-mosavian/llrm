@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 113 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 115 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -16,6 +16,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 113 documented
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
+| booleans | Setcc chains the target's cost table prices above a branch, made selects for `selects::lowered` to branch. | Inside `selects::priced`, after the selects of the module were folded and | [booleans](booleans.md) |
 | bytes | Expands `llvm.bswap` into shifts, masks and ors in MIR before instruction selection, for the targets whose description lists `bswap` under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [bytes](bytes.md) |
 | calleefacts | Records which registers a private function writes, so its direct callers keep values in the others across the call. | Per function in `assemble.rs`: `record` after the function is machined. | [calleefacts](calleefacts.md) |
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
@@ -98,6 +99,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 113 documented
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
 | selectconstants | A select between two constants made arithmetic on its condition. | Once per program in `driver::optimized`, in front of `selects::lowered` | [selectconstants](selectconstants.md) |
+| selectiondag | SelectionDAG: value types, opcodes, the node arena and `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`). | Nothing runs it yet: the builder (A1) and legalizer are the callers. The | [selectiondag](selectiondag.md) |
 | selects | Turns each MIR `select` into a branch around an empty block and a phi, where the target has no conditional move. | Once per program in `driver::optimized`, after `fpconvert` and before the | [selects](selects.md) |
 | sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |
 | shrinkwrap | Sets up a procedure's frame and kept registers where they are first needed, not at the entry, and takes them back only on the returns that path reaches. | `wrapped` runs when masm builds a procedure's items, for a procedure that | [shrinkwrap](shrinkwrap.md) |

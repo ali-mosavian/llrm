@@ -12,6 +12,7 @@
 //! aggregate assignment is a `memcpy` (#3621); this is what lets SROA and
 //! promotion see a copy of a small struct as a value.
 //!
+//! # Example
 //! ```text
 //! call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 4, i1 false)
 //!   ==>  %v = load i32, ptr %s            ; store i32 %v, ptr %d

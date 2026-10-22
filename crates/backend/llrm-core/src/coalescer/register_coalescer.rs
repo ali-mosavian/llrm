@@ -40,13 +40,16 @@
 //! # Used by
 //! Nothing yet.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
+use crate::backend::twoaddr::commutative;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::liverange::Segment;
+use crate::liveness::liverange::{LiveInterval, Segment, Vn};
 use crate::liveness::slotindex::InstrKey;
+use crate::model::ir::Loc;
 use crate::support::hash::{HashMap, HashSet};
 
 /// `RegisterCoalescer::JoinResult`.
@@ -165,6 +168,12 @@ pub fn join_copy(
         // If we can eliminate the copy without merging the live segments, do
         // so now.
         if adjust_copies_back_from(lis, state, &cp, copy) {
+            return JoinResult::Joined;
+        }
+        // If the source is defined by a commutable two-address instruction
+        // whose other operand is the destination, commute it so the copy
+        // becomes the identity.
+        if remove_copy_by_commuting_def(lis, env, state, &cp, copy) {
             return JoinResult::Joined;
         }
         // Try and see if we can partially eliminate the copy by moving the
@@ -413,6 +422,218 @@ fn adjust_copies_back_from(
     lis.remove_instr(block, copy);
     if recompute_a {
         lis.shrink_to_uses(a_reg);
+    }
+    true
+}
+
+/// `hasOtherReachingDefs`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L770>).
+fn has_other_reaching_defs(
+    lis: &LiveIntervals,
+    int_a: &LiveInterval,
+    int_b: &LiveInterval,
+    a_val: &Vn,
+    b_val: &Vn,
+) -> bool {
+    // If AValNo has PHI kills, conservatively assume that IntB defs can reach
+    // the PHI values.
+    if has_phi_kill(lis, int_a, a_val) {
+        return true;
+    }
+    for a_seg in int_a.segments.iter().filter(|seg| seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, a_val))) {
+        let mut bi = int_b.segments.partition_point(|seg| seg.start <= a_seg.start);
+        bi = bi.saturating_sub(1);
+        while let Some(b_seg) = int_b.segments.get(bi) {
+            if a_seg.end < b_seg.start {
+                break;
+            }
+            bi += 1;
+            if b_seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, b_val)) {
+                continue;
+            }
+            if b_seg.start <= a_seg.start && b_seg.end > a_seg.start {
+                return true;
+            }
+            if b_seg.start > a_seg.start && b_seg.start < a_seg.end {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `LiveIntervals::hasPHIKill`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L928>).
+fn has_phi_kill(
+    lis: &LiveIntervals,
+    li: &LiveInterval,
+    vni: &Vn,
+) -> bool {
+    for phi in li.valnos.iter().filter(|phi| !phi.is_unused() && phi.is_phi_def()) {
+        let block = lis.indexes.get_mbb_from_index(&phi.def());
+        // Conservatively return true instead of scanning huge predecessor
+        // lists.
+        if lis.cfg.preds[block].len() > 100 {
+            return true;
+        }
+        for &pred in &lis.cfg.preds[block] {
+            if li.get_vn_info_before(&lis.indexes.get_mbb_end_idx(pred)).is_some_and(|v| Rc::ptr_eq(&v, vni)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `removeCopyByCommutingDef`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L823>):
+/// for `B1 = A3` where `A3 = op A2, B0` is a commutable two-address
+/// instruction (`A3 = op A3, B0` after the copy that ties it) and `B0` dies
+/// there, the instruction becomes `B2 = op B0, A2`, `A3`'s readers read `B2`
+/// and the copy is the identity: it goes. Whether it did.
+///
+/// DEVIATE C12: a member of a parallel copy, as the copy or as a reader, stays
+/// as it is.
+fn remove_copy_by_commuting_def(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+) -> bool {
+    if lis.instr(copy).group.is_some() {
+        return false;
+    }
+    let (a_reg, b_reg) = if cp.is_flipped() { (cp.dst_reg(), cp.src_reg()) } else { (cp.src_reg(), cp.dst_reg()) };
+    let int_a = lis.interval_rc(a_reg);
+    let int_b = lis.interval_rc(b_reg);
+    // BValNo is a value number in B that is defined by a copy from A: `B1`.
+    let copy_idx = lis.indexes.get_instruction_index(copy).get_reg_slot(false);
+    let Some(b_val) = int_b.get_vn_info_at(&copy_idx) else { return false };
+    if b_val.def() != copy_idx {
+        return false;
+    }
+    // AValNo is the value number in A that defines the copy: `A3`.
+    let Some(a_val) = int_a.get_vn_info_at(&copy_idx.get_reg_slot(true)) else { return false };
+    if a_val.is_unused() || a_val.is_phi_def() {
+        return false;
+    }
+    let Some(def_key) = lis.indexes.get_instruction_from_index(&a_val.def()) else { return false };
+    let def_insn = Arc::clone(lis.instr(def_key));
+    // A commutable instruction that writes the register of its first source
+    // (`isRegTiedToUseOperand`), the other source being B.
+    let Some(what) = def_insn.what.as_ref().filter(|what| commutative(what)) else { return false };
+    if def_insn.group.is_some() || !def_insn.requires.is_empty() || !def_insn.delivers.is_empty() {
+        return false;
+    }
+    let ([Loc::Held(into)], [Loc::Held(first), Loc::Held(other)]) = (what.dests.as_slice(), what.sources.as_slice())
+    else {
+        return false;
+    };
+    if into.value != a_reg || first.value != a_reg || other.value != b_reg {
+        return false;
+    }
+    if !(into.width == first.width && first.width == other.width) {
+        return false;
+    }
+    // B dies at the instruction: the commuted one writes it.
+    if !int_b.query(&a_val.def()).is_kill() {
+        return false;
+    }
+    // Make sure there are no other definitions of IntB that would reach the
+    // uses which the new definition can reach.
+    if has_other_reaching_defs(lis, &int_a, &int_b, &a_val, &b_val) {
+        return false;
+    }
+    // Make sure all reads of AValNo can be rewritten to the new register.
+    let mut readers: Vec<InstrKey> = Vec::new();
+    for operand in lis.operands(a_reg) {
+        if !operand.reads_reg {
+            continue;
+        }
+        let use_idx = lis.indexes.get_instruction_index(operand.instr);
+        let inside = int_a.segments.get(int_a.find_segment_containing(&use_idx));
+        if !inside.is_some_and(|seg| seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, &a_val))) {
+            continue;
+        }
+        // Partial defs and tied uses can't be rewritten independently.
+        if operand.is_def || lis.instr(operand.instr).group.is_some() {
+            return false;
+        }
+        readers.push(operand.instr);
+    }
+    // The registers must be able to share a class: `constrainRegClass`.
+    if !env.can_share(a_reg, b_reg) {
+        return false;
+    }
+
+    // Commute the instruction: its definition and tied source are B's.
+    let swap = |value: u32| {
+        if value == a_reg {
+            b_reg
+        } else if value == b_reg {
+            a_reg
+        } else {
+            value
+        }
+    };
+    let def_block = lis.indexes.get_mbb_from_index(&a_val.def());
+    let commuted = def_insn.renamed(&swap);
+    state.moved.insert(def_key, commuted.id());
+    lis.rewrite_instr(def_block, def_key, commuted);
+
+    // Update the readers of AValNo to read B. A copy that becomes `B = B` and
+    // defines a value of its own merges that value into BValNo.
+    let mut int_a = (*int_a).clone();
+    let mut int_b = (*int_b).clone();
+    let mut b_val = b_val;
+    readers.sort_unstable();
+    readers.dedup();
+    for key in readers {
+        let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+        let renamed = Arc::clone(lis.instr(key)).renamed(&|value| if value == a_reg { b_reg } else { value });
+        let (new, is_noop) = (
+            renamed.id(),
+            key != copy && full_copy(&renamed).is_some_and(|(dst, src)| dst.value == b_reg && src.value == b_reg),
+        );
+        lis.rewrite_instr(block, key, renamed);
+        state.moved.insert(key, new);
+        if is_noop {
+            let def_idx = lis.indexes.get_instruction_index(new).get_reg_slot(false);
+            if let Some(dvni) = int_b.get_vn_info_at(&def_idx) {
+                b_val = int_b.merge_value_number_into(dvni, b_val);
+                state.erased.insert(new);
+                lis.remove_instr(block, new);
+            }
+        }
+    }
+
+    // Extend BValNo by merging in IntA live segments of AValNo. Val# definition
+    // is updated.
+    b_val.set_def(a_val.def());
+    let mut shrink_b = false;
+    let ends: Vec<_> = int_a
+        .segments
+        .iter()
+        .filter(|seg| seg.valno.as_ref().is_some_and(|v| Rc::ptr_eq(v, &a_val)))
+        .map(|seg| (seg.start.clone(), seg.end.clone()))
+        .collect();
+    for (start, end) in ends {
+        let merged = int_b.add_segment(Segment::new(start, end, Some(b_val.clone())));
+        shrink_b |= int_b.segments[merged].end.is_dead();
+    }
+    LiveIntervals::remove_vreg_def_at(&mut int_a, &a_val.def());
+    lis.insert_interval(int_a);
+    lis.insert_interval(int_b);
+    env.narrow(b_reg, a_reg);
+
+    // The copy is the identity now.
+    let copy = state.moved.get(&copy).copied().unwrap_or(copy);
+    let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    if shrink_b {
+        lis.shrink_to_uses(b_reg);
     }
     true
 }

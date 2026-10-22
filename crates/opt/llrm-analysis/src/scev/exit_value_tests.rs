@@ -88,3 +88,26 @@ exit:
 ";
     assert_eq!(exit_count(text, "loop"), None);
 }
+
+/// A float-controlled loop is counted by running it: `x` steps by 0.25 and the
+/// loop leaves when `x + 0.25 >= 3.0`, so the test fails on the 12th trip. The
+/// `fadd` of two constants was never folded by `constantfolding.rs` (FP binary
+/// operations were owed), so the exhaustive run stopped at once and the exit
+/// count was CouldNotCompute; `opt` prints 11 for the backedge-taken count.
+#[test]
+fn test_an_exit_on_a_float_recurrence_is_counted_by_running_the_loop() {
+    let text = "define void @f(ptr %p) {
+b0:
+  br label %loop
+loop:
+  %x = phi float [ 0.0, %b0 ], [ %x1, %loop ]
+  %x1 = fadd float %x, 0.25
+  store float %x, ptr %p
+  %c = fcmp olt float %x1, 3.0
+  br i1 %c, label %loop, label %exit
+exit:
+  ret void
+}
+";
+    assert_eq!(exit_count(text, "loop"), Some(11));
+}

@@ -31,8 +31,8 @@
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
 //! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
 //! 2026-11-14): a temporary is made in its result's class by name
-//! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it the
-//! class the result has, which the type gave the result when isel made it.
+//! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it
+//! the class the result has, which the type gave the result when isel made it.
 //! There is no per-value class at isel time here, and computing the result's
 //! class at this pass cost +0.40% Ir on d_faces -O2 (measured, #3625); so the
 //! class is what `regclass::classes` finds from the result's uses when a pass
@@ -157,7 +157,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         &split_body
     };
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut next = crate::backend::splitkit::_next_value(body);
+    let mut next = body.next_value();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
@@ -250,7 +250,6 @@ fn _held(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::coalesce::_copy as copy_of;
     use crate::model::ir::{Imm, Loc, Operation, Semantics};
 
     fn held(value: u32) -> Loc {
@@ -302,7 +301,7 @@ mod tests {
     }
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
-        block.insns.iter().filter_map(|one| copy_of(one)).collect()
+        block.insns.iter().filter_map(|one| one.copy_of()).collect()
     }
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was

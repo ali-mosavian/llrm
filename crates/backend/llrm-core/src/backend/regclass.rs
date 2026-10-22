@@ -132,16 +132,20 @@ pub fn classes(
     classes_with(body, prefer_indexes, segments, registers, false)
 }
 
-/// `MachineRegisterInfo::recomputeRegClass` (MachineRegisterInfo.cpp, called from
-/// `LiveRangeEdit::calculateRegClassAndHint`, LiveRangeEdit.cpp#L426-L430, and
-/// SplitKit.cpp#L628): the registers `value` is confined to by the instructions
-/// that name it, which a value made from another by the spiller or a split does
-/// not inherit. None where its instructions confine it to nothing.
+/// `MachineRegisterInfo::recomputeRegClass` (MachineRegisterInfo.cpp, called
+/// from `LiveRangeEdit::calculateRegClassAndHint`, LiveRangeEdit.cpp#L426-L430,
+/// and SplitKit.cpp#L628): the registers `value` is confined to by the
+/// instructions that name it, which a value made from another by the spiller or
+/// a split does not inherit. None where its instructions confine it to nothing.
 ///
 /// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
 /// {SI,DI}; the pin has no such model. A pair member keeps its side.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
+///
+/// No caller yet: splitkit's spiller and split sites recompute per value
+/// (`reclass_orders`, #3668); this whole-body entry is for the base/index pair
+/// members they leave to the parent, if a miss shows.
 pub fn recompute_class(
     body: &LirBody,
     value: u32,
@@ -1185,9 +1189,9 @@ mod tests {
         assert!(webs.get(&entry_segment).is_some());
     }
     /// A reload made for a stored word: the spiller gave it its parent's class,
-    /// {EBX} (ls.c `_ls_animate@3`, `[abs+516 + %53 + v16] := mov %51`), where its
-    /// instructions only store it. Recomputed, it is confined to nothing and the
-    /// base keeps the address class.
+    /// {EBX} (ls.c `_ls_animate@3`, `[abs+516 + %53 + v16] := mov %51`), where
+    /// its instructions only store it. Recomputed, it is confined to
+    /// nothing and the base keeps the address class.
     #[test]
     fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
         let (base, word) = (1, 2);
@@ -1228,4 +1232,52 @@ mod tests {
         assert_eq!(of(word), None);
         assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
     }
+}
+
+/// Values the spiller leaves alone: x87 values, pinned ones, and the body's
+/// inputs.
+pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
+    let mut out = floating(body);
+    out.extend(body.pins.keys().copied().chain(body.inputs.iter().copied()));
+    out
+}
+
+/// Values no general register holds: x87 values and wider ones, and every phi
+/// web they join.
+pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
+    let regs = body.regs();
+    let mut out: BTreeSet<u32> = BTreeSet::new();
+    for one in body.insns() {
+        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
+            out.extend(one.uses.iter().chain(&one.defines).copied());
+        }
+        // A value no general register holds: a float, whatever reads it.
+        for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
+            for held in crate::model::ir::values(place) {
+                if held.width > 4 {
+                    out.insert(held.value);
+                }
+            }
+        }
+    }
+    // A phi joins its result and arguments: the web is as wide as its widest
+    // member.
+    loop {
+        let mut grew = false;
+        for block in &body.blocks {
+            for phi in &block.phis {
+                let web: Vec<u32> =
+                    std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
+                if web.iter().any(|value| out.contains(value)) {
+                    for value in web {
+                        grew |= out.insert(value);
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    out
 }

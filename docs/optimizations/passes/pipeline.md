@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b8e3c4199f44f105491b401a1c67367a0eeaae5e8b62377f346d3a8bce13b429 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0d61f8b284561b9e4bab9d98d1af769fdc0c3a96315b663ce49b36c30c7f63cc -->
 
 # pipeline
 
@@ -107,7 +107,7 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |

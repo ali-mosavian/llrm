@@ -53,14 +53,15 @@
 //! # See also
 //! LLVM's
 //! [`TwoAddressInstructionPass`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp),
-//! translated in `twoaddress.rs` for the commuting; the rest is this file's own.
+//! translated in `twoaddress.rs` for the commuting; the rest is this file's
+//! own.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::{coalesce, spiller};
+use crate::backend::coalesce;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -70,7 +71,12 @@ use crate::support::hash::{IndexMap, IndexSet};
 /// Operations that read their destination.
 pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
 
-pub struct TwoAddress;
+/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE TA-4,
+/// twoaddress.rs).
+#[derive(Default)]
+pub struct TwoAddress {
+    pub lea: crate::twoaddress::ThreeAddress,
+}
 
 impl TwoAddress {
     pub const NAME: &'static str = "twoaddr";
@@ -89,16 +95,19 @@ impl LIRTransform for TwoAddress {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(tied(&body))
+        Ok(tied(&body, self.lea))
     }
 }
 
 /// `body` with every tied instruction reading what it writes.
-pub fn tied(body: &LirBody) -> LirBody {
+pub fn tied(
+    body: &LirBody,
+    lea: crate::twoaddress::ThreeAddress,
+) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
     let mut changed = false;
-    let mut counter = spiller::_next_value(body);
+    let mut counter = body.next_value();
     let mut mint = || {
         counter += 1;
         counter - 1
@@ -116,12 +125,23 @@ pub fn tied(body: &LirBody) -> LirBody {
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::new(&lis, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for one in &block.insns {
+        for (place, one) in block.insns.iter().enumerate() {
             let mut one = Arc::clone(one);
             let dist = walk.pass(&one);
             if let Some(chosen) = walk.try_instruction_commute(&one, dist) {
                 changed = true;
                 one = chosen;
+            }
+            // `convertInstTo3Addr`: a tied add whose source lives on and whose
+            // flags nothing reads makes no copy.
+            if let Some(three) = crate::twoaddress::three_address(&one, lea)
+                && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
+                && !walk.killed_at(&block.insns[place], base.value)
+                && crate::twoaddress::flags_dead_after(&block.insns, place, body.regs(), body.bits)
+            {
+                changed = true;
+                insns.push(three);
+                continue;
             }
             let Some(fix) = _untied(&one, &mut mint) else {
                 insns.push(one);
@@ -243,12 +263,15 @@ fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
     swappable_held(one).map(|(into, first, second)| (into.value, first.value, second.value))
 }
 
+/// Whether the two sources of `what` can swap places (`isCommutable`).
+pub fn commutative(what: &Semantics) -> bool {
+    (what.op == Operation::Binary && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
+        || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
+}
+
 pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
-    let commutative = (what.op == Operation::Binary
-        && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
-        || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"));
-    if !commutative
+    if !commutative(what)
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
@@ -449,12 +472,13 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use super::{Fixed, _untied, tied};
+    use super::{_untied, Fixed, tied};
     use crate::liveness::liveintervals::LiveIntervals;
-    use crate::twoaddress::Commuter;
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+    use crate::twoaddress::Commuter;
+    use crate::twoaddress::ThreeAddress::{All, Off};
 
     fn held(
         value: u32,
@@ -528,7 +552,8 @@ mod tests {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
     }
 
-    /// The instruction at `at` of one block, as the commuting walk of `tied` leaves it.
+    /// The instruction at `at` of one block, as the commuting walk of `tied`
+    /// leaves it.
     fn commuted(
         insns: Vec<Arc<Insn>>,
         at: usize,
@@ -549,7 +574,10 @@ mod tests {
     }
 
     /// `v3 := op v1, v2` with `v1` read afterwards and `v2` dying at it.
-    fn dying_second(op_name: &str, op: Operation) -> Vec<Arc<Insn>> {
+    fn dying_second(
+        op_name: &str,
+        op: Operation,
+    ) -> Vec<Arc<Insn>> {
         vec![imm_def(0, 1), imm_def(1, 2), sum(2, op_name, op), read(3, 1), read(4, 3)]
     }
 
@@ -590,7 +618,7 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let got = tied(&input);
+        let got = tied(&input, Default::default());
         let first = got
             .insns()
             .iter()
@@ -693,7 +721,7 @@ mod tests {
             IndexMap::default(),
         );
 
-        let got = tied(&input);
+        let got = tied(&input, Default::default());
 
         let insns = got.insns();
         let first = insns[0].what.as_ref().expect("semantics");
@@ -753,7 +781,7 @@ mod tests {
             IndexMap::default(),
         );
 
-        let got = tied(&input);
+        let got = tied(&input, Default::default());
 
         let insns = got.insns();
         assert!(
@@ -823,11 +851,12 @@ mod tests {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]))
     }
 
-    /// `getSingleDef(Reg, MBB)` ignores definitions in other blocks: the loop's temporary is
-    /// defined in the preheader and by the back-edge copy, and the chain `c = copy tmp; tmp = copy
-    /// a` still reaches `a`. A walk that gave up on a definition elsewhere found no chain, and
-    /// x_adler's `(x & 255) + s` tied the `and` result and copied the accumulator (x_adler -O2
-    /// 0.968 -> 1.029 of min(gcc, clang)).
+    /// `getSingleDef(Reg, MBB)` ignores definitions in other blocks: the loop's
+    /// temporary is defined in the preheader and by the back-edge copy, and
+    /// the chain `c = copy tmp; tmp = copy a` still reaches `a`. A walk
+    /// that gave up on a definition elsewhere found no chain, and x_adler's
+    /// `(x & 255) + s` tied the `and` result and copied the accumulator
+    /// (x_adler -O2 0.968 -> 1.029 of min(gcc, clang)).
     #[test]
     fn test_a_copy_chain_through_a_loop_temporary_defined_in_the_preheader_is_found() {
         let body = LirBody::new(
@@ -853,6 +882,111 @@ mod tests {
         let fixed = Fixed::default();
         let walk = Commuter::new(&lis, &fixed, 1);
         assert!(walk.is_rev_copy_chain(3, 5, 10));
+    }
+
+    /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the
+    /// add's flags are dead and `v7` lives on).
+    fn live_source_add(
+        step: i64,
+        name: &str,
+    ) -> Vec<Arc<Insn>> {
+        let what = Semantics {
+            name: Some(name.to_owned()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Imm(Imm { value: step, width: 4, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        vec![imm_def(0, 7), add, sum_into(2, 6, 8, 7), read(3, 6)]
+    }
+
+    fn names_of(body: &LirBody) -> Vec<String> {
+        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+    }
+
+    fn of(insns: Vec<Arc<Insn>>) -> LirBody {
+        LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
+    }
+
+    /// pop's `x &= x - 1`: the pin's `convertInstTo3Addr` makes the `dec` of a live `x` a `lea`
+    /// (TwoAddressInstructionPass.cpp#L1402), so no `t := mov x` pins `t` to `x`'s register; the
+    /// old pass copied, and x_popcount kept a `mov` per iteration (+10.4% clocks, AM-TA-1).
+    #[test]
+    fn test_an_add_of_a_live_source_with_dead_flags_is_a_lea_not_a_copy() {
+        let got = tied(&of(live_source_add(-1, "add")), All);
+        let names = names_of(&got);
+        assert_eq!(names.iter().filter(|name| *name == "lea").count(), 1, "{names:?}");
+        assert_eq!(names.iter().filter(|name| *name == "mov").count(), 2, "the def of v7 and the copy for the tied and: {names:?}");
+        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().unwrap();
+        let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+        assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), -1));
+    }
+
+    #[test]
+    fn test_a_sub_of_an_immediate_is_a_lea_of_its_negation() {
+        let got = tied(&of(live_source_add(5, "sub")), All);
+        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().expect("a lea");
+        let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+        assert_eq!(cell.offset, -5);
+    }
+
+    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`, `[a*8]`; a shift of 4 or a
+    /// shift of a register stays.
+    #[test]
+    fn test_a_shift_by_one_to_three_of_a_live_source_is_a_scaled_lea() {
+        for (shift, scale, base) in [(1, 1, true), (2, 4, false), (3, 8, false)] {
+            let got = tied(&of(live_source_add(shift, "shl")), All);
+            let lea = got
+                .insns()
+                .iter()
+                .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+                .cloned()
+                .unwrap_or_else(|| panic!("a lea for shl {shift}"));
+            let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+            assert_eq!((cell.index.map(|held| held.value), cell.scale, cell.base.is_some()), (Some(7), scale, base));
+        }
+        assert!(!names_of(&tied(&of(live_source_add(4, "shl")), All)).contains(&"lea".to_owned()));
+    }
+
+    /// A commuted instruction is a new one, which the intervals do not know: the kill of its tied
+    /// source is asked of the instruction as it was (the sweep failed 120 of 568 objects with "Instruction
+    /// not found in maps" on the first version of the conversion).
+    #[test]
+    fn test_a_commuted_add_is_still_asked_about_its_kills_by_the_instruction_it_was() {
+        let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 1), read(4, 3)];
+        let got = tied(&of(insns), All);
+        assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
+    }
+
+    /// A target that reads addresses through a prefix (m16) converts adds and subs and leaves a shift to
+    /// the peephole, which fuses it with the add after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
+    /// `lea eax, [ecx+ecx]; add eax, ecx` (test_m16_emits_386_forms).
+    #[test]
+    fn test_the_prefixed_mode_converts_an_add_and_leaves_a_shift() {
+        use crate::twoaddress::ThreeAddress::AddSub;
+        let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
+        assert!(lea(&tied(&of(live_source_add(-1, "add")), AddSub)));
+        assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
+    }
+
+    #[test]
+    fn test_an_add_stays_two_address_where_its_source_dies_its_flags_live_or_the_target_is_not_native() {
+        // not native
+        assert!(!names_of(&tied(&of(live_source_add(-1, "add")), Off)).contains(&"lea".to_owned()));
+        // the source dies: `v7` is not read after the add
+        let dies = vec![imm_def(0, 7), live_source_add(-1, "add")[1].clone(), read(2, 8)];
+        assert!(!names_of(&tied(&of(dies), All)).contains(&"lea".to_owned()));
+        // the flags are read: a conditional jump follows the add
+        let mut flags_live = live_source_add(-1, "add");
+        flags_live[2] = Arc::new(Insn::new(
+            2,
+            Some((2, 2)),
+            Some(Semantics { name: Some("jne".to_owned()), target: Some(0), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        ));
+        flags_live.push(read(4, 7));
+        assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
     // ------------------------------------------------------ tests/test_lir.py
@@ -952,7 +1086,7 @@ mod tests {
             IndexMap::default(),
         );
         let before = crate::backend::allocate::live_rows_walks(&input);
-        let got = tied(&input);
+        let got = tied(&input, Default::default());
         let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);

@@ -826,19 +826,6 @@ fn _renamed(
     if rename.is_empty() { Arc::clone(one) } else { spiller::_renamed(one, rename) }
 }
 
-pub fn _next_value(body: &LirBody) -> u32 {
-    // One more than the largest value the body names, or one: no set of them is
-    // built to find it.
-    let mut largest = 0;
-    for block in &body.blocks {
-        largest = block.phis.iter().map(|phi| phi.result).fold(largest, u32::max);
-        for one in &block.insns {
-            largest = one.defines.iter().chain(&one.uses).copied().fold(largest, u32::max);
-        }
-    }
-    largest + 1
-}
-
 // `_next_value`, from the postings the allocator follows the body with: the
 // largest value they hold and the phis' results, not a walk of every
 // instruction. For the allocator's own rewrites, which ask it of each body
@@ -858,7 +845,7 @@ pub fn _next_value_following(body: &LirBody) -> u32 {
     let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
     NEXT_VALUE_ASKS.with(|n| n.set(n.get() + 1));
     if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
-        assert_eq!(found, _next_value(body), "{}: the next value from the postings differs from the walk", body.name);
+        assert_eq!(found, body.next_value(), "{}: the next value from the postings differs from the walk", body.name);
     }
     found
 }
@@ -2250,13 +2237,13 @@ mod tests {
     #[test]
     fn test_the_next_value_comes_from_the_postings_and_follows_the_body() {
         let body = _pointer_across_a_loop();
-        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        assert_eq!(super::_next_value_following(&body), body.next_value());
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
-        assert_eq!(super::_next_value_following(&cut), super::_next_value(&cut));
+        assert_eq!(super::_next_value_following(&cut), cut.next_value());
         assert_eq!(super::_next_value_following(&cut), 10, "the carve made value 9");
         // The body again, without value 9: the largest value the postings hold
         // a key for is cut, and the next value is the body's, not the carve's.
-        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        assert_eq!(super::_next_value_following(&body), body.next_value());
         assert!(super::_next_value_following(&body) < 10, "a stale largest value outlived the key that was it");
     }
 
