@@ -242,6 +242,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
+    entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",
         Simplify,
