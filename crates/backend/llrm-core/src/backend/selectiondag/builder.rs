@@ -11,7 +11,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
-use crate::backend::isel::{Convention, Parameter};
+use crate::backend::isel::{Convention, Parameter, convention_for};
 use llrm_lir::registers::RegId;
 
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
@@ -63,6 +63,7 @@ pub fn build_block(
     function: &Function,
     layout: &DataLayout,
     target: &BuilderTarget,
+    arch: &dyn llrm_target::Target,
     convention: &Convention,
     info: &mut FunctionLoweringInfo,
     block: BlockId,
@@ -72,6 +73,7 @@ pub fn build_block(
         function,
         layout,
         target,
+        arch,
         convention,
         info,
         live_ins: Vec::new(),
@@ -102,6 +104,7 @@ struct Builder<'a> {
     function: &'a Function,
     layout: &'a DataLayout,
     target: &'a BuilderTarget,
+    arch: &'a dyn llrm_target::Target,
     convention: &'a Convention,
     live_ins: Vec<(RegId, u32)>,
     info: &'a mut FunctionLoweringInfo,
@@ -265,6 +268,105 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
+    /// call of a function whose arguments and result fit single registers or
+    /// the stack: `callseq_start`, the stack stores, the register copies,
+    /// `X86ISD::CALL`, `callseq_end`, then the result read back.
+    fn visit_call(&mut self, instruction: &llrm_mir::module::Instruction, info: &llrm_mir::opcode::CallInfo) -> Result<(), Refused> {
+        let (callee, arguments) = instruction.operands.split_last().expect("a call names its callee");
+        let Operand::Constant(callee_id) = *callee else { return Err(Refused("indirect call")) };
+        let ConstantKind::Global(global) = self.module.context.get(callee_id).kind else { return Err(Refused("indirect call")) };
+        if self.module.global(global).intrinsic().is_some() {
+            return Err(Refused("intrinsic call"));
+        }
+        let types = &self.module.context.types;
+        let mut arg_types = Vec::new();
+        for argument in arguments {
+            arg_types.push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
+        }
+        let first = self.arch.first_argument_offset(false);
+        let plan = convention_for(self.module, self.layout, self.arch, first, info.calling_convention, info.function_type, &arg_types, &info.argument_attrs)
+            .map_err(|_| Refused("call the convention does not describe"))?;
+        let (result_type, _, _) = self.module.signature(info.function_type);
+        // Evaluate the callee and the arguments before the call sequence starts.
+        let _ = self.get_value(*callee)?;
+        let callee_node = self.dag.get_target_global_address(self.target.dag.pointer, global.0, 0);
+        let mut values = Vec::new();
+        for argument in arguments {
+            let value = self.get_value(*argument)?;
+            if self.register_type(self.dag.value_type(value))? != self.dag.value_type(value) {
+                return Err(Refused("argument of an illegal integer type"));
+            }
+            values.push(value);
+        }
+        let bytes = (plan.stack_arguments - first).max(0) as u64;
+        let root = self.root();
+        let start = self.dag.get_callseq_start(root, bytes);
+        let mut chain = SDValue { node: start.node, res: 0 };
+        let mut stores = Vec::new();
+        let mut copies: Vec<(RegId, SDValue)> = Vec::new();
+        let mut stack_pointer = None;
+        for (value, parameter) in values.iter().zip(&plan.parameters) {
+            match parameter {
+                Parameter::Cell(displacement) => {
+                    let sp = *stack_pointer.get_or_insert_with(|| {
+                        let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                        self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
+                    });
+                    let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
+                    let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
+                    let vt = self.dag.value_type(*value);
+                    let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown };
+                    stores.push(self.dag.get_store(chain, *value, address, mem));
+                }
+                Parameter::Registers(regs) if regs.len() == 1 => copies.push((regs[0], *value)),
+                _ => return Err(Refused("argument passed in several places or by value")),
+            }
+        }
+        if !stores.is_empty() {
+            chain = self.dag.get_token_factor(&stores);
+        }
+        let mut glue: Option<SDValue> = None;
+        for (reg, value) in &copies {
+            let copy = self.dag.get_copy_to_phys_reg(chain, *reg, *value, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+        }
+        let mut ops = vec![chain, callee_node];
+        for (reg, value) in &copies {
+            ops.push(self.dag.get_phys_register(self.dag.value_type(*value), *reg));
+        }
+        ops.push(self.dag.get_register_mask());
+        ops.extend(glue);
+        let call = self.dag.get_node_multi(super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
+        let end = self.dag.get_callseq_end(SDValue { node: call.node, res: 0 }, bytes, plan.popped as u64, SDValue { node: call.node, res: 1 });
+        let mut chain = SDValue { node: end.node, res: 0 };
+        let glue = SDValue { node: end.node, res: 1 };
+        if types.is_void(result_type) {
+            self.dag.set_root(chain);
+            return Ok(());
+        }
+        let vt = self.type_of(result_type)?;
+        let [reg] = plan.returns[..] else { return Err(Refused("result in several registers")) };
+        if self.register_type(vt)? != vt {
+            return Err(Refused("result of an illegal integer type"));
+        }
+        let reg = self.sized_register(reg, vt);
+        let result = self.dag.get_copy_from_phys_reg(chain, reg, vt, glue);
+        chain = SDValue { node: result.node, res: 1 };
+        self.dag.set_root(chain);
+        if let Some(value) = instruction.result {
+            self.set_value(value, result);
+        }
+        Ok(())
+    }
+
+    /// The convention names a result register by its widest view; the DAG
+    /// names the one the value's width is (`AX` for an `i16`, not `EAX`).
+    fn sized_register(&self, reg: RegId, vt: EVT) -> RegId {
+        self.arch.registers().named(reg, i64::from(vt.size_in_bits().div_ceil(8)))
+    }
+
     /// `visitRet` and X86's `LowerReturn`: the value copied to the return
     /// register, then `RET_GLUE chain, popped, register, glue`.
     fn visit_ret(&mut self, instruction: &llrm_mir::module::Instruction) -> Result<(), Refused> {
@@ -278,6 +380,7 @@ impl Builder<'_> {
             if self.register_type(vt)? != vt {
                 return Err(Refused("result of an illegal integer type"));
             }
+            let reg = self.sized_register(reg, vt);
             let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
@@ -388,7 +491,8 @@ impl Builder<'_> {
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => return Err(Refused("switch (A2)")),
-            Opcode::Call(_) | Opcode::Invoke(_) => return Err(Refused("call (A2)")),
+            Opcode::Call(info) => self.visit_call(&instruction, info)?,
+            Opcode::Invoke(_) => return Err(Refused("invoke")),
             _ => return Err(Refused("instruction not in the scalar subset")),
         }
         if !instruction.opcode.is_terminator() {
