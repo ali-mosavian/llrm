@@ -220,7 +220,13 @@ const ROWS: &[Disposition] = &[
         "runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
         "",
     ),
-    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Simplify,
+        "jump-table-to-switch",
+        Why::Missing,
+        "x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table",
+        "w-6, 11-09",
+    ),
     row(
         Simplify,
         "libcalls-shrinkwrap",
