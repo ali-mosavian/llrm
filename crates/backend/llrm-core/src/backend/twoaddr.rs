@@ -111,9 +111,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let mut lis = LiveIntervals::new(body);
-    for value in lis.virt_regs() {
-        lis.interval_rc(value);
-    }
+    crate::twoaddress::prepare(&mut lis, body);
     let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::new(&lis, &fixed, at);
@@ -515,6 +513,21 @@ mod tests {
         Arc::new(one)
     }
 
+    fn sum_into(
+        at: i64,
+        into: u32,
+        first: u32,
+        second: u32,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("add".to_owned()),
+            dests: vec![held(into, 4)],
+            sources: vec![held(first, 4), held(second, 4)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+    }
+
     /// The instruction at `at` of one block, as the commuting walk of `tied` leaves it.
     fn commuted(
         insns: Vec<Arc<Insn>>,
@@ -523,9 +536,7 @@ mod tests {
     ) -> Option<Arc<Insn>> {
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let mut lis = LiveIntervals::new(&body);
-        for value in lis.virt_regs() {
-            lis.interval_rc(value);
-        }
+        crate::twoaddress::prepare(&mut lis, &body);
         let mut walk = Commuter::new(&lis, fixed, 0);
         let mut found = None;
         for (place, one) in lis.block_insns(0).iter().enumerate() {
@@ -796,6 +807,52 @@ mod tests {
         // The same use of the other source: nothing to gain, stays.
         let insns = vec![imm_def(0, 1), imm_def(1, 2), read(2, 2), sum(3, "add", Operation::Binary), read(4, 3)];
         assert!(commuted(insns, 3, &Fixed::default()).is_none());
+    }
+
+    fn copy_insn(
+        at: i64,
+        into: u32,
+        from: u32,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![held(into, 4)],
+            sources: vec![held(from, 4)],
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]))
+    }
+
+    /// `getSingleDef(Reg, MBB)` ignores definitions in other blocks: the loop's temporary is
+    /// defined in the preheader and by the back-edge copy, and the chain `c = copy tmp; tmp = copy
+    /// a` still reaches `a`. A walk that gave up on a definition elsewhere found no chain, and
+    /// x_adler's `(x & 255) + s` tied the `and` result and copied the accumulator (x_adler -O2
+    /// 0.968 -> 1.029 of min(gcc, clang)).
+    #[test]
+    fn test_a_copy_chain_through_a_loop_temporary_defined_in_the_preheader_is_found() {
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![
+                LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 2)]) }.into(),
+                LirBlock {
+                    succ: vec![1, 2].into(),
+                    ..LirBlock::new(
+                        1,
+                        vec![copy_insn(1, 3, 2), imm_def(2, 4), sum_into(3, 5, 4, 3), copy_insn(4, 2, 5)],
+                    )
+                }
+                .into(),
+                LirBlock::new(2, vec![read(5, 5)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        crate::twoaddress::prepare(&mut lis, &body);
+        let fixed = Fixed::default();
+        let walk = Commuter::new(&lis, &fixed, 1);
+        assert!(walk.is_rev_copy_chain(3, 5, 10));
     }
 
     // ------------------------------------------------------ tests/test_lir.py

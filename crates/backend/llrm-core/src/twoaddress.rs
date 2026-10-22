@@ -54,6 +54,35 @@ use crate::support::hash::HashMap;
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
+/// The intervals the commuting asks of: the sources of each commutative instruction and, for
+/// `isKilled`, the sources of the copies that define them. The pin has every interval at hand;
+/// computing these alone is what keeps the pass off the cost of all of them.
+pub fn prepare(
+    lis: &mut LiveIntervals,
+    body: &crate::model::lir::LirBody,
+) {
+    let mut todo: Vec<u32> = Vec::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if let Some((_, first, second)) = crate::backend::twoaddr::swappable_held(one) {
+            todo.extend([first.value, second.value]);
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(value) = todo.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        lis.interval_rc(value);
+        let mut defs = lis.operands(value).iter().filter(|operand| operand.is_def);
+        if let (Some(def), None) = (defs.next(), defs.next())
+            && let Some((dst, src)) = crate::coalescer::pair::full_copy(lis.instr(def.instr))
+            && dst.value == value
+        {
+            todo.push(src.value);
+        }
+    }
+}
+
 /// The state of one block's walk: the intervals, the registers values are
 /// fixed to and the instructions passed so far.
 pub struct Commuter<'a> {
@@ -88,7 +117,8 @@ impl<'a> Commuter<'a> {
     }
 
     /// `getSingleDef(Reg, MBB)`: the one instruction of this block that
-    /// defines `reg`; none if it has two or lives elsewhere.
+    /// defines `reg`; none if it has two here. Definitions in other blocks are
+    /// not counted.
     fn single_def(
         &self,
         reg: u32,
@@ -96,8 +126,11 @@ impl<'a> Commuter<'a> {
         let mut found = None;
         for operand in self.lis.operands(reg).iter().filter(|operand| operand.is_def) {
             let at = self.lis.indexes.get_instruction_index(operand.instr);
-            if self.lis.indexes.get_mbb_from_index(&at) != self.block || found.is_some_and(|key| key != operand.instr)
-            {
+            // A definition in another block is not counted (`DefMI.getParent() != BB`).
+            if self.lis.indexes.get_mbb_from_index(&at) != self.block {
+                continue;
+            }
+            if found.is_some_and(|key| key != operand.instr) {
                 return None;
             }
             found = Some(operand.instr);
