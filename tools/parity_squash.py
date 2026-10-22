@@ -665,11 +665,22 @@ def claims_fix(description: str) -> bool:
     return bool(FIXES_RED.search(description or ""))
 
 
+def new_names(head: set[str], merged: set[str]) -> list[str]:
+    """The failing names of `merged` that `head` does not fail. Names are per test or program (`ratchet:x::t`, `run p [-O2]`, `unit crate::t`), so a test that goes red inside a
+    step that was red already is new. A bare step name in `head` (a failure set cached before steps named their tests, or a step whose output names none) covers its own."""
+    return sorted(n for n in merged - head if not any(n.startswith((f"{h}::", f"{h} ")) for h in head))
+
+
+def fixed_names(head: set[str], merged: set[str]) -> list[str]:
+    """The failing names of `head` that `merged` no longer fails."""
+    return sorted(head - merged)
+
+
 def subset_refusals(head: set[str], merged: set[str], fixes: bool) -> list[str]:
     """Why the merged tree may not land on a head that fails `head`: it fails a check the head passes, or (a PR that says it fixes a red) fails as many as the head.
     The gate must not deadlock on a red head, and must not let a PR add a red. Both sets are in the reason."""
     shown = f"head fails {{{', '.join(sorted(head)) or '-'}}}, merged tree fails {{{', '.join(sorted(merged)) or '-'}}}"
-    if new := sorted(merged - head):
+    if new := new_names(head, merged):
         return [f"the merged tree fails {', '.join(new)}, which the head passes ({shown})"]
     if fixes and head and len(merged) >= len(head):
         return [f"the PR says it fixes a red but the merged tree fails as many checks as the head ({shown})"]
@@ -817,6 +828,8 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         git("checkout", "-q", "--detach", BASE)
         head_failed = head_expanded(head_failed, merged_failed, failing_on_checkout)
         git("checkout", "-q", "--detach", merged)
+    if fixed := fixed_names(head_failed, merged_failed):
+        print(f"FIXED: {', '.join(fixed)}")
     if why := subset_refusals(head_failed, merged_failed, claims_fix(info["body"] or "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
