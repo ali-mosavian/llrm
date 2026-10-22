@@ -509,6 +509,10 @@ str_enum!(Op {
     Fatan("FATAN") = "fatan",
     Flog2("FLOG2") = "flog2",
     Fexp2("FEXP2") = "fexp2",
+    // The natural logarithm and exponential, each one x87 sequence with the
+    // constant loaded at the unit's own precision (FLDLN2, FLDL2E).
+    Fln("FLN") = "fln",
+    Fexp("FEXP") = "fexp",
     // A float rounded to an integral float as the environment rounds: x87
     // FRNDINT.
     Fround("FROUND") = "fround",

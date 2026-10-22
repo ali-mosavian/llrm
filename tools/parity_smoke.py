@@ -201,6 +201,15 @@ def ratchet_name(command: list[str]) -> str:
 RATCHET_WORKERS = int(os.environ.get("RATCHET_WORKERS", "1"))  # 4 made no gain: each `cargo test -p X --test Y` unifies features differently and rebuilds, the build lock serializes the compiles, and 4 links at load 70 cost 600-750 s a PR
 
 
+def ratchet_entries(
+    command: list[str],
+    output: str,
+) -> list[str]:
+    """The names a failed ratchet is listed by: each test it fails (`ratchet:<name>::<test>`), else the ratchet itself where the output names none. A ratchet is a test
+    binary of many tests: listed whole, one red test hid every other test that went red in it."""
+    return [f"ratchet:{ratchet_name(command)}::{test}" for test in failed_tests(output)] or [f"ratchet:{ratchet_name(command)}"]
+
+
 def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
     """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
     The commands run RATCHET_WORKERS at a time (default 1); the result is in command order."""
@@ -212,7 +221,8 @@ def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[s
     for command, result in zip(commands, done):
         if result.returncode:
             lines = [line for line in (result.stdout + result.stderr).splitlines() if "panicked" in line or "FAILED" in line or "error" in line]
-            failed[f"ratchet:{ratchet_name(command)}"] = " / ".join(lines[:2])[:240] or "failed"
+            for name in ratchet_entries(command, result.stdout + result.stderr):
+                failed[name] = " / ".join(lines[:2])[:240] or "failed"
     return failed
 
 
@@ -369,9 +379,10 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    for level in ("-O1", "-O2", "-O3", "-Os"):
-        if why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ):
-            return "fail", f"QCport d_faces.c {level}: {why}"
+    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ))}
+    if broken:
+        first = next(iter(broken))
+        return "fail", f"QCport d_faces.c {first}: {broken[first]}", [f"qc_d_faces {level}" for level in broken]
     return "ok", "QCport d_faces.c at 4 levels"
 
 
@@ -386,10 +397,50 @@ def qc_modules(bins: Path) -> tuple[str, str]:
     if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    for module in QC_MODULES:
-        if why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ):
-            return "fail", f"QCport {module} -O2: {why}"
+    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(bins / "llrm-c"), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
+    if broken:
+        first = next(iter(broken))
+        return "fail", f"QCport {first} -O2: {broken[first]}", [f"qc_modules {module}" for module in broken]
     return "ok", f"{len(QC_MODULES)} QCport modules at -O2"
+
+
+RUN_FAIL = re.compile(r"^FAIL\s+(\S+ \[[^\]]*\])", re.M)
+
+
+def failing_programs(output: str) -> list[str]:
+    """The `run <program> [<flags>]` of each FAIL line of tools/dosbatch/run_tests.py, once each: a red `run` step is listed by the programs it fails."""
+    return list(dict.fromkeys(f"run {one}" for one in RUN_FAIL.findall(output)))
+
+
+# A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
+# parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
+WHOLE_GROUP_TRIGGERS = (
+    "crates/frontends/llrm-qb/",
+    "crates/frontends/qbfront/",
+    "crates/frontends/llrm-qbruntime/",
+    "runtime/qb/",
+    "crates/target/llrm-x86/",
+    "crates/backend/llrm-core/",
+)
+
+
+def runs_whole_groups(files: list[str] | set[str]) -> bool:
+    """Whether a PR with these changed files runs every tests/run group in the gate."""
+    return any(path.startswith(WHOLE_GROUP_TRIGGERS) for path in files)
+
+
+def group_failures(
+    bins: Path | str,
+    run=subprocess.run,
+) -> set[str]:
+    """The failing `run <program> [<flags>]` of every tests/run group (tools/dosbatch/run_groups.py) on `bins`, a launch that was stopped by its group, or `run-groups-did-not-finish`."""
+    done = run([sys.executable, str(ROOT / "tools/dosbatch/run_groups.py")], cwd=ROOT, capture_output=True, text=True, env={**os.environ, "LLRM_BIN": str(bins)})
+    output = done.stdout + done.stderr
+    names = set(failing_programs(output))
+    names |= {f"run {line.split(']')[0][1:]} launch stopped" for line in output.splitlines() if "LAUNCH STOPPED" in line}
+    if not names and (done.returncode or not re.search(r"^\[\w+\] \d+ programs: ", output, re.M)):
+        names.add("run-groups-did-not-finish")
+    return names
 
 
 def run_cases(bins: Path) -> tuple[str, str]:
@@ -400,7 +451,7 @@ def run_cases(bins: Path) -> tuple[str, str]:
     done = subprocess.run([sys.executable, str(ROOT / "tools/dosbatch/run_tests.py"), *names], cwd=ROOT, capture_output=True, text=True, env=env)
     if done.returncode:
         lines = [line for line in (done.stdout + done.stderr).splitlines() if line.strip()]
-        return "fail", " / ".join(lines[-3:])[:300]
+        return "fail", " / ".join(lines[-3:])[:300], failing_programs(done.stdout + done.stderr)
     return "ok", f"{len(names)} programs"
 
 
