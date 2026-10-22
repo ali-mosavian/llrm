@@ -60,13 +60,13 @@ def parse_groups(text: str) -> tuple[list[Red], str]:
             total += int(m[2])
             passed += int(m[3]) + int(m[4])
             if "LAUNCH STOPPED" in m[6]:
-                reds.append(Red(f"run:{m[1]}:launch-stopped", OTHER, ["run_groups.py", m[1]]))
+                reds.append(Red(f"run:{m[1]}:launch-stopped", OTHER, ["dosbatch/run_groups.py", m[1]]))
         elif (m := re.match(r"\[(\S+)\] .*: no summary", line)):
-            reds.append(Red(f"run:{m[1]}:no-summary", OTHER, ["run_groups.py", m[1]]))
+            reds.append(Red(f"run:{m[1]}:no-summary", OTHER, ["dosbatch/run_groups.py", m[1]]))
         elif line.startswith("FAIL"):
             words = line.split()
             program = words[1].rstrip(":") if len(words) > 1 else line
-            reds.append(Red(f"run:{program}", WRONG, ["run_tests.py", Path(program).stem]))
+            reds.append(Red(f"run:{program}", WRONG, ["dosbatch/run_tests.py", Path(program).stem]))
     return reds, f"{passed}/{total}"
 
 
@@ -77,9 +77,9 @@ def parse_qbrt(text: str) -> tuple[list[Red], str]:
     for line in text.splitlines():
         words = line.split()
         if line.startswith("NOTPASS") and len(words) >= 3:
-            reds.append(Red(f"qbrt:{words[1]}:{words[2]}", WRONG, ["qbrt_run.py", "--only", words[1]]))
+            reds.append(Red(f"qbrt:{words[1]}:{words[2]}", WRONG, ["dosbatch/qbrt_run.py", "--only", words[1]]))
         elif line.startswith("COMPILE-FAIL") and len(words) >= 2:
-            reds.append(Red(f"qbrt:{words[1]}:compile", COMPILE, ["qbrt_run.py", "--only", words[1]]))
+            reds.append(Red(f"qbrt:{words[1]}:compile", COMPILE, ["dosbatch/qbrt_run.py", "--only", words[1]]))
         elif (m := re.match(r"RESULT (\d+) of (\d+) pass", line)):
             result = f"{m[1]}/{m[2]}"
     return reds, result
@@ -93,7 +93,12 @@ def parse_qcport(text: str) -> tuple[list[Red], str]:
         if (m := re.search(r"(\d+) modules x (\d+) levels \+ (\d+) front-end compiles.*?(\d+) failed compiles", line)):
             count = f"{m[4]} failed/{int(m[1]) * int(m[2]) + int(m[3])}"
         elif line.strip().startswith("NEW:"):
-            reds.append(Red("qcport:" + re.sub(r"\s+", " ", line.strip()[4:]).strip()[:100], COMPILE))
+            text = re.sub(r"\s+", " ", line.strip()[4:]).strip()
+            why, _, where = text.partition(" -- ")
+            first = re.match(r"(\S+) (-m\d+) (-O\w+)", where)
+            # A program of the front-end set can be asked again at another build; a QCport module (a file outside the tree) cannot.
+            probe = ["qcport_probe.py", first[1], first[2], first[3], why[:100]] if first and "." in first[1] else []
+            reds.append(Red("qcport:" + text[:100], COMPILE, probe))
     return reds, count
 
 
@@ -332,9 +337,11 @@ def ask_at(
         if built.returncode != 0:
             return None
     env = os.environ | {"LLRM_BIN": str(binaries), "QB45_DEMOS_DIR": str(DEMOS)}
-    script = ROOT / "tools" / "dosbatch" / red.probe[0]
+    script = ROOT / "tools" / red.probe[0]
     done = subprocess.run([sys.executable, str(script), *red.probe[1:]], cwd=ROOT, env=env, capture_output=True, text=True)
     text = done.stdout + done.stderr
+    if done.returncode == 3:  # the probe has no such job at that commit
+        return None
     return "FAIL" in text or "NOTPASS" in text or done.returncode != 0
 
 
