@@ -22,7 +22,7 @@ The pass proper (14.5 M with promotion) is at parity with the pin's 14.0 M. The 
 ## Levers (pin-faithful first), owners, dates
 
 1. `Annotated` and `Writes` kept across a pass that preserves them or updated for the instructions it moved (LICM moves, `MemorySSAUpdater::moveToPlace`): the 42.6 M above, less what a real change costs. This is the lazy `Annotated` + MemorySSA plan (#3563, Lazy-Annotated A). Owner funcattrs-port, 2026-11-04; measured with d_faces -O2 callgrind Ir and objects identical.
-2. loopdeletion: 34 fresh `ScalarEvolution::new` for 17 loops, 7.57 M of its 11.87 M (pin 7.3 M); one SE per loop saves at most 3.8 M (under the 4 M bar), the persistent SE removes the rest: w-5's list (SE persistence only).
+2. loopdeletion: measured, no lever in sharing the SE. 34 loops visited, one `get_backedge_taken_info` each (6.7 M of 10.0 M, 196 K per loop); `is_loop_dead` reaches its SE for a loop that is otherwise dead only. One SE for a loop's two questions (branch `alim/perf/loopdeletion-se`, objects identical on 568 files) saved 10 K Ir of 1,416.7 M (d_faces -O2, dist 2c36cb3f vs 27b17400), not 3.8 M: the earlier estimate counted SEs, not repeated trip counts. The remaining gap to the pin (10.0 M against 7.3 M) is the trip-count computation itself, which the pin pays too; not a row. The branch is not proposed.
 3. LICM itself: none (parity). Not a row.
 
 Evidence: `w3-cg/{cg.out,ann_all.txt,tree2.txt}` in w-3's scratch; reproduce with `valgrind --tool=callgrind` on the command line above and `callgrind_annotate --tree=calling --inclusive=yes`.
