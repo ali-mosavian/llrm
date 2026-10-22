@@ -122,7 +122,94 @@ def measure(ir: str, of: pin.Target, extra: list[str]) -> tuple[int, int] | None
     return instructions, sum(sizes)
 
 
+OURS = os.environ.get("LLRM_C", str(Path.home() / "scratch/fa/tgtT/release/llrm-c"))
+SOURCES = Path(os.environ.get("LLRM_CG_SOURCES", Path.home() / "scratch/rows/cc1d-new/b"))
+
+
+def text_bytes(path: str) -> int:
+    sizes = subprocess.run(["objdump", "-h", path], capture_output=True, text=True).stdout
+    found = re.search(r"\.text\s+([0-9a-f]+)", sizes)
+    return int(found.group(1), 16) if found else 0
+
+
+def instructions_of(asm: str) -> int:
+    """Instructions in llrm-c's masm output (indented lines that are neither labels nor data)."""
+    return sum(
+        1
+        for l in asm.splitlines()
+        if re.match(r"^\s{4}[a-z]", l) and not l.rstrip().endswith(":") and not re.match(r"^\s{4}(db|dw|dd|dq|align|public|extern)\b", l)
+    )
+
+
+def ours_stage(source: Path, mode: str, level: str, includes: list[str]) -> tuple[str, int, int] | None:
+    """(the MIR llrm-c hands its backend, its instructions, its .text bytes): the same IR goes to the pin's llc, so the two backends are compared alone
+    (`switchconv`, the last stage the pin reads: the one tools of w-4's leacmp.py take). The dump goes to disk, not tmpfs."""
+    flags = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"]}[mode]
+    work = tempfile.mkdtemp(dir=str(Path.home() / "scratch/fa"))
+    try:
+        asm = subprocess.run([OURS, *flags, f"-{level}", *includes, "--dump", work, "-S", str(source), "-o", f"{work}/o.s"], capture_output=True, text=True)
+        obj = subprocess.run([OURS, *flags, f"-{level}", *includes, "-fobject-format=elf", str(source), "-o", f"{work}/o.o"], capture_output=True, text=True)
+        stage = sorted(Path(work).glob("*-switchconv.ll"))
+        if asm.returncode or obj.returncode or not stage:
+            return None
+        ir = re.sub(r" tre-deferred| threeway", "", stage[0].read_text())
+        return ir, instructions_of(Path(f"{work}/o.s").read_text()), text_bytes(f"{work}/o.o")
+    finally:
+        import shutil
+
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def pin_text(ir: str, of: pin.Target, extra: list[str]) -> tuple[int, int] | None:
+    """(instructions, .text bytes incl. padding) of `llc -O2 extra`, the pin's own alignment kept (ours aligns as the pin does at m32)."""
+    asm = pin.llc(["-O2", *extra, "-filetype=asm", "-o", "-"], ir, of)
+    if asm.returncode:
+        return None
+    count = sum(1 for l in asm.stdout.splitlines() if l.startswith("\t") and not l.startswith("\t.") and l.strip())
+    with tempfile.NamedTemporaryFile(suffix=".o") as obj:
+        if pin.llc(["-O2", *extra, "-filetype=obj", "-o", obj.name], ir, of).returncode:
+            return None
+        return count, text_bytes(obj.name)
+
+
+def premise() -> None:
+    """Per switch of SWITCHES: over the programs it changes, ours against the pin with and without the pass (instructions, .text bytes), on the one IR llrm-c hands its backend."""
+    for level, optsize in (("O2", False), ("Os", True)):
+        rows: dict[str, list[int]] = {}
+        n = 0
+        for mode, irs in sets():
+            of = pin.target(mode, optsize=optsize)
+            for path in irs:
+                source = SOURCES / f"{path.parent.name}.c"
+                if not source.exists():
+                    continue
+                made = ours_stage(source, mode, level, [])
+                if made is None:
+                    continue
+                ir, *ours = made
+                with_pass = pin_text(ir, of, [])
+                if with_pass is None:
+                    continue
+                n += 1
+                for name, switches in SWITCHES.items():
+                    for switch in switches:
+                        without = pin_text(ir, of, [switch])
+                        if without is None or without == with_pass:
+                            continue
+                        row = rows.setdefault(f"{name} [{switch}]", [0] * 8)
+                        for at, value in enumerate((*ours, *with_pass, *without, 1, 0)):
+                            row[at] += value
+        print(f"# {level}: {n} programs, ours {OURS}")
+        print("pass [switch] | ours instr | ours B | pin-with instr | pin-with B | pin-without instr | pin-without B | IRs it changes")
+        for name, row in rows.items():
+            print(f"{name} | {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[5]} | {row[6]}")
+        sys.stdout.flush()
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "premise":
+        premise()
+        return 0
     what = argv[0] if argv else "changed"
     only = argv[1] if len(argv) > 1 else ""
     for level, optsize in (("O2", False), ("Os", True)):

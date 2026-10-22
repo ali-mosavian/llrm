@@ -194,3 +194,34 @@ b0:
     assert!(dump(&text(base)).expect("parses").contains("100"), "premise: an integral middle space folds");
     assert!(!dump(&text(&format!("{base}-ni:2"))).expect("parses").contains("100"));
 }
+
+/// What `dump` answers for each instruction of `@f`, in order.
+fn answers_of(text: &str) -> Vec<String> {
+    dump(text).expect("parses").lines().map(|line| answer(line).to_owned()).collect()
+}
+
+/// An FP binary fold is exact or refused (docs/working/fp-constant-fold-plan.md):
+/// `0.1 + 0.2` rounds, and x87 evaluates it wider than f32 or f64 do, so a fold
+/// in the format could print a different number than the target computes.
+#[test]
+fn an_fp_binary_op_folds_only_when_its_result_is_exact_in_the_format() {
+    let got = answers_of(
+        "define void @f() {
+  %a = fadd double 1.0, 2.0
+  %b = fadd double 0.1, 0.2
+  %c = fadd float 1.5, 2.25
+  %d = fadd float 0x3FB99999A0000000, 0x3FC99999A0000000
+  %e = fmul double 1.5, 4.0
+  %g = fdiv double 1.0, 4.0
+  %h = fdiv double 1.0, 3.0
+  %i = frem double 7.5, 2.0
+  %j = fsub float 1.0, 1.0
+  %k = fadd nsz double 1.0, 2.0
+  %l = fdiv double 1.0, 0.0
+  ret void
+}
+",
+    );
+    let folds: Vec<bool> = got.iter().map(|one| one != "-").collect();
+    assert_eq!(folds, [true, false, true, false, true, true, false, true, true, false, false], "{got:?}");
+}
