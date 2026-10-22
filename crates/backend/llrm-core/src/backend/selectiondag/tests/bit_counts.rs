@@ -13,7 +13,7 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    dag.get_load(vt, chain, ptr, MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1) })
+    dag.get_load(vt, chain, ptr, MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1), ext: None })
 }
 
 /// Legalizes a DAG whose root is `op x` for a load `x`, and returns the new

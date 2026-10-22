@@ -136,6 +136,8 @@ mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
 #[cfg(test)]
+mod extload_tests;
+#[cfg(test)]
 mod fpround_tests;
 #[cfg(test)]
 mod opcodes_tests;

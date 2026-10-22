@@ -439,7 +439,13 @@ impl Builder<'_> {
                         fixed += 1;
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
-                        let info = MemInfo { mem_vt: part_vt, align, volatile: false, base: MemBase::Stack(-fixed) };
+                        let info = MemInfo {
+                            mem_vt: part_vt,
+                            align,
+                            volatile: false,
+                            base: MemBase::Stack(-fixed),
+                            ext: None,
+                        };
                         pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
                     }
                 }
@@ -639,7 +645,7 @@ impl Builder<'_> {
                             );
                         let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                         let vt = self.dag.value_type(*piece);
-                        let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown };
+                        let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown, ext: None };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
                 }
@@ -1027,7 +1033,7 @@ impl Builder<'_> {
         let index = self.info.new_stack_object();
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
         let align = vt.size_in_bits().div_ceil(8);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index) };
+        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
@@ -1154,7 +1160,7 @@ impl Builder<'_> {
             }
             Operand::Block(_) => MemBase::Unknown,
         };
-        Ok(MemInfo { mem_vt, align, volatile, base })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None })
     }
 
     fn visit_load(

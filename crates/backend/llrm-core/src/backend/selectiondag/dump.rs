@@ -134,7 +134,16 @@ impl SelectionDAG {
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
                 };
                 let volatile = if info.volatile { "volatile " } else { "" };
-                write!(text, "<({volatile}{verb} (s{}) {to} {base})>", info.mem_vt.size_in_bits()).ok();
+                write!(text, "<({volatile}{verb} (s{}) {to} {base})", info.mem_vt.size_in_bits()).ok();
+                if let Some(ext) = info.ext {
+                    let name = match ext {
+                        super::actions::LoadExt::ExtLoad => "anyext",
+                        super::actions::LoadExt::SExtLoad => "sext",
+                        super::actions::LoadExt::ZExtLoad => "zext",
+                    };
+                    write!(text, ", {name} from {}", type_text(info.mem_vt)).ok();
+                }
+                text.push('>');
             }
             _ => {}
         }
@@ -275,8 +284,20 @@ fn renumber_registers(
 fn strip_decorations(line: &str) -> String {
     let mut text = line.to_string();
     while let Some(start) = text.find("<(") {
-        let end = text[start..].find(")>").map_or(text.len(), |end| start + end + 2);
-        text.replace_range(start..end, "");
+        let mut depth = 0;
+        let close = text[start + 1..]
+            .char_indices()
+            .find_map(|(at, c)| {
+                depth += i32::from(c == '(') - i32::from(c == ')');
+                (depth == 0).then_some(start + 1 + at + 1)
+            })
+            .unwrap_or(text.len());
+        text.replace_range(start + 1..close, "");
+        if text[start..].starts_with("<>") {
+            text.replace_range(start..start + 2, "");
+        } else if text[start..].starts_with("<, ") {
+            text.replace_range(start + 1..start + 3, "");
+        }
     }
     while let Some(start) = text.find(" [TF=") {
         let end = text[start..].find(']').map_or(text.len(), |end| start + end + 1);

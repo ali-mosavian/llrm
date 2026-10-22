@@ -376,7 +376,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => 4,
         };
         let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
-        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry) };
+        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry), ext: None };
         let chain = self.dag.entry_node();
         let loaded = self.dag.get_load(vt, chain, index, info);
         self.replace_node(node, loaded);
