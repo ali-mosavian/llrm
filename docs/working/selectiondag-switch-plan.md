@@ -65,9 +65,12 @@ The seven functions blocked on "the DAG switch, earliest 2027-02-04" are blocked
 | 5 | sdag-c | no CannotSelect, m32 | 11-12 (11-20 with x87) | 1, 4 |
 | 6 | sdag-d | emitter: locals, globals, `CALLSEQ`, jump tables, call clobbers | 11-20 | sdag-a calls |
 | 7 | sdag-a | builder refuses nothing on the corpus | **m32 11-17, m16 11-24** | 2 |
-| 8 | sdag-d | two clean weekly runs | 11-23, 11-30 | 7 |
+| 7b | sdag-d | **behaviour gate**: `--isel=dag` assembles and RUNS programs at m32: a call-free tests/run c case first 11-06 (with `LirBody`, step 3), tests/run c with calls 11-20 (step 6), then tests/run + qbrt all groups equal output to the old selector, incl. sdag-a's FPRound cases (`16777217.0` as f32, `0.1+0.2` as f64) | first 11-06, all equal 11-20 | 3, 6, 7 |
+| 8 | sdag-d | two clean weekly runs (opcodes equal in the select shadow AND output equal in 7b) | 11-23, 11-30 | 7b |
 
 The step that costs the slip against 11-02 is **7**, now measured: the corpus holds far/segment pointers (7829 uses in 465 programs), `invoke` 841 and `landingpad` 75 (QB), m16 multi-register arguments 128 and results 61, `i64` at m16 47, intrinsics (`llrm.ia16.window/code/asm` 23, libm about 45, min/max 15, `cttz`/`ctpop` 9, `va_start` 8), casts 28, float call results 12, `freeze` 6; atomics, dynamic alloca and aggregates are absent. sdag-a's per-target dates: m32 11-17 (`va_start` 11-10; intrinsics, freeze, memcpy-const sweep 11-13; FP call results 11-17; one nib inline-asm block excepted pending a custom-intrinsic decision), m16 11-24 (exception handling, far pointers, pairs, `i64` quads and the window/code intrinsics exist only in m16 QB/qbrt). Everything else finishes by 11-20.
+
+The select shadow compares opcodes, not behaviour; 7b is the gate for behaviour and runs inside each weekly run. The `llrm.ia16.asm` intrinsics (nib at m32 1, m16 window/code) are one custom node `X86ISD::LLRM_ASM chain, bytes symbol, input registers, glue`: sdag-a builds it with the register contract as `CopyToReg`/`CopyFromReg`, sdag-c's hand case selects a pseudo, and the emitter writes the bytes verbatim (DEVIATE SD402, exit: the frontend emits the pin's `INLINEASM`); emitter side 11-13.
 
 ## File collisions
 
