@@ -116,4 +116,21 @@ Decision, to be confirmed: **m32** is matched, so for m32 the slot is a numbered
 
 1. Confirm C1 (m32) and C2 (m16); the DEVIATE text goes into `addresssink.rs`'s header and the codegen table.
 2. C2 experiment: address sinking restricted to the legal 8086 forms on some of the top-20 functions, measured in bytes at -Os; a PR only if it pays.
+
+### C2 experiment result (2026-10-23)
+
+No implementation: the measurement says the lever is not address arithmetic. QCport m16 -Os, 65 IRs (`~/scratch/w4-cgp/addrforms.py`, `addrforms2.py`; the pin's `llc` with and without address sinking, `CGP_OFF=addr`):
+
+| | instr | `lea` | spills | reloads |
+|---|--:|--:|--:|--:|
+| pin with sinking | 76280 | 2264 | 1766 | 2536 |
+| pin without | 80511 | 4170 | 2525 | 3693 |
+| ours (-Os asm, same sources) | 76532 | 2118 | | |
+
+- Ours has fewer `lea` than the pin with sinking (2118 against 2264): the address arithmetic is already folded.
+- The pin's 4231 instructions are 1906 `lea`, 759 spills and 1157 reloads. Operand forms barely move: scaled-index operands 521 against 519, `reg+reg` forms -53/+45. The 8086-legal forms are what ours already forms (isel rebuilds the address in the user block); the sinking buys no new form.
+- Per function (701 functions, `perfn-qcport16-Os`): ours 76457, pin 74952, pin without 78643, so ours already holds 59% of the pin's gain; the 4132-instruction excess is offset by 2627 where ours is smaller. The residual 1505 is not `lea`.
+- `pl_trace` (AM-C2's worst, +79 attributed): the with/without diff is x87 spill slots and block order, not addresses.
+
+Decision: no PR; AM-C2's address-form premise is withdrawn, the residual 1505 instructions (2.0%) belong to the register-pressure rows (spill and reload counts), not to CodeGenPrepare. Owner w-4.
 3. The rest of the table: unchanged (each below 0.15% on these inputs).

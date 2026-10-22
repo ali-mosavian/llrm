@@ -34,12 +34,19 @@ def text_bytes(obj):
     return int(m.group(1)) if m else 0
 
 
+# Not instructions: our listing's directives (`public f`, `extern g`, `f endp`, `align 16`, `db`) began with a letter too and made ours 5.9% larger than it is.
+NOT_INSTRUCTIONS = {"public", "extern", "end", "endp", "proc", "db", "dw", "dd", "align", "label"}
+
+
 def count(asm):
-    return sum(1 for l in asm.splitlines() if re.match(r"\s+[a-z]", l) and not l.strip().startswith((".", "#")))
+    return sum(
+        1 for l in asm.splitlines()
+        if (m := re.match(r"\s+([a-z][a-z0-9]*)\b", l)) and not l.strip().startswith((".", "#")) and m.group(1) not in NOT_INSTRUCTIONS
+    )
 
 
 def job(src):
-    w = tempfile.mkdtemp()
+    w = tempfile.mkdtemp(dir=os.environ.get("PREMISE_TMP") or str(Path.home() / "scratch"))  # a dump on tmpfs is refused
     try:
         r = subprocess.run([OURS, "-m32", "-mabi=sysv", "-march=i486", LV, "-S", "--dump", w, "-o", w + "/o.s", str(src)], capture_output=True, text=True)
         if r.returncode: return None
@@ -49,7 +56,7 @@ def job(src):
         a, b = pin_asm(ir, []), pin_asm(ir, [FLAG])
         ao, bo = pin_asm(ir, [], True), pin_asm(ir, [FLAG], True)
         if None in (a, b, ao, bo): return None
-        ours_ins = sum(1 for l in open(w + "/o.s") if re.match(r"\s+[a-z]", l) and not l.strip().startswith((".", "#")))
+        ours_ins = count(open(w + "/o.s").read())
         # our bytes: the object our compiler writes
         o = subprocess.run([OURS, "-m32", "-mabi=sysv", "-march=i486", LV, "-o", w + "/o.obj", str(src)], capture_output=True, text=True)
         return src.name, ours_ins, count(a.decode()), count(b.decode()), text_bytes(ao), text_bytes(bo)

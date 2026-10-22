@@ -170,7 +170,7 @@ pub fn constrained(
         }
     };
 
-    let mut fresh = _next_value(body).max(ids.unwrap_or(0) + 1);
+    let mut fresh = body.next_value().max(ids.unwrap_or(0) + 1);
     let mut pins: IndexMap<u32, RegId> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -456,7 +456,7 @@ pub fn distinct_classes(
         let wide = widest.entry(held.value).or_default();
         *wide = (*wide).max(held.width);
     }
-    let mut fresh = _next_value(body).max(floor);
+    let mut fresh = body.next_value().max(floor);
     let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -694,17 +694,6 @@ fn _width(
         }
     }
     2
-}
-
-fn _next_value(body: &LirBody) -> u32 {
-    let mut every: Vec<u32> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.insns)
-        .flat_map(|one| one.defines.iter().chain(&one.uses).copied())
-        .collect();
-    every.extend(body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)));
-    every.into_iter().max().unwrap_or(0) + 1
 }
 
 /// `body` with each copy a loop makes into a required register, of a value

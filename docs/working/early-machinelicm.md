@@ -24,8 +24,21 @@ Premise: does the pin's `early-machinelicm` ([TargetPassConfig.cpp#L1368](https:
 
 `MachineLICMImpl::HoistOutOfLoop` ([L827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L827)) starts the pressure from the preheader (`InitRegPressure`, L933) and, per candidate, `IsProfitableToHoist` (L1273) asks `CanCauseHighRegPressure` (L1235): any register class whose cost is positive and whose pressure on any block of the back trace would reach the limit refuses the hoist; a cheap instruction is refused outright when it creates a loop-phi copy. We have no equivalent stage after selection: `licm` (mid-end) hoists IR, `loopslots.rs` hoists reloads.
 
+## Attribution (2026-10-22)
+
+`tools/pairs/mlicm_kinds.py`: the net in-loop instructions by kind, the pin's `llc` without the pass less with it, m16 -O2, per function. A text diff of the two listings reports a gross 1765 (register and label numbers differ throughout); the net over the five modules is 657.
+
+| module | net | largest kinds |
+|---|--:|---|
+| mdl_ai | 247 | x87 `flds`/`fstps`/`fstp` 64, moves 21, loads 15 |
+| ent | 223 | `pushl` 37, `addl` 29, loads 29, moves 23, `calll` 19 |
+| cmd | 75 | `pushl` 15, moves 8, loads 8 |
+| sc | 80 | loads 23, moves 21 |
+| weapons | 32 | moves 9, loads 5 |
+| all five | 657 | moves 82, loads 80, push/add-esp/call 136, x87 70, lea 23 |
+
+No kind dominates. Constants and addresses (the kinds our mid-end `licm` could take earlier) are the smallest: `lea` 23, `mov $symbol` and `mov $imm` below that. Pushes, calls and `add esp` fall with the pass because a call sequence moved or a block was placed differently, which is layout, not hoisting.
+
 ## Decision
 
-The premise is a small gap, at m16 -O2 only. No code yet. Before any: attribute the 754 instructions by kind (constants, addresses, loads) on the five modules with the largest in-loop difference (`mdl_ai`, `cmd`, `sc`, `ent`, `weapons`), because a kind that our mid-end `licm` could take earlier (an address, a constant) is a cheaper fix than a machine pass with a register-pressure model. Owner w-3, exit 2026-11-13.
-
-Limits: static counts, one IR stage, no run times. A change to the pin's alignment or block placement moves loop ranges by a few instructions.
+CG2 stays a DEVIATE with no exit planned: the residual is diffuse and 1.6% of in-loop instructions at m16 -O2 only. Reopen if a row shows a loop-invariant constant, address or load left in a loop.

@@ -121,3 +121,50 @@ b5:
     assert!(!body.contains("sext"), "{shown}");
     assert_eq!(rest.matches("sext").count(), 2, "{shown}");
 }
+
+/// `sunk` looked at every phi of every block outside each loop, 1.97 M of the
+/// 15.4 M of indvars on d_faces -O2 (the pin's `sinkUnusedInvariants` costs
+/// nothing there). A candidate is in a block the loop exits to: phis elsewhere
+/// are not looked at.
+#[test]
+fn test_only_the_phis_of_the_exit_blocks_are_looked_at() {
+    use llrm_mir::counts::{Event, get};
+    // Five join phis after the loop, away from the exit.
+    let mut text = String::from(
+        "define i16 @f(i16 %n, i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %i.next = add i16 %i, 1
+  %last = add i16 %i.next, 40
+  %more = icmp ult i16 %i.next, %n
+  br i1 %more, label %b1, label %b2
+
+b2:
+  %e = phi i16 [ %last, %b1 ]
+  br label %j0
+",
+    );
+    for at in 0..5 {
+        text += &format!(
+            "
+j{at}:
+  %p{at} = phi i16 [ %e, %b2 ]
+  br label %j{next}
+",
+            next = at + 1
+        );
+    }
+    text += "
+j5:
+  ret i16 %e
+}
+";
+    let mut module = parsed(&text);
+    let before = get(Event::ExitSinkPhis);
+    sunk(f(&mut module));
+    let looked = get(Event::ExitSinkPhis) - before;
+    assert!(looked <= 2, "{looked} phis looked at, one is in an exit block");
+}
