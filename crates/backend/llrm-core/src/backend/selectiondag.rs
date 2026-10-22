@@ -20,9 +20,19 @@
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
 //! Arguments and returns go through the target's `Convention` (stack
 //! parameters are loads of fixed objects, register ones live-in copies;
+<<<<<<< HEAD
 //! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 //! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
 //! Indirect calls, intrinsics, switches, floats and values wider than a
+=======
+<<<<<<< HEAD
+//! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+//! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+//! Indirect calls, intrinsics, switches, floats and values wider than a
+=======
+//! `ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+>>>>>>> sdag-a2
+>>>>>>> sdag-a2b
 //! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
@@ -91,7 +101,10 @@ pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
 pub mod schedule;
+<<<<<<< HEAD
 pub mod switchcg;
+=======
+>>>>>>> sdag-a2b
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};

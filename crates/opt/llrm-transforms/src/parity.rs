@@ -329,6 +329,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
+    entry("machinelicm@4", Backend, "early-machinelicm", Translated, ""),
     partial(
         "machinecse@4",
         Backend,
