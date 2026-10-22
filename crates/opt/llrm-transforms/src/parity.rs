@@ -314,6 +314,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
+    // Runs in the strength slot, before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),

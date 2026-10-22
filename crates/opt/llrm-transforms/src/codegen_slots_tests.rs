@@ -157,10 +157,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Canonicalize Freeze Instructions in Loops",
-        Missing,
+        Match,
+        "canonfreeze.rs",
         "",
-        "",
-        "funcattrs-port; 2026-11-13: (premise below: start only where ours exceeds pin-with) MIR has `freeze`; LSR's canon-freeze is not run. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
+        "translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
     ),
     row(
         "Induction Variable Users",

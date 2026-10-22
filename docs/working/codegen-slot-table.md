@@ -13,7 +13,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 5 | Lower AMX intrinsics | N/A |  |  | AMX is a 64-bit extension; target features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 6 | Lower AMX type for load/store | N/A |  |  | as above. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 7 | Canonicalize natural loops | EXECUTED | loopsimplify.rs (mid-end) |  | loop-simplify runs in the mid-end; LSR relies on it. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs |
-| 8 | Canonicalize Freeze Instructions in Loops | MISSING |  |  | funcattrs-port; 2026-11-13: MIR has `freeze`; LSR's canon-freeze is not run. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
+| 8 | Canonicalize Freeze Instructions in Loops | MATCH | canonfreeze.rs |  | translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 9 | Induction Variable Users | MATCH | ivusers.rs |  | translated. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 10 | Loop Strength Reduction | MATCH | lsr_*.rs (registry `lsr`) | `-disable-lsr` | translated; runs at the end of the mid-end, the pin's runs after it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs; -disable-lsr -O2: -37 instr, +40 B, 61 IRs differ; -disable-lsr -Os: +283 instr, +876 B, 63 IRs differ |
 | 11 | Lower Garbage Collection Instructions | N/A |  |  | no GC strategy in any frontend. Pin: changed code in 62 (-O2) and 64 (-Os) of 77 IRs |
