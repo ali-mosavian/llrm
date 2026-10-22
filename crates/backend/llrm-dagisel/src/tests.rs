@@ -359,3 +359,97 @@ mod fold_load {
         assert!(hooks(true).try_fold_load(&mut dag, add, add, load).is_none());
     }
 }
+
+mod address_folds {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddressMode, Matcher};
+
+    fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
+        Matcher { dag, pointer_type: mvt::i32 }
+    }
+
+    fn masked_shift(dag: &mut TestDag, amount: i64, mask: i64) -> (SDValue, SDValue) {
+        let x = dag.input(1, mvt::i32);
+        let count = dag.make_constant(amount, mvt::i8);
+        let shifted = SDValue::new(dag.node(isd::SRL, &[mvt::i32], &[x, count]), 0);
+        let mask = dag.make_constant(mask, mvt::i32);
+        (SDValue::new(dag.node(isd::AND, &[mvt::i32], &[shifted, mask]), 0), x)
+    }
+
+    #[test]
+    fn a_byte_extracted_by_shift_and_mask_becomes_a_scaled_index() {
+        // `(x >> 6) & 0x3fc` is `((x >> 8) & 0xff) << 2`.
+        let mut dag = TestDag::new();
+        let (and, x) = masked_shift(&mut dag, 6, 0x3fc);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(and, &mut am));
+
+        assert_eq!(am.scale, 4);
+        let index = am.index_reg.unwrap();
+        assert_eq!(dag.nodes[index.node as usize].opcode, isd::AND, "(x >> 8) & 0xff");
+        let srl = dag.nodes[index.node as usize].ops[0];
+        assert_eq!(dag.nodes[srl.node as usize].ops[0], x);
+        assert_eq!(constant_of_node(&dag, dag.nodes[srl.node as usize].ops[1]), Some(8));
+    }
+
+    fn constant_of_node(dag: &TestDag, v: SDValue) -> Option<i64> {
+        dag.nodes[v.node as usize].constant
+    }
+
+    #[test]
+    fn a_masked_shift_left_becomes_a_masked_value_scaled() {
+        // `(x << 2) & 0xfc` is `(x & 0x3f) << 2`.
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let count = dag.make_constant(2, mvt::i8);
+        let shl = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[x, count]), 0);
+        let mask = dag.make_constant(0xfc, mvt::i32);
+        let and = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[shl, mask]), 0);
+        // The fold wants the AND used once, by the address it is part of.
+        let base = dag.input(2, mvt::i32);
+        dag.node(isd::ADD, &[mvt::i32], &[base, and]);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(and, &mut am));
+
+        assert_eq!(am.scale, 4);
+        let index = am.index_reg.unwrap();
+        assert_eq!(dag.nodes[index.node as usize].ops[0], x);
+        assert_eq!(constant_of_node(&dag, dag.nodes[index.node as usize].ops[1]), Some(0x3f));
+    }
+
+    #[test]
+    fn a_shift_and_mask_that_drops_unknown_bits_is_left_alone() {
+        // `(x >> 1) & 0x3fc` with nothing known about x: the high bits of x may be set.
+        let mut dag = TestDag::new();
+        let (and, _) = masked_shift(&mut dag, 1, 0x3fc);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(and, &mut am));
+
+        assert_eq!((am.scale, am.base_reg), (1, Some(and)), "the whole value stays a register");
+    }
+
+    #[test]
+    fn the_same_shift_and_mask_scales_when_the_high_bits_are_known_zero() {
+        // x = y & 0xff: `(x >> 1) & 0x3fc` is `(x >> 3) << 2`.
+        let mut dag = TestDag::new();
+        let y = dag.input(1, mvt::i32);
+        let byte = dag.make_constant(0xff, mvt::i32);
+        let x = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[y, byte]), 0);
+        let count = dag.make_constant(1, mvt::i8);
+        let shifted = SDValue::new(dag.node(isd::SRL, &[mvt::i32], &[x, count]), 0);
+        let mask = dag.make_constant(0x3fc, mvt::i32);
+        let and = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[shifted, mask]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(and, &mut am));
+
+        assert_eq!(am.scale, 4);
+        let index = am.index_reg.unwrap();
+        assert_eq!(dag.nodes[index.node as usize].opcode, isd::SRL);
+        assert_eq!(constant_of_node(&dag, dag.nodes[index.node as usize].ops[1]), Some(3));
+    }
+}
