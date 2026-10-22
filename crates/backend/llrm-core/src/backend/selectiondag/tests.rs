@@ -797,7 +797,6 @@ mod switches {
             }
         }
         assert_eq!(ours, include_str!("golden/switches.pin.txt"));
-<<<<<<< HEAD
     }
 }
 
@@ -869,7 +868,5 @@ mod switch_dags {
         for (name, dumps) in &ours {
             assert_eq!(dumps, &pins[name], "function {name}");
         }
-=======
->>>>>>> sdag-a2c
     }
 }

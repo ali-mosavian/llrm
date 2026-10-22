@@ -11,11 +11,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
-<<<<<<< HEAD
 mod switch;
 
-=======
->>>>>>> sdag-a2c
 use crate::backend::isel::{Convention, Parameter, convention_for};
 use llrm_lir::registers::RegId;
 
@@ -76,30 +73,8 @@ pub fn build_block(
     info: &mut FunctionLoweringInfo,
     block: BlockId,
 ) -> Result<BlockDag, Refused> {
-<<<<<<< HEAD
     let order = function.layout().to_vec();
     let mut builder = Builder::new(module, function, layout, target, arch, convention, info, block, order, function.block_capacity() as u32, None);
-=======
-    let mut builder = Builder {
-        module,
-        function,
-        layout,
-        target,
-        arch,
-        convention,
-        info,
-        live_ins: Vec::new(),
-        dag: SelectionDAG::new(target.dag),
-        node_map: IdMap::new(),
-        pending_loads: Vec::new(),
-        pending_exports: Vec::new(),
-        constants_out: HashMap::new(),
-        phi_updates: Vec::new(),
-        block,
-    };
-    builder.dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-    builder.dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
->>>>>>> sdag-a2c
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
     }
