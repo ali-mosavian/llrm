@@ -657,10 +657,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
-        Missing,
+        Deviate,
         "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, not yet called: FO-1)",
         "",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry prologue@13. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
