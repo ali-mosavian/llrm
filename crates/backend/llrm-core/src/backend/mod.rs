@@ -232,6 +232,9 @@ pub mod saverestore;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selects;
+pub mod shadow;
+#[cfg(test)]
+mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slots;
 pub mod stackusage;

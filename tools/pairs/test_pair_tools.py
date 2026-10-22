@@ -101,3 +101,43 @@ def test_board_and_cbisect_say_what_they_need_instead_of_running():
     for script in ("board.py", "cbisect.py"):
         done = subprocess.run([sys.executable, str(HERE / script)], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         assert done.returncode == 2, (script, done.stderr)
+
+
+def fake_selector(path: Path, extra: int = 0, refuse: bool = False) -> str:
+    """A stand-in llrm-c with two functions on the `isel` channel; `--isel=dag` gives `g` EXTRA more instructions, or is refused."""
+    path.write_text(
+        '#!/bin/bash\n[ "$1" = --version ] && { echo "llrm-c abc1234"; exit 0; }\n'
+        'for a; do case $a in --isel=*) s=${a#--isel=};; esac; [ "$p" = -o ] && o=$a; p=$a; done\n'
+        f'[ "$s" = dag ] && {{ [ {int(refuse)} = 1 ] && {{ echo "@f: --isel=dag: cannot select" >&2; exit 1; }}; n={extra}; }} || n=0\n'
+        'echo x > "$o"\necho "[isel] f selector=$s instructions=4 copies=1 executed=9 memory=2" >&2\n'
+        'echo "[isel] g selector=$s instructions=$((7+n)) copies=0 executed=20 memory=5" >&2\n'
+    )
+    path.chmod(0o755)
+    return str(path)
+
+
+def shadow(tmp_path, binary: str, *extra: str):
+    src = tmp_path / "b"
+    src.mkdir(exist_ok=True)
+    (src / "p.c").write_text("int a;")
+    return subprocess.run([sys.executable, str(HERE / "isel_shadow.py"), binary, "--src", str(src), "--levels", "O2", "--targets", "m32", *extra], capture_output=True, text=True)
+
+
+def test_isel_shadow_old_against_old_is_empty(tmp_path):
+    """The premise: a harness that reports a difference between a selector and itself reports nothing true."""
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm"), "--new-isel", "old")
+    assert done.returncode == 0, done.stdout
+    assert "0 functions differ of 2; 1 of 1 cells identical, 0 refused" in done.stdout
+
+
+def test_isel_shadow_shows_a_seeded_one_instruction_difference_as_one_function(tmp_path):
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm", extra=1))
+    assert done.returncode == 1
+    assert "1 functions differ of 2" in done.stdout
+    assert "p m32 -O2 g: instructions 7 -> 8" in done.stdout and " f:" not in done.stdout
+
+
+def test_isel_shadow_counts_a_refused_compile_and_never_as_equal(tmp_path):
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm", refuse=True))
+    assert done.returncode == 1
+    assert "1 refused" in done.stdout and "REFUSED p m32 -O2: old: ok; new: @f: --isel=dag: cannot select" in done.stdout
