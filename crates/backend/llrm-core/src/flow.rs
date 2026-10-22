@@ -85,6 +85,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
+    ("ProcessImplicitDefs", "processimpdefs@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
@@ -151,6 +152,8 @@ pub fn machine_with<'a>(
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
+        // Before the phis go: a value nothing defines is read as undef.
+        Box::new(crate::processimpdefs::ProcessImplicitDefs),
         Box::new(ssaspill::SsaSpill {
             frame: or_empty(),
             segments: segments.clone(),
