@@ -153,9 +153,9 @@ fn stores_at_constant_offsets_share_one_use_and_its_range_grows() {
 #[test]
 fn an_immediate_folds_into_an_address_and_not_into_a_basic_use() {
     let tti = X86::of_cpu("core2").unwrap();
-    assert!(is_always_foldable(&tti, Kind::Address, false, Immediate(8), true));
-    assert!(!is_always_foldable(&tti, Kind::Basic, false, Immediate(8), true));
-    assert!(is_always_foldable(&tti, Kind::Basic, false, Immediate::ZERO, true));
+    assert!(is_always_foldable(&tti, Kind::Address, 0, false, Immediate(8), true));
+    assert!(!is_always_foldable(&tti, Kind::Basic, 0, false, Immediate(8), true));
+    assert!(is_always_foldable(&tti, Kind::Basic, 0, false, Immediate::ZERO, true));
 }
 
 #[test]

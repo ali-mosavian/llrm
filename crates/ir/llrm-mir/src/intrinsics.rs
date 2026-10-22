@@ -280,6 +280,8 @@ pub enum FloatFunction {
     Atan,
     Log2,
     Exp2,
+    Log,
+    Exp,
     /// Rounds to an integral float as the rounding mode says.
     Rint,
 }
@@ -297,6 +299,8 @@ impl FloatFunction {
             Self::Atan => x.atan(),
             Self::Log2 => x.log2(),
             Self::Exp2 => x.exp2(),
+            Self::Log => x.ln(),
+            Self::Exp => x.exp(),
             Self::Rint => x.round_ties_even(),
         }
     }
@@ -417,7 +421,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 48] = [
+const TABLE: [Spec; 50] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -460,6 +464,8 @@ const TABLE: [Spec; 48] = [
     unary("llvm.atan", FloatFunction::Atan),
     unary("llvm.log2", FloatFunction::Log2),
     unary("llvm.exp2", FloatFunction::Exp2),
+    unary("llvm.log", FloatFunction::Log),
+    unary("llvm.exp", FloatFunction::Exp),
     unary("llvm.rint", FloatFunction::Rint),
     Spec {
         name: "llvm.lrint",

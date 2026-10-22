@@ -158,7 +158,8 @@ pub fn promised(
         let cells = promises.writes(routine);
         let nounwind = promises.nounwind.iter().any(|one| one == routine);
         let no_return = promises.no_return.iter().any(|one| one == routine);
-        if cells.is_none() && !nounwind && !no_return || out.named(name).is_some() {
+        let flags = promises.flags_results.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind && !no_return && !flags || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
@@ -168,6 +169,7 @@ pub fn promised(
         function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
         function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
         function.attrs.extend(no_return.then(|| Fact::NoReturn.carrier()));
+        function.attrs.extend(flags.then(|| Fact::FlagsResult.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one)
                 .chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied()))
@@ -2036,6 +2038,8 @@ fn intrinsic(
         Op::Fatan => "atan",
         Op::Flog2 => "log2",
         Op::Fexp2 => "exp2",
+        Op::Fln => "log",
+        Op::Fexp => "exp",
         Op::Fround => "rint",
         _ => return None,
     };
@@ -3490,7 +3494,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
                 self.define(instruction, result);
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
+            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fln | Op::Fexp | Op::Fround => {
                 let value = self.value(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let result = self.intrinsic(op, value, ty)?.ok_or_else(|| format!("{op} of a non-float"))?;

@@ -719,3 +719,43 @@ def test_a_row_whose_kernel_the_compiler_folded_away_is_marked_and_out_of_the_ge
     assert "instructions -50.0% (n=1)" in text and "folded, out of the geomeans: gone" in text, text
     assert bench.clock_lines({("gone", "c", "O2"): {"instructions": 0}}, ["gone"]) == ["gone c -O2: folded (the kernel is never entered)"]
     assert not bench.folded({"error": "run: timeout", "instructions": 0}) and not bench.folded({"instructions": 3})
+
+
+def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline():
+    """`-fno-inline=NAME` (DEVIATE 1 of driver/flags.rs): without `-fno-inline-functions`, fib's and frames' kernels inline into main, and the harness
+    has no kernel to enter ("region never entered", 112 of 287 rows of the flag table). Marked by name, the kernel is a call and crc's helpers
+    (B$FMID, B$FASC) still inline into it."""
+    import re
+    import subprocess
+    import tempfile
+
+    def asm(program: str, *extra: str) -> str:
+        with tempfile.TemporaryDirectory() as where:
+            out = Path(where) / "p.s"
+            done = subprocess.run(
+                [str(bench.BIN / "llrm-qb"), str(bench.BENCH / program / f"{program}.bas"), "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-finline-functions", "-fno-inline-functions-called-once", *extra, "-S", "-o", str(out)],
+                capture_output=True,
+                text=True,
+            )
+            assert done.returncode == 0, done.stderr
+            return out.read_text()
+
+    def calls(text: str, name: str) -> int:
+        return len(re.findall(rf"call.*\b{name}\b", text))
+
+    assert calls(asm("fib"), "BENCHFIB") == 0, "unmarked, the kernel inlines into main"
+    assert calls(asm("fib", "-fno-inline=BenchFib"), "BENCHFIB") == 1
+    crc = asm("crc", "-fno-inline=BenchCrc")
+    kernel = crc.split("BENCHCRC proc")[1].split("BENCHCRC endp")[0]
+    assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
+
+
+def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
+    import subprocess
+
+    done = subprocess.run(
+        [str(bench.BIN / "llrm-qb"), str(bench.BENCH / "fib" / "fib.bas"), "--dialect", "qb45", "-fqb-runtime=llrm", "-fno-inline=NoSuchKernel", "-o", "/dev/null"],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode != 0 and "defines no function of that name" in done.stderr

@@ -384,7 +384,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         // A literal or address is rematerializable per definition, as
         // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
         // the register's facts say its cell holds (D-I).
-        let load = what.op == Operation::Move && matches!(what.sources[0], Loc::Mem(_));
+        let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
         if load && !self.tables.remat.borrow().contains(&parent) {
             return None;
         }
@@ -1059,6 +1059,34 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&across(2)).is_none_or(|roots| roots.is_empty()));
     }
 
+    /// A value in no width table is held as wide as the widest: the complement
+    /// of a split has no entry until `note_split_from` gives it its parent's,
+    /// and read as narrow it was placed in `esi` across a call that destroys
+    /// the high half (crc.bas -O2 m16 printed 14630 for -873187034).
+    #[test]
+    fn test_a_value_in_no_width_table_is_held_against_a_call_that_destroys_a_high_half() {
+        let insns: Vec<Arc<Insn>> = (0..10).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let masks = CallMasks::of(
+            vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
+            Vec::new(),
+            widths(&[(1, 4)]),
+        );
+        let mut li = LiveInterval::new(9, 1.0);
+        let v = li.get_next_value(at(2));
+        li.add_segment(Segment::new(at(2), at(8), Some(v)));
+        assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
+    }
+
     /// An instruction that reads the data segment register without naming it
     /// takes it from a range that ends at it: a far array's selector placed in
     /// `ds` was loaded with the stack's, and matmul.bas stored into the stack
@@ -1169,6 +1197,47 @@ mod tests {
         // The x87 value lives through the middle block.
         let through = body(vec![vec![load(), make(), jump(5)], vec![jump(6)], vec![read(), store()]]);
         assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
+    }
+
+    /// A local range may take the register of a cheaper local one when that one
+    /// can move to a free register (`canReassign`, on in the pin: the subtarget
+    /// answers true). Without it the heavier range took the first register it
+    /// found and the other range, with a single register to go to, was spilled.
+    #[test]
+    fn test_a_local_range_is_evicted_when_it_can_move_to_a_free_register() {
+        let none = || Arc::new(Insn::new(0, None, None, vec![], vec![]));
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        // 1 and 2 are long and lightly used (1 more than 2); 3 is short and
+        // heavy.
+        let mut insns = vec![insn(&[1], &[]), insn(&[2], &[]), insn(&[3], &[])];
+        insns.extend((0..4).map(|_| insn(&[], &[3])));
+        insns.push(insn(&[], &[1]));
+        insns.extend((0..11).map(|_| none()));
+        insns.extend([insn(&[], &[1]), insn(&[], &[1]), insn(&[], &[2])]);
+        let body = LirBody::new(
+            "reassign",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |value: u32| match value {
+            1 => vec![RegId::EAX],
+            2 => vec![RegId::EBX, RegId::ECX],
+            3 => vec![RegId::EAX, RegId::EBX],
+            _ => vec![RegId::EAX],
+        };
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &IndexMap::default(),
+            unspillable: &BTreeSet::new(),
+            data: None,
+            sets: None,
+        };
+        let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+        assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
     }
 
     /// A range live at the two ends of a function and not between them was

@@ -105,6 +105,7 @@ fn listing_float_store(
         true,
         false,
         false,
+        false,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -1867,6 +1868,35 @@ define double @f(double %x) addrspace(1) {
         .filter_map(|what| what.name.clone())
         .collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
+}
+
+/// `fexp2` pushes two slots above its operand: with six doubles live the `fld1`
+/// overflowed the stack and reset the loop counter (p_pressure2 printed 40.04
+/// for 44.44). The selector marks the sequence as clobbering the stack's top
+/// slots.
+#[test]
+fn test_a_sequence_that_pushes_above_its_operand_clobbers_the_top_stack_registers() {
+    use llrm_lir::registers::RegId;
+    let text = "declare double @llvm.exp2.f64(double)
+declare double @llvm.log2.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.exp2.f64(double %x)
+  %b = call double @llvm.log2.f64(double %a)
+  ret double %b
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let clobbers = |name: &str| -> Vec<RegId> {
+        let one = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .find(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name))
+            .expect(name);
+        one.clobbers.iter().copied().collect()
+    };
+    assert_eq!(clobbers("fexp2"), [RegId::MM5, RegId::MM6]);
+    assert_eq!(clobbers("flog2"), [RegId::MM6]);
 }
 
 /// A segment's far pointer is offset 0: plasma's element address was
@@ -6434,6 +6464,75 @@ define float @f(float %x, float %y) addrspace(1) {
     let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
     assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
+}
+
+/// Two float arguments read again after a call were stored to the frame and
+/// loaded back from it: no float load was a value the spiller could make
+/// again, though `x` and `y` are read from cells nothing writes. Both loads are
+/// now such values (the pin: immutable stack arguments are invariant).
+#[test]
+fn test_float_arguments_read_after_a_call_are_loads_the_spiller_makes_again() {
+    let text = "declare void @g() addrspace(1)
+define double @f(double %x, double %y) addrspace(1) {
+  %a = fmul double %x, %y
+  call addrspace(1) void @g()
+  %b = fadd double %x, %a
+  %c = fmul double %b, %x
+  %e = fadd double %c, %y
+  %d = fmul double %e, %y
+  ret double %d
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let again = crate::backend::spiller::remade_values(&body);
+    let loads: Vec<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::FloatLoad))
+        .flat_map(|one| one.defines.iter().copied())
+        .collect();
+    assert!(!loads.is_empty(), "the premise: float loads");
+    assert!(loads.iter().all(|value| again.contains(value)), "{loads:?} against {again:?}");
+}
+
+/// A float made by `fild` from a frame cell was made again after a call by
+/// another `fild` of that cell, which `b`'s conversion had overwritten:
+/// `long_double_layout.c` printed 11 for `(long)(single * 2) + last` (want 24)
+/// once x87 loads of global cells counted as values the spiller makes again.
+/// Only a load of a global or an argument's cell is; the one of a local cell
+/// is stored and loaded back from its spill cell.
+#[test]
+fn test_a_float_converted_from_a_local_cell_is_not_made_again_from_it() {
+    let _on = crate::backend::allocate::RfpOn::set();
+    let text = "@g = global x86_fp80 zeroinitializer
+@k = global i32 0
+declare void @h(i32) addrspace(1)
+define i32 @f(i16 %n) addrspace(1) {
+  %two = sitofp i16 2 to x86_fp80
+  %a = load x86_fp80, ptr @g
+  %m = fmul x86_fp80 %a, %two
+  %i = fptosi x86_fp80 %m to i32
+  call addrspace(1) void @h(i32 %i)
+  %c = sitofp i16 %n to x86_fp80
+  %d = fmul x86_fp80 %a, %c
+  %j = fptosi x86_fp80 %d to i32
+  call addrspace(1) void @h(i32 %j)
+  %e = fmul x86_fp80 %a, %two
+  %l = fptosi x86_fp80 %e to i32
+  ret i32 %l
+}
+";
+    let asm = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "486", text);
+    let from = asm.find("f proc").or_else(|| asm.find("F proc")).expect("the procedure");
+    let got: Vec<String> = asm[from..]
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.ends_with("endp"))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
+    assert!(!got[call..].iter().any(|line| line.starts_with("fild ")), "{got:#?}");
 }
 
 /// `while (p < big + 20000)` over a huge array stopped at the 64 KB boundary:

@@ -868,6 +868,13 @@ pub fn is_eliminable_cast_pair(
                 std::cmp::Ordering::Equal => CastOp::BitCast,
             })
         }
+        // DEVIATE C1: the pin composes any two addrspacecasts. A space the
+        // target declares non-integral (`ni:` in its datalayout: the selector-
+        // alone space) is not a point on the way: near -> selector keeps the
+        // segment and drops the offset, selector -> far gives segment:0, and
+        // near -> far keeps the offset. Exit: the day our casts through the
+        // selector space compose (a pin-shaped far-pointer model).
+        12 if pointer_space(context, mid).is_some_and(|space| layout.has_unstable_representation(space)) => None,
         12 => Some(if pointer_space(context, src) != pointer_space(context, dst) {
             CastOp::AddrSpaceCast
         } else {

@@ -78,6 +78,18 @@ pub struct Tables {
 // proves the same per live range (`_stable_loads_by`), which covers the m16
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
 // with an invariant-load flag set from those facts.
+//
+// DEVIATE D-RFP4 (w-4, 2026-10-30): an x87 load (`fld`) of a global or of an
+// incoming argument's cell, which nothing writes while the value lives, is made
+// again where it is read. The fact: X86InstrInfo takes a load only when it is
+// invariant (an immutable stack argument is; the integer loads of D-I are the
+// same proof, `_stable_loads_from`), but the x87 loads were never offered to
+// it, so the RFP route stored and reloaded them: QCport d_alias -Os 520 fld,
+// 461 fstp, 161 fxch against 462, 392, 144 with it. A local cell is left out
+// (the cell `fild` reads is written again between two loads). Exit: retire
+// when the pin's foldMemoryOperand/rematerialisation for x87 reaches the same
+// bytes, or with D-I.
+
 /// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
 /// register written by a plain move or address, nothing pinned or destroyed.
 pub fn remat_shape(one: &Insn) -> bool {
@@ -89,7 +101,10 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.clobbers_high.is_empty()
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
-            matches!(w.op, Operation::Move | Operation::Address)
+            matches!(
+                w.op,
+                Operation::Move | Operation::Address | Operation::FloatLoad
+            )
                 && matches!(
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
@@ -320,6 +335,10 @@ impl<'a> InlineSpiller<'a> {
             self.tables.orders.borrow_mut().insert(value, order);
             let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
             self.tables.widths.borrow_mut().insert(value, width);
+            let bytes = self.tables.float_bytes.borrow().get(&reg).copied();
+            if let Some(bytes) = bytes {
+                self.tables.float_bytes.borrow_mut().insert(value, bytes);
+            }
             self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
@@ -483,8 +502,9 @@ impl InlineSpiller<'_> {
     /// writes it. DEVIATE D-RFP1: the cell is the value's float type
     /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
     /// spill rounds, not one class width, where the language follows the pin
-    /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
-    /// as only a store the program writes rounds there (stft_single). Exit: the
+    /// (`Profile::rounds_float_spills`, llrm-c); Nib keeps the qword,
+    /// as only a store the program writes rounds there (stft_single); BASIC
+    /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
     /// OPEN D-RFP3 (RFP-5, owner w-1, 2026-10-31): where the qword is kept (Nib
