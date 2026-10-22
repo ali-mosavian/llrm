@@ -9,15 +9,15 @@
 //! The matchers never change the DAG here, so the pin's `HandleSDNode` guards are not needed.
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD33** Not translated: `foldMaskedShiftToBEXTR` (no TBM or BMI here), the `any_extend`
+//! - **SD34** Not translated: `foldMaskedShiftToBEXTR` (no TBM or BMI here), the `any_extend`
 //!   look-through of `foldMaskedShiftToScaledMask` (x32), and the `SIGN_EXTEND`/`ZERO_EXTEND`
 //!   re-association of `matchIndexRecursively` and the `ZERO_EXTEND` case of
 //!   `matchAddressRecursively`. `insertDAGNode` is nothing: the arena has no order to keep, and
 //!   the pin's `HandleSDNode` guards are not modelled. Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD39** `MaskedValueIsZero` is [`known_zero`], a structural subset of `computeKnownBits`
+//! - **SD40** `MaskedValueIsZero` is [`known_zero`], a structural subset of `computeKnownBits`
 //!   (constants, `AND` with a constant, zero-extension, constant shifts); the folds decline what
 //!   it cannot prove. Owner sdag-c. Exit: when the DAG API has known bits. Review 2026-12-10.
-//! - **SD34** The 64-bit and x32 branches, RIP-relative modes, large code model, the
+//! - **SD35** The 64-bit and x32 branches, RIP-relative modes, large code model, the
 //!   TLS segment loads (`matchLoadInAddress`) and the vector forms (`matchVectorAddress`) are
 //!   left out: no such target here. m16 has its own matcher (C2). Owner sdag-c. Exit: none.
 //!   Review 2026-12-10.
@@ -55,7 +55,7 @@ fn low_mask(bits: u32) -> u64 {
 }
 
 /// The bits of `v` known to be zero, within its width (a structural subset of
-/// `computeKnownBits`: constants, `AND` with a constant, zero-extensions, constant shifts; SD39).
+/// `computeKnownBits`: constants, `AND` with a constant, zero-extensions, constant shifts; SD40).
 pub fn known_zero<D: AddrDag>(dag: &D, v: SDValue, depth: u32) -> u64 {
     let width = vt_bits(dag.value_type(v));
     let all = low_mask(width);
@@ -294,7 +294,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     fn fold_masked_shift_to_scaled_mask(&mut self, n: SDValue, am: &mut AddressMode) -> bool {
         let shift = self.operand(n, 0);
         let mask = self.constant(self.operand(n, 1)).expect("an AND with a constant");
-        // The pin also looks through an `any_extend` of i32 to i64: not at 32 bits (SD34).
+        // The pin also looks through an `any_extend` of i32 to i64: not at 32 bits (SD35).
         let Some(amount) = self.constant(self.operand(shift, 1)) else { return true };
         if self.opcode(shift) != isd::SHL || !self.dag.has_one_use(n) || !self.dag.has_one_use(shift) {
             return true;
@@ -485,7 +485,7 @@ impl<D: AddrDag> Matcher<'_, D> {
         self.match_address_recursively(op, am, depth + 1)
     }
 
-    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD33.
+    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD34.
     ///
     /// [idx]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2557
     fn match_index_recursively(&mut self, n: SDValue, am: &mut AddressMode, depth: u32) -> SDValue {

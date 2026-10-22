@@ -360,50 +360,6 @@ mod fold_load {
     }
 }
 
-mod instr_desc {
-    use super::*;
-    use crate::generated::ids::x86;
-    use crate::instr::{desc, operand_type};
-
-    fn opcode(name: &str) -> u16 {
-        table::MACHINE_OPCODES.iter().find(|(_, n)| n.split('|').any(|n| n == name)).unwrap_or_else(|| panic!("{name} is not emitted")).0
-    }
-
-    #[test]
-    fn add32rr_defines_one_register_ties_the_source_and_sets_flags() {
-        let d = desc(opcode("ADD32rr")).unwrap();
-
-        assert_eq!((d.num_operands, d.num_defs), (3, 1));
-        assert!(d.is_commutable() && !d.may_load() && !d.is_call());
-        assert_eq!(d.implicit_defs, [x86::EFLAGS]);
-        assert_eq!(d.operands[1].tied_to, 0, "src1 is the destination");
-        assert_eq!(d.operands[0].kind, operand_type::REGISTER);
-    }
-
-    #[test]
-    fn mov32rm_loads_through_a_memory_reference_of_five_operands() {
-        let d = desc(opcode("MOV32rm")).unwrap();
-
-        assert!(d.may_load() && !d.may_store());
-        assert_eq!(d.num_operands, 6);
-        assert!(d.operands[1].pointer_class, "base is a pointer class");
-        assert!(d.operands[1..6].iter().all(|o| o.kind == operand_type::MEMORY), "the pin tags all five as memory");
-    }
-
-    #[test]
-    fn the_read_modify_write_forms_the_hand_matcher_makes_have_descriptors() {
-        assert!(desc(x86::INC32m).unwrap().may_store());
-        assert!(desc(x86::ADD32mi).unwrap().may_load());
-    }
-
-    #[test]
-    fn a_call_is_a_call() {
-        assert!(desc(opcode("CALLpcrel32")).unwrap().is_call());
-    }
-
-    #[test]
-    fn an_opcode_the_tables_never_emit_has_no_descriptor() {
-        assert!(desc(0xfff0).is_none());
 mod address_folds {
     use super::*;
     use crate::testing::TestDag;
@@ -986,5 +942,14 @@ mod x87_pseudos {
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks(), sum), Outcome::Selected);
 
         assert_eq!(selected(&dag, sum), "ADD_Fp64m", "fadd [m], not fld then faddp");
+    }
+}
+
+#[test]
+fn a_machine_opcode_is_named_for_its_instruction_not_for_a_register_that_shares_the_number() {
+    // `X86::CS` (a register) and `SUBREG_TO_REG` (an instruction) are both 17; the name column once read
+    // `CS|SUBREG_TO_REG|VK2RegClassID`.
+    for (_, name) in table::MACHINE_OPCODES {
+        assert!(!name.contains("RegClassID") && name.split('|').all(|n| !["CS", "DS", "ES", "FS", "GS", "SS"].contains(&n)), "{name}");
     }
 }

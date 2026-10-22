@@ -4,16 +4,16 @@
 //! # How it works
 //! The generated table names its complex patterns by number; [`X86Hooks`] reads the function
 //! each number stands for from the CPU's `COMPLEX_PATTERNS` and runs the matcher of that name
-//! from [`crate::x86_addr`]. `selectTLSADDRAddr` and `selectMOV64Imm32` never match here (SD34).
+//! from [`crate::x86_addr`]. `selectTLSADDRAddr` and `selectMOV64Imm32` never match here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD35** `checkTCRetEnoughRegs` is `false` and `isDef32`, `isSExtAbsoluteSymbolRef` are
+//! - **SD36** `checkTCRetEnoughRegs` is `false` and `isDef32`, `isSExtAbsoluteSymbolRef` are
 //!   `false`: tail calls, 64-bit zero-extension and absolute symbols are not translated yet, and
 //!   `false` only declines a pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD36** `hasNoCarryFlagUses` answers `false` for a use through `CopyToReg EFLAGS`, which
+//! - **SD37** `hasNoCarryFlagUses` answers `false` for a use through `CopyToReg EFLAGS`, which
 //!   needs the instruction table's condition operand number. Costs `inc`/`dec` in that shape.
 //!   Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD37** `isUnneededShiftMask` reads the mask only, not `computeKnownBits`: the DAG API
+//! - **SD38** `isUnneededShiftMask` reads the mask only, not `computeKnownBits`: the DAG API
 //!   has no known-bits yet. Owner sdag-c. Exit: when it has. Review 2026-12-10.
 //!
 //! # Used by
@@ -228,7 +228,7 @@ impl X86Hooks {
         Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }.select_addr_of(Some(n.node), ptr)
     }
 
-    /// `hasNoCarryFlagUses` ([L3650][carry]); SD36.
+    /// `hasNoCarryFlagUses` ([L3650][carry]); SD37.
     ///
     /// [carry]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3650
     pub fn has_no_carry_flag_uses<D: AddrDag>(&self, dag: &D, flags: SDValue) -> bool {
@@ -308,14 +308,14 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             "selectAddr" => matcher.select_addr_of(parent, value),
             "selectLEAAddr" => matcher.select_lea_addr(value),
             "selectRelocImm" => {
-                // `Wrapper sym` as an immediate; the truncated form needs absolute symbols (SD35).
+                // `Wrapper sym` as an immediate; the truncated form needs absolute symbols (SD36).
                 if matcher.dag.opcode(value.node) != x86isd::Wrapper {
                     return false;
                 }
                 results.push((matcher.dag.operand(value.node, 0), None));
                 return true;
             }
-            // ELF TLS and 64-bit immediates (SD34).
+            // ELF TLS and 64-bit immediates (SD35).
             _ => None,
         };
         let Some(a) = operands else { return false };

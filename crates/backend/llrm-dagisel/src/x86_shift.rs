@@ -5,7 +5,7 @@
 //! (as `n ^ -1`) or `32 - n` (as `0 - n`) is the same as `n`, `~n` or `-n` masked to 5 bits, and
 //! the table's `shiftMask*` patterns drop that mask. This rewrites the count to
 //! `(newcount & 31)` and lets the table select the shift. A translation of [L4664][fold] for
-//! 32-bit and narrower values; the 64-bit branch (`Size == 64`) is not needed here (SD34).
+//! 32-bit and narrower values; the 64-bit branch (`Size == 64`) is not needed here (SD35).
 //!
 //! # Used by
 //! The `X86DAGToDAGISel::Select` loop, for `SHL`, `SRL`, `SRA`, `ROTL` and `ROTR` nodes.
