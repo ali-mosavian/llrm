@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 10] = [
+const UNOPTIMIZED: [&str; 11] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -69,15 +69,17 @@ const UNOPTIMIZED: [&str; 10] = [
     "OptimizePHIs",
     "LateCleanup",
     "FixupSetCC",
+    "MachineLICM",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 23] = [
+const SLOTS: [(&str, &str); 24] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
@@ -138,6 +140,9 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, a loop-invariant computation in the preheader (the pin:
+        // EarlyMachineLICM, ahead of MachineCSE).
+        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
