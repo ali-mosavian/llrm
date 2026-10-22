@@ -11,7 +11,7 @@ Fold `a op b` in format F only when the operation is exact in F: the real result
 - add/sub/mul: error-free transformation in f64 (two-sum, fma) shows the f64 result exact; for f32 the f64 result must also convert to f32 exactly. div: `fma(q, b, -a) == 0`. rem: the IEEE remainder of the same-format operands is exact.
 - refuse: a NaN result or operand (payload nondeterministic), an inexact result, an overflow to infinity (inexact), `x86_fp80` (held as a double), and an instruction with `nsz`, `reassoc`, `contract` or `arcp` (the pin's `AllowNonDeterministic = false`).
 - denormals: MIR has no `denormal-fp-math` attribute; IEEE mode is assumed, as the pin does without the attribute.
-- Exit: a target/frontend fact stating strict-width evaluation would allow the pin's inexact fold; none exists today.
+- Exit: a "strict float width" fact in the profile, true only under the standard-precision flag (every assignment rounded), where the pin's f32 fold is faithful. None exists today; C/Nib f32 follow the fast mode (excess precision on x87) and QB evaluates at 80 bits, so the client loop (`next_frame += 0.1f`) stays open.
 
 ## Tests
 fadd/fsub/fmul/fdiv/frem on f32 and f64 (exact folds); each refusal (flags, NaN, inexact, overflow, fp80); denormal operands and results; a pair where f32 rounding and x87 evaluation differ (`0.1f + 0.2f`): must not fold. SCEV: a float-controlled loop gets its exit count.
