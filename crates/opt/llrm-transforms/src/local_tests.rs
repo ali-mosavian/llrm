@@ -1430,3 +1430,40 @@ b2:
 "
     );
 }
+
+/// `duplicate_phis_in` built a map and a vector of the phis for every block it
+/// was asked of, and most blocks have no two phis (d_faces -O2: 3,844 visits,
+/// 2.8 M Ir). A block of none or one is not walked; one of two is.
+#[test]
+fn a_block_of_fewer_than_two_phis_is_not_walked_for_duplicates() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ %x, %b1 ], [ 1, %b2 ]
+  %q = phi i16 [ %x, %b1 ], [ 1, %b2 ]
+  ret i16 %p
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let walked = || crate::transform::WALKED.with(std::cell::Cell::get);
+    let before = walked();
+    for block in function.layout().to_vec() {
+        if function.layout().last() != Some(&block) {
+            assert!(!crate::transform::duplicate_phis_in(function, block).unwrap(), "no duplicates before b3");
+        }
+    }
+    assert_eq!(walked() - before, 0, "a block of fewer than two phis was walked");
+    let last = *function.layout().last().expect("b3");
+    assert!(crate::transform::duplicate_phis_in(function, last).unwrap(), "b3's two phis are one");
+    assert_eq!(walked() - before, 1);
+}
