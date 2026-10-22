@@ -22,7 +22,9 @@
 //! parameters are loads of fixed objects, register ones live-in copies;
 //! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 //! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
-//! Indirect calls, intrinsics, switches, floats and values wider than a
+//! A `switch` of range clusters is the split-and-chain compare blocks of
+//! `visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
+//! intrinsics, floats and values wider than a
 //! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
@@ -80,7 +82,9 @@
 
 pub mod actions;
 pub mod builder;
+pub mod dag_combiner;
 mod dag;
+pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
 pub mod fold;
@@ -110,5 +114,7 @@ mod emit_tests;
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod tests;

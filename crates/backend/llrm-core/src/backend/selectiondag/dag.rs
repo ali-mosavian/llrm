@@ -15,7 +15,7 @@ pub struct SDValue {
 /// `SDNodeFlags`; CSE keeps the flags both builders agree on
 /// (`intersectFlagsWith`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct SDNodeFlags(pub u8);
+pub struct SDNodeFlags(pub u16);
 
 impl SDNodeFlags {
     pub const NO_UNSIGNED_WRAP: SDNodeFlags = SDNodeFlags(1);
@@ -25,6 +25,12 @@ impl SDNodeFlags {
     pub const DISJOINT: SDNodeFlags = SDNodeFlags(16);
     pub const SAME_SIGN: SDNodeFlags = SDNodeFlags(32);
     pub const IN_BOUNDS: SDNodeFlags = SDNodeFlags(64);
+    pub const NO_NANS: SDNodeFlags = SDNodeFlags(128);
+    pub const NO_INFS: SDNodeFlags = SDNodeFlags(256);
+    pub const NO_SIGNED_ZEROS: SDNodeFlags = SDNodeFlags(512);
+    pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
+    pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
+    pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
 
     pub fn union(self, other: SDNodeFlags) -> SDNodeFlags {
         SDNodeFlags(self.0 | other.0)
@@ -61,6 +67,7 @@ pub enum NodeData {
     Block(u32),
     Symbol(u32),
     Mem(MemInfo),
+    JumpTable(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -141,12 +148,14 @@ pub struct SelectionDAG {
     /// Names the dump prints for `Global`/`Block` payloads, by id.
     pub global_names: Vec<String>,
     pub block_names: Vec<String>,
+    /// Names of external symbols, by id.
+    pub symbol_names: Vec<String>,
 }
 
 impl SelectionDAG {
     pub fn new(config: DagConfig) -> SelectionDAG {
         let zero = SDValue { node: 0, res: 0 };
-        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
+        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new(), symbol_names: Vec::new() };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
         dag
@@ -282,6 +291,44 @@ impl SelectionDAG {
         }
     }
 
+    /// `MorphNodeTo`: `node` becomes `opcode` over `values` and `ops` in place, leaving the CSE
+    /// map consistent. When an equal node exists it is returned instead and `node` is untouched
+    /// (the caller then replaces it, as `SelectionDAGISel::MorphNode` does).
+    pub(super) fn morph_node_to(&mut self, node: u32, opcode: ISD, values: &[EVT], ops: &[SDValue]) -> u32 {
+        let shareable = !values.contains(&EVT::GLUE);
+        let key = (opcode, values.to_vec(), ops.to_vec(), NodeData::None);
+        if shareable {
+            if let Some(&found) = self.cse.get(&key) {
+                if found != node {
+                    return found;
+                }
+            }
+        }
+        if let Some(old) = self.key_of(node) {
+            if self.cse.get(&old) == Some(&node) {
+                self.cse.remove(&old);
+            }
+        }
+        let data = &mut self.nodes[node as usize];
+        data.opcode = opcode;
+        data.values = key.1.clone();
+        data.ops = key.2.clone();
+        data.data = NodeData::None;
+        if shareable {
+            self.cse.insert(key, node);
+        }
+        node
+    }
+
+    /// Drops `node` from the CSE map, so a later request builds a new node rather than reuse it.
+    pub(super) fn forget_node(&mut self, node: u32) {
+        if let Some(key) = self.key_of(node) {
+            if self.cse.get(&key) == Some(&node) {
+                self.cse.remove(&key);
+            }
+        }
+    }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
@@ -373,6 +420,12 @@ impl SelectionDAG {
         let bits = bits & super::fold::mask(vt.size_in_bits());
         let opcode = if target { ISD::TargetConstant } else { ISD::Constant };
         self.intern(opcode, &[vt], &[], SDNodeFlags::default(), NodeData::Const { bits, opaque })
+    }
+
+    /// `getConstantFP` by the bits of the type (DEVIATE SD11: no `APFloat`).
+    pub fn get_constant_fp(&mut self, bits: u128, vt: EVT) -> SDValue {
+        assert!(vt.is_floating_point(), "FP constant of {vt:?}");
+        self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
     pub fn get_all_ones_constant(&mut self, vt: EVT) -> SDValue {
@@ -503,6 +556,30 @@ impl SelectionDAG {
 
     /// A call's `RegisterMask` operand: the registers the callee preserves
     /// are the allocator's to know, so the node carries none.
+    fn symbol_id(&mut self, name: &str) -> u32 {
+        match self.symbol_names.iter().position(|one| one == name) {
+            Some(at) => at as u32,
+            None => {
+                self.symbol_names.push(name.to_string());
+                self.symbol_names.len() as u32 - 1
+            }
+        }
+    }
+
+    pub fn get_external_symbol(&mut self, vt: EVT, name: &str) -> SDValue {
+        let id = self.symbol_id(name);
+        self.intern(ISD::ExternalSymbol, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
+    pub fn get_target_external_symbol(&mut self, vt: EVT, name: &str) -> SDValue {
+        let id = self.symbol_id(name);
+        self.intern(ISD::TargetExternalSymbolNode, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
+    pub fn get_jump_table(&mut self, vt: EVT, index: u32) -> SDValue {
+        self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
     pub fn get_register_mask(&mut self) -> SDValue {
         self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
     }

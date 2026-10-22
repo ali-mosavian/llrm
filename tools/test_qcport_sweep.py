@@ -178,3 +178,35 @@ def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
         assert "no build stamp" in str(why)
     else:
         raise AssertionError("an unstamped binary was swept")
+
+
+def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
+    """An interrupt handler with Borland's nine register parameters was refused from 10-19 to 10-23 (`a fact of no parameter`): no sweep compiled a C file of that kind."""
+    jobs = q.extra_jobs()
+    callconv = [job for job in jobs if job[0] == "llrm-c"]
+    assert {job[1].name for job in callconv} >= {"cfcallee.c", "cncallee.c"}
+    assert {job[2:] for job in callconv} == {("-m16", "-O1"), ("-m16", "-O2")}
+
+
+def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
+    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    fixtures = tmp_path / "tests/fixtures/callconv/c"
+    fixtures.mkdir(parents=True)
+    (fixtures / "harness.c").write_text('#include <stdio.h>\nint main(void) { return 0; }\n')
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    for tool in ("llrm-c", "llrm-qb", "llrm-nib"):
+        (bins / tool).write_text('#!/bin/sh\ncase "$*" in *"-I /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
+        (bins / tool).chmod(0o755)
+    failed = q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
+    assert "harness.c" not in {program for program, _, _ in failed}, failed
+
+
+def test_a_failure_is_keyed_by_its_error_not_by_a_warning_printed_after_it():
+    """The 22:00 sweep keyed `Unable to open 'stdio.h'` as `Warning! WN: No prototype found for function 'printf'`: the last line was a warning."""
+    text = "wccq failed:\nx.c(3): Error! E1055: Unable to open 'stdio.h'\nx.c(36): Warning! W131: No prototype found for function 'printf'\n"
+    assert q.kind(text) == "x.c(...): Error! EN: Unable to open 'stdio.h'"
