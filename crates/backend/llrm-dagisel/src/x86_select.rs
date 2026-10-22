@@ -27,6 +27,7 @@ use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
 use crate::x86_hooks::X86Hooks;
+use crate::x86_llrm::{LLRM_NODES, select_llrm_node};
 use crate::x86_mul::select_mul_lohi;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -48,6 +49,10 @@ pub fn select_node<D: AddrDag>(
             if select_divrem(dag, hooks, node) {
                 return Outcome::Selected;
             }
+        }
+        op if LLRM_NODES.contains(&op) => {
+            select_llrm_node(dag, node);
+            return Outcome::Selected;
         }
         isd::SMUL_LOHI | isd::UMUL_LOHI => {
             if select_mul_lohi(dag, hooks, node) {

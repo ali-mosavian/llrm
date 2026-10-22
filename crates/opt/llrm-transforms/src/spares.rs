@@ -69,7 +69,7 @@
 //! `!{i32 37}` on each, and does not say which instruction has that id.
 //!
 //! From `--dump` of `examples/pass-docs/spares.c` (`p[i] = g; a[i] = i; s +=
-//! g;` in a loop, `p` a parameter) at -O2 -m16, stages `addresssink` and
+//! g;` in a loop, `p` a parameter) at -O2 -m16, stages `cgpaddr` and
 //! `spares`.
 //!
 //! # Runs
