@@ -658,7 +658,7 @@ const ROWS: &[Row] = &[
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
         Missing,
-        "prologue.rs, masm.rs",
+        "prologue.rs, masm.rs; framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate; not yet called: CG7)",
         "",
         "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry prologue@13. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),

@@ -166,6 +166,7 @@ pub mod fpcopyprop;
 pub mod fpregs;
 pub mod fpstack;
 pub mod frame;
+pub mod framelowering;
 pub mod framefree;
 pub mod funnel;
 pub mod globals;
