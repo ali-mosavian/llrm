@@ -414,10 +414,9 @@ fn _extended_boolean_negated(
 /// 0`, `n - 2 == 0`, ... which are `n == 1`, `n == 2`: the chain of differences
 /// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`,
 /// `recsum`, `recpow`); the pin has no copies and so no chain. Every other body
-/// keeps the pin's rule: a loop's test of its step (`x - 1 != 0`) stays on the
-/// counter for IndVars (x_heapsort, x_cordic under #3350). Owner: w-6. Exit:
-/// D10's cleanup collapses the chains by a pin pass, or D10 goes; review
-/// 2026-11-30.
+/// keeps the pin's one-use rule. Owner: w-6. Exit: when #3422 (SimplifyCFG's
+/// conditional-branch value comparisons) lands, re-measure D10's chains; if
+/// they collapse the gate goes. Review 2026-11-30.
 fn _offset_compared(
     context: &Context,
     function: &mut Function,
