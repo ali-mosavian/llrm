@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0d61f8b284561b9e4bab9d98d1af769fdc0c3a96315b663ce49b36c30c7f63cc -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:f6ab428ea4c9c5c9f4a3aa8d43eef063b4bcec9991237368a0cbe72c06e129e1 -->
 
 # pipeline
 
@@ -121,7 +121,7 @@ the intervals of counted loops. `limits` are the copy budgets of the
 unroller.
 
 ## Needs
-`Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+`Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 up front, and frozen at the end of D so the passes of E read them without
 recomputing after each edit.
 
