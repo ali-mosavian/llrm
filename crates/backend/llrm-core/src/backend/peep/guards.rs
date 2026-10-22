@@ -209,6 +209,17 @@ pub fn no_longer(
     )
 }
 
+/// `after` encodes, and in real mode in no more bytes than `before`: the
+/// dword form takes the operand-size prefix there. DEVIATE W1 of the byte/word
+/// fixup (`peephole.peep`).
+pub fn short_in_real_mode(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    after: &Arc<Insn>,
+) -> bool {
+    if cx.bits() == 16 { no_longer(cx, before, after) } else { encodable(cx, after) }
+}
+
 /// Both encode, in as many bytes.
 pub fn same_length(
     cx: &Cx,
