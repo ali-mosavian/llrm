@@ -783,8 +783,7 @@ mod tests {
 
 /// The convention `arch`'s description gives a private function, and the ones
 /// that may take it. `instrument` (`LLRM_PRIVATE_WATCALL`, the CC1 comparison)
-/// gives it the description's `private_instrument` instead, where it states
-/// one.
+/// gives it the description's `private_instrument` instead, where it states one.
 fn private_convention(
     arch: &dyn Target,
     instrument: bool,

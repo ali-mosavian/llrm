@@ -6892,10 +6892,9 @@ impl Selector<'_, '_, '_> {
     /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
     /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
     /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
-    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a
-    /// libcall would move. Exit: a runtime `_memcpy` in each C target and a
-    /// target "has memcpy" fact, then the libcall here, queued after the
-    /// tuning phase.
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a libcall
+    /// would move. Exit: a runtime `_memcpy` in each C target and a target
+    /// "has memcpy" fact, then the libcall here, queued after the tuning phase.
     ///
     /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
     /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;

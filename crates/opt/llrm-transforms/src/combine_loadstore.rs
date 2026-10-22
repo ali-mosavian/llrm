@@ -46,8 +46,8 @@
 //!
 //! DEVIATE 6: an alloca only copied from constant memory
 //! (`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
-//! here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
-//! scalar alloca has no count operand, so a count of 1 is dropping the operand.
+//! here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's scalar alloca has
+//! no count operand, so a count of 1 is dropping the operand.
 //!
 //! # Used by
 //! `combine` (its `visit`).

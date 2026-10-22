@@ -190,8 +190,7 @@ impl<'a> BasicAA<'a> {
         operand
     }
 
-    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant
-    /// expression.
+    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant expression.
     fn is_gep_operator(
         &self,
         operand: Operand,
@@ -207,9 +206,7 @@ impl<'a> BasicAA<'a> {
     ) -> Option<Operand> {
         match operand {
             Operand::Constant(id) => match &self.unit.context.get(id).kind {
-                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
-                    Some(Operand::Constant(operands[0]))
-                }
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => Some(Operand::Constant(operands[0])),
                 _ => None,
             },
             _ => None,
@@ -260,12 +257,9 @@ impl<'a> BasicAA<'a> {
         DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
-            // A `getelementptr` constant expression is a GEPOperator as well:
-            // DecomposeGEPExpression reads it as it reads the instruction.
+            // A `getelementptr` constant expression is a GEPOperator as well: DecomposeGEPExpression reads it as it reads the instruction.
             if let Operand::Constant(id) = operand {
-                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) =
-                    &self.unit.context.get(id).kind
-                {
+                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) = &self.unit.context.get(id).kind {
                     found.inbounds &= *inbounds;
                     found.nuw &= *nuw;
                     let indices: Vec<Option<i128>> = operands[1..]
@@ -275,8 +269,7 @@ impl<'a> BasicAA<'a> {
                             self.unit.int_constant(index).map(|bits| self.signed(index, bits))
                         })
                         .collect();
-                    let (constant, variable) =
-                        self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
+                    let (constant, variable) = self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     debug_assert!(variable.is_empty(), "a constant expression's indices are constants");
                     found.offset += constant;
                     operand = Operand::Constant(operands[0]);
