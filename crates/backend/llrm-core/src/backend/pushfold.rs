@@ -55,7 +55,11 @@
 //! ```
 //!
 //! # Runs
-//! Machine phase after `floatfold`, before the register classes are decided,
+//! Twice. As `LoadFold` first of the machine phases, after selection: the pin's
+//! DAG selection folds a once-read load into `ADD32rm` before MachineCombiner
+//! runs, and a load folded after it let the combiner rebuild a chain as a tree.
+//! As `PushFold`, a machine phase after `floatfold`, before the register classes
+//! are decided,
 //! once per function, at every -O level but -O0 (the pin's pass is
 //! `-no-x86-call-frame-opt`-switchable only, and runs at -O0 too; ours does not
 //! at -O0, where nothing improves after selection).
@@ -87,6 +91,29 @@ impl LIRTransform for PushFold {
 
     fn name(&self) -> &str {
         "pushfold"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        Ok(folded(&body))
+    }
+}
+
+/// The same fold at selection, ahead of the passes that read the shape of the
+/// code: the pin's DAG selection folds a once-read load into `ADD32rm` before
+/// MachineCombiner runs, and a load left a register there let the combiner
+/// rebuild a chain of adds as a tree.
+pub struct LoadFold;
+
+impl LIRTransform for LoadFold {
+    fn class_name(&self) -> &'static str {
+        "LoadFold"
+    }
+
+    fn name(&self) -> &str {
+        "loadfold"
     }
 
     fn transform(

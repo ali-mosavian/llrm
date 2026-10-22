@@ -70,6 +70,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LateCleanup",
     "MachineCombiner",
     "PushFold",
+    "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
     "LiveRangeShrink",
@@ -82,6 +83,7 @@ const UNOPTIMIZED: &[&str] = &[
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
+    ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -142,6 +144,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // As the pin's selection has it: a once-read load is the memory operand
+        // of its reader before MachineCombiner sees the chain.
+        Box::new(crate::backend::pushfold::LoadFold),
         // The compare of a value with the constant it was just subtracted by
         // shares the subtract's flags (X86TargetLowering::EmitCmp).
         Box::new(crate::backend::cmpsub::CmpAsSub),
@@ -502,6 +507,22 @@ mod tests {
         assert_eq!(at(&after, "FloatAssign"), None);
         assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
         assert_eq!(at(&after, "FloatAlloc"), at(&after, "RegAlloc").map(|one| one + 1), "{after:?}");
+    }
+
+    /// The pin folds a once-read load into `ADD32rm` in selection, before the
+    /// combiner. Folded after it, the combiner saw `add rr` for a stack
+    /// argument and rebuilt a six-term sum as a tree: `mov eax, edx` and a
+    /// different register order in two llrm-c listings.
+    #[test]
+    fn test_a_load_is_folded_before_the_combiner_sees_the_chain() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN, false)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one);
+        assert!(at("LoadFold").is_some() && at("LoadFold") < at("MachineCombiner"), "{names:?}");
     }
 
     #[test]
