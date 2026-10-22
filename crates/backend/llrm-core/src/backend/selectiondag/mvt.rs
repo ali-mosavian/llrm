@@ -13,6 +13,9 @@ pub enum MVT {
     F32,
     F64,
     F80,
+    /// A far pointer, a selector and an offset (DEVIATE SD2): m16 only, the
+    /// type legalizer expands it into two `i16`.
+    Far,
     /// Chains (`MVT::Other`).
     Other,
     /// Glue (`MVT::Glue`): never CSE'd.
@@ -82,7 +85,7 @@ impl EVT {
                 MVT::I1 => 1,
                 MVT::I8 => 8,
                 MVT::I16 => 16,
-                MVT::I32 | MVT::F32 => 32,
+                MVT::I32 | MVT::F32 | MVT::Far => 32,
                 MVT::I64 | MVT::F64 => 64,
                 MVT::F80 => 80,
                 MVT::I128 => 128,
