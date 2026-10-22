@@ -1541,4 +1541,52 @@ mod tests {
         let load = Insn::new(0, None, Some(load), vec![1], vec![]);
         assert!(env.rematerialize(&load, 8, 1, None).is_none());
     }
+
+    /// A reload made for a stored word got its parent's order, {BX}
+    /// (ls.c `_ls_animate@3`: `[abs+516 + %53 + v16] := mov %51`), and with the
+    /// base holding {BX} too the two had one register between them: the
+    /// function fell back to the rounds. Its own instructions only store
+    /// it, so the order widens to every register; the base, which an
+    /// address confines, stays among BX, SI and DI.
+    #[test]
+    fn test_a_spilled_values_stored_word_takes_the_class_its_instructions_give() {
+        use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
+        let (base, word) = (1u32, 2u32);
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let imm = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let make = |at, defines: Vec<u32>, uses: Vec<u32>, w| Arc::new(Insn::new(at, None, Some(w), defines, uses));
+        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let insns = vec![
+            make(1, vec![base], vec![], what(Operation::Move, "mov", vec![held(base)], vec![imm(2)])),
+            make(2, vec![word], vec![], what(Operation::Move, "mov", vec![held(word)], vec![imm(3)])),
+            make(3, vec![], vec![base, word], what(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(word)])),
+            make(4, vec![], vec![], what(Operation::Return, "ret", vec![], vec![])),
+        ];
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lis = LiveIntervals::new(&body);
+        let classes = RegisterClasses::m16();
+        let sets = crate::backend::regclass::Sets::of(&classes);
+        let tables = Tables::default();
+        tables.orders.borrow_mut().insert(word, vec![RegId::EBX]);
+        tables.orders.borrow_mut().insert(base, vec![RegId::EBX]);
+        reclass_orders(&tables, &Default::default(), Some(&sets), classes.registers, &lis, &[word, base]);
+        assert_eq!(tables.orders.borrow()[&word], sets.available, "the stored word may take any register");
+        assert_eq!(
+            tables.orders.borrow()[&base],
+            vec![RegId::EBX, RegId::ESI, RegId::EDI],
+            "an address base stays among the address registers"
+        );
+    }
 }
