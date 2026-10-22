@@ -155,7 +155,7 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
     seen = fake_qcport(tmp_path, fail_level="-O2")
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    verdict, detail = ps.qc_d_faces(tmp_path)
+    verdict, detail, *_ = ps.qc_d_faces(tmp_path)
     assert verdict == "fail" and "-O2" in detail and "no instruction choosing" in detail, detail
     assert seen.read_text().split() == ["-O1", "-O2"]
     seen.unlink()
@@ -204,7 +204,7 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    verdict, detail = ps.qc_modules(tmp_path)
+    verdict, detail, *_ = ps.qc_modules(tmp_path)
     assert verdict == "fail" and "sound/snd.c" in detail and "BitCast of a float" in detail, detail
     compiler.write_text("#!/bin/sh\nexit 0\n")
     assert ps.qc_modules(tmp_path)[0] == "ok"
@@ -359,3 +359,37 @@ def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
 def test_the_ratchets_run_one_at_a_time_by_default():
     """Four at a time cost 600-750 s a PR at load 70 against ~57 s in a row (cargo's lock serializes the compiles; the links collide): serial is the default, RATCHET_WORKERS overrides."""
     assert ps.RATCHET_WORKERS == 1
+
+
+FAILURES_BLOCK = "running 3 tests\n\nfailures:\n\nfailures:\n    first_red\n    second_red\n\ntest result: FAILED. 1 passed; 2 failed\n"
+
+
+def test_a_red_ratchet_is_listed_by_its_failing_tests_not_whole():
+    """A ratchet is a test binary: listed as `ratchet:x`, a second test going red inside it was 'the same step failing' and no merge was refused for it."""
+
+    class Done:
+        returncode, stdout, stderr = 1, FAILURES_BLOCK, ""
+
+    failed = ps.ratchet_failures(run=lambda command: Done() if "block_list_ratchet" in " ".join(command) else type("Ok", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    assert set(failed) == {"ratchet:block_list_ratchet::first_red", "ratchet:block_list_ratchet::second_red"}, failed
+
+
+def test_a_red_run_step_is_listed_by_its_failing_programs():
+    out = "FAIL  qb/log_exp_digits.bas [-O2]: line 1: want x\nFAIL  qb/log_exp_digits.bas [-Os]: line 1\nFAIL  c/x.c [-O1]: y\n4 programs: 1 pass"
+    assert ps.failing_programs(out) == ["run qb/log_exp_digits.bas [-O2]", "run qb/log_exp_digits.bas [-Os]", "run c/x.c [-O1]"]
+    assert ps.failing_programs("no failures named") == []
+
+
+def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypatch):
+    for sub in ("host", "render", "game", "sound", "ui", "model", "qgl"):
+        (tmp_path / "src" / sub).mkdir(parents=True)
+    for module in ps.QC_MODULES:
+        (tmp_path / "src" / module).write_text("int x;")
+    (tmp_path / "inc").mkdir()
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/bin/sh\ncase \"$*\" in *combat.c*|*snd.c*) echo broken >&2; exit 1;; esac\nexit 0\n")
+    compiler.chmod(0o755)
+    verdict, _, names = ps.qc_modules(tmp_path)
+    assert verdict == "fail" and names == ["qc_modules game/combat.c", "qc_modules sound/snd.c"], names
