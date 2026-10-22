@@ -71,13 +71,16 @@ const UNOPTIMIZED: &[&str] = &[
     "PushFold",
     "FixupSetCC",
     "CopyPropagation",
+    "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
+    "CmpAsSub",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
 const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
+    ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
@@ -85,6 +88,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("FlagsCopy", "flagscopy@5"),
@@ -134,6 +138,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // The compare of a value with the constant it was just subtracted by
+        // shares the subtract's flags (X86TargetLowering::EmitCmp).
+        Box::new(crate::backend::cmpsub::CmpAsSub),
         // On SSA, first: a phi cycle that carries one value is that value (the
         // pin: OptimizePHIs, ahead of MachineCSE).
         Box::new(crate::backend::optimizephis::OptimizePhis),
@@ -158,6 +165,12 @@ pub fn machine_with<'a>(
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
+        // On SSA, last: an instruction up to the last definition of what it
+        // reads (the pin: LiveRangeShrink, x86 addPreRegAlloc).
+        Box::new(crate::backend::liverangeshrink::LiveRangeShrink {
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+        }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
