@@ -512,7 +512,9 @@ fn test_division_and_variable_shifts() {
 
 /// A variable index is scaled, and an address only accesses read is their
 /// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
-/// so no `ss:` override: it cost a byte and a clock at each access.
+/// so no `ss:` override: it cost a byte and a clock at each access. The
+/// doubled index is made once and both accesses use it (7a574ed3ed: precse
+/// no longer reads a load as touching the flags, so the two `i + i` are one).
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -532,15 +534,12 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
-            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
             "add si, si",
+            "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
-            "pop di",
             "pop si",
             "leave",
             "retf"
