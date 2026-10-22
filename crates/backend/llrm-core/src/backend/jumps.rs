@@ -280,11 +280,7 @@ fn inverted(
                 continue;
             }
             let flipped = Arc::new(Insn {
-                what: Some(Semantics {
-                    name: Some((*opposite).into()),
-                    target: Some(onward),
-                    ..branch_what.clone()
-                }),
+                what: Some(Semantics { name: Some((*opposite).into()), target: Some(onward), ..branch_what.clone() }),
                 ..(*branch).clone()
             });
             let jump = Arc::new(Insn {
@@ -309,11 +305,7 @@ fn inverted(
             continue;
         }
         let flipped = Arc::new(Insn {
-            what: Some(Semantics {
-                name: Some((*opposite).into()),
-                target: last_what.target,
-                ..branch_what.clone()
-            }),
+            what: Some(Semantics { name: Some((*opposite).into()), target: last_what.target, ..branch_what.clone() }),
             ..(*branch).clone()
         });
         let insns = blocks[index]

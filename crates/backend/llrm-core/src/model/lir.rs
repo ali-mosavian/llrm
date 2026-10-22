@@ -118,8 +118,8 @@ pub struct Insn {
     pub uses: Vec<u32>,
     /// Values its operands name and read as undefined (`ProcessImplicitDefs`'
     /// `undef` flag): no definition reaches them and none is needed, so none is
-    /// in `uses`, no live range starts at them, and the allocator gives them any
-    /// register of their class.
+    /// in `uses`, no live range starts at them, and the allocator gives them
+    /// any register of their class.
     pub undefs: Vec<u32>,
     pub clobbers: BTreeSet<RegId>,
     pub clobbers_high: BTreeSet<RegId>,
@@ -1082,8 +1082,9 @@ pub struct LirBody {
     pub pins: IndexMap<u32, RegId>,
     /// The value whose register class a value made after instruction selection
     /// has: a phi's temporary is made in its result's class
-    /// (`createVirtualRegister(getRegClass(DestReg))`, PHIElimination.cpp#L414-L415).
-    /// A value with no entry has the class its uses give it (`regclass::classes`).
+    /// (`createVirtualRegister(getRegClass(DestReg))`,
+    /// PHIElimination.cpp#L414-L415). A value with no entry has the class
+    /// its uses give it (`regclass::classes`).
     pub class_like: Arc<IndexMap<u32, u32>>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,

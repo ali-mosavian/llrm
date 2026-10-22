@@ -215,7 +215,10 @@ mod tests {
     }
 
     fn names(insns: &[Arc<Insn>]) -> Vec<String> {
-        insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default()).collect()
+        insns
+            .iter()
+            .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
+            .collect()
     }
 
     /// `n - 1` and `n <= 1` were a `lea` and a `cmp` of the same value, so the

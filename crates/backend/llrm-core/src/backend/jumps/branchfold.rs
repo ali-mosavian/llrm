@@ -276,11 +276,7 @@ impl<'a> Folder<'a> {
             && block.succ.len() == 1
         {
             let jump = Arc::new(Insn {
-                what: Some(Semantics {
-                    name: Some("jmp".into()),
-                    target: Some(to),
-                    ..Semantics::new(Operation::Jump)
-                }),
+                what: Some(Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) }),
                 uses: Vec::new(),
                 ..(**cond).clone()
             });

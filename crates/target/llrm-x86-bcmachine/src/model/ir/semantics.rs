@@ -488,11 +488,7 @@ pub fn _call(
     op: Operation,
     name: &str,
 ) -> Option<Semantics> {
-    Some(Semantics {
-        name: Some(name.into()),
-        target: insn.target().map(|target| target as i64),
-        ..Semantics::new(op)
-    })
+    Some(Semantics { name: Some(name.into()), target: insn.target().map(|target| target as i64), ..Semantics::new(op) })
 }
 
 /// An instruction that does nothing at all -- padding between bodies.

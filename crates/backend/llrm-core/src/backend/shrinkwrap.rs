@@ -357,10 +357,7 @@ mod tests {
         at: i64,
         target: i64,
     ) -> Arc<Insn> {
-        insn(
-            at,
-            Semantics { name: Some("je".into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) },
-        )
+        insn(at, Semantics { name: Some("je".into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) })
     }
 
     fn ret(at: i64) -> Arc<Insn> {

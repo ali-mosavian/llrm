@@ -288,8 +288,7 @@ mod tests {
     }
 
     fn branch(target: i64) -> Arc<Insn> {
-        let what =
-            Semantics { name: Some("jne".into()), target: Some(target), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(target), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 

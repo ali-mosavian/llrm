@@ -77,8 +77,7 @@ fn set_byte(one: &Insn) -> Option<u32> {
     let what = one.what.as_ref()?;
     let name = what.name.as_deref()?;
     let ([Loc::Held(into)], []) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
-    (what.op == Operation::Unary && name.starts_with("set") && into.width == 1)
-        .then_some(into.value)
+    (what.op == Operation::Unary && name.starts_with("set") && into.width == 1).then_some(into.value)
 }
 
 /// `movzx into, byte`: `into`.
@@ -88,8 +87,7 @@ fn zero_extend_of(
 ) -> Option<Held> {
     let what = one.what.as_ref()?;
     let ([Loc::Held(into)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
-    (what.name.as_deref() == Some("movzx") && from.value == byte && from.width == 1 && into.width == 4)
-        .then_some(*into)
+    (what.name.as_deref() == Some("movzx") && from.value == byte && from.width == 1 && into.width == 4).then_some(*into)
 }
 
 /// `body` with its `setcc`-and-`movzx` pairs made zero-then-`setcc`.
@@ -115,8 +113,18 @@ pub fn fixed(body: &LirBody) -> LirBody {
             }
         }
     }
-    let mut next = body.blocks.iter().flat_map(|b| b.insns.iter()).flat_map(|one| one.defines.iter().chain(&one.uses)).copied().max().unwrap_or(0) + 1;
-    let flag_lane = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
+    let mut next = body
+        .blocks
+        .iter()
+        .flat_map(|b| b.insns.iter())
+        .flat_map(|one| one.defines.iter().chain(&one.uses))
+        .copied()
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let flag_lane = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
 
     let mut out = body.clone();
     for block in &mut out.blocks {
@@ -147,7 +155,10 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 let into = zero_extend_of(&insns[at], byte)?;
                 // Nothing between the set and the movzx may touch the result
                 // value.
-                if insns[index + 1..at].iter().any(|between| between.defines.contains(&into.value) || between.uses.contains(&into.value)) {
+                if insns[index + 1..at]
+                    .iter()
+                    .any(|between| between.defines.contains(&into.value) || between.uses.contains(&into.value))
+                {
                     return None;
                 }
                 Some((flags_at, at, into))
@@ -178,7 +189,8 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 insns[index] = Arc::new(set);
                 insns.remove(at);
                 insns.insert(flags_at, make_zero);
-                // The zero is before `flags_at`, so every later index moved by one.
+                // The zero is before `flags_at`, so every later index moved by
+                // one.
                 flags_def = Some(flags_at + 1);
                 index += 2;
                 continue;

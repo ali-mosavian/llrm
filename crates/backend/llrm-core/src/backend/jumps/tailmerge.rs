@@ -170,11 +170,7 @@ fn seq_of(
                     let opposite = _OPPOSITE.get(branch.name.as_deref()?)?;
                     let at = items.len() - 1;
                     let flipped = Arc::new(Insn {
-                        what: Some(Semantics {
-                            name: Some((*opposite).into()),
-                            target: Some(way),
-                            ..branch.clone()
-                        }),
+                        what: Some(Semantics { name: Some((*opposite).into()), target: Some(way), ..branch.clone() }),
                         ..(*items[at].insn).clone()
                     });
                     items[at].insn = flipped;

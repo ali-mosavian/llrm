@@ -410,8 +410,11 @@ mod tests {
         let mut slots = Frame::new(-16);
         slots.slot(1_i64, 2).unwrap();
         let result = reserved(&body, &slots, Some(&runtime())).unwrap();
-        let names: Vec<_> =
-            result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect();
+        let names: Vec<_> = result.blocks[0]
+            .insns
+            .iter()
+            .map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap())
+            .collect();
         assert_eq!(names, ["mov", "call", "sub", "add", "call", "retf"]);
     }
 

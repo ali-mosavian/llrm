@@ -494,11 +494,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
             let mut jump = Insn::new(
                 last.at,
                 Some((last.at, last.at)),
-                Some(Semantics {
-                    name: Some("jmp".into()),
-                    target: Some(bridge),
-                    ..Semantics::new(Operation::Jump)
-                }),
+                Some(Semantics { name: Some("jmp".into()), target: Some(bridge), ..Semantics::new(Operation::Jump) }),
                 Vec::new(),
                 Vec::new(),
             );

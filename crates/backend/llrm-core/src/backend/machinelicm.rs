@@ -315,7 +315,11 @@ mod tests {
         let classes = RegisterClasses::m16();
         let done = hoisted(&body, &classes);
         let names = |at: usize| -> Vec<String> {
-            done.blocks[at].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);

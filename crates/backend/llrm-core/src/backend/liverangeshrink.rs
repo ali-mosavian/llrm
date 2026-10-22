@@ -136,9 +136,15 @@ fn safe_to_move(
 
 /// `TII.isCopyInstr`: a register-to-register move.
 fn is_copy(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.op == Operation::Move && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Held(_)]))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Move
+                && matches!(
+                    (what.dests.as_slice(), what.sources.as_slice()),
+                    ([Loc::Held(_)], [Loc::Held(_)])
+                ),
+        )
 }
 
 /// What a value is, for the same-class test: the set it is confined to, its
@@ -231,11 +237,14 @@ pub fn shrunk(
                     at += 1;
                     continue;
                 }
-                let target = landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
+                let target =
+                    landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
                 at += 1;
                 let Some(after) = target else { continue };
                 let place = if after == PHI { 0 } else { position[after] + 1 };
-                if place >= position[me] || !flags_allow(regs, body.bits, &insns, place, position[me], !block.succ.is_empty()) {
+                if place >= position[me]
+                    || !flags_allow(regs, body.bits, &insns, place, position[me], !block.succ.is_empty())
+                {
                     continue;
                 }
                 // The instruction takes the position of the one it lands
@@ -412,7 +421,15 @@ mod tests {
         at: i64,
         into: u32,
     ) -> Arc<Insn> {
-        insn(at, Operation::Move, "mov", vec![held(into)], vec![Loc::Imm(Imm { value: i64::from(into), width: 4, address: None })], vec![into], vec![])
+        insn(
+            at,
+            Operation::Move,
+            "mov",
+            vec![held(into)],
+            vec![Loc::Imm(Imm { value: i64::from(into), width: 4, address: None })],
+            vec![into],
+            vec![],
+        )
     }
 
     fn add(
@@ -421,7 +438,15 @@ mod tests {
         left: u32,
         right: u32,
     ) -> Arc<Insn> {
-        insn(at, Operation::Binary, "add", vec![held(into)], vec![held(left), held(right)], vec![into], vec![left, right])
+        insn(
+            at,
+            Operation::Binary,
+            "add",
+            vec![held(into)],
+            vec![held(left), held(right)],
+            vec![into],
+            vec![left, right],
+        )
     }
 
     fn ret(at: i64) -> Arc<Insn> {
@@ -429,7 +454,8 @@ mod tests {
     }
 
     fn body(insns: Vec<Arc<Insn>>) -> LirBody {
-        let mut body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body
     }
@@ -463,8 +489,14 @@ mod tests {
     /// A value read twice is not shortened by the move.
     #[test]
     fn test_a_value_read_twice_keeps_the_instruction_where_it_is() {
-        let before =
-            body(vec![constant(0, 10), constant(1, 11), constant(2, 12), add(3, 13, 10, 11), add(4, 14, 10, 12), ret(5)]);
+        let before = body(vec![
+            constant(0, 10),
+            constant(1, 11),
+            constant(2, 12),
+            add(3, 13, 10, 11),
+            add(4, 14, 10, 12),
+            ret(5),
+        ]);
         assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13, 14]);
     }
 
@@ -484,8 +516,11 @@ mod tests {
         let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![held(1), held(2)], vec![], vec![1, 2]);
         let branch = insn(4, Operation::Branch, "je", vec![], vec![], vec![], vec![]);
         let before = body(vec![constant(0, 10), constant(1, 11), cmp, add(3, 13, 10, 11), branch, ret(5)]);
-        let names: Vec<_> =
-            shrink(&before).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        let names: Vec<_> = shrink(&before).blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
         assert_eq!(names, ["mov", "mov", "cmp", "add", "je", "ret"]);
     }
 }

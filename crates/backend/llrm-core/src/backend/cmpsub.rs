@@ -210,8 +210,11 @@ mod tests {
         let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let done = fused(&body);
-        let names: Vec<String> =
-            done.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        let names: Vec<String> = done.blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
         assert_eq!(names, ["sub", "jae"]);
     }
 }

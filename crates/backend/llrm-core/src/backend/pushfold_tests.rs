@@ -44,7 +44,15 @@ fn load(
     base: u32,
     offset: i64,
 ) -> Arc<Insn> {
-    insn(at, Operation::Move, "mov", vec![Loc::Held(held(value))], vec![Loc::Mem(cell(base, offset))], vec![value], vec![base])
+    insn(
+        at,
+        Operation::Move,
+        "mov",
+        vec![Loc::Held(held(value))],
+        vec![Loc::Mem(cell(base, offset))],
+        vec![value],
+        vec![base],
+    )
 }
 
 fn push(
@@ -59,7 +67,11 @@ fn body(insns: Vec<Arc<Insn>>) -> LirBody {
 }
 
 fn names(body: &LirBody) -> Vec<String> {
-    body.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
+    body.blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap())
+        .collect()
 }
 
 /// `f(p->a, p->b, p->c)` pushed 3 loads into registers and 3 pushes of them
@@ -83,7 +95,8 @@ fn test_a_value_read_twice_keeps_its_load() {
 
 #[test]
 fn test_a_store_between_the_load_and_the_push_keeps_the_load() {
-    let store = insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
+    let store =
+        insn(2, Operation::Move, "mov", vec![Loc::Mem(cell(7, 0))], vec![Loc::Held(held(8))], vec![], vec![7, 8]);
     let before = body(vec![load(1, 2, 1, 8), store, push(3, 2)]);
     assert_eq!(names(&folded(&before)), ["mov", "mov", "push"]);
 }

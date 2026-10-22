@@ -13,20 +13,32 @@
 //! as `setb` and made again by `add byte, 0xff`. A reader right after another
 //! of the same byte reuses the `test`. The pseudo instructions go.
 //!
-//! Pin functions, in order: [`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263) is `lowered`;
-//! [`collectCondsInRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721) and [`promoteCondToReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744) are the
-//! byte made per condition (`bytes`, `setcc` at the copy);
-//! [`getCondOrInverseInReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761) is the shared byte for a condition and
-//! its inverse (`PAIRS`); [`insertTest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775) is the `test`;
-//! [`rewriteSetCC`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785) and [`rewriteMI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899) (jcc, cmov) are the
-//! `Read::Cond` arm; [`rewriteArithmetic`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824) (adc, sbb) is the
+//! Pin functions, in order:
+//! [`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263)
+//! is `lowered`;
+//! [`collectCondsInRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721)
+//! and
+//! [`promoteCondToReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744)
+//! are the byte made per condition (`bytes`, `setcc` at the copy);
+//! [`getCondOrInverseInReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761)
+//! is the shared byte for a condition and its inverse (`PAIRS`);
+//! [`insertTest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775)
+//! is the `test`;
+//! [`rewriteSetCC`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785)
+//! and
+//! [`rewriteMI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899)
+//! (jcc, cmov) are the
+//! `Read::Cond` arm;
+//! [`rewriteArithmetic`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824)
+//! (adc, sbb) is the
 //! `Read::Carry` arm.
 //!
 //! DEVIATE R2 (no number yet): the pin finds `COPY $eflags` that isel and
 //! earlier passes leave; LIR has none, so the copy is the pseudo pair and
 //! `lowered` takes the place of the search. The pin splits blocks
-//! ([`splitBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149)) to follow a copy across them; see R1. Owner w-5,
-//! review 2026-11-19; exit: an isel producer of a flags copy.
+//! ([`splitBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149))
+//! to follow a copy across them; see R1. Owner w-5, review 2026-11-19; exit: an
+//! isel producer of a flags copy.
 //!
 //! DEVIATE R1 (no number yet): a copy and its restore must be in one block (the
 //! pin follows the copy across blocks by dominance); else the pass fails.
@@ -104,7 +116,11 @@ const ALIASES: [(&str, &str); 14] = [
 /// What an instruction reads of the flags.
 enum Read {
     /// A condition: the saved one, and whether the reader wants it inverted.
-    Cond { saved: &'static str, inverted: bool, stem: &'static str },
+    Cond {
+        saved: &'static str,
+        inverted: bool,
+        stem: &'static str,
+    },
     Carry,
 }
 
@@ -113,7 +129,8 @@ fn reading(one: &Insn) -> Option<Read> {
     if name == "adc" || name == "sbb" {
         return Some(Read::Carry);
     }
-    let (stem, cc): (&'static str, &str) = ["j", "set", "cmov"].iter().find_map(|&s| name.strip_prefix(s).map(|c| (s, c)))?;
+    let (stem, cc): (&'static str, &str) =
+        ["j", "set", "cmov"].iter().find_map(|&s| name.strip_prefix(s).map(|c| (s, c)))?;
     if stem == "j" && cc == "mp" {
         return None;
     }
@@ -150,8 +167,18 @@ fn byte(value: u32) -> Loc {
 /// `body` with its flag copies lowered.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let (regs, bits) = (body.regs(), body.bits);
-    let mut next = body.blocks.iter().flat_map(|b| b.insns.iter()).flat_map(|one| one.defines.iter().chain(&one.uses)).copied().max().unwrap_or(0) + 1;
-    let flag_lane = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None);
+    let mut next = body
+        .blocks
+        .iter()
+        .flat_map(|b| b.insns.iter())
+        .flat_map(|one| one.defines.iter().chain(&one.uses))
+        .copied()
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let flag_lane = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
     let mut out = body.clone();
     for block in &mut out.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
@@ -187,7 +214,15 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                     let value = next;
                     next += 1;
                     bytes.insert(key, value);
-                    made.push(make(insns[copy_at].at, &name, Operation::Unary, vec![byte(value)], vec![], vec![value], vec![]));
+                    made.push(make(
+                        insns[copy_at].at,
+                        &name,
+                        Operation::Unary,
+                        vec![byte(value)],
+                        vec![],
+                        vec![value],
+                        vec![],
+                    ));
                 }
             }
             let mut tested: Option<u32> = None;
@@ -286,7 +321,11 @@ mod tests {
         insns.extend(readers.iter().zip(10..).map(|(&name, value)| reader(name, value)));
         let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let done = lowered(&body).unwrap();
-        done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
+        done.blocks[0]
+            .insns
+            .iter()
+            .map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap())
+            .collect()
     }
 
     #[test]

@@ -347,8 +347,7 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
         let [load, compare] = widened(5, &cell, Vec::new());
         let mut plain = (*load).clone();
-        plain.what =
-            Some(Semantics { name: Some("mov".into()), op: Operation::Move, ..plain.what.clone().unwrap() });
+        plain.what = Some(Semantics { name: Some("mov".into()), op: Operation::Move, ..plain.what.clone().unwrap() });
         plain.rematerialized = true;
         let compare = {
             let mut one = (*compare).clone();

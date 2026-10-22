@@ -187,8 +187,7 @@ fn _integer_loads(
                         let value = if *width == 2 { *value as i16 as i32 } else { *value as i32 };
                         let cell = pool.cell(constpool::narrowest(f64::from(value)));
                         let mut made = (*one).clone();
-                        made.what =
-                            Some(Semantics { name: Some("fld".into()), sources: vec![Loc::Mem(cell)], ..what });
+                        made.what = Some(Semantics { name: Some("fld".into()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
                         changed = true;
                         continue;

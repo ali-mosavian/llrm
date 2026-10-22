@@ -5394,11 +5394,8 @@ mod tests {
     fn test_repeated_tied_operand_does_not_become_memory_to_memory() {
         for op_name in ["xor", "add", "and", "sub"] {
             let op = _add(1, 1, 0x100);
-            let op = Insn {
-                what: Some(Semantics { name: Some(op_name.into()), ..what(&op).clone() }),
-                uses: vec![1],
-                ..op
-            };
+            let op =
+                Insn { what: Some(Semantics { name: Some(op_name.into()), ..what(&op).clone() }), uses: vec![1], ..op };
             let result = _out(&_body(vec![op]), &[1]);
             let [reload, arithmetic, store] = result.as_slice() else { panic!("{result:?}") };
             assert!(is_mem(&what(reload).sources[0]));
