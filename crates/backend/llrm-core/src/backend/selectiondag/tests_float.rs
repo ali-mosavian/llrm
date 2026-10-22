@@ -8,7 +8,6 @@ fn dag() -> SelectionDAG {
 
 use super::legalize_dag::DagLegalizer;
 use super::x86_lowering::{x86isd, X86Lowering};
-use super::*;
 
 fn legalized(bits: u128, vt: EVT) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
