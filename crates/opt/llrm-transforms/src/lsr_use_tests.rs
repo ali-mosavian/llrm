@@ -118,6 +118,25 @@ fn two_invariants_in_an_address_fold_to_no_add() {
     });
 }
 
+/// DEVIATE LU2: `a + b + 8` for a Basic use is one `lea` on x86, so the offset
+/// beside the two registers costs no add of its own: before, it was charged one,
+/// and PLASMA's zero-ending counter lost the tie to `cmp bx,642` (4 against 4).
+#[test]
+fn an_offset_beside_two_registers_is_the_displacement_of_the_lea() {
+    with_loop(|cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.unfolded_offset = Immediate(8);
+        f.canonicalize(se, header);
+        let basic = use_of(Kind::Basic, &[0]);
+        let cost = rated(cx, se, header, &basic, &f, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 1, "the add of the registers only");
+        // One register and an offset is an add of the offset, as before.
+        let one = Formula { base_regs: vec![a], has_base_reg: true, unfolded_offset: Immediate(8), ..Formula::default() };
+        let cost = rated(cx, se, header, &basic, &one, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 1);
+    });
+}
+
 /// A register a chosen formula already holds is not counted twice, and one that
 /// the caller marked visited makes the formula lose.
 #[test]
