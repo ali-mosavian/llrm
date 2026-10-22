@@ -376,7 +376,7 @@ impl Combiner<'_> {
     }
 
     /// The intrinsic `call` calls.
-    fn intrinsic_of(
+    pub(crate) fn intrinsic_of(
         &self,
         call: InstId,
     ) -> Option<llrm_mir::intrinsics::Intrinsic> {

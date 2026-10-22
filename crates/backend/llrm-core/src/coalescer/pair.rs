@@ -43,6 +43,19 @@ pub trait CoalescerEnv {
         false
     }
 
+    /// `MachineInstr::isTerminator`: the instruction ends its block.
+    fn is_terminator(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        insn.what
+            .as_ref()
+            .is_some_and(|what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ))
+    }
+
     /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI) &&
     /// DefMI->isSafeToMove()` with one def: a move of an immediate that reads
     /// and writes nothing else.
