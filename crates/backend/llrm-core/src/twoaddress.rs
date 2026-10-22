@@ -51,6 +51,14 @@
 //! piece 4): a source that dies is never converted; the pin also converts one
 //! that dies when the destination is mapped to another register.
 //!
+//! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
+//! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
+//! 2026-11-14): the kills come from one backward scan of each block over the
+//! live-out rows (`BodyFacts`), not from `LiveIntervals`. The pin builds them once
+//! and shares them with the coalescer; ours built a second set here (+3.0 M Ir on
+//! d_faces -O2 at m32, `LiveIntervals::new`), and the scan answers the same
+//! question for a use: no later read, or a redefinition.
+//!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
 //! `v3` dies at the add and `v1` does not, so the add is `v4 := add v3, v1`
@@ -62,48 +70,67 @@
 use std::sync::Arc;
 
 use crate::backend::twoaddr::Fixed;
-use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{self, Loc, Semantics};
-use crate::model::lir::Insn;
-use crate::support::hash::HashMap;
+use crate::model::lir::{Insn, LirBody};
+use crate::support::hash::{HashMap, HashSet};
+
+/// An instruction by identity (`Insn::id`).
+pub type InstrKey = u64;
 
 /// `MaxDataFlowEdge` (`-dataflow-edge-limit`, 10): how many copies and tied
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
-/// The intervals the commuting and the three-address conversion ask of: the sources of each commutative instruction, the tied source of each convertible add and, for
-/// `isKilled`, the sources of the copies that define them. The pin has every interval at hand;
-/// computing these alone is what keeps the pass off the cost of all of them.
-pub fn prepare(
-    lis: &mut LiveIntervals,
-    body: &crate::model::lir::LirBody,
-) {
-    let mut todo: Vec<u32> = Vec::new();
-    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        if let Some((_, first, second)) = crate::backend::twoaddr::swappable_held(one) {
-            todo.extend([first.value, second.value]);
+/// What the walks ask of a body: who reads and writes each value, which block each
+/// instruction is in, and where a value dies (`isPlainlyKilled`). The pin reads the
+/// kills off `LiveIntervals`; here one backward scan of each block from the live-out
+/// rows gives them, without the intervals, the slot indexes and the trees that
+/// `LiveIntervals::new` builds (DEVIATE TA-6: the same answer for a use, from less).
+pub struct BodyFacts {
+    /// By value: each instruction that names it and whether it defines it.
+    refs: HashMap<u32, Vec<(InstrKey, bool)>>,
+    block_of: HashMap<InstrKey, usize>,
+    insn: HashMap<InstrKey, Arc<Insn>>,
+    /// (instruction, value): the use is the value's last, nothing after reads it.
+    killed: HashSet<(InstrKey, u32)>,
+}
+
+impl BodyFacts {
+    pub fn of(body: &LirBody) -> Self {
+        use crate::backend::allocate::LiveAt;
+        let rows = crate::backend::allocate::live_rows(body);
+        let mut facts =
+            Self { refs: HashMap::default(), block_of: HashMap::default(), insn: HashMap::default(), killed: HashSet::default() };
+        for (at, block) in body.blocks.iter().enumerate() {
+            // Whether each value read in this block is live after the point the scan has reached:
+            // asked of the rows the first time, then kept up.
+            let mut live: HashMap<u32, bool> = HashMap::default();
+            for one in block.insns.iter().rev() {
+                let key = one.id();
+                facts.block_of.insert(key, at);
+                facts.insn.insert(key, Arc::clone(one));
+                for &value in &one.defines {
+                    facts.refs.entry(value).or_default().push((key, true));
+                    live.insert(value, false);
+                }
+                for &value in &one.uses {
+                    facts.refs.entry(value).or_default().push((key, false));
+                    let after = *live.entry(value).or_insert_with(|| rows.live_out(block.at, value));
+                    if !after {
+                        facts.killed.insert((key, value));
+                    }
+                    live.insert(value, true);
+                }
+            }
         }
-        // `convertInstTo3Addr` asks whether the tied source dies.
-        if three_address(one, ThreeAddress::All).is_some()
-            && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
-        {
-            todo.push(base.value);
-        }
+        facts
     }
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some(value) = todo.pop() {
-        if !seen.insert(value) {
-            continue;
-        }
-        lis.interval_rc(value);
-        let mut defs = lis.operands(value).iter().filter(|operand| operand.is_def);
-        if let (Some(def), None) = (defs.next(), defs.next())
-            && let Some((dst, src)) = crate::coalescer::pair::full_copy(lis.instr(def.instr))
-            && dst.value == value
-        {
-            todo.push(src.value);
-        }
+
+    fn refs(
+        &self,
+        value: u32,
+    ) -> &[(InstrKey, bool)] {
+        self.refs.get(&value).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -208,7 +235,7 @@ pub fn flags_dead_after(
 /// The state of one block's walk: the intervals, the registers values are
 /// fixed to and the instructions passed so far.
 pub struct Commuter<'a> {
-    lis: &'a LiveIntervals,
+    facts: &'a BodyFacts,
     fixed: &'a Fixed,
     block: usize,
     /// `DistanceMap`: the position of each instruction passed in this block.
@@ -217,14 +244,13 @@ pub struct Commuter<'a> {
 }
 
 impl<'a> Commuter<'a> {
-    /// The walk of `block`, at its first instruction. Every value named in the
-    /// block must have its interval (`LiveIntervals::interval_rc`).
+    /// The walk of `block`, at its first instruction.
     pub fn new(
-        lis: &'a LiveIntervals,
+        facts: &'a BodyFacts,
         fixed: &'a Fixed,
         block: usize,
     ) -> Self {
-        Self { lis, fixed, block, distance: HashMap::default(), dist: 0 }
+        Self { facts, fixed, block, distance: HashMap::default(), dist: 0 }
     }
 
     /// `DistanceMap.insert(MI, ++Dist)`: the instruction is passed; its
@@ -246,16 +272,15 @@ impl<'a> Commuter<'a> {
         reg: u32,
     ) -> Option<InstrKey> {
         let mut found = None;
-        for operand in self.lis.operands(reg).iter().filter(|operand| operand.is_def) {
-            let at = self.lis.indexes.get_instruction_index(operand.instr);
+        for &(instr, is_def) in self.facts.refs(reg) {
             // A definition in another block is not counted (`DefMI.getParent() != BB`).
-            if self.lis.indexes.get_mbb_from_index(&at) != self.block {
+            if !is_def || self.facts.block_of.get(&instr) != Some(&self.block) {
                 continue;
             }
-            if found.is_some_and(|key| key != operand.instr) {
+            if found.is_some_and(|key| key != instr) {
                 return None;
             }
-            found = Some(operand.instr);
+            found = Some(instr);
         }
         found
     }
@@ -265,7 +290,7 @@ impl<'a> Commuter<'a> {
         &self,
         key: InstrKey,
     ) -> Option<(u32, u32)> {
-        crate::coalescer::pair::full_copy(self.lis.instr(key)).map(|(dst, src)| (src.value, dst.value))
+        crate::coalescer::pair::full_copy(&self.facts.insn[&key]).map(|(dst, src)| (src.value, dst.value))
     }
 
     /// `getTiedUse`: the value the instruction's definition of `def` is tied
@@ -275,7 +300,7 @@ impl<'a> Commuter<'a> {
         key: InstrKey,
         def: u32,
     ) -> Option<u32> {
-        let what = self.lis.instr(key).what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
+        let what = self.facts.insn[&key].what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
         match (&what.dests[0], &what.sources[0]) {
             (Loc::Held(dst), Loc::Held(src)) if dst.value == def => Some(src.value),
             _ => None,
@@ -324,12 +349,12 @@ impl<'a> Commuter<'a> {
     ) -> (bool, u32) {
         let mut last_def = 0;
         let mut last_use = dist;
-        for operand in self.lis.operands(reg) {
-            let Some(&at) = self.distance.get(&operand.instr) else { continue };
-            if !operand.is_def && at < last_use {
+        for &(instr, is_def) in self.facts.refs(reg) {
+            let Some(&at) = self.distance.get(&instr) else { continue };
+            if !is_def && at < last_use {
                 last_use = at;
             }
-            if operand.is_def && at > last_def {
+            if is_def && at > last_def {
                 last_def = at;
             }
         }
@@ -342,12 +367,7 @@ impl<'a> Commuter<'a> {
         key: InstrKey,
         reg: u32,
     ) -> bool {
-        let interval = self.lis.get_interval(reg);
-        if !interval.has_at_least_one_value() {
-            return false;
-        }
-        let at = self.lis.indexes.get_instruction_index(key);
-        interval.query(&at).is_kill()
+        self.facts.killed.contains(&(key, reg))
     }
 
     /// `isKilled`: whether `reg`, used by the instruction, dies there, looking
@@ -363,10 +383,10 @@ impl<'a> Commuter<'a> {
             if !self.is_plainly_killed(at, reg) {
                 return false;
             }
-            // Several definitions: go with what the interval says.
-            let mut defs = self.lis.operands(reg).iter().filter(|operand| operand.is_def);
-            let (Some(def), None) = (defs.next(), defs.next()) else { return true };
-            at = def.instr;
+            // Several definitions: go with what the kill says.
+            let mut defs = self.facts.refs(reg).iter().filter(|(_, is_def)| *is_def);
+            let (Some(&(def, _)), None) = (defs.next(), defs.next()) else { return true };
+            at = def;
             // A definition that is no copy is not going to be coalesced.
             let Some((source, _)) = self.copy_to_reg(at) else { return true };
             reg = source;
