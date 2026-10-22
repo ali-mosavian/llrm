@@ -6729,3 +6729,27 @@ b6:
     assert!(got.contains(&"mov es, di".to_owned()) && got.contains(&"mov es, bx".to_owned()), "{got:?}");
     assert!(!got.iter().any(|line| line == "mov ax, bx" || line.starts_with("mov ax, word ptr [bp+8]")), "{got:?}");
 }
+
+/// X86 DynAlloca Expander (the pin's `x86-dyn-alloca-expander`) has nothing to
+/// expand here: the pin lowers a dynamic `alloca` on i486-linux to the round
+/// up and `sub esp, n` with no DYN_ALLOCA pseudo and no probe (its pseudo is
+/// made only under MSVC-style stack probing), and so does
+/// `hook_dynamic_alloca`: the size rounded to the stack's alignment, subtracted
+/// from the stack pointer, which is the address. Row 55 of the codegen slot
+/// table is N/A on that.
+#[test]
+fn test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe() {
+    let text = assembled(
+        "declare void @use(ptr)
+define void @f(i16 %n) {
+b0:
+  %p = alloca i8, i16 %n, align 2
+  call void @use(ptr %p)
+  ret void
+}
+",
+    );
+    assert!(text.contains("sub sp,") || text.contains("sub esp,"), "the stack pointer is lowered: {text}");
+    assert!(text.contains("and "), "by a size rounded to the stack's alignment: {text}");
+    assert!(!text.contains("loop") && !text.contains("__chkstk") && !text.contains("B$STK"), "no probe: {text}");
+}

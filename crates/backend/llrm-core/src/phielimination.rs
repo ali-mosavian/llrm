@@ -31,8 +31,8 @@
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
 //! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
 //! 2026-11-14): a temporary is made in its result's class by name
-//! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it the
-//! class the result has, which the type gave the result when isel made it.
+//! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it
+//! the class the result has, which the type gave the result when isel made it.
 //! There is no per-value class at isel time here, and computing the result's
 //! class at this pass cost +0.40% Ir on d_faces -O2 (measured, #3625); so the
 //! class is what `regclass::classes` finds from the result's uses when a pass

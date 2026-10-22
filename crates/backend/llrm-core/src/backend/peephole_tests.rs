@@ -3709,6 +3709,87 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
 }
 
+/// A body of one `lea eax, address` and, where `flags_read`, a `jb` after it.
+fn lea_body(
+    address: AddressRef,
+    flags_read: bool,
+) -> LirBody {
+    let eax = rl(RegId::EAX, 4);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![eax], vec![Loc::Address(address)])),
+        vec![1],
+        vec![1],
+    ));
+    if !flags_read {
+        // A compare writes every flag before anything reads one.
+        let compare = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(8, 4)])),
+            vec![],
+            vec![1],
+        ));
+        return body("lea", 1, vec![block(1, vec![lea, compare], vec![]).into()]);
+    }
+    let branch =
+        Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
+    body("lea", 1, vec![block(1, vec![lea, branch], vec![3]).into(), block(3, vec![], vec![]).into()])
+}
+
+fn sum(
+    through: RegId,
+    index_through: RegId,
+    scale: i64,
+    offset: i64,
+) -> AddressRef {
+    AddressRef { through, index_through, scale, offset, ..AddressRef::new(None) }
+}
+
+/// X86FixupLEAs `optTwoAddrLEA`: `lea eax,[eax+ecx]` is `add eax,ecx`, in
+/// either operand order, where no flag is read after it. Without the pass the
+/// LEA stayed an LEA: 3 bytes for `add`, 3 for `lea`, but the pin's output
+/// differs in 37 IRs.
+#[test]
+fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
+    for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
+        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let what = done.insns()[0].what.clone().unwrap();
+        assert_eq!(what.name.as_deref(), Some("add"));
+        assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
+    }
+}
+
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
+/// `increments` makes `inc`.
+#[test]
+fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
+    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let what = done.insns()[0].what.clone().unwrap();
+    assert_eq!(what.name.as_deref(), Some("add"));
+    assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
+    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    assert_eq!(names(&one.insns())[0], "inc");
+}
+
+/// The pin leaves a three-address or scaled LEA alone: only the two-address
+/// scale-1 forms are the pass's.
+#[test]
+fn test_lea_that_is_not_two_address_stays() {
+    for address in [
+        sum(RegId::ECX, RegId::EDX, 1, 0),
+        sum(RegId::EAX, RegId::ECX, 2, 0),
+        sum(RegId::EAX, RegId::ECX, 1, 4),
+        sum(RegId::ECX, RegId::None, 1, 8),
+    ] {
+        let done = lea_fixed(rules(), &lea_body(address, false));
+        assert_eq!(names(&done.insns())[0], "lea");
+    }
+}
+
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
 /// only for `sub x, 1`, so recmany and recfloat grew (`dec ecx` became `add
 /// edx, -1`, 3 bytes against 1). X86's patterns select DEC for `add x, -1` as
