@@ -158,8 +158,9 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
+| SD20 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
 
-Next free: **SD20**.
+Next free: **SD21**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
