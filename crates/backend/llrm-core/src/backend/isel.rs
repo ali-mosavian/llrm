@@ -2413,7 +2413,9 @@ impl Selector<'_, '_, '_> {
             Opcode::Cast(CastOp::Trunc)
                 if self.types().int_bits(instruction.ty) == Some(1)
                     && function.operand_type(&self.module.context, instruction.operands[0]).is_some_and(|ty| {
-                        self.types().int_bits(ty).is_some_and(|bits| bits <= 16) && !self.is_wide(ty)
+                        self.types().int_bits(ty).is_some_and(|bits| bits <= 32)
+                            && !self.is_wide(ty)
+                            && !self.is_far(ty)
                     }) => {}
             _ => return,
         }
