@@ -199,6 +199,8 @@ pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
+#[cfg(test)]
+mod memsetpattern_tests;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
@@ -220,6 +222,7 @@ pub mod machinelicm;
 pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
+pub mod memsetpattern;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;

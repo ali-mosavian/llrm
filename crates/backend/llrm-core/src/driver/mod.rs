@@ -458,6 +458,9 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    if options.isel == crate::backend::shadow::Selector::Dag {
+        timed("mir memset patterns", || program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded))?;
+    }
     timed("mir bit counts", || {
         program
             .modules
