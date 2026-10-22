@@ -6,9 +6,11 @@
 //! as the rewrite of MIR before isel.
 //!
 //! # How it works
-//! For a load whose value `E = sext/zext L` is made in the same block and
-//! whose other readers are all compares with a constant in that block, those
-//! compares compare `E` instead, with the constant extended the same way. `L`
+//! For a load whose value `E = sext/zext L` is made in the same block, the
+//! compares of `L` with a constant, in that block or any block the load
+//! dominates, compare `E` instead, with the constant extended the same way;
+//! the same extension made again is `E`, and a reader in the load's own block
+//! reads `trunc E`; any other reader leaves the load alone. `L`
 //! is then read only by `E`, and isel selects the pair as one `movsx`/`movzx`
 //! from memory: the compare is on the wide register, not on a byte register
 //! that `E` must extend again.
@@ -20,7 +22,7 @@
 //! | # | DEVIATE |
 //! |---|---|
 //! | D1 | Done on MIR before isel, not in the DAG: isel selects one instruction at a time (`isel/combined.rs`) and has no combine stage. Owner mir-undef; revisit when isel gains one. |
-//! | D2 | Any other reader of the load (a store, a call, an extension in another block) leaves the load alone. The pin gives it `trunc E` (`isTruncateFree`), and the narrow value then lives beside the wide one: bench/grep.nib `_main` grew 58 B of spills when this was done. Owner mir-undef; revisit when isel can fold the trunc. |
+//! | D2 | A reader of the load that is neither a compare with a constant, the same extension again nor in the load's own block (a store or a call in another block) leaves the load alone. The pin gives it `trunc E` (`isTruncateFree`); there the narrow value lives beside the wide one: bench/grep.nib `_main` grew 58 B of spills. Owner mir-undef; revisit when isel can fold the trunc. |
 //!
 //! # Example
 //! Before:
@@ -93,6 +95,10 @@ impl FunctionPass for ExtLoad {
 /// What the compares and the other readers of one load become.
 struct Plan {
     extension: InstId,
+    /// Other extensions of the load, of the same kind and type: they are `E`.
+    same: Vec<InstId>,
+    /// Readers in the load's block that read `trunc E`.
+    others: Vec<(InstId, u32)>,
     /// `(compare, index of the load in its operands, index of the constant)`.
     compares: Vec<(InstId, u32, u32)>,
 }
@@ -113,15 +119,16 @@ fn plan(
         matches!(made.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) && made.operands[0] == Operand::Value(result)
     })?;
     let zero_extended = function.instruction(extension).opcode == Opcode::Cast(CastOp::ZExt);
-    let extended = function.instruction(extension).result?;
     let mut compares = Vec::new();
+    let mut same = Vec::new();
+    let mut others = Vec::new();
     for used in function.users(result).snapshot() {
         if used.user == extension {
             continue;
         }
         let user = function.instruction(used.user);
         let here = function.parent(used.user) == Some(home);
-        if let (Opcode::ICmp(predicate), true) = (&user.opcode, here) {
+        if let Opcode::ICmp(predicate) = &user.opcode {
             let other = 1 - used.index;
             if int_constant(context, user.operands[other as usize]).is_some() {
                 // A zero extension loses the sign bits a signed compare reads.
@@ -132,14 +139,30 @@ fn plan(
                 continue;
             }
         }
-        // Another reader would read `trunc E`: the narrow value stays live
-        // beside the wide one and costs a register (D3).
+        // The same extension made again (another block): it is `E`, which
+        // dominates it as the load does. Any other reader would read `trunc E`,
+        // and the narrow value would live beside the wide one (D2).
+        if user.opcode == function.instruction(extension).opcode
+            && user.ty == function.instruction(extension).ty
+            && used.index == 0
+        {
+            same.push(used.user);
+            continue;
+        }
+        // A reader in the load's own block reads `trunc E`: nothing of the
+        // narrow value is live out of the block. One in another block
+        // or a phi would keep it live beside the wide value (grep.nib
+        // `_main`, +58 B of spills): left.
+        if here && user.opcode != Opcode::Phi {
+            others.push((used.user, used.index));
+            continue;
+        }
         return None;
     }
     if compares.is_empty() {
         return None;
     }
-    Some(Plan { extension, compares })
+    Some(Plan { extension, same, others, compares })
 }
 
 fn int_constant(
@@ -179,6 +202,27 @@ fn widened(
         let extended = Operand::Value(function.instruction(plan.extension).result.expect("a value"));
         let zero_extended = function.instruction(plan.extension).opcode == Opcode::Cast(CastOp::ZExt);
         function.move_to(plan.extension, Position::After(load)).expect("a placed instruction");
+        for again in plan.same {
+            let value = function.instruction(again).result.expect("a value");
+            function.replace_value(value, extended);
+            function.erase(again).expect("no readers");
+        }
+        if !plan.others.is_empty() {
+            let cut = function.create_instruction(
+                Opcode::Cast(CastOp::Trunc),
+                narrow,
+                vec![extended],
+                Flags::default(),
+                None,
+            );
+            function.insert(cut, Position::After(plan.extension)).expect("a placed instruction");
+            let cut = Operand::Value(function.instruction(cut).result.expect("a value"));
+            for (user, at) in plan.others {
+                let mut operands = function.instruction(user).operands.clone();
+                operands[at as usize] = cut;
+                function.set_operands(user, operands);
+            }
+        }
         for (compare, at, constant) in plan.compares {
             let mut operands = function.instruction(compare).operands.clone();
             let bits = int_constant(context, operands[constant as usize]).expect("an integer constant");

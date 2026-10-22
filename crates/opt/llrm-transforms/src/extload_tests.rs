@@ -95,12 +95,12 @@ b2:
     assert!(after.contains("icmp eq i16 %w, -1"), "{after}");
 }
 
-/// Another reader of the byte (here a store) leaves the load alone: reading
-/// `trunc E` kept the narrow and the wide value live together (grep.nib
-/// `_main`, +58 B).
+/// A reader in the load's own block (here a store) reads the truncated
+/// extension: the load has one reader, so selection folds it into the extending
+/// load.
 #[test]
-fn test_a_load_with_another_reader_is_left() {
-    let text = "define i8 @f(ptr %p, ptr %t, ptr %s) {
+fn test_a_reader_in_the_loads_block_reads_the_truncated_extension() {
+    let after = run("define i8 @f(ptr %p, ptr %t, ptr %s) {
 b0:
   %c = load i8, ptr %p
   %lt = icmp sgt i8 %c, 0
@@ -110,10 +110,76 @@ b0:
   %v = load i8, ptr %q
   ret i8 %v
 }
+");
+    assert!(after.contains("icmp sgt i16 %w, 0") && after.contains("trunc i16 %w to i8"), "{after}");
+}
+
+/// A reader in another block (here a store) keeps the load as it is: reading
+/// `trunc E` there kept the narrow and the wide value live together
+/// (grep.nib `_main`).
+#[test]
+fn test_a_reader_in_another_block_leaves_the_load_alone() {
+    let text = "define i8 @f(ptr %p, ptr %t, ptr %s, i1 %c) {
+b0:
+  %b = load i8, ptr %p
+  %lt = icmp sgt i8 %b, 0
+  %w = sext i8 %b to i16
+  br i1 %c, label %b1, label %b2
+b1:
+  store i8 %b, ptr %s
+  %q = getelementptr i8, ptr %t, i16 %w
+  %v = load i8, ptr %q
+  ret i8 %v
+b2:
+  ret i8 0
+}
 ";
     let mut module = parsed(&format!("{DOS}{text}"));
     let before = crate::testing::printed(&module);
     assert_eq!(managed(&mut module, ExtLoad), before);
+}
+
+/// A compare with a constant in a later block compares the extension too, as
+/// the one in the load's block does (x_life's neighbour count tested in the
+/// loop's next block: 16 B of `movzx`).
+#[test]
+fn test_a_compare_in_a_later_block_compares_the_extension() {
+    let after = run("define i8 @f(ptr %p, ptr %t, i1 %c) {
+b0:
+  %b = load i8, ptr %p
+  %w = zext i8 %b to i16
+  br i1 %c, label %b1, label %b2
+b1:
+  %nz = icmp ne i8 %b, 0
+  %q = getelementptr i8, ptr %t, i16 %w
+  %v = load i8, ptr %q
+  %r = select i1 %nz, i8 %v, i8 1
+  ret i8 %r
+b2:
+  ret i8 0
+}
+");
+    assert!(after.contains("icmp ne i16 %w, 0") && !after.contains("icmp ne i8"), "{after}");
+}
+
+/// The extension made again in another block is the first one.
+#[test]
+fn test_the_same_extension_made_again_in_another_block_is_the_first() {
+    let after = run("define i16 @f(ptr %p, i1 %c) {
+b0:
+  %b = load i8, ptr %p
+  %w = zext i8 %b to i16
+  %nz = icmp ne i8 %b, 0
+  br i1 %nz, label %b1, label %b2
+b1:
+  %again = zext i8 %b to i16
+  %s = add i16 %w, %again
+  ret i16 %s
+b2:
+  ret i16 %w
+}
+");
+    assert_eq!(after.matches("zext").count(), 1, "{after}");
 }
 
 /// A load with no extension is left.
