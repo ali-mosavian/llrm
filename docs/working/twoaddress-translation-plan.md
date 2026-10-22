@@ -2,17 +2,20 @@
 
 Pin d1106deb71cc, [`TwoAddressInstructionPass.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp). Plan only; the table of what differs is in [phi-pre-ra-translation](phi-pre-ra-translation.md). `twoaddr.rs` today is its own pass (update in place, commuting, a memory destination in a fresh register).
 
-## The premise: a count, not a story
+## The premise: a count, taken the same way on both sides
 
-`render/dl.c` -O2, function `_dl_muzzle@3`, the same MIR (the `addresssink` stage of our build, parity 3b70c16822) through the pin's `llc` (`-print-after=`, copies counted as `COPY`) and through ours (`ISEL_DUMP=1`, copies counted as `vN := mov vN`; the two counts are not the same measure):
+`render/dl.c` -O2 at parity 3b70c16822. The pin: `llc -mtriple=i386-pc-linux-code16 -frame-pointer=all -O2 -print-after=phi-node-elimination,twoaddressinstruction,register-coalescer` on the build's own `37-addresssink.ll`, counting `COPY` opcodes in the pin's printed MIR per function. Ours: `ISEL_DUMP=1` of the same compile, counting `mov` with one register operand (loads, stores and immediates excluded). The two opcodes are not the same measure: the pin's `COPY` also carries the ABI argument and return moves, ours has those as pseudo-ops.
 
-| after | pin | ours |
-|---|---|---|
-| PHIElimination | 34 | 33 |
-| TwoAddressInstruction | 47 (+13) | 58 (+25) |
-| RegisterCoalescer | 3 | 10 |
+| function | PHIElimination pin/ours | TwoAddress pin/ours | Coalescer pin/ours |
+|---|---|---|---|
+| `_dl_muzzle@3` | 34/36 | 47/61 | 3/13 |
+| `_dl_decay@3` | 27/18 | 34/24 | 10/3 |
+| `_dl_explosion@3` | 23/25 | 30/34 | 3/8 |
+| `_dl_live@3` | 34/30 | 38/36 | 7/3 |
+| `_dl_mark@3` | 53/42 | 59/51 | 15/8 |
+| `_dl_relink@3` | 72/66 | 101/107 | 12/28 |
 
-So ours adds twice the copies at this pass and leaves more after coalescing. That is what the translation has to move, and the first thing to find is how much of the 25 vs 13 is the pass and how much is the tied-operand set (four operations here, the descriptors' tied operands there).
+Copies added by the pass, pin/ours: muzzle 13/25, decay 7/6, explosion 7/9, live 4/6, mark 6/9, relink 29/41. Ours adds more in every function but decay. After the coalescer the sign flips in decay, live and mark (ours fewer), so the final count is not one-directional and the opcode difference may be most of it. What the count supports: the pass adds more copies than the pin's in five of six functions, most in muzzle and relink. It does not support a claim about the final copies.
 
 ## Data the pass needs that LIR does not have
 
@@ -35,8 +38,8 @@ Each piece has a numbered DEVIATE for what stays (kill flags, distances, the tie
 
 ## First fail-first test
 
-The far-pointer test `test_a_far_pointers_phi_is_not_copied_through_ax` is the premise for the coalescer side only (a phi temporary's class). For this pass the first test is a minimum of the count above: a function whose pin `llc` output after TwoAddressInstruction has fewer copies than ours, reduced from `_dl_muzzle@3` by `tools/stages.py`-style stage dumps. It is not chosen yet; picking it is the first step of piece 1's PR.
+The far-pointer test `test_a_far_pointers_phi_is_not_copied_through_ax` is the premise for the coalescer side only (a phi temporary's class). For this pass the first test is a reduction of `_dl_muzzle@3` (13 added by the pin, 25 by ours) to the smallest function where ours adds more copies than the pin at TwoAddressInstruction. It is not chosen yet; picking it is the first step of piece 1's PR.
 
 ## Not done
 
-No measurement of what any piece changes; the counts above are one function. The vreg class field is a data-model change and is not part of this plan (decided elsewhere).
+No measurement of what any piece changes; the counts above are six functions of one file. The vreg class field is a data-model change and is not part of this plan (decided elsewhere).
