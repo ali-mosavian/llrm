@@ -1,8 +1,9 @@
 //! Drops what the CPU cannot run from the decoded table.
 //!
-//! A check that is false for the CPU kills the sequence it is in; a check that is true is
-//! dropped. Sequences are alternatives of a `Scope`, cases of a switch, or the whole table, so a
-//! dead alternative disappears and a `Scope` left with one alternative is inlined.
+//! A check that is false for the CPU kills the sequence it is in; a check that
+//! is true is dropped. Sequences are alternatives of a `Scope`, cases of a
+//! switch, or the whole table, so a dead alternative disappears and a `Scope`
+//! left with one alternative is inlined.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,8 +14,8 @@ use crate::features::Cpu;
 use crate::inc::Ids;
 use crate::predicate::{self, Decided, Expr};
 
-/// What pruning kept of the pattern predicates: the simplified expression of each one still
-/// checked at run time.
+/// What pruning kept of the pattern predicates: the simplified expression of
+/// each one still checked at run time.
 pub type Open = BTreeMap<u16, Expr>;
 
 pub struct Pruner {
@@ -24,7 +25,11 @@ pub struct Pruner {
 }
 
 impl Pruner {
-    pub fn new(cpu: &Cpu, predicates: &[String], ids: &Ids) -> Result<Pruner, String> {
+    pub fn new(
+        cpu: &Cpu,
+        predicates: &[String],
+        ids: &Ids,
+    ) -> Result<Pruner, String> {
         let decided = predicates
             .iter()
             .enumerate()
@@ -42,12 +47,18 @@ impl Pruner {
         Ok(Pruner { decided, dead_vts, open: Open::new() })
     }
 
-    pub fn prune(&mut self, nodes: &[Node]) -> Vec<Node> {
+    pub fn prune(
+        &mut self,
+        nodes: &[Node],
+    ) -> Vec<Node> {
         self.sequence(nodes).unwrap_or_default()
     }
 
     /// `None` when the sequence can never match.
-    fn sequence(&mut self, nodes: &[Node]) -> Option<Vec<Node>> {
+    fn sequence(
+        &mut self,
+        nodes: &[Node],
+    ) -> Option<Vec<Node>> {
         let mut out = Vec::with_capacity(nodes.len());
         for node in nodes {
             match node {
@@ -67,8 +78,7 @@ impl Pruner {
                     out.push(node.clone());
                 }
                 Node::Scope(alternatives) => {
-                    let mut live: Vec<Vec<Node>> =
-                        alternatives.iter().filter_map(|alt| self.sequence(alt)).collect();
+                    let mut live: Vec<Vec<Node>> = alternatives.iter().filter_map(|alt| self.sequence(alt)).collect();
                     match live.len() {
                         0 => return None,
                         1 => out.extend(live.pop().unwrap()),
@@ -101,7 +111,10 @@ impl Pruner {
         Some(out)
     }
 
-    fn dead_item(&self, item: &Matcher) -> bool {
+    fn dead_item(
+        &self,
+        item: &Matcher,
+    ) -> bool {
         let dead = |vt: &Vt| self.dead_vts.contains(&vt.0);
         match item {
             Matcher::CheckType(vt) | Matcher::CheckChildType { vt, .. } | Matcher::CheckValueType(vt) => dead(vt),

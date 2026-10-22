@@ -29,7 +29,7 @@
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
-use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate};
+use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
 /// A number and its width: `ConstantInt`, and the zero a `Null` or `Zero` is.
@@ -447,7 +447,10 @@ pub fn float_binary(
     c1: ConstantId,
     c2: ConstantId,
 ) -> Option<ConstantId> {
-    if flags.contains(Flags::NSZ) || flags.contains(Flags::REASSOC) || flags.contains(Flags::CONTRACT) || flags.contains(Flags::ARCP)
+    if flags.contains(Flags::NSZ)
+        || flags.contains(Flags::REASSOC)
+        || flags.contains(Flags::CONTRACT)
+        || flags.contains(Flags::ARCP)
     {
         return None;
     }

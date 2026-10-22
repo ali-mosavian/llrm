@@ -1075,8 +1075,9 @@ mod tests {
         Arc::new(one)
     }
 
-    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and none is needed: no segment
-    /// is made for it, where a plain read of a value nothing defines stops the calculation ("a unique value"),
+    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and
+    /// none is needed: no segment is made for it, where a plain read of a
+    /// value nothing defines stops the calculation ("a unique value"),
     /// and the values around it keep theirs.
     #[test]
     fn test_a_value_read_as_undef_has_no_live_range_and_costs_its_reader_nothing() {
@@ -1088,8 +1089,8 @@ mod tests {
         assert!(!lis.operands(9)[0].reads_reg);
     }
 
-    /// A join that renames a value renames the one an operand reads as undef too: left alone, the operand
-    /// would name a value nothing places.
+    /// A join that renames a value renames the one an operand reads as undef
+    /// too: left alone, the operand would name a value nothing places.
     #[test]
     fn test_renaming_a_value_renames_the_undef_reads_of_it() {
         let one = undef_reader(&[2], &[9]);

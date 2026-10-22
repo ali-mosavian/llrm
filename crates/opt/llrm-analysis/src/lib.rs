@@ -134,8 +134,6 @@ pub mod interprocedural;
 pub mod ivdescriptors;
 #[cfg(test)]
 mod laa_testing;
-#[cfg(test)]
-mod nocapture_agreement_tests;
 pub mod liveness;
 pub mod loads;
 pub mod loadstorepromoter;
@@ -150,6 +148,8 @@ pub mod memoryssa;
 pub mod mssa;
 pub mod mustexecute;
 pub mod nearest;
+#[cfg(test)]
+mod nocapture_agreement_tests;
 pub mod noreturn;
 pub mod num;
 pub mod occurrence;
