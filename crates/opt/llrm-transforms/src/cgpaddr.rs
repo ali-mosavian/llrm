@@ -1,5 +1,5 @@
-//! CodeGenPrepare: comparison and address sinking, so isel sees one form: LLVM's
-//! `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst`
+//! CodeGenPrepare: comparison and address sinking, so isel sees one form:
+//! LLVM's `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst`
 //! (address-mode sinking, below), and GVNSink's merge of equal arms.
 //!
 //! # How it works
@@ -109,11 +109,11 @@
 //! #386 (RGBLIGHTS `a(i) = ...` under an `IF`).
 
 //!
-//! Address modes (`optimizeMemoryInst`): see [`sunk`]. A `load` or `store` whose
-//! address is a `gep` chain made in another block, matched as `base + offset +
-//! scale * index` where `isLegalAddressingMode` says the whole is one access,
-//! has the address made again just before it; a `select` of two offsets of one
-//! base selects the offsets. DEVIATE CGP1: no promoted extensions
+//! Address modes (`optimizeMemoryInst`): see [`sunk`]. A `load` or `store`
+//! whose address is a `gep` chain made in another block, matched as `base +
+//! offset + scale * index` where `isLegalAddressingMode` says the whole is one
+//! access, has the address made again just before it; a `select` of two offsets
+//! of one base selects the offsets. DEVIATE CGP1: no promoted extensions
 //! (`TypePromotionTransaction`), no phi combiner (the phi of equal addresses is
 //! merged above), no base-register-and-global form and no matching through
 //! `ptrtoint`/`inttoptr`. Exit: those translated.
