@@ -53,3 +53,37 @@ sdag-b's signed 12-19 for the whole lowering is after 12-14, but the switch need
 ## Row 23 (CGP)
 
 The seven functions blocked on "the DAG switch, earliest 2027-02-04" are blocked until 2026-12-14 (m32) and 2026-12-18 (m16; 2027-01-08 at worst).
+
+## Critical path to 2026-12-14 (m32)
+
+| Step | Owner | Deliverable | Date | Depends on |
+|---|---|---|---|---|
+| 1 | sdag-b | i1 branch promote (#3852), `and x,1` fold (#3855) land | 10-24 | the runner |
+| 2 | sdag-a | corpus shadow of QCport, tests/run, qbrt: the real builder refusal list | 11-02 | 1 (so the shadow sees past BrCond) |
+| 3 | sdag-d | blocks to `LirBody`/`Selected`; `--isel=dag` makes a function | 11-06 | #3800 landing |
+| 4 | sdag-b | remaining promote/expand 11-14, x87 and FP conversions 11-18, bit counts 11-25 | 11-25 | sdag-a's FP builder |
+| 5 | sdag-c | no CannotSelect, m32 | 11-12 (11-20 with x87) | 1, 4 |
+| 6 | sdag-d | emitter: locals, globals, `CALLSEQ`, jump tables, call clobbers | 11-20 | sdag-a calls |
+| 7 | sdag-a | builder refuses nothing on the corpus: EH 11-27, sweep 12-04 | **12-10** | 2 |
+| 8 | sdag-d | two clean weekly runs | 12-07, 12-14 | 7 |
+
+The step that costs the slip against 11-02 is **7**: the builder's refusal list is unknown until step 2 (11-02) and sdag-a's dates for EH, atomics and aggregates (11-20 to 12-04) are sequential. Everything else finishes by 11-25. If step 2 shows EH, atomics, `va_*` and aggregates absent from the corpus, step 7 collapses to 11-14.
+
+## File collisions
+
+This week `builder.rs` was touched by 6 commits (981 lines, mostly sdag-a) and `tests.rs` by 17 (1430 lines, all four owners). Of the SelectionDAG PRs titled so, 21 are closed unmerged (several are consolidations such as #3710+#3721 into #3756 and #3763; their cause is not classified here), and #3851 is conflicting now. `tests.rs` is the shared file that costs: **the first PR is the split of `tests.rs` into one file per area** (`dag`, `builder`, `legalize_types`, `lowering`, `combiner`, `x86_lowering`). sdag-d writes it (mechanical, no test changes), all others leave `tests.rs` alone from its start until it lands (one day); 10-24. `builder.rs` stays: one owner touches it; its `builder/` submodules already carry the new areas (`memops`, `switch`).
+
+## A November m32 switch
+
+It needs the weekly runs on 11-16 and 11-23 and the switch on **11-30**. What moves:
+
+| Step | Now | Needed | Days | Who needs help |
+|---|---|---|---|---|
+| 7 builder clean | 12-10 | 11-14, only if the 11-02 shadow shows EH/atomics/`va_*`/aggregates absent; else those four are deferred behind a refusal that falls back (not allowed by the gate) | -26 | sdag-a: `va_*` and atomics pulled to 11-10 by dropping the intrinsic sweep |
+| 4 legalizer | 11-25 | 11-18 (types 11-14, x87 11-14, bit counts 11-18) | -7 | sdag-b: ConstantFP libcall and bit counts to sdag-c, who is idle until the shadow shows new buckets |
+| 5 matcher | 11-12 / 11-20 | 11-12 | 0 | sdag-c |
+| 6 emitter | 11-20 | 11-13 | -7 | sdag-d: calls half to sdag-a (the builder already knows the call sequence) |
+| 3 `LirBody` | 11-06 | 11-06 | 0 | sdag-d |
+| combiner | not a gate | div/rem and extend-of-load (sdag-d, 11-03) are needed for the corpus equality, not the switch | 0 | sdag-d |
+
+Two limits are not about people: the build slots (two shared; one test cycle of one crate is 10 to 20 minutes behind other sessions' builds, so each owner gets about 30 cycles a day), and a refusal found in the last run week resets the clean-run count. A November switch is possible only if the 11-02 shadow shows the builder's tail is not in the corpus; decide on 11-02, not before.
