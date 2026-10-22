@@ -195,7 +195,10 @@ fn movable(one: &Insn) -> bool {
             what.op,
             Op::Binary | Op::Unary | Op::Move | Op::Extend | Op::Address | Op::Funnel | Op::Select
         )
-        && what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::Held(_) | Loc::Imm(_)))
+        && what.dests.iter().chain(&what.sources).all(|place| {
+            // A `lea` names a cell and reads none.
+            matches!(place, Loc::Held(_) | Loc::Imm(_)) || (what.op == Op::Address && matches!(place, Loc::Mem(_)))
+        })
 }
 
 fn flag_lanes(
@@ -211,13 +214,13 @@ fn flag_lanes(
     Some((flags(&effect.all_reads()), flags(&effect.writes)))
 }
 
-/// Whether `one` writes the flags (an unknown effect does).
-fn flags_written(
+/// Whether `one` reads or writes the flags (an unknown effect does both).
+fn flags_touched(
     one: &Insn,
     regs: llrm_lir::registers::Regs,
     bits: u32,
 ) -> bool {
-    flag_lanes(one, regs, bits).is_none_or(|(_, writes)| writes)
+    flag_lanes(one, regs, bits).is_none_or(|(reads, writes)| reads || writes)
 }
 
 /// Whether `one` neither reads nor writes the flags (an unknown effect does
@@ -645,8 +648,8 @@ impl<'a> Commuter<'a> {
             defs.push(dst.value);
             end += 1;
         }
-        // The flags it writes are not to be read or written between.
-        let writes_flags = flags_written(&mi, regs, bits);
+        // The flags it reads or writes are not to be read or written between.
+        let writes_flags = flags_touched(&mi, regs, bits);
         if end > last {
             return false;
         }
@@ -683,6 +686,135 @@ impl<'a> Commuter<'a> {
         for (place, one) in moved.into_iter().enumerate() {
             work.insert(after + place, one);
         }
+        let mut killed = self.facts.killed.borrow_mut();
+        killed.remove(&(kill.id(), reg));
+        killed.insert((mi.id(), reg));
+        self.distance.remove(&mi.id());
+        true
+    }
+
+    /// `isDefTooClose`: whether the definition of `reg` that `work[at]` follows
+    /// is too near to move a reader of `reg` above `work[at]`: `work[at]`
+    /// itself defines it, a definition sits below it, or a load defines it
+    /// one instruction above (a load takes 2, anything else 1:
+    /// `getInstrLatency` without itineraries, TA-7).
+    fn def_too_close(
+        &self,
+        reg: u32,
+        dist: u32,
+        mi: &Insn,
+    ) -> bool {
+        for &(instr, is_def) in self.facts.refs(reg) {
+            if !is_def || self.facts.block_of.get(&instr) != Some(&self.block) {
+                continue;
+            }
+            let def = &self.facts.insn[&instr];
+            if crate::coalescer::pair::full_copy(def).is_some() {
+                continue;
+            }
+            if instr == mi.id() {
+                return true;
+            }
+            let Some(&at) = self.distance.get(&instr) else { return true };
+            let latency =
+                if def.what.as_ref().is_some_and(|what| what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))) {
+                    2
+                } else {
+                    1
+                };
+            if latency > dist - at {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `rescheduleKillAboveMI` for the tied instruction `work[at]`: the one
+    /// later reader that kills its source goes above it, so the source dies
+    /// at the tied instruction. True when the list changed; `at` then holds
+    /// the moved reader.
+    pub fn reschedule_kill_above_mi(
+        &mut self,
+        work: &mut Vec<Arc<Insn>>,
+        at: usize,
+        regs: llrm_lir::registers::Regs,
+        bits: u32,
+    ) -> bool {
+        let mi = Arc::clone(&work[at]);
+        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
+            return false;
+        };
+        if into.value == source.value {
+            return false;
+        }
+        let reg = source.value;
+        let Some(&dist) = self.distance.get(&mi.id()) else { return false };
+        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
+            return false;
+        };
+        if work[last + 1..].iter().any(|one| one.defines.contains(&reg))
+            || !self.facts.killed.borrow().contains(&(work[last].id(), reg))
+        {
+            return false;
+        }
+        let kill = Arc::clone(&work[last]);
+        // A copy is left to the coalescer (the pin moves one only for a folded
+        // load, which has no case here).
+        if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
+            return false;
+        }
+        if let Some(what) = kill.what.as_ref()
+            && crate::backend::twoaddr::ties(what)
+            && matches!(
+                what.sources.first(),
+                Some(Loc::Held(held)) if held.value == reg
+            )
+        {
+            return false;
+        }
+        let mut uses: Vec<u32> = Vec::new();
+        let mut kills: Vec<u32> = Vec::new();
+        for &value in &kill.uses {
+            if self.def_too_close(value, dist, &mi) {
+                return false;
+            }
+            let killed = self.facts.killed.borrow().contains(&(kill.id(), value));
+            if value == reg && !killed {
+                return false;
+            }
+            uses.push(value);
+            if killed && value != reg {
+                kills.push(value);
+            }
+        }
+        let touches_flags = flags_touched(&kill, regs, bits);
+        let mut visited = 0;
+        for other in &work[at..last] {
+            if visited > 10 {
+                return false;
+            }
+            visited += 1;
+            if barrier(other) {
+                return false;
+            }
+            if touches_flags && !flags_untouched(other, regs, bits) {
+                return false;
+            }
+            for &value in &other.uses {
+                if kills.contains(&value) {
+                    return false;
+                }
+                if other.id() != mi.id() && value == reg && !self.facts.killed.borrow().contains(&(other.id(), value)) {
+                    return false;
+                }
+            }
+            if other.defines.iter().any(|value| uses.contains(value)) {
+                return false;
+            }
+        }
+        let moved = work.remove(last);
+        work.insert(at, moved);
         let mut killed = self.facts.killed.borrow_mut();
         killed.remove(&(kill.id(), reg));
         killed.insert((mi.id(), reg));
