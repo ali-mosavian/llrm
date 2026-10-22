@@ -127,6 +127,19 @@ macho = "_*"
 pointer = ["eax"]
 float = ["st0"]
 
+# fastcc32: the pin's `fastcc` on i486 (llc d1106deb71cc, read from its disassembly): the first two integers take ECX then EDX (an i8
+# CL, an i16 DX, an i64 ECX:EDX), a float or what comes after goes on the stack, the caller pops. Nothing selects it: it is the
+# comparison instrument for CC1 (`LLRM_PIN_FASTCC=1`, backend/cpu.rs), which gives private functions this in place of watcall32.
+[fastcc32]
+like = "cdecl32"
+cc = "fast"
+argument_registers = ["ecx", "edx"]
+wide_pairs = [["ecx", "edx"]]
+backfill = true
+skip_memory = true
+arguments_clobbered = true
+results_clobbered = true
+
 # sysv32: the i386 System V ABI, gcc's default on Linux, as `gcc -m32` emits it (read from its disassembly, not from the
 # psABI's text): every argument on the stack, pushed right to left in dword slots, which the caller removes; EBX, ESI, EDI and
 # EBP kept; results in EAX, EDX:EAX and ST0. Every struct result, whatever its size, is written through a pointer that is the
