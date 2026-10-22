@@ -7299,17 +7299,8 @@ impl Compiler {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
             let result = self.value(type_id);
-            if intrinsic.lowering == Lowering::Log {
-                let logarithm = self.value(type_id);
-                self.emit("flog2", vec![logarithm], vec![operand]);
-                let ln2 = self.floating_literal("0.69314718055994530942", type_id)?;
-                self.emit("fmul", vec![result], vec![Operand::Value(logarithm), ln2]);
-            } else {
-                let log2e = self.floating_literal("1.4426950408889634074", type_id)?;
-                let scaled = self.value(type_id);
-                self.emit("fmul", vec![scaled], vec![operand, log2e]);
-                self.emit("fexp2", vec![result], vec![Operand::Value(scaled)]);
-            }
+            let op = if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" };
+            self.emit(op, vec![result], vec![operand]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Floor {

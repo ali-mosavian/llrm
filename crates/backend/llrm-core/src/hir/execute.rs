@@ -948,7 +948,7 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(ordered(op, left.cmp(&right)))]
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
+            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fln | Op::Fexp | Op::Fround => {
                 let value = args[0].float()?;
                 let result = match op {
                     Op::Fabs => value.abs(),
@@ -958,6 +958,8 @@ impl<'p> Machine<'p> {
                     Op::Fatan => value.atan(),
                     Op::Fround => value.round_ties_even(),
                     Op::Flog2 => value.log2(),
+                    Op::Fln => value.ln(),
+                    Op::Fexp => value.exp(),
                     _ => value.exp2(),
                 };
                 // Python's math raises where IEEE would invent a NaN or
