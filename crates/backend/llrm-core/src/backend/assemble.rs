@@ -1117,7 +1117,8 @@ fn staged(
             Some(timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)))
         }
         Selector::Shadow => {
-            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)) {
+            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch))
+            {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {
                     llrm_support::debug!("isel", "{name} refused: {}", why.0);
@@ -1130,19 +1131,19 @@ fn staged(
         done
     } else {
         timed("isel", || {
-        isel::selected_with(
-            module,
-            name,
-            abi,
-            &mut pool.borrow_mut(),
-            target.cpu,
-            target.segments,
-            target.selection,
-            target.arch,
-            zeroed,
-            hole,
-            target.facts,
-        )
+            isel::selected_with(
+                module,
+                name,
+                abi,
+                &mut pool.borrow_mut(),
+                target.cpu,
+                target.segments,
+                target.selection,
+                target.arch,
+                zeroed,
+                hole,
+                target.facts,
+            )
         })
     };
     let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =

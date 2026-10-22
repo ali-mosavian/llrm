@@ -2,12 +2,12 @@
 //! take: the other half of `--isel=dag`.
 //!
 //! # How it works
-//! [`selected`] builds the entry block's DAG, runs [`super::dag_select::select_block`]
-//! and turns the emitted blocks into a `LirBody`: the blocks the select
-//! diamond made, their successors, the machine facts the phases read. A
-//! function the path cannot yet take (more than one MIR block, a call, a
-//! frame object, an unsupported opcode) is a refusal with its reason: the
-//! shadow harness counts them.
+//! [`selected`] builds the entry block's DAG, runs
+//! [`super::dag_select::select_block`] and turns the emitted blocks into a
+//! `LirBody`: the blocks the select diamond made, their successors, the machine
+//! facts the phases read. A function the path cannot yet take (more than one
+//! MIR block, a call, a frame object, an unsupported opcode) is a refusal with
+//! its reason: the shadow harness counts them.
 //!
 //! ```text
 //! @f(a, b) = a + b      LIR:  v1 := mov [arg0]      (builder, legalizer,
@@ -56,15 +56,24 @@ use crate::model::lir::{Block, LirBlock, LirBody};
 struct Info;
 
 impl SchedInfo for Info {
-    fn num_defs(&self, opcode: u32) -> usize {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
         llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
-    fn implicit_defs(&self, opcode: u32) -> &[u16] {
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
         llrm_dagisel::instr::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
     }
 
-    fn is_call(&self, opcode: u32) -> bool {
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool {
         llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
 }
@@ -143,7 +152,11 @@ pub fn selected(
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let tables = tables(arch);
     let frame = Frame(
-        convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None }).collect(),
+        convention
+            .parameters
+            .iter()
+            .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
+            .collect(),
     );
     let ctx = EmitContext { frame: &frame, address_mode: AddrMode::Flat32, map: &tables.map, names: &tables.names };
     let mut hooks = X86Hooks::new(Options {
