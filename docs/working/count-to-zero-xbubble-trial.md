@@ -11,4 +11,6 @@ Result (m32 -O2, tools/rows/row.sh, base 911a555d8 dist, same machine model):
 
 Why x_bubble is worse: the model picks the zero-end counter for the fill loop (`inc eax; jne`, no `cmp`) but the address becomes `_a[edx+esi]` with `mov esi,eax; shl esi,2` each trip. Our isel does not fold `add(x, shl(y,2))` under a symbol into `[sym+x+y*4]`; the model prices the scaled index as foldable. The stride-4 counter that main's loop uses (`add 4; je`, address base + counter) is not among the formulas: it needs the ICmpZero scale-by-4 formula paired with the address's `reg({0,+,4})`, which the step above does not pair (the address is `reg({0,+,4})` alone, no scaled register).
 
-Next, in order: (1) fold `sym + x + y*4` in isel (`address_scaled_multiply.rs` covers `base + c*i` only); (2) pair the stride-4 forms in the generator; (3) rerun rows. Owner w-5, by 2026-11-06.
+Dependency: x_bubble waits for SelectionDAG C1 (sdag-c's `matchAddress`), the translation of the fold below; the old isel is not patched. sdag-c is asked to add x_bubble's fill loop to the select shadow and report whether `add(x, shl(y,2))` under a symbol selects `[sym+x+y*4]`. The generator stays unapplied until then.
+
+Next, in order: (1) the address fold, from C1; (2) pair the stride-4 forms in the generator; (3) rerun rows. Owner w-5, by 2026-11-06.
