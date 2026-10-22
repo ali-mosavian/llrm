@@ -329,10 +329,10 @@ const ROWS: &[Row] = &[
     // Machine SSA.
     row(
         "Early Tail Duplication",
-        Missing,
+        Deviate,
         "jumps/ (late tail duplication only)",
         "-disable-early-taildup",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry slot early-tailduplication. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ",
+        "CG3: early tail duplication is not translated; reason: on our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs (-O3 the same); cost: that; exit: decide with the ret duplication of STRISTMP-1 (main duplicates `ret` into both arms, ours does not) and re-measure; owner w-3; review 2026-11-20. Registry slot early-tailduplication. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ",
     ),
     row(
         "Optimize machine instruction PHIs",
@@ -678,10 +678,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Tail Duplication",
-        Missing,
+        Deviate,
         "jumps/ ",
         "-disable-tail-duplicate",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ",
+        "CG4: late tail duplication is not translated; reason: -disable-tail-duplicate changes no clock, instruction or branch of 70 bench programs at m32 -O2 and -O3 (m16 -O2: 220 of 46865 in-loop instructions); cost: none measured; exit: re-measure with the ret duplication of STRISTMP-1; owner w-3; review 2026-11-20. Registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ",
     ),
     again(
         "Machine Copy Propagation Pass",
@@ -728,10 +728,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Branch Probability Basic Block Placement",
-        Missing,
+        Deviate,
         "jumps/placement",
         "-disable-block-placement",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry jumps@17, chains and loops (#2629). Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
+        "CG5: placement is translated in part (jumps/placement, #2629); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%) and 917988 without the pass; clocks without it +0.84% of 32.19 M; -O3 733888 against 726139 (+1.1%); executed `jmp` 112791 against 94444 at -O2; cost: the 1.5% of taken branches (nbody_single, queens, x_adler, x_ll_div, x_crc32 the largest); exit: per-program attribution by w-2 (docs/working/tail-dup-placement.md), translate what it names; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
     ),
     row(
         "Insert fentry calls",
