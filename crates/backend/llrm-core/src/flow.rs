@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 13] = [
+const UNOPTIMIZED: &[&str] = &[
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -68,6 +68,7 @@ const UNOPTIMIZED: [&str; 13] = [
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "PushFold",
     "FixupSetCC",
     "CopyPropagation",
     "X86OptimizeLEAs",
@@ -75,7 +76,7 @@ const UNOPTIMIZED: [&str; 13] = [
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 26] = [
+const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -88,6 +89,7 @@ const SLOTS: [(&str, &str); 26] = [
     ("FixupSetCC", "fixupsetcc@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
+    ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
     ("FloatAlloc", "floatalloc@8"),
@@ -167,6 +169,9 @@ pub fn machine_with<'a>(
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        // A pushed value a load made, read nowhere else, is pushed from the
+        // load's cell (the pin: X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         if crate::backend::allocate::rfp_on() {
             Box::new(floatassign::FloatPrep {
@@ -569,5 +574,25 @@ mod tests {
         .expect("a phase that changes nothing");
         assert_eq!(Arc::strong_count(&kept), 1, "the phase's end kept it");
         drop(body);
+    }
+
+    /// Each PR that added a phase bumped the literal length of `UNOPTIMIZED`
+    /// and `SLOTS`: two of them in one batch did not build, and the second
+    /// always conflicted (the 18:10 batch, 12 PRs). The lists are slices.
+    #[test]
+    fn the_phase_lists_have_no_literal_length() {
+        let text = include_str!("flow.rs");
+        for name in ["UNOPTIMIZED", "SLOTS"] {
+            let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
+            assert!(line.contains(": &["), "{line}");
+        }
+    }
+
+    /// Every phase `-O0` leaves out is a phase with a slot.
+    #[test]
+    fn every_unoptimized_phase_has_a_slot() {
+        for class in UNOPTIMIZED {
+            assert!(SLOTS.iter().any(|(one, _)| one == class), "{class}");
+        }
     }
 }

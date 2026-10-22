@@ -228,6 +228,7 @@ pub mod postrasink;
 pub mod fixupsetcc;
 pub mod precse;
 pub mod pressuresink;
+pub mod pushfold;
 pub mod prologue;
 pub mod regthrash;
 pub mod relayout;
