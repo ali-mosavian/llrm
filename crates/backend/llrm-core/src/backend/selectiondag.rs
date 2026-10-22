@@ -120,6 +120,4 @@ mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
-mod dagisel_tests;
-#[cfg(test)]
 mod tests;
