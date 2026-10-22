@@ -178,3 +178,11 @@ def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
         assert "no build stamp" in str(why)
     else:
         raise AssertionError("an unstamped binary was swept")
+
+
+def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
+    """An interrupt handler with Borland's nine register parameters was refused from 10-19 to 10-23 (`a fact of no parameter`): no sweep compiled a C file of that kind."""
+    jobs = q.extra_jobs()
+    callconv = [job for job in jobs if job[0] == "llrm-c"]
+    assert {job[1].name for job in callconv} >= {"cfcallee.c", "cncallee.c"}
+    assert {job[2:] for job in callconv} == {("-m16", "-O1"), ("-m16", "-O2")}

@@ -499,6 +499,21 @@ mod builder {
         }
     }
 
+    /// Constant expressions (`getelementptr` of a global, `ptrtoint` of one)
+    /// build the pin's `add GlobalAddress, offset`. The shadow bucket
+    /// "constant expression" (lru, scroll, x_bigadd) was refused.
+    #[test]
+    fn constant_expressions_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/constexpr.ll");
+        let pin = pin_blocks(include_str!("golden/constexpr.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");
