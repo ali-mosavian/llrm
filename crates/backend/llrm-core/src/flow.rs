@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 12] = [
+const UNOPTIMIZED: &[&str] = &[
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -74,7 +74,7 @@ const UNOPTIMIZED: [&str; 12] = [
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 25] = [
+const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -564,5 +564,25 @@ mod tests {
         .expect("a phase that changes nothing");
         assert_eq!(Arc::strong_count(&kept), 1, "the phase's end kept it");
         drop(body);
+    }
+
+    /// Each PR that added a phase bumped the literal length of `UNOPTIMIZED`
+    /// and `SLOTS`: two of them in one batch did not build, and the second
+    /// always conflicted (the 18:10 batch, 12 PRs). The lists are slices.
+    #[test]
+    fn the_phase_lists_have_no_literal_length() {
+        let text = include_str!("flow.rs");
+        for name in ["UNOPTIMIZED", "SLOTS"] {
+            let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
+            assert!(line.contains(": &["), "{line}");
+        }
+    }
+
+    /// Every phase `-O0` leaves out is a phase with a slot.
+    #[test]
+    fn every_unoptimized_phase_has_a_slot() {
+        for class in UNOPTIMIZED {
+            assert!(SLOTS.iter().any(|(one, _)| one == class), "{class}");
+        }
     }
 }
