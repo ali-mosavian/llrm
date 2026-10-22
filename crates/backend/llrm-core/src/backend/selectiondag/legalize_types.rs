@@ -19,7 +19,7 @@
 //! by name ([`LegalizeError::Unsupported`]), and the cases are added in the
 //! pin's order by later pieces.
 //!
-//! DEVIATE SD21: no `NodeUpdateListener`: [`SelectionDAG::replace_all_uses_with`]
+//! DEVIATE SD33: no `NodeUpdateListener`: [`SelectionDAG::replace_all_uses_with`]
 //! returns what it did to each user ([`Rauw`]). Nodes replaced stay in the
 //! arena with no users (no `RemoveDeadNodes`). Exit: none. Owner sdag-b.
 //! Review 2026-11-13.

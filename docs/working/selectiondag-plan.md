@@ -110,6 +110,21 @@ Premise tests (each seen failing before its piece lands; they dump the DAG after
 
 An end-to-end run waits for A1 (builder) and D1 (emitter); until then each test builds its DAG by hand through A0's `getNode`.
 
+### B0 addendum: the m32 action table and the `far` tests
+
+**Action table (B0a2, 2026-12-03 with B0d).** The pin sets actions in `X86TargetLowering::X86TargetLowering` ([L131][x-ctor]) in one pass, and a later call overwrites an earlier one, so the Rust table is built by the same calls in the same order. Translated for i486/P5, with each arm's line range kept as a comment: scalar integer setup (L134-L178: x87 on, boolean contents `ZeroOrOne`, shift amounts and setcc results `i8`, scheduling preference RegPressure at 32 bits [L148][x-sched]); register classes (L179-L188); truncating stores and extending loads (L189-L198); `ABS`, funnel shifts, saturating ops (L205-L240, `canUseCMOV` false before P6: the CMOV arms are not taken); the `!useSoftFloat` arm for x87 (L241-L310, only the `hasX87` parts); integer divide and remainder as `SDIVREM`/`UDIVREM` and multiply-high (L327-L352); bit counts (L364-L450: `CTTZ`/`CTLZ` expand without BMI/LZCNT, `CTPOP` expands without POPCNT, so `bitcounts.rs` goes at Phase 2); `SELECT`/`SELECT_CC`/`BR_CC` custom (L469-L484, the pin expands `cmov` itself); 64-bit shifts as `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS` custom (L508-L520); atomics (L522, N/A: MIR has none); `VASTART` and friends (L559-L570); x87 FP arms (L764-L870: f32/f64 `RFP` classes when `UseX87` and no SSE, `f80` always); the common FP expansions (L935-L969); and the 32-bit-only custom lowerings at L2749-L2830. Not translated and listed as N/A with their ranges: every `hasSSE*`, `hasAVX*`, `hasAVX512`, `hasBWI`, `hasVLX`, `hasFP16`, `hasMMX`, `hasXOP`, `hasGFNI`, AMX and `is64Bit` arm (L318-L326, L437-L468 partly, L618-L1034, L1036-L2748). Premise test for the table: a line count of calls per arm against the pin's, so a dropped arm shows (the count comes from the pin's source, checked in as a list, and the test compares the table's number of set actions per category to it).
+
+**`far` tests (B0e).** Each fails first (the type has no rule before B0e):
+
+1. `far` constant `(0x1234:0x0010)` expands to two `i16` constants, offset first.
+2. `far` load from `p` is `i16` load at `p` and `i16` load at `p+2`, chain joined by a `TokenFactor`; the pin's `ExpandIntRes_LOAD` ([L4414][li-load]) is the shape.
+3. `far` store is two `i16` stores at the same offsets, one chain.
+4. `far == far` and `far != far` expand to a compare of both halves combined with `and`/`or` (not a 32-bit compare).
+5. `far` `select` is two `i16` selects on one condition.
+6. `far` through `CopyToReg`/`CopyFromReg` is two virtual registers, offset then selector (the order `les` loads them in).
+7. `far` to `i32` and back (`far_cast`) is `BUILD_PAIR`/`EXTRACT` of the halves, no arithmetic.
+8. At m32 a `far` node is refused with a message naming the target (SD2: m16 only).
+
 The ordering inside a group is the table's; groups run in parallel from 2026-10-26, so by 2026-12-03 an end-to-end function exists (A0, A1, B0, C0, D0 done; D1 joins them). Shadow means the old selector produces the output; the new one runs in `--isel=dag` and in the harness.
 
 ### Phase 1: the switch
@@ -159,9 +174,9 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
 | SD20 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
-| SD21 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
+| SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
 
-Next free: **SD22**.
+Next free: **SD34**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
@@ -220,3 +235,4 @@ Next free: **SD22**.
 [li-mul]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4540
 [li-shiftc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3296
 [li-esetcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3589
+[li-load]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4414
