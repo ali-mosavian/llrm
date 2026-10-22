@@ -314,7 +314,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
-    // Runs in the strength slot, before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    // Runs in the strength slot,
+    // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
@@ -347,6 +348,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Old,
         "lir-cleanup-poc",
     ),
+    entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
