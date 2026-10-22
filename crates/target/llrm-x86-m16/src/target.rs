@@ -147,6 +147,11 @@ impl Machine for Dos {
             scale_costs,
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
+            address_registers: self
+                .address_forms
+                .iter()
+                .find(|form| !form.secondary)
+                .and_then(|form| Some((form.bases? + form.indices?) as u32)),
             huge_space: crate::spaces().huge,
         };
         let layout = crate::layout();

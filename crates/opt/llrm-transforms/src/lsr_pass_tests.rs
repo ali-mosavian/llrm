@@ -359,6 +359,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
         registers: 6,
         scaled_index_insns: 2,
+        address_registers: None,
         huge_space: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
@@ -558,6 +559,7 @@ b3:
         scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
         registers: 6,
         scaled_index_insns: 2,
+        address_registers: None,
         huge_space: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
@@ -616,6 +618,7 @@ b5:
         scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
         registers: 6,
         scaled_index_insns: 2,
+        address_registers: None,
         huge_space: Some(3),
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
@@ -627,4 +630,52 @@ b5:
     let after = printed(&module);
     let inner = after.split("b3:").nth(1).and_then(|rest| rest.split("\nb4:").next()).expect("b3");
     assert!(inner.contains(" = phi ptr addrspace(3)"), "the inner loop walks a huge pointer: {after}");
+}
+
+/// QCport `ls.c` `_ls_animate@3` at m16: a loop that loads a pointer and
+/// computes its index names two address registers of its own; with the
+/// array walk's base and counter that is four for BX, SI and DI, and the
+/// greedy allocator failed at stage Done (the rounds loop placed it). With
+/// the target's address registers stated the walk steps one pointer.
+#[test]
+fn a_walk_whose_loop_holds_two_other_addresses_steps_one_pointer_in_real_mode() {
+    let text = "define i16 @f(ptr %t, i16 %d) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ -64, %entry ], [ %i2, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s2, %loop ]
+  %a = getelementptr i8, ptr %t, i16 %i
+  %b = getelementptr i8, ptr %a, i16 70
+  %pp = load ptr, ptr %b
+  %k = load i16, ptr %a
+  %q = getelementptr i8, ptr %pp, i16 %k
+  %v = load i8, ptr %q
+  %z = zext i8 %v to i16
+  %s2 = add i16 %s, %z
+  %i2 = add nsw i16 %i, 8
+  %c = icmp ne i16 %i2, 0
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %s2
+}
+";
+    let run = |address_registers| {
+        let real = RealMode {
+            scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+            registers: 6,
+            scaled_index_insns: 2,
+            address_registers,
+            huge_space: None,
+        };
+        let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+        printed(&module)
+    };
+    assert!(!run(None).contains("phi ptr"), "{}", run(None));
+    assert!(run(Some(3)).contains("phi ptr"), "{}", run(Some(3)));
 }

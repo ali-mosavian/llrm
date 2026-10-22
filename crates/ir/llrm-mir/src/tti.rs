@@ -575,6 +575,13 @@ pub trait Tti {
         8
     }
 
+    /// DEVIATE LU2 (LLVM has no 8086 model): how many registers a native
+    /// address can be made of, where the target restricts them (real mode:
+    /// BX, SI and DI); None where any register addresses.
+    fn address_registers(&self) -> Option<u32> {
+        None
+    }
+
     /// Instructions a scaled index (`base + scale * index`, scale above 1)
     /// costs beyond the address itself, once for each scaled register: the
     /// backend forms it once and every use of the register shares it. 0

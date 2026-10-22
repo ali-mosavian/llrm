@@ -318,6 +318,48 @@ pub fn is_address_use(
     }
 }
 
+/// DEVIATE LU2: the registers the loop's addresses take that are not the
+/// loop's own inductions: the loop-variant leaves of every address's
+/// `getelementptr` chain (a pointer loaded in the loop, a computed index). They
+/// are held whatever formula is chosen, so they leave fewer of the target's
+/// address registers to the ones LSR rates.
+pub fn outside_address_registers(
+    cx: &Cx,
+    l: BlockId,
+) -> u32 {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
+    let function = cx.function;
+    let mut leaves: HashSet<Operand> = HashSet::default();
+    let mut stack: Vec<Operand> = Vec::new();
+    for &block in lp.get_blocks() {
+        for inst in function.iter_block(block) {
+            let instruction = function.instruction(inst);
+            match &instruction.opcode {
+                Opcode::Load { .. } => stack.push(instruction.operands[0]),
+                Opcode::Store { .. } => stack.push(instruction.operands[1]),
+                _ => {}
+            }
+        }
+    }
+    let mut seen: HashSet<Operand> = HashSet::default();
+    while let Some(operand) = stack.pop() {
+        if !seen.insert(operand) || lp.is_loop_invariant(function, operand) {
+            continue;
+        }
+        let Operand::Value(value) = operand else { continue };
+        let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def else { continue };
+        let defined = function.instruction(def);
+        match defined.opcode {
+            Opcode::Phi => {}
+            Opcode::GetElementPtr { .. } => stack.extend(defined.operands.iter().copied()),
+            _ => {
+                leaves.insert(operand);
+            }
+        }
+    }
+    leaves.len() as u32
+}
+
 /// The address space of the pointer type `ty`, if it is one.
 fn address_space(
     cx: &Cx,
@@ -465,6 +507,8 @@ pub struct Collection<'a, 'b> {
     pub iv_inc_block: BlockId,
     pub uses: Vec<Use>,
     use_map: HashMap<(Scev, Kind), usize>,
+    /// DEVIATE LU2: the address registers left for the formulas.
+    pub address_limit: Option<u32>,
     pub reg_uses: RegUseTracker,
     /// Interesting factors between use strides.
     pub factors: IndexSet<i64>,
@@ -506,6 +550,11 @@ impl<'a, 'b> Collection<'a, 'b> {
             iv_inc_insert_pos,
             uses: Vec::new(),
             use_map: HashMap::default(),
+            address_limit: tti
+                .address_registers()
+                .map(|registers| registers.saturating_sub(outside_address_registers(cx, l)))
+                // Only where a formula of two registers certainly overflows.
+                .filter(|limit| *limit <= 1),
             reg_uses: RegUseTracker::default(),
             factors: IndexSet::default(),
             types: IndexSet::default(),
@@ -888,6 +937,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     tti: self.tti,
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
+                    address_limit: self.address_limit,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
