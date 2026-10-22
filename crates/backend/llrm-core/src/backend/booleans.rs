@@ -64,12 +64,34 @@ fn defined_for(
     (function.users(value).only().is_some_and(|only| only.user == user)).then_some(def)
 }
 
+/// Whether `value` is a compare of operands the target holds in one register:
+/// a wider one is several instructions and live ranges, and moving it into an
+/// arm spills (qcport snd -Os: a long compare in 16-bit code).
+fn word_compare(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    word_bits: u32,
+) -> bool {
+    let Operand::Value(value) = value else { return false };
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let compare = function.instruction(def);
+    matches!(compare.opcode, Opcode::ICmp(_))
+        && compare.operands.iter().all(|&operand| {
+            function
+                .operand_type(context, operand)
+                .and_then(|ty| context.types.int_bits(ty))
+                .is_none_or(|bits| bits <= word_bits)
+        })
+}
+
 /// The chains of `function` priced above a branch, made branches. How many.
 pub fn branched(
     context: &Context,
     function: &mut Function,
     price: &dyn Fn(&str) -> Option<i64>,
     wanted: &dyn Fn(&str) -> bool,
+    word_bits: u32,
 ) -> Result<usize, String> {
     let Some(costs) = prices(price) else { return Ok(0) };
     let (add_wins, and_wins) = (costs.chain_add > costs.branch_add, costs.chain_and > costs.branch_and);
@@ -101,6 +123,18 @@ pub fn branched(
                 }
                 let flag = widened.operands[0];
                 if function.operand_type(context, flag).and_then(|ty| context.types.int_bits(ty)) != Some(1) {
+                    continue;
+                }
+                if !word_compare(context, function, flag, word_bits)
+                    && !{
+                        // c = !compare
+                        defined_for(function, flag, zext)
+                            .filter(|&not| function.instruction(not).opcode == Opcode::Binary(BinaryOp::Xor))
+                            .is_some_and(|not| {
+                                word_compare(context, function, function.instruction(not).operands[0], word_bits)
+                            })
+                    }
+                {
                     continue;
                 }
                 // c = !c0 reads the other arm.
@@ -160,7 +194,8 @@ pub fn branched(
             let [left, right] = one.operands[..] else { continue };
             for (first, second) in [(left, right), (right, left)] {
                 let Some(compare) = defined_for(function, second, inst) else { continue };
-                if !matches!(function.instruction(compare).opcode, Opcode::ICmp(_)) {
+                let Some(Operand::Value(second_value)) = Some(second) else { continue };
+                if !word_compare(context, function, Operand::Value(second_value), word_bits) {
                     continue;
                 }
                 let no = Operand::Constant(context.int(ty, 0));

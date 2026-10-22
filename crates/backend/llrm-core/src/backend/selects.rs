@@ -149,6 +149,12 @@ pub fn priced(
     wanted: &dyn Fn(&str) -> bool,
     price: &dyn Fn(&str) -> Option<i64>,
 ) -> Result<(), String> {
+    // A near pointer is one register: the width of a compare a chain may move.
+    let word_bits = module
+        .datalayout
+        .as_deref()
+        .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
+        .map_or(32, |layout| layout.pointer(0).bits as u32);
     let context = &module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -171,7 +177,7 @@ pub fn priced(
                 }
             }
         }
-        crate::backend::booleans::branched(context, function, price, wanted)?;
+        crate::backend::booleans::branched(context, function, price, wanted, word_bits)?;
         loop {
             let found = function
                 .walk()
@@ -529,6 +535,32 @@ entry:
             let arguments = || [p, lo, hi].map(|v| Val::Int { bits: v, width: 16 }).to_vec();
             assert_eq!(run(&after, "f", arguments(), 100).unwrap(), run(&before, "f", arguments(), 100).unwrap());
         }
+    }
+
+    /// qcport snd -Os grew 35 bytes: an `and` of compares of longs in 16-bit
+    /// code was branched, the second compare moved into the arm, and its
+    /// operands, two registers each, were spilled across the branch. A compare
+    /// wider than a near pointer stays a chain.
+    #[test]
+    fn test_a_compare_wider_than_a_register_is_left_a_chain() {
+        let body = |ty: &str| {
+            format!(
+                "target datalayout = \"e-p:16:16-i16:16-i32:16-n8:16\"
+define i1 @f({ty} %p, {ty} %lo, {ty} %hi) {{
+entry:
+  %a = icmp uge {ty} %p, %lo
+  %b = icmp ult {ty} %p, %hi
+  %r = and i1 %a, %b
+  ret i1 %r
+}}
+"
+            )
+        };
+        let (_, word) = branched(&body("i16"), &i486);
+        assert_eq!(conditional_branches(&word), 1, "{}", llrm_mir::print::module(&word));
+        let (_, long) = branched(&body("i32"), &i486);
+        assert_eq!(conditional_branches(&long), 0, "{}", llrm_mir::print::module(&long));
+        assert!(llrm_mir::print::module(&long).contains(" and "), "{}", llrm_mir::print::module(&long));
     }
 
     /// `llvm.smax.i16` and its kin, which SCEV's exit values and InstCombine
