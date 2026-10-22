@@ -187,6 +187,7 @@ pub mod selectors {
 }
 pub mod booleans;
 pub mod edges;
+pub mod fixupsetcc;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
@@ -223,7 +224,6 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
-pub mod fixupsetcc;
 pub mod precse;
 pub mod pressuresink;
 pub mod prologue;
@@ -313,7 +313,6 @@ pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;
 pub mod spillplacement;
-pub mod splitkit;
 pub mod ssarepair;
 pub mod ssaspill;
 pub mod storecombine;
