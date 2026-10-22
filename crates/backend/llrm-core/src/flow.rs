@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 12] = [
+const UNOPTIMIZED: &[&str] = &[
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -74,7 +74,7 @@ const UNOPTIMIZED: [&str; 12] = [
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 25] = [
+const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
