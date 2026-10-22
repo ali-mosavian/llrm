@@ -16,14 +16,17 @@ All three need EFLAGS dead at the LEA and no segment, scale > 1, or symbol disp.
 
 ## Ours
 
-The pin makes these LEAs before RA (`convertToThreeAddress`), RA turns some
-two-address. Ours makes an LEA only in `peephole::addresses`, priced against
-the add it replaces, and `increments` makes INC/DEC. Probe: 115 programs of
-tests/run/c at -O2 -m32 sysv i486, 3855 LEAs, **0** scale-1 LEAs whose
-destination is a source. Cases 1 and 2 have no site; case 3 not probed.
+Cases 1 and 2: group `lea_fixup` of `peephole.peep` (`lea_fixed`, run before
+`increments`, which makes a step of one an INC or DEC as the pin's case 2).
+Guards `sums_into`, `steps_in_place`; makers `other_term`, `step`. EFLAGS dead
+is `flags_dead`; the pin's segment and symbol exclusions are `addr` unset.
+
+The pin makes these LEAs before RA; ours makes an LEA only in
+`peephole::addresses`. Probe: 115 programs of tests/run/c at -O2 -m32 sysv
+i486, 3855 LEAs, **0** scale-1 LEAs whose destination is a source, so the
+rule fires nowhere there; the unit tests build the shape.
 
 ## Rows
 
-- LF-1 DEVIATE (exit: pre-RA LEA formation, row 62): cases 1-2 are not
-  translated; nothing makes the input.
-- LF-2 open (owner w-6, 11-09): case 3 sites via `optLEAALU`.
+- LF-1 DEVIATE CG6: case 3 (`optLEAALU`, [L500](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L500)) not translated;
+  owner w-6, 11-09.
