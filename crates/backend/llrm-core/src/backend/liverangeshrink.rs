@@ -153,7 +153,8 @@ pub fn shrunk(
     registers: &RegisterClasses,
 ) -> LirBody {
     let regs = body.regs();
-    let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
+    // Worked out when a candidate first asks: most bodies have none.
+    let confined = std::cell::OnceCell::new();
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     let mut read: IndexMap<u32, usize> = IndexMap::default();
@@ -186,7 +187,10 @@ pub fn shrunk(
             }
         }
     }
-    let class_of = |value: u32| -> Class { (confined.get(&value).cloned(), widths.get(&value).copied()) };
+    let class_of = |value: u32| -> Class {
+        let confined = confined.get_or_init(|| regclass::classes(body, &BTreeSet::new(), segments, registers));
+        (confined.get(&value).cloned(), widths.get(&value).copied())
+    };
     let mut changed = false;
     let blocks: Vec<Block> = body
         .blocks
