@@ -152,7 +152,7 @@ pub fn tied(
                 continue;
             }
             // `rescheduleKillAboveMI`: the reader that kills the source goes above the tied instruction.
-            commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
                 changed = true;
                 continue;
             }
