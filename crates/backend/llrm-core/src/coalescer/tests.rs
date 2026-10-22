@@ -566,3 +566,33 @@ fn test_a_copy_back_of_a_copy_goes_by_extending_the_first_value() {
     assert_eq!(lis.interval(1).valnos.iter().filter(|vn| !vn.is_unused()).count(), 1, "one value of v1 is left");
     assert_consistent(&lis, &was, 2);
 }
+
+/// `pre: v1 := load` and a one-block loop `v2 := mov v1; read v2; v1 := mov v2`
+/// that branches to itself or out: the copy `v2 := mov v1` is redundant on the
+/// way round the loop (`v1` holds `v2` after the reverse copy), so
+/// `removePartialRedundancy` moves it to the preheader and the loop keeps the
+/// reverse copy only. `_dl_muzzle@3` kept this pair for the segment of a far
+/// pointer, two copies a trip.
+#[test]
+fn test_a_copy_at_a_loop_entry_that_the_latch_reverses_moves_to_the_preheader() {
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    // After the loop `v1` is redefined while `v2` is still read: the join of
+    // the two intervals fails, which is when the copy is moved instead.
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let was = body(&[
+        (&[Arc::clone(&first)], &[1]),
+        (&[Arc::clone(&to), Arc::clone(&user), Arc::clone(&back)], &[1, 2]),
+        (&[Arc::clone(&again), Arc::clone(&kept), Arc::clone(&after)], &[]),
+    ]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let copies_before = lis.blocks()[1].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    assert_eq!(copies_before, 1, "the premise: the loop holds the copy");
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), to.id());
+    assert_eq!(result, JoinResult::Joined);
+    let in_loop = lis.blocks()[1].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    let in_preheader = lis.blocks()[0].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    assert_eq!((in_loop, in_preheader), (0, 1), "the copy moved out of the loop");
+    assert_consistent(&lis, &was, 2);
+}
