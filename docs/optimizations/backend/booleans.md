@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/booleans.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/booleans.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:7c3993d09477a89ff26b5eb7d786457d15159db9d1723a016365fc4125812b2b -->
+<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:dae3596036edc9a37c074f6a1b7b424d9c9f48d9f40790fcc173aa7f0ad86caf -->
 
 # booleans
 
@@ -8,23 +8,25 @@ for `selects::lowered` to branch.
 
 ## How it works
 Without a conditional move a comparison used as a value is `cmp; setcc` and
-its combiners are more instructions: `x + zext(c)` is `setcc; movzx; add`,
-`a & b` of two compares is two `setcc` and an `and`. A branch does the same
-in a jump and the work only one arm needs. Each such chain is priced both
-ways from the target's cost table (`setcc`, `movzx`, `alu_rr`, `jcc`,
-`jcc_not_taken`, the description's `timings.times`) and rewritten as a
-`select` where the branch is cheaper; the arm's instruction (the `add 1`,
-the second compare) moves into the taken block with the diamond.
+its combiners are more instructions: `x + zext(c)` is `setcc; movzx; add`.
+A branch does the same in a jump and the work only one arm needs. That
+chain is priced both ways from the target's cost table (`setcc`, `movzx`,
+`alu_rr`, `jcc`, `jcc_not_taken`, the description's `timings.times`) and
+rewritten as a `select` where the branch is cheaper; the arm's instruction
+(the `add 1`) moves into the taken block with the diamond.
+
+An `and` of two compares used as a value is not branched: the pin keeps two
+`setcc` and an `and` (`FindMergedConditions` short-circuits only a branch's
+condition). Main branched it by price; that was STRISTMP-1.
 
 ```text
  %z = zext i1 %c to i32           %y = add %x, 1        ; moved into taken
  %r = add i32 %x, %z       ==>    %r = select %c, %y, %x    -> br %c, taken, join
 ```
 
-DEVIATE B2 (no number yet): the pin lowers these as `setcc` chains too
-(`pin.py llc -m 32` on x_mergesort's merge loop: 21 instructions with the
-flags spilled; `is_tmp(p){return p>=temps && p<temps+240;}`: `cmp; setae;
-cmp; setb; and; movzx`), where main branches. The price is the one cost
+DEVIATE B2 (no number yet), the `add` chain: the pin lowers it as a `setcc`
+chain too (`pin.py llc -m 32` on x_mergesort's merge loop: 21 instructions
+with the flags spilled), where main branches. The price is the one cost
 table, not the shape of a loop. Exit: the pin's lowering equals or beats
 main on the rows (x_mergesort, stft bq32, nhstutil). Plan: docs/working/
 setcc-chain-plan.md.

@@ -930,7 +930,8 @@ mod tests {
         let assignment =
             allocated(&spilled, &merged(&pins, &required(&spilled, &crate::backend::classes::RegisterClasses::m16())));
         let placed =
-            allocate::applied(&spilled, &assignment, &crate::backend::classes::RegisterClasses::m16()).unwrap();
+            crate::backend::rewriter::rewrite(&spilled, &assignment, &crate::backend::classes::RegisterClasses::m16())
+                .unwrap();
         let insns = placed.insns();
         let call_index = insns.iter().position(|one| what(one).op == Operation::Call).unwrap();
         let store = &insns[call_index + 1];
@@ -963,9 +964,12 @@ mod tests {
             call.requires = registers.iter().map(|register| (value, *register)).collect();
             let (body, pins) =
                 constrained(&_body(vec![constant, call]), None, &crate::backend::classes::RegisterClasses::m16());
-            let placed =
-                allocate::applied(&body, &allocated(&body, &pins), &crate::backend::classes::RegisterClasses::m16())
-                    .unwrap();
+            let placed = crate::backend::rewriter::rewrite(
+                &body,
+                &allocated(&body, &pins),
+                &crate::backend::classes::RegisterClasses::m16(),
+            )
+            .unwrap();
             let zeros: BTreeSet<RegId> = placed
                 .insns()
                 .iter()
@@ -1002,8 +1006,12 @@ mod tests {
         let Some(Loc::Mem(cell)) = what(&result).sources.last() else { panic!("not memory") };
         assert_eq!(cell.base.unwrap().value, result.uses[0]);
         assert_eq!(pins[&result.uses[0]], RegId::SI);
-        let placed =
-            allocate::applied(&got, &allocated(&got, &pins), &crate::backend::classes::RegisterClasses::m16()).unwrap();
+        let placed = crate::backend::rewriter::rewrite(
+            &got,
+            &allocated(&got, &pins),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .unwrap();
         let emitted = select::emit(what(placed.insns().last().unwrap()), 0, None, false, false, None);
         assert!(emitted.is_some());
         assert_eq!(emitted.unwrap().code, [0xDE, 0x34]); // fidiv word [si]

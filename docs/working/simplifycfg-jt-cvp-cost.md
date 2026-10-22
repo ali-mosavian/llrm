@@ -36,3 +36,10 @@ Each item is a code PR with Ir on both arms (callgrind d_faces -O2) and identica
 | 5 | JumpThreading after 1 and 2: re-profile | open | 2026-11-27 |
 
 The targets are guesses from the callee costs until each is profiled in isolation; the PR states what it measured.
+
+## Re-take after #3792 (callgrind d_faces -O2)
+
+- **Lever 1 (#3792):** `loop_form_blocks` remembered per graph: -1.41 M Ir, objects identical. 24 of 34 asks still miss (the CFG changed since the last); what is left of it is 5.2 M, of which `loops_of` is 2.0 M (84 K per call: `DomTree::of` 0.86 M, `natural` 0.62 M, `LoopInfo::analyze` 0.53 M). A cheaper derivation is worth at most about 1 M: not the lever the plan guessed.
+- **LVI `get_edge_value_local`:** ours 13,831 calls at 1,153 Ir each (15.9 M); the pin 8,593 calls at 498 Ir (4.28 M). So 1.6x the asks and 2.3x the cost of each. The cost is flat: `get_value_from_condition` 11,297 calls at 1,150 Ir (`get_value_from_icmp_condition` 0.8 K per call, `match_icmp_operand` 20,627 calls), no one function above 1.3 M self.
+- **Allocation:** `__rust_alloc` 44 M, `memcpy` 41 M and `__rust_dealloc` 27 M are 7% of the whole run; the lattice and range values are cloned per query.
+- **Next:** cut the asks first (the per-block visitors of SimplifyCfg ask LVI for edges `knownpred` and `jumpthreading` already asked), then the clones in `get_edge_value_local`; each as its own PR with Ir on both arms and identical objects.
