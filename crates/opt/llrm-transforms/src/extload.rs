@@ -23,6 +23,7 @@
 //! |---|---|
 //! | D1 | Done on MIR before isel, not in the DAG: isel selects one instruction at a time (`isel/combined.rs`) and has no combine stage. Owner mir-undef; revisit when isel gains one. |
 //! | D2 | A reader of the load that is neither a compare with a constant, the same extension again nor in the load's own block (a store or a call in another block) leaves the load alone. The pin gives it `trunc E` (`isTruncateFree`); there the narrow value lives beside the wide one: bench/grep.nib `_main` grew 58 B of spills. Owner mir-undef; revisit when isel can fold the trunc. |
+//! | D3 | A compare with a constant in a block the load dominates, not only in its own, is widened (the pin's DAG is one block): x_life -O2 727 -> 711 B, -O3 the same, m16 -O1 668 -> 661, -O2 644 -> 641. Cost: bench/grep.nib is +33 / +29 / +25 B over parity at -O1 / -O2 / -Os (and 115 / 173 / 159 B under main): `_main` spills one more range (greedy trace: spilled 31 -> 32, stores 8 -> 12). The cause is an UNTESTED hypothesis: a long range that moves from the byte class to the word class can take SI or DI, which grep uses as base registers. Exit: a pressure-aware gate for the cross-block case. Owner mir-undef; review 2026-11-14. |
 //!
 //! # Example
 //! Before:
