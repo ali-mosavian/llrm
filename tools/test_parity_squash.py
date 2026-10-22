@@ -725,3 +725,18 @@ def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
     assert not ps.perf_needs_rows("fix(analysis): bug", "Owner: x", code)
     assert not ps.perf_needs_rows("feat(analysis): new", "Owner: x", code)
     assert ps.perf_needs_rows("perf(analysis): faster", "Owner: x", [])
+
+
+def test_a_new_failing_test_inside_an_already_red_step_is_refused_and_a_fixed_one_is_noted():
+    """The gate compared steps: a head red on `ratchet:x` hid a second test of x going red (llrm-qb lib went from 4 to 27 red tests with no refusal)."""
+    head = {"ratchet:x::old_one", "run p [-O2]"}
+    merged = {"ratchet:x::old_one", "ratchet:x::new_one", "run p [-O2]"}
+    why = ps.subset_refusals(head, merged, fixes=False)
+    assert why and "ratchet:x::new_one" in why[0] and "old_one" not in why[0].split(", which")[0], why
+    assert ps.subset_refusals(head, set(head), fixes=False) == []
+    assert ps.fixed_names(head, {"run p [-O2]"}) == ["ratchet:x::old_one"]
+
+
+def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
+    """A failure set cached before steps named their tests holds `ratchet:x`: the tests inside it are not new for that head."""
+    assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]

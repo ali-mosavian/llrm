@@ -4622,6 +4622,9 @@ impl Compiler {
             self.select_block(step_block);
         }
         if self.block_open() {
+            // NEXT is a statement: RESUME NEXT after the last of the body
+            // continues here, not after the loop.
+            self.end_statement();
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(step_type);
             self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
@@ -4741,6 +4744,10 @@ impl Compiler {
         self.loops.push((done_block, Some(test_block)));
         self.statement_list(body)?;
         self.loops.pop();
+        // WEND is a statement RESUME NEXT can reach.
+        if self.block_open() {
+            self.end_statement();
+        }
         self.jump_if_open(test_block);
         self.select_block(done_block);
         Ok(())
@@ -4769,6 +4776,10 @@ impl Compiler {
         self.statement_list(body)?;
         self.loops.pop();
         self.exits.pop();
+        // LOOP is a statement RESUME NEXT can reach.
+        if self.block_open() {
+            self.end_statement();
+        }
         self.jump_if_open(next);
         if let Some((while_true, condition)) = post {
             self.select_block(test_block);
@@ -5987,6 +5998,13 @@ impl Compiler {
                 _ => None,
             }) {
                 let (operand, type_id) = self.expression(&arguments[0])?;
+                // BC hands the routine a LONG whose high word is zero for an
+                // INTEGER: HEX$(-1%) is FFFF, not FFFFFFFF.
+                let (operand, type_id) = if type_id == INTEGER {
+                    (self.convert(operand, INTEGER, UNSIGNED_INTEGER)?, UNSIGNED_INTEGER)
+                } else {
+                    (operand, type_id)
+                };
                 let operand = self.convert(operand, type_id, LONG)?;
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
@@ -7292,17 +7310,8 @@ impl Compiler {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
             let result = self.value(type_id);
-            if intrinsic.lowering == Lowering::Log {
-                let logarithm = self.value(type_id);
-                self.emit("flog2", vec![logarithm], vec![operand]);
-                let ln2 = self.floating_literal("0.69314718055994530942", type_id)?;
-                self.emit("fmul", vec![result], vec![Operand::Value(logarithm), ln2]);
-            } else {
-                let log2e = self.floating_literal("1.4426950408889634074", type_id)?;
-                let scaled = self.value(type_id);
-                self.emit("fmul", vec![scaled], vec![operand, log2e]);
-                self.emit("fexp2", vec![result], vec![Operand::Value(scaled)]);
-            }
+            let op = if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" };
+            self.emit(op, vec![result], vec![operand]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Floor {

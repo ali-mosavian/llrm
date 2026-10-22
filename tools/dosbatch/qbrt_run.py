@@ -49,6 +49,23 @@ def compiling(
     return kept, failed
 
 
+def differs(one) -> bool:
+    """Whether a (program, target) run is not byte for byte BCOM45's."""
+    return not (one.reference.status == "ok" and one.candidate.status == "ok" and one.difference == "" and one.screen_difference == "")
+
+
+def unexpected(
+    known: dict[tuple[str, str], str],
+    name: str,
+    target: str,
+    one,
+) -> str | None:
+    """Why a run counts against the result, or None: a difference not in `known`, or a `known` one that now matches (the entry goes)."""
+    if (name, target) in known:
+        return None if differs(one) else f"now matches BCOM45: remove it from KNOWN ({known[name, target]})"
+    return (one.candidate.detail or one.difference or one.screen_difference or "differs")[:150] if differs(one) else None
+
+
 def level(text: str) -> str:
     """`-O1`, `O1`, `1` or `s` as the compiler's `-O1` / `-Os`."""
     return text if text.startswith("-") else "-O" + text.removeprefix("O")
@@ -107,9 +124,9 @@ def main(argv: list[str]) -> int:
     differing = 0
     for name in names:
         for target, one in results[name].items():
-            if not (one.reference.status == "ok" and one.candidate.status == "ok" and one.difference == "" and one.screen_difference == ""):
+            if (why := unexpected(test_qbrt.KNOWN, name, target, one)) is not None:
                 differing += 1
-                print(f"NOTPASS {name} {target} {one.reference.status} {one.candidate.status} {(one.candidate.detail or one.difference or one.screen_difference)[:150]}", flush=True)
+                print(f"NOTPASS {name} {target} {one.reference.status} {one.candidate.status} {why}", flush=True)
     print(f"RESULT {2 * len(names) - differing} of {2 * len(names)} pass (program x target); {len(failed)} did not compile")
     return len(failed) + differing
 

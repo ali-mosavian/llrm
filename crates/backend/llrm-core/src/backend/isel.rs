@@ -829,7 +829,7 @@ fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
 /// The x87 operation on st(0) each float function is. One no x87
 /// instruction is -- `fatan`, `flog2`, `fexp2` -- a frontend's finalizer
 /// spells as the sequence that computes it.
-pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
+pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 10] = [
     (FloatFunction::Fabs, "fabs"),
     (FloatFunction::Sqrt, "fsqrt"),
     (FloatFunction::Rint, "frndint"),
@@ -838,6 +838,8 @@ pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
     (FloatFunction::Atan, "fatan"),
     (FloatFunction::Log2, "flog2"),
     (FloatFunction::Exp2, "fexp2"),
+    (FloatFunction::Log, "fln"),
+    (FloatFunction::Exp, "fexp"),
 ];
 
 /// The width of a float value in LIR: x87's extended precision.
@@ -5944,10 +5946,15 @@ impl Selector<'_, '_, '_> {
                     };
                     let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                    out.push(insn(
+                    let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
-                    ));
+                    );
+                    // The sequence pushes above its operand: the stack's top
+                    // slots are not free for a value live across it.
+                    let scratch = llrm_x86::select::x87_scratch(name);
+                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    out.push(Arc::new(one));
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
