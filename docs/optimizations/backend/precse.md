@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:a23ac6624b49344969db14aba819b6e248fc1bcd84b8f2251ab70dbd12eec4f2 -->
+<!-- src: crates/backend/llrm-core/src/backend/precse.rs sha256:3865f4be1f01feebe53429cb22ec3169166be4fe67974c7e847651380d23bf4b -->
 
 # precse
 
@@ -68,6 +68,12 @@ DEVIATE CSE4 (owner funcattrs-port, exit 2026-11-13):
 without moving the instruction's read to the copy's source, so the readers
 of a copy's source are counted from the body as it was. Heuristics 2 and 3
 see the pin's lists except for that.
+
+DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
+same elimination after allocation, is ours alone (the pin runs MachineCSE
+once, before allocation). Removed, 10 of 568 objects grow and none shrinks
+(shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
+it stays until what it finds there is found before allocation.
 
 ## Example
 `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
