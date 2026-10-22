@@ -77,3 +77,26 @@ def test_a_pair_leaves_only_the_binaries_per_sha_and_all_builds_share_one_target
     assert set(log.read_text().split()) == {str(scratch / "tgt-dist")}
     build(scratch, repo, shas[0], env)  # built already: no second build
     assert len(log.read_text().split()) == 2
+
+
+def test_a_built_dist_is_write_once_and_a_rebuild_goes_to_another_dir(tmp_path):
+    """Another session copied a different llrm-c over a built sbp-<sha>/dist (md5 01fdf3625b2a became ecbc4f3de389): `ok` records the sums, the files are read-only, a changed file is refused, a rebuild never overwrites."""
+    repo = tmp_path / "wt-head10"
+    (sha,) = repo_with_commits(repo, 1)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    build(scratch, repo, sha, env)
+    ok = (scratch / f"sbp-{sha}" / "ok").read_text()
+    assert f"sha: {sha}" in ok and "cmd: build --profile dist" in ok and "  llrm-c" in ok, ok
+    binary = scratch / f"sbp-{sha}" / "dist" / "llrm-c"
+    assert not os.access(binary, os.W_OK)
+    binary.chmod(0o755)
+    binary.write_text("another tree\n")
+    refused = subprocess.run(["bash", str(SCRIPT), str(scratch), sha], cwd=repo, env=env, capture_output=True, text=True)
+    assert refused.returncode != 0 and "not what its ok recorded" in refused.stderr, refused
+    binary.write_text(sha + "\n")
+    build(scratch, repo, sha, env)  # restored: kept as it is
+    subprocess.run(["bash", str(SCRIPT), str(scratch), sha], cwd=repo, env={**env, "PAIR_REBUILD": "1"}, check=True)
+    assert (scratch / f"sbp-{sha}-2" / "dist" / "llrm-c").read_text().strip() == sha
+    assert binary.read_text().strip() == sha
