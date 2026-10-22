@@ -21,8 +21,8 @@ The pass proper (14.5 M with promotion) is at parity with the pin's 14.0 M. The 
 
 ## Levers (pin-faithful first), owners, dates
 
-1. `Annotated` and `Writes` kept across a pass that preserves them or updated for the instructions it moved (LICM moves, `MemorySSAUpdater::moveToPlace`): the 42.6 M above, less what a real change costs. Owner w-5 (analysis manager, SE persistence step 1 is the same machinery), plan 10-27, first Ir drop as a PR by 11-02, measured with d_faces -O2 callgrind Ir and objects identical.
-2. loopdeletion: 34 fresh `ScalarEvolution::new` for 17 loops, 7.57 M of its 11.87 M (pin 7.3 M); one SE per loop saves at most 3.8 M (under the 4 M bar), the persistent SE removes the rest: w-5's list.
+1. `Annotated` and `Writes` kept across a pass that preserves them or updated for the instructions it moved (LICM moves, `MemorySSAUpdater::moveToPlace`): the 42.6 M above, less what a real change costs. This is the lazy `Annotated` + MemorySSA plan (#3563, Lazy-Annotated A). Owner funcattrs-port, 2026-11-04; measured with d_faces -O2 callgrind Ir and objects identical.
+2. loopdeletion: 34 fresh `ScalarEvolution::new` for 17 loops, 7.57 M of its 11.87 M (pin 7.3 M); one SE per loop saves at most 3.8 M (under the 4 M bar), the persistent SE removes the rest: w-5's list (SE persistence only).
 3. LICM itself: none (parity). Not a row.
 
 Evidence: `w3-cg/{cg.out,ann_all.txt,tree2.txt}` in w-3's scratch; reproduce with `valgrind --tool=callgrind` on the command line above and `callgrind_annotate --tree=calling --inclusive=yes`.
