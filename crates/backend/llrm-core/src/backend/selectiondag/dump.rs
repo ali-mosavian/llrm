@@ -34,6 +34,14 @@ fn prints_inline(node: &SDNode) -> bool {
     node.opcode != ISD::EntryToken && node.ops.is_empty()
 }
 
+/// `%e`: six digits, a signed exponent of at least two.
+fn c_exponent(value: f64) -> String {
+    let text = format!("{value:.6e}");
+    let (mantissa, exponent) = text.split_once('e').expect("an exponent");
+    let exponent: i32 = exponent.parse().expect("a number");
+    format!("{mantissa}e{}{:02}", if exponent < 0 { '-' } else { '+' }, exponent.abs())
+}
+
 impl SelectionDAG {
     fn name_of(&self, node: &SDNode) -> String {
         match node.data {
@@ -53,6 +61,12 @@ impl SelectionDAG {
             (super::SDNodeFlags::SAME_SIGN, " samesign"),
             (super::SDNodeFlags::IN_BOUNDS, " inbounds"),
             (super::SDNodeFlags::NON_NEG, " nneg"),
+            (super::SDNodeFlags::NO_NANS, " nnan"),
+            (super::SDNodeFlags::NO_INFS, " ninf"),
+            (super::SDNodeFlags::NO_SIGNED_ZEROS, " nsz"),
+            (super::SDNodeFlags::ALLOW_RECIPROCAL, " arcp"),
+            (super::SDNodeFlags::ALLOW_CONTRACT, " contract"),
+            (super::SDNodeFlags::ALLOW_REASSOC, " reassoc"),
         ] {
             if flags.has(flag) {
                 text.push_str(name);
@@ -64,6 +78,11 @@ impl SelectionDAG {
                 let signed = ((bits << (128 - width)) as i128) >> (128 - width);
                 write!(text, "<{signed}>").ok();
             }
+            NodeData::ConstFp { bits } => match node.values[0] {
+                EVT::Simple(MVT::F32) => write!(text, "<{}>", c_exponent(f64::from(f32::from_bits(bits as u32)))).ok().unwrap_or(()),
+                EVT::Simple(MVT::F64) => write!(text, "<{}>", c_exponent(f64::from_bits(bits as u64))).ok().unwrap_or(()),
+                _ => write!(text, "<APFloat({bits})>").ok().unwrap_or(()),
+            },
             NodeData::Global { symbol, offset } => {
                 write!(text, "<ptr @{}>", self.global_names[symbol as usize]).ok();
                 if offset > 0 {

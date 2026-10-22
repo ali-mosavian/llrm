@@ -454,6 +454,21 @@ mod builder {
     /// A direct call: `callseq_start`, the stack stores, `X86ISD::CALL`,
     /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
     /// is refused before this piece.
+    /// Floating point: loads and stores of `f32`/`f64`, `fadd`/`fmul`/`fsub`,
+    /// `fneg`, `fcmp`, conversions, an FP constant, and a `ret` of the value
+    /// (RET_GLUE's operand, st(0) naming no register). Floats were refused.
+    #[test]
+    fn floating_point_matches_the_pins_initial_dag() {
+        let ll = include_str!("golden/fp.ll");
+        let pin = pin_blocks(include_str!("golden/fp.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");

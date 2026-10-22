@@ -36,8 +36,8 @@ SelectionDAG has 47 nodes:
       t42: ch = TokenFactor t12, t39, t36
         t9: i1 = setcc t2, Constant:i32<0>, seteq:ch
       t41: i1 = xor t9, Constant:i1<-1>
-    t44: ch = brcond t42, t41, BasicBlock:ch<b3 0x63a07f56f9a8>
-  t46: ch = br t44, BasicBlock:ch<b2 0x63a07f56f818>
+    t44: ch = brcond t42, t41, BasicBlock:ch<b3 0x5b12558c59a8>
+  t46: ch = br t44, BasicBlock:ch<b2 0x5b12558c5818>
 
 
 
@@ -52,7 +52,7 @@ SelectionDAG has 16 nodes:
     t11: ch = store<(volatile store (s32) into @g1)> t0, t7, GlobalAddress:i32<ptr @g1> 0, poison:i32
   t12: i32,ch = load<(dereferenceable load (s32) from @g1)> t11, GlobalAddress:i32<ptr @g1> 0, poison:i32
     t13: ch = store<(store (s32) into @g1)> t12:1, t12, GlobalAddress:i32<ptr @g1> 0, poison:i32
-  t15: ch = br t13, BasicBlock:ch<b2 0x63a07f56f818>
+  t15: ch = br t13, BasicBlock:ch<b2 0x5b12558c5818>
 
 
 

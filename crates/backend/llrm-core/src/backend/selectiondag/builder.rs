@@ -20,7 +20,7 @@ use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG
 use super::fold::mask;
 use super::isd::{CondCode, ISD};
 use super::function_lowering::FunctionLoweringInfo;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// An instruction the builder does not translate yet; the shadow harness
 /// counts these per reason.
@@ -179,6 +179,34 @@ fn flags_of(flags: llrm_mir::opcode::Flags) -> SDNodeFlags {
         .with(SDNodeFlags::DISJOINT, flags.contains(Flags::DISJOINT))
         .with(SDNodeFlags::NON_NEG, flags.contains(Flags::NNEG))
         .with(SDNodeFlags::SAME_SIGN, flags.contains(Flags::SAMESIGN))
+        .with(SDNodeFlags::NO_NANS, flags.contains(Flags::NNAN))
+        .with(SDNodeFlags::NO_INFS, flags.contains(Flags::NINF))
+        .with(SDNodeFlags::NO_SIGNED_ZEROS, flags.contains(Flags::NSZ))
+        .with(SDNodeFlags::ALLOW_RECIPROCAL, flags.contains(Flags::ARCP))
+        .with(SDNodeFlags::ALLOW_CONTRACT, flags.contains(Flags::CONTRACT))
+        .with(SDNodeFlags::ALLOW_REASSOC, flags.contains(Flags::REASSOC))
+}
+
+fn float_cond_code(predicate: llrm_mir::opcode::FloatPredicate) -> CondCode {
+    use llrm_mir::opcode::FloatPredicate as P;
+    match predicate {
+        P::False => CondCode::SetFalse,
+        P::Oeq => CondCode::SetOEq,
+        P::Ogt => CondCode::SetOGt,
+        P::Oge => CondCode::SetOGe,
+        P::Olt => CondCode::SetOLt,
+        P::Ole => CondCode::SetOLe,
+        P::One => CondCode::SetONe,
+        P::Ord => CondCode::SetO,
+        P::Ueq => CondCode::SetUEq,
+        P::Ugt => CondCode::SetUGt,
+        P::Uge => CondCode::SetUGe,
+        P::Ult => CondCode::SetULt,
+        P::Ule => CondCode::SetULe,
+        P::Une => CondCode::SetUNe,
+        P::Uno => CondCode::SetUo,
+        P::True => CondCode::SetTrue,
+    }
 }
 
 fn cond_code(predicate: IntPredicate) -> CondCode {
@@ -202,7 +230,11 @@ impl Builder<'_> {
             Type::Int(bits) if (1..=128).contains(bits) => Ok(EVT::integer(*bits)),
             Type::Pointer(0) => Ok(self.target.dag.pointer),
             Type::Pointer(_) => Err(Refused("pointer in another address space")),
-            Type::Float(_) => Err(Refused("floating point")),
+            Type::Float(kind) => Ok(EVT::Simple(match kind {
+                llrm_mir::types::FloatKind::Float => MVT::F32,
+                llrm_mir::types::FloatKind::Double => MVT::F64,
+                llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
+            })),
             _ => Err(Refused("aggregate or vector value")),
         }
     }
@@ -210,6 +242,9 @@ impl Builder<'_> {
     /// The register type a value of `vt` is carried in across blocks:
     /// itself when legal, else the next legal width up.
     fn register_type(&self, vt: EVT) -> Result<EVT, Refused> {
+        if vt.is_floating_point() {
+            return Ok(vt);
+        }
         let bits = vt.size_in_bits();
         self.target.legal_ints.iter().find(|legal| **legal >= bits).map(|legal| EVT::integer(*legal)).ok_or(Refused("integer wider than a register"))
     }
@@ -409,6 +444,9 @@ impl Builder<'_> {
             return Ok(());
         }
         let vt = self.type_of(result_type)?;
+        if vt.is_floating_point() {
+            return Err(Refused("floating-point result of a call"));
+        }
         let [reg] = plan.returns[..] else { return Err(Refused("result in several registers")) };
         if self.register_type(vt)? != vt {
             return Err(Refused("result of an illegal integer type"));
@@ -438,15 +476,20 @@ impl Builder<'_> {
         if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
-            let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
-            if self.register_type(vt)? != vt {
-                return Err(Refused("result of an illegal integer type"));
+            if vt.is_floating_point() {
+                // x87 returns in st(0), which no register names: the value is RET_GLUE's operand
+                ops.push(value);
+            } else {
+                let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
+                if self.register_type(vt)? != vt {
+                    return Err(Refused("result of an illegal integer type"));
+                }
+                let reg = self.sized_register(reg, vt);
+                let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(vt, reg));
             }
-            let reg = self.sized_register(reg, vt);
-            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
-            chain = SDValue { node: copy.node, res: 0 };
-            glue = Some(SDValue { node: copy.node, res: 1 });
-            ops.push(self.dag.get_phys_register(vt, reg));
         }
         let popped = self.dag.get_constant_with(self.convention.popped as u128, EVT::I32, true, false);
         let mut all = vec![chain, popped];
@@ -477,6 +520,8 @@ impl Builder<'_> {
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
+            ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
+            ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
@@ -544,6 +589,8 @@ impl Builder<'_> {
             Opcode::Binary(op) => self.visit_binary(&instruction, *op)?,
             Opcode::Cast(op) => self.visit_cast(&instruction, *op)?,
             Opcode::ICmp(predicate) => self.visit_icmp(&instruction, *predicate)?,
+            Opcode::FCmp(predicate) => self.visit_fcmp(&instruction, *predicate)?,
+            Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
@@ -582,7 +629,11 @@ impl Builder<'_> {
             BinaryOp::And => ISD::And,
             BinaryOp::Or => ISD::Or,
             BinaryOp::Xor => ISD::Xor,
-            _ => return Err(Refused("floating point")),
+            BinaryOp::FAdd => ISD::FAdd,
+            BinaryOp::FSub => ISD::FSub,
+            BinaryOp::FMul => ISD::FMul,
+            BinaryOp::FDiv => ISD::FDiv,
+            BinaryOp::FRem => ISD::FRem,
         };
         let lhs = self.get_value(instruction.operands[0])?;
         let mut rhs = self.get_value(instruction.operands[1])?;
@@ -618,6 +669,15 @@ impl Builder<'_> {
                     operand
                 }
             }
+            CastOp::FPExt => self.dag.get_node(ISD::FpExtend, dest, &[operand]),
+            CastOp::FPTrunc => {
+                let zero = self.dag.get_constant_with(0, self.target.dag.pointer, true, false);
+                self.dag.get_node(ISD::FpRound, dest, &[operand, zero])
+            }
+            CastOp::FPToSI => self.dag.get_node(ISD::FpToSInt, dest, &[operand]),
+            CastOp::FPToUI => self.dag.get_node(ISD::FpToUInt, dest, &[operand]),
+            CastOp::SIToFP => self.dag.get_node(ISD::SIntToFp, dest, &[operand]),
+            CastOp::UIToFP => self.dag.get_node_flags(ISD::UIntToFp, dest, &[operand], flags),
             _ => return Err(Refused("cast not in the scalar subset")),
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
@@ -632,6 +692,26 @@ impl Builder<'_> {
         let flags = flags_of(instruction.flags);
         let node = self.dag.get_node_flags(ISD::SetCC, dest, &[lhs, rhs, cc], SDNodeFlags(flags.0 & SDNodeFlags::SAME_SIGN.0));
         self.set_value(instruction.result.expect("a compare has a result"), node);
+        Ok(())
+    }
+
+    fn visit_fcmp(&mut self, instruction: &llrm_mir::module::Instruction, predicate: llrm_mir::opcode::FloatPredicate) -> Result<(), Refused> {
+        let lhs = self.get_value(instruction.operands[0])?;
+        let rhs = self.get_value(instruction.operands[1])?;
+        let dest = self.type_of(instruction.ty)?;
+        let cc = self.dag.get_cond_code(float_cond_code(predicate));
+        let flags = flags_of(instruction.flags);
+        let flags = SDNodeFlags(flags.0 & (SDNodeFlags::NO_NANS.0 | SDNodeFlags::NO_INFS.0 | SDNodeFlags::NO_SIGNED_ZEROS.0 | SDNodeFlags::ALLOW_RECIPROCAL.0 | SDNodeFlags::ALLOW_CONTRACT.0 | SDNodeFlags::ALLOW_REASSOC.0));
+        let node = self.dag.get_node_flags(ISD::SetCC, dest, &[lhs, rhs, cc], flags);
+        self.set_value(instruction.result.expect("a compare has a result"), node);
+        Ok(())
+    }
+
+    fn visit_fneg(&mut self, instruction: &llrm_mir::module::Instruction) -> Result<(), Refused> {
+        let operand = self.get_value(instruction.operands[0])?;
+        let vt = self.dag.value_type(operand);
+        let node = self.dag.get_node_flags(ISD::FNeg, vt, &[operand], flags_of(instruction.flags));
+        self.set_value(instruction.result.expect("an fneg has a result"), node);
         Ok(())
     }
 

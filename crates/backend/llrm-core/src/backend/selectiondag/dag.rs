@@ -15,7 +15,7 @@ pub struct SDValue {
 /// `SDNodeFlags`; CSE keeps the flags both builders agree on
 /// (`intersectFlagsWith`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct SDNodeFlags(pub u8);
+pub struct SDNodeFlags(pub u16);
 
 impl SDNodeFlags {
     pub const NO_UNSIGNED_WRAP: SDNodeFlags = SDNodeFlags(1);
@@ -25,6 +25,12 @@ impl SDNodeFlags {
     pub const DISJOINT: SDNodeFlags = SDNodeFlags(16);
     pub const SAME_SIGN: SDNodeFlags = SDNodeFlags(32);
     pub const IN_BOUNDS: SDNodeFlags = SDNodeFlags(64);
+    pub const NO_NANS: SDNodeFlags = SDNodeFlags(128);
+    pub const NO_INFS: SDNodeFlags = SDNodeFlags(256);
+    pub const NO_SIGNED_ZEROS: SDNodeFlags = SDNodeFlags(512);
+    pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
+    pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
+    pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
 
     pub fn union(self, other: SDNodeFlags) -> SDNodeFlags {
         SDNodeFlags(self.0 | other.0)
@@ -373,6 +379,12 @@ impl SelectionDAG {
         let bits = bits & super::fold::mask(vt.size_in_bits());
         let opcode = if target { ISD::TargetConstant } else { ISD::Constant };
         self.intern(opcode, &[vt], &[], SDNodeFlags::default(), NodeData::Const { bits, opaque })
+    }
+
+    /// `getConstantFP` by the bits of the type (DEVIATE SD11: no `APFloat`).
+    pub fn get_constant_fp(&mut self, bits: u128, vt: EVT) -> SDValue {
+        assert!(vt.is_floating_point(), "FP constant of {vt:?}");
+        self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
     pub fn get_all_ones_constant(&mut self, vt: EVT) -> SDValue {
