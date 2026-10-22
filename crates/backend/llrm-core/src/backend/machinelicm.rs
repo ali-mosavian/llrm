@@ -28,6 +28,19 @@
 //! invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
 //! (`MayCSE`).
 //!
+//! # Example
+//! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
+//! sum is made by instruction selection, after the IR's LICM has run). The
+//! sum is made once, ahead of the loop:
+//!
+//! ```text
+//!   pre:                              pre:
+//!     jmp loop                          v9 := add k, 0x3
+//!   loop:                       =>      jmp loop
+//!     v9 := add k, 0x3                loop:
+//!     v10 := imul v8, v9                v10 := imul v8, v9
+//! ```
+//!
 //! # Runs
 //! A machine phase before `precse` (`flow::machine_with`), at every -O level
 //! but -O0.

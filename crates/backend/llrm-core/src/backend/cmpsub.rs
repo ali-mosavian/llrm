@@ -15,6 +15,18 @@
 //! the pin could not sink it past the branch (x_adler: `x >= 65521 ? x - 65521
 //! : x`, `sub; jae` against `cmp; jbe` around an `add`).
 //!
+//! # Example
+//! `unsigned h(unsigned x) { return x >= 65521u ? x - 65521u : x; }` on
+//! `-m32 -march=i486 -O2`. The compare goes; the subtract's carry is the
+//! branch (the pin also makes the difference once, then selects with `cmovb`):
+//!
+//! ```text
+//!   mov ecx, eax                     mov ecx, eax
+//!   add ecx, -65521                  sub ecx, 65521
+//!   cmp eax, 65520          =>       jb  L_keep
+//!   jbe L_keep
+//! ```
+//!
 //! # Runs
 //! A machine phase ahead of the first SSA phase (`flow::machine_with`), at
 //! every -O level but -O0.
