@@ -41,3 +41,12 @@ sc O1 -20, savegame Os -8). Asm instruction multisets of five of them, `fold801`
 Cause not yet named per rewrite (fold's value evaluator `_numbers` at this slot, per w-8's table): the next step is the
 stage diff of each body before and after the slot, then the rewrite translated into `combine` or the number accepted.
 Not checked against the pin (m16 has no pin asm; the check is the pin's InstCombine on the stage IR).
+
+### FR-2a: the first difference in d_alias Os (stage diff)
+
+`LLRM_MIR_STAGES` dirs of the two `fold801` dists, d_alias.c -Os m16, value numbers normalised: the bodies first differ
+in the input of `09/loop-load-elim@1400` (the cleanup list), not in a dumped pass. There `br i1 %c, label %b48, label %b34`
+(base) is `%x = xor i1 %c, true; br i1 %x, label %b34, label %b48` (new), plus one more incoming edge on a 9-way phi.
+The pin's InstCombine swaps the successors of a branch on a `xor true` ([visitCondBrInst L4347](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4347); `pin.opt('instcombine')` gives `br %c.not, %e, %t` for it)
+and so does `combine_branch.rs`, with a test, so the open question is why the xor survives `combine@1242` in this body
+(not run on the block, or made after it): to find with the stage dumps of 08/09, w-6, 2026-11-04.
