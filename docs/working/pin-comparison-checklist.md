@@ -18,6 +18,10 @@ A comparison that skipped them was withdrawn once: `_place` (queens, m32 -O2) wa
 - Instruction counts, spills, reloads: comparable only when lines 4 and 5 hold.
 - Decisions: not comparable function by function. The pin's intervals are not ours. The same-input instrument is a printer of our pre-RA LIR as LLVM MIR (parked: an opcode mapping, days not hours). Until then, check our decisions against RAGreedy.cpp rule by rule (`LLRM_GREEDY_DECISIONS`).
 
+## Method caveat: re-parsed text
+
+`pin.py` runs the pin on re-parsed text, so use-list-order ties differ from the pin's own pipeline (IvUsers visits users in descending program order since IU1). See [ivusers-order.md](ivusers-order.md) (#3750) and its follow-up rows IU2-IU6.
+
 ## The internal-function convention
 
 `calleepop` (the translation of GlobalOpt's `ChangeCalleesToFastCall`, see [selection](../abi/selection.md#private-functions-and-calleepop)) gives an internal, non-variadic m32 function the target's `private` convention `watcall32`, and on m16 the callee-pop twin where it pays. It is not the pin's: x86's `fastcc` passes two integer arguments in ECX and EDX. Proposed as a numbered DEVIATE (number to be given by oversight):
