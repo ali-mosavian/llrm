@@ -422,10 +422,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Live Range Shrink",
-        Missing,
-        "pressuresink.rs stands in",
+        Match,
+        "liverangeshrink.rs",
         "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
+        "w-4; translated 2026-10-23, registry liverangeshrink@4, before phi elimination. DEVIATE LRS1 in the header (class test, flags). pressuresink.rs stays until the machine scheduler. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup SetCC",

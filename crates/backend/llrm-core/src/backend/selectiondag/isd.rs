@@ -243,7 +243,7 @@ impl ISD {
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",
             Trap => "trap",
-            Target(code) => return format!("X86ISD#{code}"),
+            Target(code) => return super::x86isd::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()

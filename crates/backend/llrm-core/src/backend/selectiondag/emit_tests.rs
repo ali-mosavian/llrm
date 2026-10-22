@@ -102,8 +102,9 @@ fn an_add_and_a_copy_become_two_instructions() {
     let root = copy_to(&mut dag, entry, 12, sum);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
-        let insns = emit(&dag, &units, ctx).expect("emits");
-        let lines = text(&insns);
+        let blocks = emit(&dag, &units, ctx).expect("emits");
+        let insns = &blocks[0].insns;
+        let lines = text(insns);
         assert_eq!(insns.len(), 2, "{lines:?}");
         assert!(lines[0].contains("add"), "{lines:?}");
         assert!(lines[1].contains("mov"), "{lines:?}");
@@ -132,7 +133,8 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     let root = copy_to(&mut dag, entry, 1, five);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
-        let insns = emit(&dag, &units, ctx).expect("emits");
+        let blocks = emit(&dag, &units, ctx).expect("emits");
+        let insns = &blocks[0].insns;
         let mov = insns[0].what.as_ref().unwrap();
         assert!(matches!(mov.dests[0], Loc::Reg(Reg { register: RegId::EAX, .. })), "{mov:?}");
         assert!(matches!(mov.sources[0], Loc::Imm(ref imm) if imm.value == 5), "{mov:?}");
@@ -146,10 +148,40 @@ fn an_unmapped_opcode_is_an_error() {
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
     let b = copy_from(&mut dag, entry, 11);
-    let cmov = machine(&mut dag, "CMOV_GR32", &[EVT::I32], &[a, b]);
-    let root = copy_to(&mut dag, entry, 12, cmov);
+    let bsf = machine(&mut dag, "BSF32rr", &[EVT::I32], &[a, b]);
+    let root = copy_to(&mut dag, entry, 12, bsf);
     context(|ctx| {
         let units = schedule(&dag, root, &Info);
         assert!(matches!(emit(&dag, &units, ctx), Err(EmitError::Unmapped(_))));
+    });
+}
+
+/// At i486 a `select` reaches the emitter as `CMOV_GR32`, and there is no
+/// `cmov`: the emitter must make the diamond, a branch on the condition and
+/// a phi of the two values in the join block. Emitted as one instruction it
+/// would select the wrong operand on half the inputs.
+#[test]
+fn a_select_without_cmov_becomes_a_branch_and_a_phi() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let when_false = copy_from(&mut dag, entry, 10);
+    let when_true = copy_from(&mut dag, entry, 11);
+    let ne = dag.get_constant(5, EVT::I8);
+    let select = machine(&mut dag, "CMOV_GR32", &[EVT::I32], &[when_false, when_true, ne]);
+    let root = copy_to(&mut dag, entry, 12, select);
+    context(|ctx| {
+        let units = schedule(&dag, root, &Info);
+        let blocks = emit(&dag, &units, ctx).expect("emits");
+        assert_eq!(blocks.len(), 3, "this, false, sink");
+        let (this, fallthrough, sink) = (&blocks[0], &blocks[1], &blocks[2]);
+        let branch = this.insns.last().and_then(|one| one.what.as_ref()).expect("a branch ends the first block");
+        assert_eq!((branch.name.as_deref(), branch.target), (Some("jne"), Some(sink.at)));
+        assert!(fallthrough.insns.is_empty());
+        let [phi] = &sink.phis[..] else { panic!("one phi: {:?}", sink.phis) };
+        assert_eq!(phi.incoming.len(), 2);
+        assert_eq!(phi.incoming[0].0, fallthrough.at, "the false value comes from the false block");
+        assert_eq!(phi.incoming[1].0, this.at, "the true value from the block that branched");
+        let mov = sink.insns[0].what.as_ref().expect("the copy lands in the join block");
+        assert_eq!(mov.sources[0], Loc::Held(crate::model::ir::Held { value: phi.result, width: 32 }));
     });
 }

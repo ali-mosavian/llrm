@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 123 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -76,6 +76,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
+| machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
