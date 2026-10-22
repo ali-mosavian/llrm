@@ -3,15 +3,12 @@
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
+#include "MCTargetDesc/X86BaseInfo.h"
 #include "X86ISelLowering.h"
 #include <cstdio>
 
 using namespace llvm;
 
-#define GET_REGINFO_ENUM
-#include "X86GenRegisterInfo.inc"
-#define GET_INSTRINFO_ENUM
-#include "X86GenInstrInfo.inc"
 
 // @ENUMS@
 
