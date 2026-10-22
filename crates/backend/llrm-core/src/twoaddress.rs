@@ -60,8 +60,9 @@
 //! test refuses it, DEVIATE TA-7: no itineraries), and the pin's copy chain is
 //! moved in order, where its splice reverses a chain of two.
 //!
-//! DEVIATE TA-8 (exit: loads folded into their reader before this pass, as isel does in the
-//! pin): a value a load defines is not the operand that is tied (`is_profitable_to_commute`).
+//! DEVIATE TA-8 (exit: loads folded into their reader before this pass, as isel
+//! does in the pin): a value a load defines is not the operand that is tied
+//! (`is_profitable_to_commute`).
 //!
 //! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
 //! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
@@ -399,7 +400,8 @@ impl<'a> Commuter<'a> {
         }
     }
 
-    /// Whether `reg` is defined in this block by one load (`mov r, [m]`, not volatile).
+    /// Whether `reg` is defined in this block by one load (`mov r, [m]`, not
+    /// volatile).
     fn is_load_def(
         &self,
         reg: u32,
@@ -409,7 +411,10 @@ impl<'a> Commuter<'a> {
         !one.volatile
             && one.what.as_ref().is_some_and(|what| {
                 what.op == crate::model::ir::Operation::Move
-                    && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Mem(_)]))
+                    && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(_)], [Loc::Mem(_)])
+                    )
             })
     }
 
@@ -520,11 +525,13 @@ impl<'a> Commuter<'a> {
         if !self.is_plainly_killed(key, c) {
             return false;
         }
-        // DEVIATE TA-8 (exit: loads folded into their reader before this pass, as isel does in the
-        // pin): a value a load defines is no operand to tie, the peephole folds it into the
-        // instruction (`add eax, [esp+16]`). Tying the other one keeps that form; tying the load
-        // gave `mov eax, [a]; add eax, ecx` and an extra register (by_value in c32/regs.c: 5
-        // instructions with `push ecx` against the pin's 3).
+        // DEVIATE TA-8 (exit: loads folded into their reader before this pass,
+        // as isel does in the pin): a value a load defines is no
+        // operand to tie, the peephole folds it into the instruction
+        // (`add eax, [esp+16]`). Tying the other one keeps that form; tying the
+        // load gave `mov eax, [a]; add eax, ecx` and an extra register
+        // (by_value in c32/regs.c: 5 instructions with `push ecx`
+        // against the pin's 3).
         match (self.is_load_def(b), self.is_load_def(c)) {
             (false, true) => return false,
             (true, false) => return true,
