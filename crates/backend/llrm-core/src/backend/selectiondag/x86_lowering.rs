@@ -47,11 +47,17 @@ pub mod x86isd {
     pub const BRCOND: ISD = ISD::Target(493);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
+    /// Real mode's `les`/`lds` (`tools/dagisel/own_ids.txt`): the offset, a chain; the segment is read back from `ES`/`DS`.
+    pub const LES: ISD = ISD::Target(24576);
+    pub const LDS: ISD = ISD::Target(24577);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SUB: ISD = ISD::Target(762);
     pub const XOR: ISD = ISD::Target(955);
 }
+
+/// `X86::ES`, the segment `les` loads.
+pub const ES: u32 = 31;
 
 /// `X86::CondCode`.
 pub mod cond {
