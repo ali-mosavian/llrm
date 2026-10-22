@@ -72,6 +72,7 @@
 pub mod actions;
 pub mod builder;
 mod dag;
+pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
 pub mod fold;
@@ -98,5 +99,7 @@ mod emit_tests;
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod tests;
