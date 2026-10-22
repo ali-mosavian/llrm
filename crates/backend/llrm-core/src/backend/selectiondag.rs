@@ -92,6 +92,7 @@ pub mod dump;
 pub mod emit;
 pub mod fold;
 pub mod function_lowering;
+pub mod inline_asm;
 pub mod isd;
 pub mod known_bits;
 pub mod legalize_dag;

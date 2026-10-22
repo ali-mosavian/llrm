@@ -486,7 +486,7 @@ mod tests {
             at,
             Some((at, at + 3)),
             Some(Semantics {
-                name: Some("lea".to_owned()),
+                name: Some("lea".into()),
                 dests: vec![Loc::Held(held(value))],
                 sources: vec![Loc::Mem(cell(base, offset))],
                 ..Semantics::new(Operation::Address)
@@ -506,7 +506,7 @@ mod tests {
             at,
             Some((at, at + 3)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Held(held(value))],
                 sources: vec![Loc::Mem(cell(base, offset))],
                 ..Semantics::new(Operation::Move)
@@ -526,7 +526,7 @@ mod tests {
             at,
             Some((at, at + 2)),
             Some(Semantics {
-                name: Some("add".to_owned()),
+                name: Some("add".into()),
                 dests: vec![Loc::Held(held(value))],
                 sources: vec![Loc::Held(held(read)), Loc::Held(held(read))],
                 ..Semantics::new(Operation::Binary)
@@ -561,7 +561,7 @@ mod tests {
                         },
                     );
                 (
-                    what.name.clone().unwrap(),
+                    what.name.as_deref().map(str::to_owned).unwrap(),
                     cell.and_then(|cell| cell.base).map(|base| base.value),
                     cell.map_or(0, |cell| cell.offset),
                 )

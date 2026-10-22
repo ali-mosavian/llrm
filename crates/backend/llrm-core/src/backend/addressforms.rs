@@ -126,7 +126,7 @@ pub fn promote(
             let mut changed = (*one).clone();
             changed.what = Some(Semantics {
                 op: Operation::Extend,
-                name: Some("movzx".to_owned()),
+                name: Some("movzx".into()),
                 dests: destinations,
                 ..what.clone()
             });
@@ -166,7 +166,7 @@ fn extension(
 ) -> Insn {
     let mut follower = (*lir::anchor(Arc::clone(one))).clone();
     follower.what = Some(Semantics {
-        name: Some("movzx".to_owned()),
+        name: Some("movzx".into()),
         dests: vec![Loc::Held(ir::Held { value, width: 4 })],
         sources: vec![Loc::Held(ir::Held { value: temporary, width: 2 })],
         ..Semantics::new(Operation::Extend)

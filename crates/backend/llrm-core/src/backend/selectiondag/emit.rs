@@ -293,7 +293,7 @@ impl Emitter<'_, '_> {
         let this = self.blocks.last().expect("a block").at;
         let (false_at, sink_at) = (self.next_address(), self.next_address());
         let target = Some(sink_at);
-        let what = Semantics { target, name: Some(jump.to_owned()), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { target, name: Some(jump.into()), ..Semantics::new(Operation::Branch) };
         self.push_semantics(what);
         let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
         self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
@@ -483,7 +483,7 @@ impl Emitter<'_, '_> {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         self.push_semantics(what);
     }
 

@@ -662,7 +662,7 @@ fn _move(
         beside.at,
         Some((beside.at, beside.at)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(into)],
             sources: vec![out_of],
             ..Semantics::new(Operation::Move)
@@ -831,7 +831,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(

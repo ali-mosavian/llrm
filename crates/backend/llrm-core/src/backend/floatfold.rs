@@ -314,7 +314,7 @@ fn _compare_with_integer(
         return None;
     }
     let mut made = what.clone();
-    made.name = Some("ficom".to_owned());
+    made.name = Some("ficom".into());
     made.sources = vec![Loc::Held(*left), Loc::Mem(cell_of(load).clone())];
     Some((home, right.value, made))
 }
