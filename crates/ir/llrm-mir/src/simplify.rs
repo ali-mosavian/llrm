@@ -33,10 +33,17 @@
 //!    operations; `simplifyFMAFMul`'s `computeKnownFPClass` of a value, `FMA`,
 //!    `FCmp`, `AndOrOfFCmps`, `Ldexp`, constrained calls and `bitcast (uitofp
 //!    X)` remain: #2246.
-//! 4. Pointer compares, `addrspacecast`: #2247. `simplifyLoadInst` is
-//!    `simplify_load`: the load of a constant address; a load whose address is
-//!    an instruction over a constant global (the
-//!    `stripAndAccumulateConstantOffsets` half) is not translated.
+//! 4. Pointer compares, `addrspacecast`: #2247.
+//! 4a. `simplifyLoadInst`
+//!    ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702))
+//!    is `simplify_load`, whose fold is `ConstantFoldLoadFromConstPtr`
+//!    ([L898](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L898)):
+//!    a non-volatile load of a constant address. The half for an address that
+//!    is an instruction over a constant global (`getUnderlyingObject`,
+//!    `stripAndAccumulateConstantOffsets`, uniform initializers) is not
+//!    translated. Reason: the constant-address half is what the client loop
+//!    needed; the other needs a value-level underlying-object walk. Owner:
+//!    w-3, with #2247. Exit: translated, 2026-11-06.
 //! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
 //!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
@@ -4219,9 +4226,9 @@ fn simplify_gep(
 /// `simplifyLoadInst`
 /// ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702)):
 /// the value a non-volatile load of a constant address reads from a constant
-/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`). DEVIATE:
-/// the half for an address that is an instruction (`getUnderlyingObject` and
-/// `stripAndAccumulateConstantOffsets`) is not translated.
+/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`). DEVIATE
+/// 4a of the header: the half for an address that is an instruction is not
+/// translated.
 fn simplify_load(
     q: &Query,
     volatile: bool,
