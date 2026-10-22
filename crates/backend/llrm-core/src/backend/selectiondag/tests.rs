@@ -484,6 +484,21 @@ mod builder {
         }
     }
 
+    /// Small constant sizes are loads and stores (overlapping at the end),
+    /// and a REP whose size is not a multiple of the block adds the tail as
+    /// stores: the pin's. These were refused.
+    #[test]
+    fn small_memory_intrinsics_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/memsmall.ll");
+        let pin = pin_blocks(include_str!("golden/memsmall.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 9);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");
