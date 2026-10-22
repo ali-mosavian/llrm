@@ -1397,3 +1397,58 @@ join:
         &[&[0], &[1], &[2], &[3]],
     );
 }
+
+/// hanoi (D10 copies): compares `x == 0, 1, 2` into one block with a phi of
+/// constants. The pin makes one `switch` (`out.fold.split` blocks); ours kept
+/// every compare.
+#[test]
+fn test_a_chain_of_equality_branches_into_one_phi_is_one_switch() {
+    check(
+        "define i32 @f(i32 %x) {
+b0:
+  %a = icmp eq i32 %x, 0
+  br i1 %a, label %out, label %b1
+
+b1:
+  %b = icmp eq i32 %x, 1
+  br i1 %b, label %out, label %b2
+
+b2:
+  %c = icmp eq i32 %x, 2
+  br i1 %c, label %out, label %b3
+
+b3:
+  %d = mul i32 %x, 7
+  br label %out
+
+out:
+  %r = phi i32 [ 0, %b0 ], [ 1, %b1 ], [ 3, %b2 ], [ %d, %b3 ]
+  ret i32 %r
+}
+",
+        "define i32 @f(i32 %x) {
+b0:
+  switch i32 %x, label %b3 [
+    i32 0, label %out
+    i32 1, label %out.fold.split
+    i32 2, label %out.fold.split1
+  ]
+
+b3:
+  %d = mul i32 %x, 7
+  br label %out
+
+out.fold.split:
+  br label %out
+
+out.fold.split1:
+  br label %out
+
+out:
+  %r = phi i32 [ 0, %b0 ], [ %d, %b3 ], [ 1, %out.fold.split ], [ 3, %out.fold.split1 ]
+  ret i32 %r
+}
+",
+        &[&[0], &[1], &[2], &[3], &[9]],
+    );
+}
