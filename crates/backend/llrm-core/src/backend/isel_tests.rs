@@ -1635,8 +1635,10 @@ b1:
 /// A float phi's constant input is loaded as any float constant is: taken
 /// for an address, it refused `an address of no global` and left deedlines'
 /// CREATEOBJECT and qbdemo's FRACLINE unselected.
-// The constant is made on the edge that reads it (MachineSink): no `fstp st(0)`
-// to drop the other path's.
+// The pin's llc does the same (tools/pairs/pin.py llc -m 32, i486): `fldz`
+// above the compare, `fstp st(0); fld1` on the other path. MachineSink leaves a
+// def that writes the flags where a successor reads them (`SinkInstruction`'s
+// zombie check, fae5196031), so the constant is no longer made on each edge.
 #[test]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
@@ -1656,14 +1658,13 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "cmp word ptr [bp+6], 0",
-            "jle L0_4294967297",
-            "L0_2:",
-            "fld1",
-            "pop bp",
-            "retf",
-            "L0_4294967297:",
             "fldz",
+            "cmp word ptr [bp+6], 0",
+            "jle L0_3",
+            "L0_2:",
+            "fstp st(0)",
+            "fld1",
+            "L0_3:",
             "pop bp",
             "retf"
         ]
