@@ -62,7 +62,6 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::backend::coalesce;
-use crate::liveness::liveintervals::LiveIntervals;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -119,11 +118,10 @@ pub fn tied(
     let fixed = _fixed(body);
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
-    let mut lis = LiveIntervals::new(body);
-    crate::twoaddress::prepare(&mut lis, body);
+    let facts = crate::twoaddress::BodyFacts::of(body);
     let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
-        let mut walk = crate::twoaddress::Commuter::new(&lis, &fixed, at);
+        let mut walk = crate::twoaddress::Commuter::new(&facts, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for (place, one) in block.insns.iter().enumerate() {
             let mut one = Arc::clone(one);
@@ -473,7 +471,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::{_untied, Fixed, tied};
-    use crate::liveness::liveintervals::LiveIntervals;
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -560,11 +557,10 @@ mod tests {
         fixed: &Fixed,
     ) -> Option<Arc<Insn>> {
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
-        let mut lis = LiveIntervals::new(&body);
-        crate::twoaddress::prepare(&mut lis, &body);
-        let mut walk = Commuter::new(&lis, fixed, 0);
+        let facts = crate::twoaddress::BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, fixed, 0);
         let mut found = None;
-        for (place, one) in lis.block_insns(0).iter().enumerate() {
+        for (place, one) in body.blocks[0].insns.iter().enumerate() {
             let dist = walk.pass(one);
             if place == at {
                 found = walk.try_instruction_commute(one, dist);
@@ -877,10 +873,9 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let mut lis = LiveIntervals::new(&body);
-        crate::twoaddress::prepare(&mut lis, &body);
+        let facts = crate::twoaddress::BodyFacts::of(&body);
         let fixed = Fixed::default();
-        let walk = Commuter::new(&lis, &fixed, 1);
+        let walk = Commuter::new(&facts, &fixed, 1);
         assert!(walk.is_rev_copy_chain(3, 5, 10));
     }
 
@@ -1058,7 +1053,7 @@ mod tests {
     /// update in place asks only whether a value read once is read in its own
     /// block, which the use counts answer.
     #[test]
-    fn test_two_address_does_not_walk_the_body_for_liveness_rows() {
+    fn test_two_address_walks_the_body_for_liveness_once_and_builds_no_intervals() {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
@@ -1089,6 +1084,11 @@ mod tests {
         let got = tied(&input, Default::default());
         let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
+        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
+        // The pin shares one LiveIntervals with the coalescer; here the kills are one backward scan
+        // over the live-out rows and none is built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
+        let _ = tied(&input, Default::default());
+        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);
     }
 }

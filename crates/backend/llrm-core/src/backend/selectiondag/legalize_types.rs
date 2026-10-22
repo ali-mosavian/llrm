@@ -35,10 +35,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::actions::TargetLowering;
-use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
+use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::lowering::TypeAction;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
+use super::x86_lowering::{x86isd, ES};
 
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,6 +341,21 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::SetCC => {
+                // Compare into the target's own result type, then sign extend or
+                // truncate to the promoted type.
+                let ops = self.dag.node(value).ops.clone();
+                let in_vt = self.dag.value_type(ops[0]);
+                let wide = self.tli.types.set_cc_result_type(in_vt);
+                let setcc = self.dag.get_node(ISD::SetCC, wide, &ops);
+                if to.size_in_bits() > wide.size_in_bits() {
+                    self.dag.get_node(ISD::SignExtend, to, &[setcc])
+                } else if to.size_in_bits() < wide.size_in_bits() {
+                    self.dag.get_node(ISD::Truncate, to, &[setcc])
+                } else {
+                    setcc
+                }
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -364,6 +380,30 @@ impl<'a> TypeLegalizer<'a> {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[operand])
+            }
+            ISD::ZeroExtend => {
+                // Extend the promoted source to the result type, then clear
+                // what the source did not have (`getZeroExtendInReg`).
+                let src = self.dag.operand(node, 0);
+                let promoted = self.promoted_integer(src);
+                let vt = self.dag.value_type(node);
+                let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
+                let mask = super::fold::mask(self.dag.value_type(src).size_in_bits());
+                let mask = self.dag.get_constant(mask, vt);
+                self.dag.get_node(ISD::And, vt, &[wide, mask])
+            }
+            ISD::Select if at == 0 => {
+                // The condition becomes the target's boolean type (`PromoteTargetBoolean`).
+                let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
+                let extend = match self.dag.config().boolean_contents {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                let updated = self.dag.update_node_operands(n, &[cond, then, other]);
+                SDValue { node: updated, res: 0 }
             }
             op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "promote operand" }),
         };
@@ -400,6 +440,16 @@ impl<'a> TypeLegalizer<'a> {
                 let lo = self.dag.get_constant_with(bits, half, false, self.dag.is_opaque(value));
                 let hi = self.dag.get_constant_with(bits >> width, half, false, self.dag.is_opaque(value));
                 (lo, hi)
+            }
+            ISD::Load if vt == EVT::Simple(MVT::Far) => {
+                // A far pointer is `les`: the offset, with the selector left in
+                // `ES` and read back on the chain (SD2).
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+                let les = self.dag.intern(x86isd::LES, &[half, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+                let selector = self.dag.get_copy_from_reg(SDValue { node: les.node, res: 1 }, ES, half);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
+                (les, selector)
             }
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));

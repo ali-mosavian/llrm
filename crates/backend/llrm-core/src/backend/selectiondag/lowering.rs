@@ -109,6 +109,11 @@ impl TargetLoweringInfo {
         }
     }
 
+    /// `getSetCCResultType`: X86 compares into an `i8`, whatever the operands.
+    pub fn set_cc_result_type(&self, _operand: EVT) -> EVT {
+        EVT::I8
+    }
+
     pub fn type_action(&self, vt: EVT) -> TypeAction {
         self.type_conversion(vt).0
     }

@@ -734,7 +734,8 @@ no:
             "setl al",
             "cmp cx, 3",
             "sete cl",
-            "test al, cl",
+            "mov dl, al",
+            "and dl, cl",
             "je L0_8",
             "L0_6:",
             "movzx dx, al",
@@ -749,7 +750,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (18, 2));
+    assert_eq!(counts(&got), (19, 2));
 }
 
 #[test]
@@ -915,7 +916,8 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            // `canFoldIntoRegPush`: the load nothing else reads is the push's cell.
+            // `canFoldIntoRegPush`: the load nothing else reads is the push's
+            // cell.
             "push word ptr count",
             "call far ptr helper",
             "retf",
@@ -5273,7 +5275,7 @@ fn sized_with(
 /// what the cheaper route costs.
 #[test]
 fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
-    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/conc9_les.ll")).unwrap();
     let (spiller, allocator) =
         (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
     assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");
@@ -6900,9 +6902,10 @@ b0:
     assert!(!text.contains("loop") && !text.contains("__chkstk") && !text.contains("B$STK"), "no probe: {text}");
 }
 
-/// A register-plus-register add of a live source is a `lea [a+b]`, and the assembler has a form for it
-/// at both targets: the first version carried a literal address in the cell and `host.c` and `mdl.c`
-/// (QCport -Os, m16) stopped with "no encoding" for `lea r32, [abs+r38+r37]`.
+/// A register-plus-register add of a live source is a `lea [a+b]`, and the
+/// assembler has a form for it at both targets: the first version carried a
+/// literal address in the cell and `host.c` and `mdl.c` (QCport -Os, m16)
+/// stopped with "no encoding" for `lea r32, [abs+r38+r37]`.
 #[test]
 fn test_a_register_sum_of_a_live_source_is_encoded_as_a_lea() {
     let text = "define i32 @f(i32 %a, i32 %b) addrspace(1) {
@@ -6914,4 +6917,48 @@ fn test_a_register_sum_of_a_live_source_is_encoded_as_a_lea() {
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("lea ")), "{got:?}");
+}
+
+/// A byte `and` only a compare with zero reads is `test`
+/// (X86InstrFragments.td#L805 `X86testpat`, `TEST8ri` at
+/// X86InstrArithmetic.td#L1330): x_collatz ran `mov dl, cl; and dl, 1; jne`
+/// where the pin selects `test cl, 1; jne`. Only the 16 and 32 bit forms were
+/// selected.
+#[test]
+fn test_a_byte_and_only_a_compare_with_zero_reads_is_a_test() {
+    let text = "define i16 @f(i8 %a) addrspace(1) {
+entry:
+  %m = and i8 %a, 1
+  %z = icmp ne i8 %m, 0
+  br i1 %z, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
+}
+
+/// `X86TargetLowering::LowerBRCOND` branches on a boolean truncation by testing
+/// its low bit (X86testpat, X86InstrFragments.td#L805; `TEST8ri`,
+/// X86InstrArithmetic.td#L1330): x_collatz made `and dl, 1` first (and a copy)
+/// for `br (trunc x to i1)`.
+#[test]
+fn test_a_branch_on_a_boolean_truncation_is_a_test_of_the_low_bit() {
+    let text = "define i16 @f(i16 %a) addrspace(1) {
+entry:
+  %b = trunc i16 %a to i1
+  br i1 %b, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
 }

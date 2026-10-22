@@ -127,6 +127,13 @@ fn nearest_common_dominator(
     }
 }
 
+/// DEVIATE IU7: the loop is planned twice when the exit tests are edited: the
+/// first look (`marked` none) finds the edits, the second builds `IvUsers`
+/// again over the edited loop and marks the tests with `transformToPostInc`.
+/// The pin keeps one `IVUsers` through `OptimizeLoopTermCond`. Reason: the edit
+/// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
+/// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
+/// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the

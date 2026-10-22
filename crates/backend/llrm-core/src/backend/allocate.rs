@@ -242,8 +242,8 @@ use crate::backend::liveunion::Placed;
 use crate::backend::liveunion::{LiveUnion, Overlaps};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
-use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Semantics, Space};
+use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyrepr::Repr;
@@ -4237,7 +4237,8 @@ impl RegAlloc {
         let colored =
             llrm_support::debug::timed("spill slots shared", || spiller::slots_colored(&out, &mut frame.borrow_mut()));
         let _apply = llrm_support::debug::span("regalloc apply");
-        applied(&colored, &got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
+        crate::backend::rewriter::rewrite(&colored, &got, &self.classes)
+            .map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }
 
@@ -4692,7 +4693,7 @@ pub(crate) fn _fold_priced(
 }
 
 /// Python `format(value, "g")`.
-fn _g(value: f64) -> String {
+pub(crate) fn _g(value: f64) -> String {
     if value.is_nan() {
         return "nan".to_owned();
     }
@@ -4715,284 +4716,6 @@ fn _g(value: f64) -> String {
     trimmed(format!("{value:.*}", (5 - exponent) as usize))
 }
 
-/// `body` with every operand naming a value replaced by its register.
-pub fn applied(
-    body: &LirBody,
-    got: &Assignment,
-    classes: &RegisterClasses,
-) -> Result<LirBody, Error> {
-    if !got.spilled.is_empty() {
-        let worst: Vec<String> = got.spilled.iter().take(4).map(|one| format!("value#{one}")).collect();
-        return Err(Spilled(format!(
-            "{} values want a stack slot ({}) at a cost of {} and spilling them did not settle. Measured on \
-             bools-q-evt: the same twelve every round, thirty-six instructions added each time. Their ranges \
-             cross calls that clobber every register, so no register can hold them and the reload cannot either",
-            got.spilled.len(),
-            worst.join(", "),
-            _g(got.cost),
-        ))
-        .into());
-    }
-    let body = _dead_insertions(body);
-    let held = &got.r#where;
-    let failed: RefCell<Option<Unplaced>> = RefCell::new(None);
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| LirBlock {
-            at: block.at,
-            insns: lir::without(
-                &block.insns,
-                |one| _discardable_identity(one),
-                Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held, classes) {
-                    Ok(placed) => placed,
-                    Err(error) => {
-                        failed.borrow_mut().get_or_insert(error);
-                        Arc::clone(one)
-                    }
-                }),
-            )
-            .into_iter()
-            .map(_identity_anchor)
-            .collect(),
-            succ: block.succ.clone(),
-            phis: block.phis.clone(),
-            cold: block.cold,
-            align: block.align,
-            max_skip: block.max_skip,
-        })
-        .collect::<Vec<_>>();
-    if let Some(error) = failed.into_inner() {
-        return Err(error.into());
-    }
-    Ok(LirBody {
-        origin: body.origin.clone(),
-        pins: body.pins.clone(),
-        ordered: body.ordered,
-        ..body.with_blocks(blocks)
-    })
-}
-
-/// Delete unused allocator copies before physical identity loses their use
-/// graph.
-fn _dead_insertions(body: &LirBody) -> LirBody {
-    if body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.insns)
-        .any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier))
-    {
-        return body.clone();
-    }
-    let mut body = body.clone();
-    loop {
-        let mut used: BTreeSet<u32> =
-            body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.uses.iter().copied()).collect();
-        used.extend(
-            body.blocks
-                .iter()
-                .flat_map(|block| &block.insns)
-                .flat_map(|one| one.requires.iter().map(|(held, _)| held.value)),
-        );
-        used.extend(
-            body.blocks
-                .iter()
-                .flat_map(|block| &block.phis)
-                .flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)),
-        );
-        let mut dead: BTreeSet<usize> = BTreeSet::new();
-        for one in body.blocks.iter().flat_map(|block| &block.insns) {
-            if one.covers.is_none_or(|covers| covers.0 != covers.1)
-                || !one.spread.is_empty()
-                || !one.clobbers.is_empty()
-                || !one.requires.is_empty()
-                || !one.delivers.is_empty()
-                || one.symbol == Some(true)
-            {
-                continue;
-            }
-            let Some(what) = &one.what else {
-                continue;
-            };
-            if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-                if let ([Loc::Held(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) {
-                    let value = dest.value;
-                    if one.defines == [value]
-                        && !used.contains(&value)
-                        && (matches!(source, Loc::Held(_) | Loc::Imm(_))
-                            || matches!(source, Loc::Mem(_)) && one.spill_reload)
-                    {
-                        dead.insert(ranges::key(one));
-                    }
-                }
-            }
-        }
-        if dead.is_empty() {
-            return body;
-        }
-        body = body.with_blocks(
-            body.blocks
-                .iter()
-                .map(|block| {
-                    block.with_insns(
-                        block.insns.iter().filter(|one| !dead.contains(&ranges::key(one))).cloned().collect(),
-                    )
-                })
-                .collect(),
-        );
-    }
-}
-
-/// Retain byte ownership without requiring an encodable register self-copy.
-fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
-    if one.group.is_some() || !_pointless(&one) {
-        return one;
-    }
-    let mut made = (*one).clone();
-    made.what = Some(lir::inert());
-    Arc::new(made)
-}
-
-/// An identity that is not still owned by the parallel-copy scheduler.
-fn _discardable_identity(one: &Insn) -> bool {
-    one.group.is_none() && _pointless(one)
-}
-
-/// Place one instruction without discarding an inserted definition.
-fn _placed_for_rewrite(
-    one: &Arc<Insn>,
-    held: &IndexMap<u32, RegId>,
-    classes: &RegisterClasses,
-) -> Result<Arc<Insn>, Unplaced> {
-    let placed = _placed(one, held, classes)?;
-    if placed.group.is_none() && _pointless(&placed) {
-        return Ok(lir::anchor(placed));
-    }
-    Ok(placed)
-}
-
-/// Whether this instruction moves a register into itself.
-fn _pointless(one: &Insn) -> bool {
-    let Some(what) = &one.what else {
-        return false;
-    };
-    if what.op != Operation::Move {
-        return false;
-    }
-    if what.dests.len() != 1 || what.sources.len() != 1 {
-        return false;
-    }
-    matches!(
-        (&what.dests[0], &what.sources[0]),
-        (Loc::Reg(into), Loc::Reg(out_of)) if into.register == out_of.register
-    )
-}
-
-fn _placed(
-    one: &Arc<Insn>,
-    held: &IndexMap<u32, RegId>,
-    classes: &RegisterClasses,
-) -> Result<Arc<Insn>, Unplaced> {
-    let regs = classes.registers;
-    let Some(what) = &one.what else {
-        return Ok(Arc::clone(one));
-    };
-    // A value read as undef has no register of its own: any one will do
-    // (`VirtRegRewriter` gives an undef operand the first of its class).
-    let undef_held;
-    let held = if one.undefs.iter().any(|value| !held.contains_key(value)) {
-        let mut more = held.clone();
-        for value in &one.undefs {
-            more.entry(*value).or_insert(classes.available[0]);
-        }
-        undef_held = more;
-        &undef_held
-    } else {
-        held
-    };
-    let dests = what.dests.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
-    let sources = what.sources.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
-    let mut name = what.name.clone();
-    if target::far_load(regs, what) {
-        if let Loc::Reg(selector) = &dests[1] {
-            if let Some(spelt) = regs.load_form(selector.register) {
-                name = Some(spelt.to_owned());
-            }
-        }
-    }
-    let mut made = (**one).clone();
-    // A value now in an x87 register is named by the register: the stackifier
-    // numbers it again (`fpregs`).
-    let in_rfp = |value: &u32| held.get(value).is_some_and(|at| regs.in_class(*at, llrm_lir::registers::class::RFP));
-    made.uses.retain(|value| !in_rfp(value));
-    made.defines.retain(|value| !in_rfp(value));
-    made.what = Some(Semantics { name, dests, sources, ..what.clone() });
-    Ok(Arc::new(made))
-}
-
-/// One operand with its value resolved to the register holding it.
-fn _settled(
-    place: &Loc,
-    held: &IndexMap<u32, RegId>,
-    classes: &RegisterClasses,
-) -> Result<Loc, Unplaced> {
-    let regs = classes.registers;
-    let mut place = place.clone();
-    if let Loc::Mem(cell) = &place {
-        if let Some(selector) = cell.selector {
-            let Some(register) = held.get(&selector.value) else {
-                return Err(Unplaced(format!("selector value#{} has no register", selector.value)));
-            };
-            let addr = cell.addr.expect("a selected cell has an address");
-            place = Loc::Mem(Mem { addr: Some(Addr { segment: (*register).iced(), ..addr }), ..cell.clone() });
-        }
-    }
-    if let Loc::Mem(cell) = &place {
-        if let Some(index) = cell.index {
-            let base = cell.base.and_then(|base| held.get(&base.value).copied());
-            let index_register = held.get(&index.value).copied();
-            let Some(index_register) = index_register.filter(|_| cell.base.is_none() || base.is_some()) else {
-                return Err(Unplaced(format!("scaled cell {} has no register for its base or index", cell.repr())));
-            };
-            let mut base_register = match (base, cell.base) {
-                (Some(base), Some(held_base)) => regs.named(base, i64::from(held_base.width)),
-                _ => cell.through,
-            };
-            let mut index_register = regs.named(index_register, i64::from(index.width));
-            if cell.base.is_some_and(|held_base| held_base.width == 2 && index.width == 2)
-                && cell.scale == 1
-                && classes.word_indexes.contains(&base_register)
-                && classes.word_bases.contains(&index_register)
-            {
-                std::mem::swap(&mut base_register, &mut index_register);
-            }
-            return Ok(Loc::Mem(Mem { through: base_register, index_through: index_register, ..cell.clone() }));
-        }
-        if let Some(base) = cell.base {
-            let Some(register) = held.get(&base.value) else {
-                return Ok(place.clone());
-            };
-            let placed = regs.named(*register, i64::from(base.width).max(2));
-            if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
-                return Ok(Loc::Mem(Mem { through: RegId::BP, index_through: placed, ..cell.clone() }));
-            }
-            return Ok(Loc::Mem(Mem { through: placed, ..cell.clone() }));
-        }
-    }
-    let Loc::Held(value) = &place else {
-        return Ok(place);
-    };
-    let Some(register) = held.get(&value.value) else {
-        return Err(Unplaced(format!("value#{} at width {} has no register", value.value, value.width)));
-    };
-    // An x87 value is placed in FP0..FP6: the stackifier puts it on the stack
-    // and its operands become st(i).
-    if regs.in_class(*register, llrm_lir::registers::class::RFP) {
-        return Ok(Loc::Reg(Reg { register: *register, width: value.width }));
-    }
-    Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
-}
-
 #[cfg(test)]
 mod tests {
     //! Ports of `tests/test_allocation.py`, `tests/test_allocation_hints.py`,
@@ -5008,8 +4731,9 @@ mod tests {
     use super::*;
     use crate::analysis::intervals::Segment;
     use crate::backend::regalloc_input::through;
+    use crate::backend::rewriter::{_dead_insertions, _placed, _settled};
     use crate::backend::{parcopy, select, verify};
-    use crate::model::ir::Imm;
+    use crate::model::ir::{Imm, Reg};
     use crate::support::hash::IndexMap;
 
     fn semantics(
@@ -5666,7 +5390,7 @@ mod tests {
             vec![],
             vec![17],
         );
-        let got = applied(
+        let got = crate::backend::rewriter::rewrite(
             &_one_block(vec![load]),
             &assignment(pins(&[(17, RegId::BX)])),
             &crate::backend::classes::RegisterClasses::m16(),
@@ -5974,7 +5698,9 @@ mod tests {
     fn test_call_input_is_computed_in_its_available_required_register() {
         let body = call_copy();
         let assignment = allocated(&body, Some(&body.pins)).expect("allocates");
-        let result = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
+        let result =
+            crate::backend::rewriter::rewrite(&body, &assignment, &crate::backend::classes::RegisterClasses::m16())
+                .expect("applies");
         assert!(assignment.spilled.is_empty());
         let mut emitted: Vec<u8> = Vec::new();
         for one in result.insns() {
@@ -6177,7 +5903,9 @@ mod tests {
 
         let assignment = allocated(&body, None).expect("allocates");
         assert!(assignment.spilled.is_empty(), "{assignment:?}");
-        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
+        let placed =
+            crate::backend::rewriter::rewrite(&body, &assignment, &crate::backend::classes::RegisterClasses::m16())
+                .expect("applies");
         let accesses: Vec<Semantics> =
             placed.insns().iter().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
         assert!(accesses.iter().all(|what| select::emit(what, 0, None, false, false, None).is_some()), "{accesses:?}");
@@ -6319,7 +6047,7 @@ mod tests {
             returning.requires = vec![(Held { value: 2, width: 2 }, RegId::AX)];
             let body = LirBody { inputs: values(&[1]), ..body_of("fixed-identity", 1, vec![identity, returning]) };
 
-            let placed = applied(
+            let placed = crate::backend::rewriter::rewrite(
                 &body,
                 &assignment(pins(&[(1, RegId::AX), (2, RegId::AX)])),
                 &crate::backend::classes::RegisterClasses::m16(),
@@ -6357,7 +6085,9 @@ mod tests {
         let body = LirBody { inputs: values(&[1]), ..body_of("parallel-identity", 1, vec![identity, consumed]) };
         let assignment = assignment(pins(&[(1, RegId::AX), (2, RegId::AX)]));
 
-        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
+        let placed =
+            crate::backend::rewriter::rewrite(&body, &assignment, &crate::backend::classes::RegisterClasses::m16())
+                .expect("applies");
         let scheduled = parcopy::scheduled(&placed).expect("schedules");
 
         assert!(verify::verify(&placed, false).is_empty(), "{:?}", verify::verify(&placed, false));

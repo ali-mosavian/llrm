@@ -984,17 +984,101 @@ impl ScalarEvolution {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L7221
-    /// `getRangeViaFactoring`. SEAM: the select-pattern case needs the IR
-    /// `select` of constants behind an unknown; none is recognised until
-    /// `createSCEV` (S3) lets a `select` stand for two recurrences.
+    /// `getRangeViaFactoring`: `{C?A:B,+,C?P:Q}` is the union of the ranges of
+    /// `{A,+,P}` and `{B,+,Q}`.
     fn get_range_via_factoring(
         &mut self,
-        _cx: &Cx,
-        _start: Scev,
-        _step: Scev,
+        cx: &Cx,
+        start: Scev,
+        step: Scev,
         max_be_count: Ap,
     ) -> ConstantRange {
-        ConstantRange::full(max_be_count.width)
+        let bit_width = max_be_count.width;
+        let full = ConstantRange::full(bit_width);
+        let Some((start_cond, start_true, start_false)) = self.select_pattern(cx, bit_width, start) else {
+            return full;
+        };
+        let Some((step_cond, step_true, step_false)) = self.select_pattern(cx, bit_width, step) else {
+            return full;
+        };
+        if start_cond != step_cond {
+            // Four possibilities would be needed; getRange already does about
+            // as well.
+            return full;
+        }
+        let true_start = self.get_constant(start_true);
+        let true_step = self.get_constant(step_true);
+        let false_start = self.get_constant(start_false);
+        let false_step = self.get_constant(step_false);
+        let true_range = self.get_range_for_affine_ar(cx, true_start, true_step, max_be_count).0;
+        let false_range = self.get_range_for_affine_ar(cx, false_start, false_step, max_be_count).0;
+        true_range.union_with(&false_range, PreferredRangeType::Smallest)
+    }
+
+    /// `getRangeViaFactoring`'s `SelectPattern`: `s` as `select C, T, F` of
+    /// constants behind an integral cast and a constant offset; the condition
+    /// and the two values.
+    fn select_pattern(
+        &mut self,
+        cx: &Cx,
+        bit_width: u32,
+        s: Scev,
+    ) -> Option<(Operand, Ap, Ap)> {
+        use llrm_mir::context::ConstantKind;
+        let mut s = s;
+        let mut offset = Ap::new(bit_width, 0);
+        // Peel off a constant offset.
+        if let Kind::Add(ops) = &self.node(s).kind
+            && ops.len() == 2
+            && let Kind::Constant(off) = self.node(ops[0].scev).kind
+        {
+            offset = off;
+            s = ops[1].scev;
+        }
+        // Peel off a cast operation.
+        let mut cast = None;
+        match self.node(s).kind {
+            Kind::Truncate(op) => {
+                cast = Some(0);
+                s = op.scev;
+            }
+            Kind::ZeroExtend(op) => {
+                cast = Some(1);
+                s = op.scev;
+            }
+            Kind::SignExtend(op) => {
+                cast = Some(2);
+                s = op.scev;
+            }
+            _ => {}
+        }
+        let Kind::Unknown(Operand::Value(value)) = self.node(s).kind.clone() else { return None };
+        let ValueDef::Instruction(select) = cx.function.value(value).def else { return None };
+        let instruction = cx.function.instruction(select);
+        if instruction.opcode != Opcode::Select {
+            return None;
+        }
+        let constant = |operand: Operand| -> Option<Ap> {
+            let Operand::Constant(id) = operand else { return None };
+            let found = cx.context.get(id);
+            let bits = match found.kind {
+                ConstantKind::Int(bits) => bits,
+                ConstantKind::Zero => 0,
+                _ => return None,
+            };
+            Some(Ap::new(cx.context.types.int_bits(found.ty)?, bits))
+        };
+        let (condition, true_value, false_value) =
+            (instruction.operands[0], constant(instruction.operands[1])?, constant(instruction.operands[2])?);
+        // Re-apply the cast peeled off earlier.
+        let recast = |value: Ap| match cast {
+            Some(0) => value.trunc(bit_width),
+            Some(1) => value.zext(bit_width),
+            Some(_) => value.sext(bit_width),
+            None => value,
+        };
+        // Re-apply the constant offset peeled off earlier.
+        Some((condition, recast(true_value).add(offset), recast(false_value).add(offset)))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L5063
