@@ -1,6 +1,6 @@
 # Pin pipeline slots against llrm's pipeline
 
-Owner: funcattrs-port. Rows: see Counts. MISSING rows read `owner unassigned`: the coordinator assigns owners on 10-26 (until then the test accepts `unassigned (coordinator, 10-26)` as the owner).
+Owner: funcattrs-port. Rows: see Counts. MISSING rows carry the owner the coordinator assigned on 10-22 (plan rows or N/A with evidence by 11-09).
 
 Output of the slot test (funcattrs-port, 2026-10-22; first table 1442783c8e6d, corrected here): the pin's `-print-pipeline-passes` at -O1, -O2, -O3, -Os
 (tests/fixtures/pin-pipeline, tools/pairs/pin_pipeline.py; LLVM d1106deb71cc, opt md5 e8430a02d9bc7c91c31a8fcb5f37d0a1; target m32: i386 -march=i486, no SSE).
@@ -247,7 +247,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | level | phase | pin slot | nest | state | ours | row | note | owner |
 |---|---|---|---|---|---|---|---|---|
 | -O1 | Early | ee-instrument<> | function<eager-inv> | none |  | N/A | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O1 | Early | lower-expect | function<eager-inv> | none |  | MISSING | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Early | lower-expect | function<eager-inv> | none |  | MISSING | no llvm.expect reaches MIR: llrm-c compiles __builtin_expect as a call of an undefined `__builtin_expect_` (a link error, not a wrong answer); the fix is identity plus a branch hint in the frontend; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | decide@1178:Partial |  |  |  |
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | match | sroa@1179:Translated |  |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | match | earlycse@1180:Translated |  |  |  |
@@ -258,11 +258,11 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | earlycse@649:Translated |  |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@675:Partial |  |  |  |
 | -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |  |
-| -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@690:Partial |  |  |  |
 | -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | reassociate@696:Translated + algebraic@696:Old |  |  |  |
-| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | floatloop@724:Old + licm@724:Translated |  |  |  |
 | -O1 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |  |
 | -O1 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | licm@730:Translated |  |  |  |
@@ -290,34 +290,34 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify |  |  | ours-only | 810: cvp@810 |  |  |  |
 | -O1 | Simplify |  |  | ours-only | 820: dse@820 |  |  |  |
 | -O1 | Simplify |  |  | ours-only | 823: loopsimplify@823 + lcssa@823 + licm@823 |  |  |  |
-| -O1 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | float2int | function<eager-inv> | match | float2int@1594:Translated |  |  |  |
-| -O1 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | unassigned (coordinator, 10-26) |
-| -O1 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O1 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O1 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | loop-interchange | function<eager-inv>/loop | match | loop-interchange@1631:Translated |  |  |  |
-| -O1 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | inject-tli-mappings | function<eager-inv> | none |  | N/A | maps scalar libcalls to vector ones; vectors deferred |  |
 | -O1 | Late | loop-vectorize<no-interleave-forced-only;vectorize-forced-only;> | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O1 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O1 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | loop-load-elim | function<eager-inv> | match | loop-load-elim@1400:Partial |  |  |  |
-| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1438:Partial |  |  |  |
 | -O1 | Late | vector-combine | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
-| -O1 | Late | loop-unroll<O1> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
+| -O1 | Late | loop-unroll<O1> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | transform-warning | function<eager-inv> | none |  | N/A | diagnostic for failed pragmas; no output |  |
-| -O1 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O1 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O1 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O1 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O1 | Late | licm<allowspeculation> | function<eager-inv>/loop-mssa | match | licm@1508:Translated |  |  |  |
-| -O1 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O1 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | instsimplify | function<eager-inv> | match | instsimplify@1662:Translated |  |  |  |
-| -O1 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O1 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O1 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O1 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O1 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O1 | Late | tailcallelim | function<eager-inv> | match | tailrec@1677:Translated |  |  |  |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1682:Partial |  |  |  |
 | -O1 | Late | annotation-remarks | function | none |  | N/A | remarks off |  |
@@ -329,7 +329,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | coro-early |  | none |  | N/A | coroutines: no frontend |  |
 | -O1 | Module | openmp-opt |  | none |  | N/A | OpenMP: no frontend |  |
 | -O1 | Module | ipsccp |  | none |  | EXECUTED (outside the registry) | ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's |  |
-| -O1 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | unassigned (coordinator, 10-26) |
+| -O1 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | w-6, 11-09 |
 | -O1 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O1 | Module | always-inline |  | none |  | EXECUTED (outside the registry) | walk (the CGSCC walk's inliner) |  |
 | -O1 | Module | inline | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | walk, and interprocedural (inlines again after the clones) |  |
@@ -342,16 +342,16 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O1 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
 | -O1 | Module | elim-avail-extern |  | none |  | EXECUTED (outside the registry) | available-externally |  |
-| -O1 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | unassigned (coordinator, 10-26) |
+| -O1 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O1 | Module | recompute-globalsaa |  | none |  | N/A | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) |  |
 | -O1 | Module | alloc-token |  | none |  | N/A | clang option, off |  |
 | -O1 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O1 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | unassigned (coordinator, 10-26) |
+| -O1 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
 | -O1 | Module | cg-profile |  | none |  | N/A | profile data |  |
 | -O1 | Module | rel-lookup-table-converter |  | none |  | N/A | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O1 | Module | lower-comment-string |  | none |  | N/A | #pragma comment strings |  |
 | -O2 | Early | ee-instrument<> | function<eager-inv> | none |  | N/A | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O2 | Early | lower-expect | function<eager-inv> | none |  | MISSING | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Early | lower-expect | function<eager-inv> | none |  | MISSING | no llvm.expect reaches MIR: llrm-c compiles __builtin_expect as a call of an undefined `__builtin_expect_` (a link error, not a wrong answer); the fix is identity plus a branch hint in the frontend; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O2 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | decide@1178:Partial |  |  |  |
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | match | sroa@1179:Translated |  |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | match | earlycse@1180:Translated |  |  |  |
@@ -363,17 +363,17 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | runs only on a target with divergent branches; x86 has none |  |
 | -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | jumpthreading@668:Translated |  |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | cvp@669:Translated |  |  |  |
-| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@675:Partial |  |  |  |
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |  |
 | -O2 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | aggressive-instcombine@678:Partial |  |  |  |
-| -O2 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O2 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | tailrec@688:Translated |  |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@690:Partial |  |  |  |
 | -O2 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | reassociate@696:Translated + algebraic@696:Old |  |  |  |
-| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | floatloop@724:Old + licm@724:Translated |  |  |  |
 | -O2 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |  |
 | -O2 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | licm@730:Translated |  |  |  |
@@ -382,12 +382,12 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |  |
 | -O2 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopidiom@737:Translated + loopidioms@737:Old |  |  |  |
 | -O2 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | indvars@738:Partial |  |  |  |
-| -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopdeletion@749:Translated |  |  |  |
 | -O2 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | unroll@753:Translated + indvars@753:Translated |  |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sroa@776:Translated |  |  |  |
 | -O2 | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O2 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O2 | Simplify | gvn<> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | inferspace@787:Old + gvn@787:Translated |  |  |  |
 | -O2 | Simplify | sccp | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sccp@792:Translated |  |  |  |
 | -O2 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | bdce@797:Translated |  |  |  |
@@ -405,35 +405,35 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@837:Partial + fold@837:Old + dead@837:Old |  |  |  |
 | -O2 | Simplify |  |  | ours-only | 764: loopsimplify@764 + lcssa@764 |  |  |  |
 | -O2 | Simplify |  |  | ours-only | 772: loopsimplify@772 + lcssa@772 |  |  |  |
-| -O2 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | float2int | function<eager-inv> | match | float2int@1594:Translated |  |  |  |
-| -O2 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | unassigned (coordinator, 10-26) |
-| -O2 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O2 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O2 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | loop-interchange | function<eager-inv>/loop | match | loop-interchange@1631:Translated |  |  |  |
-| -O2 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | inject-tli-mappings | function<eager-inv> | none |  | N/A | maps scalar libcalls to vector ones; vectors deferred |  |
 | -O2 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O2 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O2 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | loop-load-elim | function<eager-inv> | match | loop-load-elim@1400:Partial |  |  |  |
-| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1438:Partial |  |  |  |
 | -O2 | Late | slp-vectorizer | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
 | -O2 | Late | vector-combine | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
-| -O2 | Late | loop-unroll<O2> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
+| -O2 | Late | loop-unroll<O2> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | transform-warning | function<eager-inv> | none |  | N/A | diagnostic for failed pragmas; no output |  |
-| -O2 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O2 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O2 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O2 | Late | licm<allowspeculation> | function<eager-inv>/loop-mssa | match | licm@1508:Translated |  |  |  |
-| -O2 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O2 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | instsimplify | function<eager-inv> | match | instsimplify@1662:Translated |  |  |  |
-| -O2 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O2 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O2 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O2 | Late | tailcallelim | function<eager-inv> | match | tailrec@1677:Translated |  |  |  |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1682:Partial |  |  |  |
 | -O2 | Late | annotation-remarks | function | none |  | N/A | remarks off |  |
@@ -445,7 +445,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | coro-early |  | none |  | N/A | coroutines: no frontend |  |
 | -O2 | Module | openmp-opt |  | none |  | N/A | OpenMP: no frontend |  |
 | -O2 | Module | ipsccp |  | none |  | EXECUTED (outside the registry) | ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's |  |
-| -O2 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | unassigned (coordinator, 10-26) |
+| -O2 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | w-6, 11-09 |
 | -O2 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O2 | Module | always-inline |  | none |  | EXECUTED (outside the registry) | walk (the CGSCC walk's inliner) |  |
 | -O2 | Module | inline | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | walk, and interprocedural (inlines again after the clones) |  |
@@ -459,20 +459,20 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O2 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
 | -O2 | Module | elim-avail-extern |  | none |  | EXECUTED (outside the registry) | available-externally |  |
-| -O2 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | unassigned (coordinator, 10-26) |
+| -O2 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O2 | Module | recompute-globalsaa |  | none |  | N/A | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) |  |
 | -O2 | Module | alloc-token |  | none |  | N/A | clang option, off |  |
 | -O2 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O2 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | unassigned (coordinator, 10-26) |
+| -O2 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
 | -O2 | Module | cg-profile |  | none |  | N/A | profile data |  |
 | -O2 | Module | rel-lookup-table-converter |  | none |  | N/A | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O2 | Module | lower-comment-string |  | none |  | N/A | #pragma comment strings |  |
 | -O3 | Early | ee-instrument<> | function<eager-inv> | none |  | N/A | -pg/-finstrument-functions: no frontend asks for it |  |
-| -O3 | Early | lower-expect | function<eager-inv> | none |  | MISSING | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Early | lower-expect | function<eager-inv> | none |  | MISSING | no llvm.expect reaches MIR: llrm-c compiles __builtin_expect as a call of an undefined `__builtin_expect_` (a link error, not a wrong answer); the fix is identity plus a branch hint in the frontend; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O3 | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | decide@1178:Partial |  |  |  |
 | -O3 | Early | sroa<modify-cfg> | function<eager-inv> | match | sroa@1179:Translated |  |  |  |
 | -O3 | Early | early-cse<> | function<eager-inv> | match | earlycse@1180:Translated |  |  |  |
-| -O3 | Early | callsite-splitting | function<eager-inv> | none |  | MISSING | -O3 only; not measured | unassigned (coordinator, 10-26) |
+| -O3 | Early | callsite-splitting | function<eager-inv> | none |  | MISSING | -O3 only; not measured | funcattrs-port, 11-09 |
 | -O3 | Cleanup | mem2reg | function<eager-inv> | match | promote@1241:Translated |  |  |  |
 | -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | match | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |  |
 | -O3 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | decide@1244:Partial |  |  |  |
@@ -481,17 +481,17 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | runs only on a target with divergent branches; x86 has none |  |
 | -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | jumpthreading@668:Translated |  |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | cvp@669:Translated |  |  |  |
-| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@675:Partial |  |  |  |
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |  |
 | -O3 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | aggressive-instcombine@678:Partial |  |  |  |
-| -O3 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O3 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | tailrec@688:Translated |  |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@690:Partial |  |  |  |
 | -O3 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | reassociate@696:Translated + algebraic@696:Old |  |  |  |
-| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | floatloop@724:Old + licm@724:Translated |  |  |  |
 | -O3 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |  |
 | -O3 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | licm@730:Translated |  |  |  |
@@ -500,12 +500,12 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |  |
 | -O3 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopidiom@737:Translated + loopidioms@737:Old |  |  |  |
 | -O3 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | indvars@738:Partial |  |  |  |
-| -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopdeletion@749:Translated |  |  |  |
 | -O3 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | unroll@753:Translated + indvars@753:Translated |  |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sroa@776:Translated |  |  |  |
 | -O3 | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O3 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O3 | Simplify | gvn<> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | inferspace@787:Old + gvn@787:Translated |  |  |  |
 | -O3 | Simplify | sccp | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sccp@792:Translated |  |  |  |
 | -O3 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | bdce@797:Translated |  |  |  |
@@ -523,36 +523,36 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@837:Partial + fold@837:Old + dead@837:Old |  |  |  |
 | -O3 | Simplify |  |  | ours-only | 764: loopsimplify@764 + lcssa@764 |  |  |  |
 | -O3 | Simplify |  |  | ours-only | 772: loopsimplify@772 + lcssa@772 |  |  |  |
-| -O3 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | float2int | function<eager-inv> | match | float2int@1594:Translated |  |  |  |
-| -O3 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | chr | function<eager-inv> | none |  | N/A | control-height-reduction needs profile data |  |
-| -O3 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | unassigned (coordinator, 10-26) |
-| -O3 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O3 | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | loop-interchange | function<eager-inv>/loop | match | loop-interchange@1631:Translated |  |  |  |
-| -O3 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | inject-tli-mappings | function<eager-inv> | none |  | N/A | maps scalar libcalls to vector ones; vectors deferred |  |
 | -O3 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O3 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O3 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | loop-load-elim | function<eager-inv> | match | loop-load-elim@1400:Partial |  |  |  |
-| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1438:Partial |  |  |  |
 | -O3 | Late | slp-vectorizer | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
 | -O3 | Late | vector-combine | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
-| -O3 | Late | loop-unroll<O3> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
+| -O3 | Late | loop-unroll<O3> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | transform-warning | function<eager-inv> | none |  | N/A | diagnostic for failed pragmas; no output |  |
-| -O3 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -O3 | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O3 | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -O3 | Late | licm<allowspeculation> | function<eager-inv>/loop-mssa | match | licm@1508:Translated |  |  |  |
-| -O3 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -O3 | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | instsimplify | function<eager-inv> | match | instsimplify@1662:Translated |  |  |  |
-| -O3 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -O3 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -O3 | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -O3 | Late | tailcallelim | function<eager-inv> | match | tailrec@1677:Translated |  |  |  |
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1682:Partial |  |  |  |
 | -O3 | Late | annotation-remarks | function | none |  | N/A | remarks off |  |
@@ -565,12 +565,12 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | coro-early |  | none |  | N/A | coroutines: no frontend |  |
 | -O3 | Module | openmp-opt |  | none |  | N/A | OpenMP: no frontend |  |
 | -O3 | Module | ipsccp |  | none |  | EXECUTED (outside the registry) | ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's |  |
-| -O3 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | unassigned (coordinator, 10-26) |
+| -O3 | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | w-6, 11-09 |
 | -O3 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O3 | Module | always-inline |  | none |  | EXECUTED (outside the registry) | walk (the CGSCC walk's inliner) |  |
 | -O3 | Module | inline | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | walk, and interprocedural (inlines again after the clones) |  |
 | -O3 | Module | function-attrs<skip-non-recursive-function-attrs> | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | interprocedural (states what each body does); not compared pass by pass |  |
-| -O3 | Module | argpromotion | cgscc/devirt<4> | none |  | MISSING | -O3 only; argpromotion.rs exists, where it runs is not in the registry: unverified | unassigned (coordinator, 10-26) |
+| -O3 | Module | argpromotion | cgscc/devirt<4> | none |  | MISSING | -O3 only; argpromotion.rs exists, where it runs is not in the registry: unverified | w-6, 11-09 |
 | -O3 | Module | openmp-opt-cgscc | cgscc/devirt<4> | none |  | N/A | OpenMP: no frontend |  |
 | -O3 | Module | function-attrs | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | interprocedural (states what each body does); not compared pass by pass |  |
 | -O3 | Module | coro-split | cgscc/devirt<4> | none |  | N/A | coroutines: no frontend |  |
@@ -580,16 +580,16 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O3 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
 | -O3 | Module | elim-avail-extern |  | none |  | EXECUTED (outside the registry) | available-externally |  |
-| -O3 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | unassigned (coordinator, 10-26) |
+| -O3 | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O3 | Module | recompute-globalsaa |  | none |  | N/A | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) |  |
 | -O3 | Module | alloc-token |  | none |  | N/A | clang option, off |  |
 | -O3 | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O3 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | unassigned (coordinator, 10-26) |
+| -O3 | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
 | -O3 | Module | cg-profile |  | none |  | N/A | profile data |  |
 | -O3 | Module | rel-lookup-table-converter |  | none |  | N/A | relative lookup tables are a PIC feature; no PIC targets |  |
 | -O3 | Module | lower-comment-string |  | none |  | N/A | #pragma comment strings |  |
 | -Os | Early | ee-instrument<> | function<eager-inv> | none |  | N/A | -pg/-finstrument-functions: no frontend asks for it |  |
-| -Os | Early | lower-expect | function<eager-inv> | none |  | MISSING | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Early | lower-expect | function<eager-inv> | none |  | MISSING | no llvm.expect reaches MIR: llrm-c compiles __builtin_expect as a call of an undefined `__builtin_expect_` (a link error, not a wrong answer); the fix is identity plus a branch hint in the frontend; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -Os | Early | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | decide@1178:Partial |  |  |  |
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | match | sroa@1179:Translated |  |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | match | earlycse@1180:Translated |  |  |  |
@@ -601,17 +601,17 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | runs only on a target with divergent branches; x86 has none |  |
 | -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | jumpthreading@668:Translated |  |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | cvp@669:Translated |  |  |  |
-| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@675:Partial |  |  |  |
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |  |
 | -Os | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | aggressive-instcombine@678:Partial |  |  |  |
-| -Os | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -Os | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | tailrec@688:Translated |  |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | decide@690:Partial |  |  |  |
 | -Os | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | reassociate@696:Translated + algebraic@696:Old |  |  |  |
-| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | none |  | MISSING | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | floatloop@724:Old + licm@724:Translated |  |  |  |
 | -Os | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |  |
 | -Os | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | match | licm@730:Translated |  |  |  |
@@ -620,12 +620,12 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |  |
 | -Os | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopidiom@737:Translated + loopidioms@737:Old |  |  |  |
 | -Os | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | indvars@738:Partial |  |  |  |
-| -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | loopdeletion@749:Translated |  |  |  |
 | -Os | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | match | unroll@753:Translated + indvars@753:Translated |  |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sroa@776:Translated |  |  |  |
 | -Os | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -Os | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -Os | Simplify | gvn<> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | inferspace@787:Old + gvn@787:Translated |  |  |  |
 | -Os | Simplify | sccp | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | sccp@792:Translated |  |  |  |
 | -Os | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | bdce@797:Translated |  |  |  |
@@ -643,35 +643,35 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | match | combine@837:Partial + fold@837:Old + dead@837:Old |  |  |  |
 | -Os | Simplify |  |  | ours-only | 764: loopsimplify@764 + lcssa@764 |  |  |  |
 | -Os | Simplify |  |  | ours-only | 772: loopsimplify@772 + lcssa@772 |  |  |  |
-| -Os | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | drop-unnecessary-assumes | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | float2int | function<eager-inv> | match | float2int@1594:Translated |  |  |  |
-| -Os | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | unassigned (coordinator, 10-26) |
-| -Os | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | lower-constant-intrinsics | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -Os | Late | loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count> | function<eager-inv>/loop | none |  | MISSING | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) | w-3 (w-5 if silent at 09:00), 11-09 |
+| -Os | Late | loop-deletion | function<eager-inv>/loop | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | loop-interchange | function<eager-inv>/loop | match | loop-interchange@1631:Translated |  |  |  |
-| -Os | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | loop-distribute | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | inject-tli-mappings | function<eager-inv> | none |  | N/A | maps scalar libcalls to vector ones; vectors deferred |  |
 | -Os | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -Os | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -Os | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | loop-load-elim | function<eager-inv> | match | loop-load-elim@1400:Partial |  |  |  |
-| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1438:Partial |  |  |  |
 | -Os | Late | slp-vectorizer | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
 | -Os | Late | vector-combine | function<eager-inv> | none |  | N/A | vectors deferred (user ruling 10-20), -sse target |  |
-| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
-| -Os | Late | loop-unroll<O2> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
+| -Os | Late | loop-unroll<O2> | function<eager-inv> | none |  | MISSING | the late loop-unroll<O2>; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | transform-warning | function<eager-inv> | none |  | N/A | diagnostic for failed pragmas; no output |  |
-| -Os | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | unassigned (coordinator, 10-26) |
+| -Os | Late | sroa<preserve-cfg;aggregate-to-vector> | function<eager-inv> | none |  | MISSING | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Late | infer-alignment | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -Os | Late | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | none |  | MISSING | the three late runs; ours has no combine slot in the late list | w-4, 11-09 |
 | -Os | Late | licm<allowspeculation> | function<eager-inv>/loop-mssa | match | licm@1508:Translated |  |  |  |
-| -Os | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | alignment-from-assumptions | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-1, 11-09 |
+| -Os | Late | loop-sink | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | instsimplify | function<eager-inv> | match | instsimplify@1662:Translated |  |  |  |
-| -Os | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
-| -Os | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | unassigned (coordinator, 10-26) |
+| -Os | Late | div-rem-pairs | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Late | mergeicmps | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Late | expand-memcmp | function<eager-inv> | none |  | MISSING | ablation 0 of 12 IRs | w-4, 11-09 |
 | -Os | Late | tailcallelim | function<eager-inv> | match | tailrec@1677:Translated |  |  |  |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | match | simplifycfg@1682:Partial |  |  |  |
 | -Os | Late | annotation-remarks | function | none |  | N/A | remarks off |  |
@@ -683,7 +683,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Module | coro-early |  | none |  | N/A | coroutines: no frontend |  |
 | -Os | Module | openmp-opt |  | none |  | N/A | OpenMP: no frontend |  |
 | -Os | Module | ipsccp |  | none |  | EXECUTED (outside the registry) | ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's |  |
-| -Os | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | unassigned (coordinator, 10-26) |
+| -Os | Module | called-value-propagation |  | none |  | MISSING | indirect calls only; not measured | w-6, 11-09 |
 | -Os | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -Os | Module | always-inline |  | none |  | EXECUTED (outside the registry) | walk (the CGSCC walk's inliner) |  |
 | -Os | Module | inline | cgscc/devirt<4> | none |  | EXECUTED (outside the registry) | walk, and interprocedural (inlines again after the clones) |  |
@@ -697,11 +697,11 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Module | globalopt |  | none |  | EXECUTED (outside the registry) | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -Os | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
 | -Os | Module | elim-avail-extern |  | none |  | EXECUTED (outside the registry) | available-externally |  |
-| -Os | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | unassigned (coordinator, 10-26) |
+| -Os | Module | rpo-function-attrs |  | none |  | MISSING | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -Os | Module | recompute-globalsaa |  | none |  | N/A | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) |  |
 | -Os | Module | alloc-token |  | none |  | N/A | clang option, off |  |
 | -Os | Module | globaldce |  | none |  | EXECUTED (outside the registry) | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -Os | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | unassigned (coordinator, 10-26) |
+| -Os | Module | constmerge |  | none |  | MISSING | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
 | -Os | Module | cg-profile |  | none |  | N/A | profile data |  |
 | -Os | Module | rel-lookup-table-converter |  | none |  | N/A | relative lookup tables are a PIC feature; no PIC targets |  |
 | -Os | Module | lower-comment-string |  | none |  | N/A | #pragma comment strings |  |
