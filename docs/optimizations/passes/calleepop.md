@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:cbe3c14afad202a5ef8a1f25dcce5722e362ee6ff11dee2afe8911ec6b1d24ce -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:3663592e3a22a72e5b62998f4f5df220cfdf7aa5439785b63b932c1655ef4f39 -->
 
 # calleepop
 
@@ -47,15 +47,15 @@ its convention.
 | [`useFastCCForInternalCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8196): always true here | none | MATCH |
 | what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `watcall32` at m32, the callee-pop twin at m16 | DEVIATE CC1 |
 
-DEVIATE CC1 (owner funcattrs-port, review 2026-11-05). Reason: on the 486 and
-P5 an argument register costs no more than a stack slot, and `watcall32` has
-four of them. Cost, ours against the pin's `fastcc` (`LLRM_PIN_FASTCC=1`
+DEVIATE CC1 (owner funcattrs-port, review 2026-11-05). Reason: on the 486
+and P5 an argument register costs no more than a stack slot, and `watcall32`
+has four of them. Cost, ours against the pin's `fastcc` (`LLRM_PIN_FASTCC=1`
 builds the latter), m32, 486 model, f36fd3559b: the 71 rows' clocks (code
 bytes) at -O1 -0.9% (+0.1%), -O2 -0.2% (+0.6%), -O3 -0.2% (+0.4%), -Os +0.2%
 (-0.1%); recursion moves it most, `rectwo` -9.6% at -O1, `x_hanoi2` +32% at
 -Os. QCport, 62 modules, bytes ours/pin: -O1 299137/299678, -O2
-317103/317209, -O3 342916/343179, -Os 238865/239002 (+0.06%). Exit: adopt the
-pin's `fastcc` when its rows are no worse; they are mixed, so not yet.
+317103/317209, -O3 342916/343179, -Os 238865/239002 (+0.06%). Exit: adopt
+the pin's `fastcc` when its rows are no worse; they are mixed, so not yet.
 
 ## Example
 Before:
