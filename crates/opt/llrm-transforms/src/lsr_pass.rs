@@ -56,8 +56,12 @@ impl FunctionPass for LoopStrengthReduce {
         "lsr"
     }
 
+    /// True: the pin's `LoopStrengthReducePass::run` returns
+    /// `getLoopPassPreservedAnalyses()`, which does not preserve GlobalsAA. A
+    /// pointer induction variable over a global array makes its address
+    /// escape, so the module's `GlobalsModRef` is worked out again after `lsr`.
     fn adds_memory_operations(&self) -> bool {
-        false
+        true
     }
 
     fn run(
