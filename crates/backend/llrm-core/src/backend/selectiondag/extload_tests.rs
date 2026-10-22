@@ -2,7 +2,6 @@ use super::actions::LoadExt;
 use super::dump::normalized;
 use super::*;
 
-
 /// An extending load keeps its narrow memory type and prints the
 /// extension as the pin does (`zext from i8`); a plain load prints
 /// neither. Loads were never extending, so a combine could not make one.

@@ -99,7 +99,8 @@ pub struct MemInfo {
     pub align: u32,
     pub volatile: bool,
     pub base: MemBase,
-    /// The extension of a load narrower than its result (`LoadExtType`); none for a plain load.
+    /// The extension of a load narrower than its result (`LoadExtType`); none
+    /// for a plain load.
     pub ext: Option<super::actions::LoadExt>,
 }
 
