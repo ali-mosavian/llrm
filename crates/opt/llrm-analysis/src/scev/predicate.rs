@@ -1016,16 +1016,51 @@ impl ScalarEvolution {
             || self.is_known_via_non_recursive_reasoning(cx, pred, lhs, rhs)
     }
 
-    /// `isKnownViaInduction`. SEAM (S5): it asks the loop guards, which are
-    /// the rest of S5.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L11394
+    /// `isKnownViaInduction`: the predicate holds on entry to the innermost
+    /// loop the two expressions use and on its backedge, for their
+    /// post-increment forms.
     fn is_known_via_induction(
         &mut self,
-        _cx: &Cx,
-        _pred: IntPredicate,
-        _lhs: Scev,
-        _rhs: Scev,
+        cx: &Cx,
+        pred: IntPredicate,
+        lhs: Scev,
+        rhs: Scev,
     ) -> bool {
-        false
+        // First collect all loops.
+        let mut loops_used = IdSet::new();
+        self.get_used_loops(lhs, &mut loops_used);
+        self.get_used_loops(rhs, &mut loops_used);
+        let used: Vec<BlockId> = loops_used.iter().collect();
+        // The loops form a linear order by domination: the innermost is the one
+        // no other loop's header is properly dominated by.
+        let Some(&first) = used.first() else { return false };
+        let mdl = used.iter().copied().fold(first, |best, one| {
+            if cx.tree.properly_dominates(best, one) { one } else { best }
+        });
+
+        // Get init and post increment value for LHS.
+        let (lhs_init, lhs_post) = self.split_into_init_and_post_inc(cx, mdl, lhs);
+        // If LHS contains unknown non-invariant SCEV then bail out.
+        if lhs_init == self.get_could_not_compute() {
+            return false;
+        }
+        // Get init and post increment value for RHS.
+        let (rhs_init, rhs_post) = self.split_into_init_and_post_inc(cx, mdl, rhs);
+        if rhs_init == self.get_could_not_compute() {
+            return false;
+        }
+        // It is possible that init SCEV contains an invariant load but it does
+        // not dominate MDL and is not available at MDL loop entry, so we should
+        // check it here.
+        if !self.is_available_at_loop_entry(cx, lhs_init, mdl) || !self.is_available_at_loop_entry(cx, rhs_init, mdl) {
+            return false;
+        }
+
+        // It seems backedge guard check is faster than entry one so in some
+        // cases it can speed up whole estimation by short circuit.
+        self.is_loop_backedge_guarded_by_cond_pred(cx, mdl, pred, lhs_post, rhs_post)
+            && self.is_loop_entry_guarded_by_cond_pred(cx, mdl, pred, lhs_init, rhs_init)
     }
 
     /// `getUsedLoops`: the loops of the add recurrences in `s`.
