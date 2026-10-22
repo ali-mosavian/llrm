@@ -25,7 +25,7 @@
 //! (`return_pops`).
 //!
 //! Where the description gives a private function a convention of its own
-//! (`private`, as the x86 m32 description does with `watcall32`), every
+//! (`private`, as the x86 m32 description does with `fastcc32`), every
 //! internal, non-variadic function whose convention may be replaced takes that
 //! one, with the calls of it, under any ABI the program has. No price is asked:
 //! registers cost no more than the stack at either end.
@@ -40,27 +40,31 @@
 //! | [`hasChangeableCCImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1700) | `direct_only` and the plain-call test | MATCH |
 //! | [`ChangeCalleesToFastCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1673) | the call-site loop in `run` | MATCH |
 //! | [`useFastCCForInternalCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8196): always true here | none | MATCH |
-//! | what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `watcall32` at m32, the callee-pop twin at m16 | DEVIATE CC1 |
+//! | what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `fastcc32` at m32 (the pin's); the callee-pop twin at m16 | MATCH |
 //!
-//! DEVIATE CC1 (owner funcattrs-port, review 2026-11-05). Reason: on the 486
-//! and P5 an argument register costs no more than a stack slot, and `watcall32`
-//! has four of them. Cost: the pin's `fastcc` (`LLRM_PIN_FASTCC=1`) relative to
-//! ours, m32, 486 model, f36fd3559b, 71 rows; negative is the pin's better.
+//! CC1 is closed: the private m32 convention is the pin's `fastcc`
+//! (`fastcc32`). `LLRM_PRIVATE_WATCALL=1` gives `watcall32` back, to compare;
+//! it is no switch for production. Priced on the 71 m32 rows (486 model) and
+//! QCport (62 modules, `qcport.py`), dda83cd1c5, the same binary on both arms;
+//! new against the old `watcall32` default:
 //!
-//! | level | clocks | code bytes | rows that decide |
+//! | level | clocks | code bytes | QCport bytes |
 //! |---|---|---|---|
-//! | -O1 | -0.9% (-0.1% without the two) | +0.1% | `rectwo` -9.6%, `frames` -1.6% |
-//! | -O2 | -0.2% (+0.1%) | +0.6% | `rectwo` -9.8%, `frames` -0.1% |
-//! | -O3 | -0.2% (+0.0%) | +0.4% | the same two |
-//! | -Os | +0.2% | -0.1% | `x_hanoi2` +32% |
+//! | -O1 | -0.9% | +0.05% | +0.18% |
+//! | -O2 | -0.2% | +0.6% | +0.03% |
+//! | -O3 | -0.2% | +0.4% | +0.08% |
+//! | -Os | +0.2% | -0.1% | +0.06% |
 //!
-//! QCport (62 modules, `qcport.py`), bytes pin/ours: -O1 299678/299137, -O2
-//! 317209/317103, -O3 343179/342916, -Os 239002/238865 (+0.06%). Exit: adopt
-//! the pin's `fastcc` if it is no worse. Met on clocks at -O1..-O3, by two
-//! recursive rows; not met on code bytes at any level, nor on clocks at -Os.
-//! Re-price 2026-11-05, after the allocator work (frame traffic decides these
-//! rows); a level-dependent choice (pin's at -O1..-O3, ours at -Os) is the
-//! option if the clocks hold.
+//! The exit ("adopt the pin's `fastcc` if no worse") is met on clocks at
+//! -O1..-O3, by `rectwo` (-9.6%) and `fib` (-5.0%); d_faces compile Ir -0.28%.
+//! Rows above the old default are numbered, owner funcattrs-port, exit "tune
+//! after the allocator work" (the cost is frame traffic around calls), review
+//! 2026-11-13:
+//! - CC2, -Os clocks +0.2%: `x_hanoi2` +32.2%, `queens` +4.9%, `bintree` +2.0%.
+//! - CC3, -O1..-O3 rows: `x_hanoi2` +9.4% at -O1 and +3.8% at -O2 and -O3,
+//!   `queens` +8.2% at -O2.
+//! - CC4, code bytes +0.05%, +0.6%, +0.4% at -O1..-O3 (`quicksort` and
+//!   `bintree` +64 and +48 B at -O2), QCport +0.03% to +0.18%.
 //!
 //! # Example
 //! Before:

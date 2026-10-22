@@ -512,7 +512,9 @@ fn test_division_and_variable_shifts() {
 
 /// A variable index is scaled, and an address only accesses read is their
 /// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
-/// so no `ss:` override: it cost a byte and a clock at each access.
+/// so no `ss:` override: it cost a byte and a clock at each access. The
+/// doubled index is made once and both accesses use it (7a574ed3ed: precse
+/// no longer reads a load as touching the flags, so the two `i + i` are one).
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -532,15 +534,12 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
-            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
             "add si, si",
+            "mov word ptr [bp+si-8], 5",
             "mov ax, word ptr [bx+si+2]",
-            "pop di",
             "pop si",
             "leave",
             "retf"
@@ -722,7 +721,9 @@ no:
     let got = listing(text, "f");
     // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
     // Greedy's register choice (#2312): the old pin's instructions, memory
-    // operands, prefixes and adjacent dependencies, other registers.
+    // operands, prefixes and adjacent dependencies, other registers. The
+    // extensions and the negate sink into the arm that reads them (a88a614969,
+    // MachineSink outside size builds): the `no` path runs none of them.
     assert_eq!(
         got,
         [
@@ -731,15 +732,16 @@ no:
             "L0_0:",
             "mov cx, word ptr [bp+6]",
             "cmp cx, word ptr [bp+8]",
-            "setl dl",
-            "movzx ax, dl",
-            "neg ax",
+            "setl al",
             "cmp cx, 3",
-            "sete bl",
-            "movzx cx, bl",
-            "and dl, bl",
+            "sete cl",
+            "mov dl, al",
+            "and dl, cl",
             "je L0_8",
             "L0_6:",
+            "movzx ax, al",
+            "neg ax",
+            "movzx cx, cl",
             "add ax, cx",
             "pop bp",
             "retf",
@@ -749,7 +751,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (18, 2));
+    assert_eq!(counts(&got), (19, 2));
 }
 
 #[test]
@@ -2490,11 +2492,26 @@ join:
   ret i16 %v
 }
 ";
-    // The byte test reads its cell where it runs: the load crosses the address
-    // arithmetic.
+    // The address arithmetic sinks into the arm that makes the phi's input
+    // (a88a614969, MachineSink outside size builds); bx is defined on both
+    // paths before the load.
     assert_eq!(
-        listing(text, "f")[3..7],
-        ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]
+        listing(text, "f")[3..],
+        [
+            "mov bx, word ptr [bp+6]",
+            "cmp byte ptr [bp+8], 0",
+            "je L0_3",
+            "L0_2:",
+            "add bx, bx",
+            "add bx, offset a",
+            "jmp L0_4",
+            "L0_3:",
+            "mov bx, offset a",
+            "L0_4:",
+            "mov ax, word ptr [bx]",
+            "pop bp",
+            "retf"
+        ]
     );
 }
 
