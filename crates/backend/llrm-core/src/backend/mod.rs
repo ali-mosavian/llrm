@@ -325,7 +325,6 @@ pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;
 pub mod spillplacement;
-pub mod splitkit;
 pub mod ssarepair;
 pub mod ssaspill;
 pub mod storecombine;

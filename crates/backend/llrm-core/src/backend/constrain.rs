@@ -819,7 +819,6 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::{constrained, hoisted, required};
-    use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
     use crate::backend::{allocate, select, spiller, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -868,21 +867,28 @@ mod tests {
         Insn::new(at, Some((at, at + 2)), Some(what), defines.to_vec(), uses.to_vec())
     }
 
+    /// The assignment the pins give, and a register of its own for every other
+    /// value: nothing here needs an allocator.
     fn allocated(
         body: &LirBody,
         pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
-        allocate::allocate(
-            body,
-            Some(pins),
-            None,
-            None,
-            None,
-            ProfileOrName::Name("386"),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("allocates")
+        let mut values = pins.clone();
+        let mut spare = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI, RegId::DI].into_iter();
+        for one in body.insns() {
+            for value in one.defines.iter().chain(&one.uses) {
+                if !values.contains_key(value) {
+                    values.insert(*value, spare.next().expect("a register is left"));
+                }
+            }
+        }
+        allocate::Assignment {
+            r#where: values,
+            spilled: Default::default(),
+            cost: 0.0,
+            optimal: false,
+            why: "pins".to_owned(),
+        }
     }
 
     fn merged(
