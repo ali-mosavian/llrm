@@ -24,15 +24,20 @@
 //! `v1 := implicit_def; v2 := mov v1; v3 := add v4, v2`: `v2` is an `implicit_def`
 //! too, and `v3 := add v4, v2` reads `v2` as undef; both definitions go.
 //!
+//! A definition a phi still reads is left as `mov v, 0` (`left_as_zero`): the copy a
+//! phi makes of it reads a register, as before.
+//!
 //! # Used by
-//! Nothing yet: `isel` makes `implicit_def`s in the next piece of the translation
-//! (docs/working/process-implicit-defs-plan.md).
+//! `flow::machine_with`, after `SharedConstants`; `isel`'s `held` makes the
+//! `implicit_def`s of a poison or undef value a register holds.
 
 use std::sync::Arc;
 
 use crate::coalescer::pair::full_copy;
 use crate::model::ir::{Operation, Semantics};
+use crate::model::ir::Imm;
 use crate::model::lir::{Insn, LirBody};
+use crate::model::passes::LIRTransform;
 use crate::support::hash::HashSet;
 
 pub const IMPLICIT_DEF: &str = "implicit_def";
@@ -65,6 +70,62 @@ fn made_implicit(
     Arc::new(made)
 }
 
+/// `body` with each `implicit_def` that is left a `mov v, 0` (DEVIATE PI-2).
+pub fn left_as_zero(body: &LirBody) -> LirBody {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .map(|one| {
+                    let Some(value) = implicit_def_of(one) else { return Arc::clone(one) };
+                    let width = match one.what.as_ref().map(|what| &what.dests[0]) {
+                        Some(crate::model::ir::Loc::Held(held)) => held.width,
+                        _ => return Arc::clone(one),
+                    };
+                    let mut made = (**one).clone();
+                    made.what = Some(Semantics {
+                        op: Operation::Move,
+                        name: Some("mov".to_owned()),
+                        dests: one.what.as_ref().expect("semantics").dests.clone(),
+                        sources: vec![crate::model::ir::Loc::Imm(Imm { value: 0, width, address: None })],
+                        ..Semantics::new(Operation::Move)
+                    });
+                    made.defines = vec![value];
+                    Arc::new(made)
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
+/// The pass as a phase: processed, the rest left as zero.
+pub struct ProcessImplicitDefs;
+
+impl LIRTransform for ProcessImplicitDefs {
+    fn class_name(&self) -> &'static str {
+        "ProcessImplicitDefs"
+    }
+
+    fn name(&self) -> &str {
+        "processimpdefs"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| implicit_def_of(one).is_some()) {
+            return Ok(body);
+        }
+        Ok(left_as_zero(&processed(&body)))
+    }
+}
+
 /// `body` with every `implicit_def` processed.
 pub fn processed(body: &LirBody) -> LirBody {
     let mut current = body.clone();
@@ -89,13 +150,20 @@ pub fn processed(body: &LirBody) -> LirBody {
                     .insns
                     .iter()
                     .map(|one| {
-                        let flagged: Vec<u32> = one.uses.iter().copied().filter(|v| defined.contains(v)).collect();
+                        let flagged: Vec<u32> = one
+                            .uses
+                            .iter()
+                            .copied()
+                            .filter(|v| defined.contains(v))
+                            .collect();
                         if flagged.is_empty() {
                             return Arc::clone(one);
                         }
                         changed = true;
                         let mut made = (**one).clone();
                         made.uses.retain(|value| !flagged.contains(value));
+                        // The register it was to arrive in is no longer asked for: the value is any.
+                        made.requires.retain(|(held, _)| !flagged.contains(&held.value));
                         made.undefs.extend(flagged.iter().copied());
                         // A copy that now reads nothing is an implicit def itself.
                         if made.uses.is_empty()

@@ -328,6 +328,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
+    entry("processimpdefs@2", Backend, "process-implicit-defs (ProcessImplicitDefs.cpp)", Translated, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     partial(
         "machinecse@4",
