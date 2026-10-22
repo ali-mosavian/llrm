@@ -471,10 +471,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 EFLAGS copy lowering",
-        Match,
+        Deviate,
         "flagscopy.rs",
         "",
-        "translated (registry flagscopy@5) over an explicit flags copy; isel makes none yet (DEVIATE R1). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "CG9: translated (registry flagscopy@5) over an explicit flags copy, the pseudo pair standing for the pin's COPY $eflags search (R1 one block, R2); reason: isel makes no flags copy; cost: none; exit: an isel producer of a flags copy; owner w-5; review 2026-11-19. Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -778,10 +778,10 @@ const ROWS: &[Row] = &[
     row("X86 vzeroupper inserter", Na, "", "", "AVX only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs"),
     row(
         "X86 Byte/Word Instruction Fixup",
-        Missing,
+        Deviate,
+        "peephole.peep group byte_word_fixup",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a peephole group (W2), one rule per pin function with its permalink, not a pass; reason: the liveness and encoding facts are the peephole's; cost: none known; exit: a Rust pass once those facts reach LIRTransforms; owner w-5; review 2026-11-19. W1: real mode only if not longer. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
     ),
     row(
         "X86 Atom pad short functions",
