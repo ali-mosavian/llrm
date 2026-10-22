@@ -41,7 +41,7 @@ fn converted(
         .collect();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = super::converted(context, &layout, function, &outer, &mut |id: GlobalId| sizes[id.0 as usize]);
+    let changed = super::converted(context, &layout, function, &outer, &|id: GlobalId| sizes[id.0 as usize]);
     let after = printed(&module);
     if changed {
         let want: Vec<_> =
@@ -147,34 +147,26 @@ fn a_function_without_a_table_call_asks_no_size() {
     ));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let mut asked = 0;
-    let changed = super::converted(context, &layout, function, &outer, &mut |_| {
-        asked += 1;
+    let asked = std::cell::Cell::new(0);
+    let changed = super::converted(context, &layout, function, &outer, &|_| {
+        asked.set(asked.get() + 1);
         Size::Unknown
     });
     assert!(!changed);
-    assert_eq!(asked, 0);
+    assert_eq!(asked.get(), 0);
 }
 
-/// A table call asks the size of each entry, and an `Unknown` answer converts
-/// nothing: the manager counts and runs the pass again.
+/// A table whose entries' sizes no one knows converts nothing.
 #[test]
-fn an_unknown_size_converts_nothing_and_is_asked() {
+fn an_unknown_size_converts_nothing() {
     let mut module = parsed(&format!("{DOS}{}", example("internal constant", "")));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let mut asked = Vec::new();
-    let changed = super::converted(context, &layout, function, &outer, &mut |id| {
-        asked.push(id);
-        Size::Unknown
-    });
-    assert!(!changed);
-    assert_eq!(asked.len(), 4, "every entry is asked, so one count serves the table");
+    assert!(!super::converted(context, &layout, function, &outer, &|_| Size::Unknown));
 }
 
-/// Through the pass manager: the first run asks the sizes, the manager counts
-/// them and runs the pass over @f again, and the table is a switch. Without
-/// the rerun the table stayed a table for every real compile.
+/// Through the pass manager: it counts the functions the table names, and the
+/// table is a switch.
 #[test]
 fn the_manager_counts_the_callees_and_runs_the_pass_again() {
     let mut module = parsed(&format!("{DOS}{}", example("internal constant", "")));
@@ -188,4 +180,70 @@ fn the_manager_counts_the_callees_and_runs_the_pass_again() {
     let want: Vec<_> =
         INPUTS.iter().map(|input| Val::Int { bits: mask(16) & expected(input) as u128, width: 16 }).collect();
     assert_eq!(results(&module, INPUTS), want, "{after}");
+}
+
+/// `x_funcptr` as the C frontend makes it at m32: a table that is a packed
+/// struct of pointers, indexed through `[4 x i8]` by a 32-bit value.
+#[test]
+fn a_table_that_is_a_packed_struct_of_pointers_is_a_switch() {
+    let text = "target datalayout = \"e-p:32:32-i32:32-n8:16:32\"
+
+define i32 @f0(i32 %x) {
+entry:
+  %r = add i32 %x, 3
+  ret i32 %r
+}
+define i32 @f1(i32 %x) {
+entry:
+  %r = mul i32 %x, 5
+  ret i32 %r
+}
+@t = internal constant <{ ptr, ptr }> <{ ptr @f0, ptr @f1 }>
+
+define i32 @f(i32 %n, i32 %x) {
+entry:
+  %i = and i32 %n, 1
+  %p = getelementptr inbounds nuw [4 x i8], ptr @t, i32 %i
+  %fn = load ptr, ptr %p
+  %r = call i32 %fn(i32 %x)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let sizes: Vec<Size> = module
+        .globals
+        .iter()
+        .map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => {
+                Size::Instructions(function.live_instructions())
+            }
+            _ => Size::Declaration,
+        })
+        .collect();
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = super::converted(context, &layout, function, &outer, &|id: GlobalId| sizes[id.0 as usize]);
+    assert!(changed, "{}", printed(&module));
+}
+
+/// Through the whole pipeline in LLVM's order: `x_funcptr` compiled with the
+/// pass in the dist and kept its four indirect calls: the pipeline's passes
+/// run inside one `pipeline` pass, which skips a pass that found nothing on a
+/// second run, and the first run had found nothing for want of the sizes.
+#[test]
+fn the_pipeline_makes_the_table_call_a_switch() {
+    let text = format!("{DOS}{}", example("internal constant", "").replace("define i16 @f(", "define i16 @main(i16 %n, i16 %x) {\nentry:\n  %r = call i16 @f(i16 %n, i16 %x)\n  ret i16 %r\n}\n\ndefine i16 @f("));
+    let mut module = parsed(&text);
+    let applied = crate::pipeline::Applied {
+        options: crate::pipeline::Options { llvm_order: true, pre: true, ..Default::default() },
+        ..Default::default()
+    };
+    llrm_mir::program::Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        crate::pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("call i16 %"), "{after}");
 }

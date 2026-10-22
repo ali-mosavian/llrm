@@ -250,10 +250,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "CodeGen Prepare",
-        Missing,
-        "addresssink.rs (sinkCmpExpression, address sinking), extload.rs (ext-load promotion)",
+        Executed,
+        "addresssink.rs (sinkCmpExpression, address-phi sink), cgpaddr.rs (optimizeMemoryInst), extload.rs (ext-load promotion)",
         "-disable-cgp",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) partial; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1611 instr 6318 B, pin-with 1412 instr 5482 B, pin-without 1482 instr 5642 B (6 programs); -Os: ours 486 instr 1392 B, pin-with 463 instr 1378 B, pin-without 488 instr 1474 B (5 programs)",
+        "w-4; 2026-10-23: address-mode sinking translated (cgpaddr.rs, DEVIATE CGP1: no promoted extensions, no phi/select combiner); compare sink in addresssink.rs; ext-load promotion in extload.rs; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1611 instr 6318 B, pin-with 1412 instr 5482 B, pin-without 1482 instr 5642 B (6 programs); -Os: ours 486 instr 1392 B, pin-with 463 instr 1378 B, pin-without 488 instr 1474 B (5 programs)",
     ),
     row(
         "Exception handling preparation",
@@ -658,7 +658,7 @@ const ROWS: &[Row] = &[
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
         Deviate,
-        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, not yet called: FO-1)",
+        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, FO-1) and framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate), not yet called: CG7",
         "",
         "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
@@ -731,7 +731,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "jumps/placement",
         "-disable-block-placement",
-        "CG5: placement is translated in part (jumps/placement, #2629); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%) and 917988 without the pass; clocks without it +0.84% of 32.19 M; -O3 733888 against 726139 (+1.1%); executed `jmp` 112791 against 94444 at -O2; cost: the 1.5% of taken branches (nbody_single, queens, x_adler, x_ll_div, x_crc32 the largest); exit: per-program attribution by w-2 (docs/working/tail-dup-placement.md), translate what it names; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
+        "CG5: placement is translated (jumps/placement, #2629; its deviations D3-D6, D20-D22 in jumps-placement-check.md); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%), -O3 +1.1%; the loops behind the residual are not placement: nbody_single = LSR's induction variable (w-5), x_adler = the compare sharing the subtract's flags (cmpsub@1, #3773) and the EmitLoweredSelect orientation (measured +3509 B, not landed, tail-dup-placement.md); cost: the 1.5% of taken branches; exit: those two causes, then re-measure with tools/pairs/bench_pin.py; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
     ),
     row(
         "Insert fentry calls",
@@ -779,9 +779,9 @@ const ROWS: &[Row] = &[
     row(
         "X86 Byte/Word Instruction Fixup",
         Deviate,
-        "peephole.peep group byte_word_fixup",
+        "fixupbw.rs",
         "",
-        "CG8: a peephole group (W2), one rule per pin function with its permalink, not a pass; reason: the liveness and encoding facts are the peephole's; cost: none known; exit: a Rust pass once those facts reach LIRTransforms; owner w-5; review 2026-11-19. W1: real mode only if not longer. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with two deviations: W1 real mode rewrites only if not longer (the 0x66 prefix), W3 a movsx within one register is refused; reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
     ),
     row(
         "X86 Atom pad short functions",

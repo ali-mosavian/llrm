@@ -179,6 +179,20 @@ def perf_needs_rows(title: str, description: str, files: list[str] | tuple[str, 
     return []
 
 
+MARKER = re.compile(r"^(<{7}|>{7})( |$)")
+
+
+def conflict_markers(base: str, head: str, cwd: Path = ROOT) -> list[str]:
+    """A file where an added line is a merge conflict marker (`<<<<<<<` or `>>>>>>>`): pushed to an open branch twice in a day, it would break every batch it joined."""
+    path, found = "", []
+    for line in git("diff", "-U0", base, head, cwd=cwd).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:]
+        elif line.startswith("+") and MARKER.match(line[1:]) and path not in found:
+            found.append(path)
+    return [f"{path}: an added line is a merge conflict marker; resolve the merge and push again" for path in found]
+
+
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
@@ -193,7 +207,7 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
     for path, page in dead_links(base, head, cwd):
         why.append(f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR")
     changed = subprocess.run(["git", "diff", "--name-only", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True).stdout.split()
-    return why + perf_needs_rows(title, description, changed) + assistant_mentions(title, description, base, head, cwd)
+    return why + conflict_markers(base, head, cwd) + perf_needs_rows(title, description, changed) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
@@ -532,9 +546,10 @@ FAST = os.environ.get("LAND_FAST") == "1"  # the user's call (2026-10-19): no sm
 MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
-def batch(prs: list, passes, land, refuse) -> None:
+def batch(prs: list, passes, land, refuse, offenders=None) -> None:
     """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
-    set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone."""
+    set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone. `offenders(prs)`,
+    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once."""
     if not prs:
         return
     if passes(prs):
@@ -544,9 +559,15 @@ def batch(prs: list, passes, land, refuse) -> None:
     if len(prs) == 1:
         refuse(prs[0])
         return
+    # A unit the head passes fails on the merged tree: the PRs that fail it alone are dropped by name and the rest are tested once, instead of a smoke per half.
+    if offenders and (named := [pr for pr in offenders(prs) if pr in prs]) and len(named) < len(prs):
+        for pr in named:
+            refuse(pr)
+        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders)
+        return
     middle = len(prs) // 2
-    batch(prs[:middle], passes, land, refuse)
-    batch(prs[middle:], passes, land, refuse)
+    batch(prs[:middle], passes, land, refuse, offenders)
+    batch(prs[middle:], passes, land, refuse, offenders)
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
@@ -630,6 +651,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     landed, refused = [], []
 
     left_out: dict[str, str] = {}
+    failed_units: set[str] = set()
 
     def passes_fast(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
@@ -649,6 +671,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return "; ".join(why)
             return ""
 
+        failed_units.clear()
         kept, out = fast_merge(group, merge_one)
         left_out.update(out)
         for number, why in out.items():
@@ -663,8 +686,28 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             changed = git("diff", "--name-only", BASE, "HEAD").split()
             if new := sorted(new_lib_failures(changed)):
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                failed_units.update(new)
                 return False
         return True
+
+    def offending(group: list[str]) -> list[str]:
+        """The PRs of `group` that fail the unit the batch failed, each merged alone on the head (the unit asked exactly, a minute at most per PR); none when no unit failed."""
+        units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
+        by_package: dict[str, set[str]] = {}
+        for package, test in units:
+            by_package.setdefault(package, set()).add(test)
+        if not by_package:
+            return []
+        named = []
+        for number in group:
+            clean_checkout(BASE)
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                continue
+            if any(failing_on_checkout(package, tests) for package, tests in by_package.items()):
+                named.append(number)
+        return named
 
     def passes(group: list[str]) -> bool:
         if FAST:
@@ -708,7 +751,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
-        batch(list(numbers), passes, land, lambda number: refused.append(number))
+        batch(list(numbers), passes, land, lambda number: refused.append(number), offending if FAST else None)
     print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
     return 1 if refused else 0
 
