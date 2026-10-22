@@ -59,7 +59,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 51 | X86 Avoid Store Forwarding Blocks | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 52 | X86 Suppress APX features for relocation | N/A |  |  | APX is 64-bit; features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 53 | X86 speculative load hardening | N/A |  |  | acts on the `speculative_load_hardening` attribute, never set. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
-| 54 | X86 EFLAGS copy lowering | MISSING | flag lanes (liveness.rs), stepflags.rs |  | funcattrs-port; 2026-11-13: changed code in 2 (-O2) and 2 (-Os) of 77 IRs |
+| 54 | X86 EFLAGS copy lowering | MATCH | flagscopy.rs |  | translated (registry flagscopy@5) over an explicit flags copy; isel makes none yet (DEVIATE R1). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs |
 | 55 | X86 DynAlloca Expander | N/A |  |  | the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: for `alloca i8, i32 %n` on i486-linux its llc emits the rounded `sub esp` with no pseudo and no probe; `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin |
 | 56 | Tile Register Pre-configure | N/A |  |  | AMX; features exclude it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 57 | Detect Dead Lanes | N/A |  |  | 0 of 77 IRs differ with the pin's switch off or the pass on (-O2 and -Os): changed code in 0 (-O2) and 0 (-Os) of 77 IRs; ours has lanes.rs with no pin counterpart on the i486 |
