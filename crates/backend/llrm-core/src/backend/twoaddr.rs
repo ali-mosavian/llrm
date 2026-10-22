@@ -1059,7 +1059,7 @@ mod tests {
         use crate::model::ir::Mem;
         let load = {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(3, 4)],
                 sources: vec![Loc::Mem(Mem::new(None, 4))],
                 ..Semantics::new(Operation::Move)
