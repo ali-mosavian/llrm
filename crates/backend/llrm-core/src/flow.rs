@@ -85,6 +85,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
     ("PushFold", "pushfold@6"),
@@ -161,6 +162,9 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // Flags kept across an instruction that clobbers them become a byte
+        // per condition (the pin: X86FlagsCopyLowering, every level).
+        Box::new(crate::backend::flagscopy::FlagsCopy),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),

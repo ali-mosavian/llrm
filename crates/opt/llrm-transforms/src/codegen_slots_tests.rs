@@ -471,10 +471,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 EFLAGS copy lowering",
-        Missing,
-        "flag lanes (liveness.rs), stepflags.rs",
+        Match,
+        "flagscopy.rs",
         "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "translated (registry flagscopy@5) over an explicit flags copy; isel makes none yet (DEVIATE R1). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
     ),
     row(
         "X86 DynAlloca Expander",

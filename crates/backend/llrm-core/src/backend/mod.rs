@@ -225,6 +225,7 @@ pub mod pointers;
 pub mod postings;
 pub mod postrasink;
 pub mod fixupsetcc;
+pub mod flagscopy;
 pub mod precse;
 pub mod pressuresink;
 pub mod pushfold;
