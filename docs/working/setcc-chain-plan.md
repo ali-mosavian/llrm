@@ -25,10 +25,15 @@ Lowering, per iteration of the merge loop:
 
 The branch wins on both CPUs for this shape.
 
+## The nhstutil leaf is another chain
+
+`static int is_tmp(const void *p){return p>=temps && p<temps+240;}` (repro `/tmp/nh2.c`; w-6's dumps `~/scratch/cause/nh-main.s` against `nh-fix.s`): both the pin's llc and ours emit `cmp; setae cl; cmp; setb al; and cl,al; movzx` (no `zext`-add), where main branches (`cmp; jae; ...; xor eax,eax / mov al,1`). The IR is an `and i1` of two compares used as a value: a different pattern with the same cost shape. With a variable bound our own output already branches (6 instructions, `jb` over a `setb`): the chain appears when the bounds are link-time constants.
+
+Price (i486 / P5): two `setcc` 4+4 / 1+1, `and` 1, `movzx` 3 / 3, two `cmp` 2 = 14 / 8; the branched form `cmp; jb; cmp; setb` is 1 + 3 + 1 + 4 = 9 on a taken branch, 6 not taken (i486), 5 / 3 on P5.
+
 ## Plan
 
-1. DEVIATE (next free number): on a target without cmov, `add x, zext(c)` and `zext(c)` feeding only an add are expanded to `select c, x+1, x` before `selects::lowered`, when `setcc + movzx + add` costs more than `jcc + alu_rr` from the cost table. The term is read from the target description, not from this loop's shape. Exit: the pin's lowering equals or beats main on the rows.
-2. First PR 2026-11-02: the expansion and a fail-first test (this repro under `LLRM_DEBUG`), rows pair on x_mergesort, qsort, bsearch, stft bq32, nhstutil; `qcport.py` -Os (bytes decide there: whether the rule applies at -Os is read from those bytes, not assumed).
+1. One cost-based rule over setcc chains, one DEVIATE (next free number), not a rule per shape: on a target without cmov, a chain of `setcc`s and their combiners (`and`/`or` of compares used as a value, `add x, zext(c)`, a `select` of those) is expanded to `select`s before `selects::lowered` when the chain costs more than the branched form. Both prices are sums over `timings.times` entries (`setcc`, `movzx`, `alu_rr`, `jcc`, `jcc_not_taken`) read through the target description. Exit: the pin's lowering equals or beats main on the rows. If the one rule cannot hold both shapes, it becomes two numbered rows.
+2. First PR 2026-10-30: the expansion and a fail-first test (this repro under `LLRM_DEBUG`), rows pair on x_mergesort, stft bq32, qsort, bsearch and every bench row that uses a short-circuit boolean (found by a grep of the sources for `&&`/`||` used as values; nothing worse than main per row); `qcport.py` -Os (bytes decide there: whether the rule applies at -Os is read from those bytes, not assumed).
 3. Priced against #3544's numbers before the PR.
 
-Not checked yet: the stft bq32 and nhstutil leaves; they are named by the row and share the cause only if their stage diff shows the same `zext` chain.
