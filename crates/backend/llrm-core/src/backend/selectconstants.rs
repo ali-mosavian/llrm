@@ -113,7 +113,7 @@ fn mask(width: u32) -> u128 {
 }
 
 /// An integer constant operand's signed value.
-fn constant(
+pub(crate) fn constant(
     context: &Context,
     operand: Operand,
 ) -> Option<i128> {
@@ -152,7 +152,7 @@ pub fn folded(
 }
 
 /// A new instruction before `select`, and its value.
-fn before(
+pub(crate) fn before(
     function: &mut Function,
     select: InstId,
     opcode: Opcode,
