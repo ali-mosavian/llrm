@@ -332,7 +332,7 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
 
     stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
-    assert set(failed) == {"ratchet:docs"} and "docs/optimizations/backend/jumps.md" in failed["ratchet:docs"] and "--sync" in failed["ratchet:docs"], failed
+    assert any("docs/optimizations/backend/jumps.md" in name for name in failed) and all("--sync" in why for why in failed.values()), failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
 
 
@@ -540,3 +540,21 @@ def test_integration_failures_name_the_red_tests_less_the_listed_ones():
 
     assert ps.integration_failures(["attribute"], run=run) == {"integration attribute::a_red_one"}
     assert ps.integration_failures([], run=run) == set()
+
+
+def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
+    """docsbuild --check was red on the base with 23 lines; one `ratchet:docs` name let a 24th through."""
+    import parity_squash as sq
+
+    class Done:
+        def __init__(self, text):
+            self.returncode, self.stdout, self.stderr = 1, text, ""
+
+    base = "".join(f"crates/a/f{n}.rs: no # Example\n" for n in range(23))
+    head = set(ps.docs_failures(run=lambda command: Done(base)))
+    merged = set(ps.docs_failures(run=lambda command: Done(base + "crates/a/new.rs: no # Example\n")))
+    assert len(head) == 23 and len(merged) == 24
+    why = sq.subset_refusals(head, merged, fixes=False)
+    assert why and "new.rs" in why[0], why
+    assert sq.subset_refusals(head, set(head), fixes=False) == []
+    assert sq.new_names({"ratchet:docs"}, merged) == []  # a head cached before the lines were named covers them
