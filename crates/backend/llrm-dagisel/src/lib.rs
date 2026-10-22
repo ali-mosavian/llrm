@@ -17,6 +17,7 @@
 pub mod dag;
 #[rustfmt::skip]
 pub mod generated;
+pub mod instr;
 pub mod interp;
 pub mod matcher;
 pub mod predicates;
