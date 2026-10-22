@@ -118,7 +118,7 @@ fn a_sum_of_two_arguments_goes_through() {
     assert_eq!(blocks.len(), 1, "{blocks:#?}");
     let names: Vec<&str> =
         blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
-    assert_eq!(names, ["mov", "add", "mov"], "{blocks:#?}");
+    assert_eq!(names, ["mov", "add", "mov", "ret"], "{blocks:#?}");
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
     assert!(blocks[0][2].starts_with("[Reg(Reg { register: EAX"), "the sum is returned in EAX: {blocks:#?}");
 }
