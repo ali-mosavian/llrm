@@ -95,22 +95,25 @@ b2:
     assert!(after.contains("icmp eq i16 %w, -1"), "{after}");
 }
 
-/// Another reader of the byte reads the truncated extension: the load has one
-/// reader, so selection folds it into the extending load.
+/// Another reader of the byte (here a store) leaves the load alone: reading
+/// `trunc E` kept the narrow and the wide value live together (grep.nib
+/// `_main`, +58 B).
 #[test]
-fn test_another_reader_of_the_byte_reads_the_truncated_extension() {
-    let after = run("define i8 @f(ptr %p, ptr %t, ptr %s) {
+fn test_a_load_with_another_reader_is_left() {
+    let text = "define i8 @f(ptr %p, ptr %t, ptr %s) {
 b0:
   %c = load i8, ptr %p
+  %lt = icmp sgt i8 %c, 0
   %w = sext i8 %c to i16
   store i8 %c, ptr %s
   %q = getelementptr i8, ptr %t, i16 %w
   %v = load i8, ptr %q
   ret i8 %v
 }
-");
-    assert!(after.contains("trunc i16 %w to i8"), "{after}");
-    assert!(after.contains("store i8 %0"), "{after}");
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let before = crate::testing::printed(&module);
+    assert_eq!(managed(&mut module, ExtLoad), before);
 }
 
 /// A load with no extension is left.

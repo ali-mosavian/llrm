@@ -6,22 +6,21 @@
 //! as the rewrite of MIR before isel.
 //!
 //! # How it works
-//! For a load whose value `E = sext/zext L` is made in the same block, the
-//! compares of `L` with a constant in that block compare `E` instead, with the
-//! constant extended the same way; every other reader of `L` reads
-//! `trunc E`. `L` is then read only by `E`, and isel selects the pair as one
-//! `movsx`/`movzx` from memory: the compare is on the wide register, not on a
-//! byte register that `E` must extend again.
+//! For a load whose value `E = sext/zext L` is made in the same block and
+//! whose other readers are all compares with a constant in that block, those
+//! compares compare `E` instead, with the constant extended the same way. `L`
+//! is then read only by `E`, and isel selects the pair as one `movsx`/`movzx`
+//! from memory: the compare is on the wide register, not on a byte register
+//! that `E` must extend again.
 //!
 //! A `zext` is not made where a signed compare reads `L` (its sign bits would
-//! be lost), and a load whose value and extension are both read in other
-//! blocks is left unless a compare is widened (`BothLiveOut`). `E` is moved to
-//! just after `L`, so that it precedes the compares it now feeds.
+//! be lost). `E` is moved to just after `L`, so that it precedes the compares
+//! it now feeds.
 //!
 //! | # | DEVIATE |
 //! |---|---|
 //! | D1 | Done on MIR before isel, not in the DAG: isel selects one instruction at a time (`isel/combined.rs`) and has no combine stage. Owner mir-undef; revisit when isel gains one. |
-//! | D2 | `isTruncateFree` is taken as true: a truncation to a narrower integer reads the low part of the register on every x86 mode, so the compare of an unextendable use is not a reason to stay. |
+//! | D2 | Any other reader of the load (a store, a call, an extension in another block) leaves the load alone. The pin gives it `trunc E` (`isTruncateFree`), and the narrow value then lives beside the wide one: bench/grep.nib `_main` grew 58 B of spills when this was done. Owner mir-undef; revisit when isel can fold the trunc. |
 //!
 //! # Example
 //! Before:
@@ -96,8 +95,6 @@ struct Plan {
     extension: InstId,
     /// `(compare, index of the load in its operands, index of the constant)`.
     compares: Vec<(InstId, u32, u32)>,
-    /// The readers of the load other than the extension and the compares.
-    others: Vec<(InstId, u32)>,
 }
 
 /// `load`'s plan, or `None` where the pin's `ExtendUsesToFormExtLoad` says no
@@ -118,8 +115,6 @@ fn plan(
     let zero_extended = function.instruction(extension).opcode == Opcode::Cast(CastOp::ZExt);
     let extended = function.instruction(extension).result?;
     let mut compares = Vec::new();
-    let mut others = Vec::new();
-    let mut live_out = false;
     for used in function.users(result).snapshot() {
         if used.user == extension {
             continue;
@@ -137,23 +132,14 @@ fn plan(
                 continue;
             }
         }
-        live_out |= !here || user.opcode == Opcode::Phi;
-        others.push((used.user, used.index));
-    }
-    if compares.is_empty() && others.is_empty() {
+        // Another reader would read `trunc E`: the narrow value stays live
+        // beside the wide one and costs a register (D3).
         return None;
     }
-    // `BothLiveOut`: both the load and its extension are read in other
-    // blocks, and only a widened compare makes the change worth it.
-    if live_out
-        && compares.is_empty()
-        && function.users(extended).snapshot().iter().any(|used| {
-            function.parent(used.user) != Some(home) || function.instruction(used.user).opcode == Opcode::Phi
-        })
-    {
+    if compares.is_empty() {
         return None;
     }
-    Some(Plan { extension, compares, others })
+    Some(Plan { extension, compares })
 }
 
 fn int_constant(
@@ -200,22 +186,6 @@ fn widened(
             operands[at as usize] = extended;
             operands[constant as usize] = Operand::Constant(context.int(wide, value));
             function.set_operands(compare, operands);
-        }
-        if !plan.others.is_empty() {
-            let cut = function.create_instruction(
-                Opcode::Cast(CastOp::Trunc),
-                narrow,
-                vec![extended],
-                Flags::default(),
-                None,
-            );
-            function.insert(cut, Position::After(plan.extension)).expect("a placed instruction");
-            let cut = Operand::Value(function.instruction(cut).result.expect("a value"));
-            for (user, at) in plan.others {
-                let mut operands = function.instruction(user).operands.clone();
-                operands[at as usize] = cut;
-                function.set_operands(user, operands);
-            }
         }
         debug_assert!(function.users(result).snapshot().iter().all(|used| used.user == plan.extension));
         changed = true;
