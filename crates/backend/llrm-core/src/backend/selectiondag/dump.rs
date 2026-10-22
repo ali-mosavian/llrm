@@ -75,6 +75,9 @@ impl SelectionDAG {
             NodeData::Block(block) => {
                 write!(text, "<{} 0x0>", self.block_names[block as usize]).ok();
             }
+            NodeData::PhysReg(reg) => {
+                write!(text, " ${}", format!("{reg:?}").to_lowercase()).ok();
+            }
             NodeData::Register(reg) => {
                 write!(text, " %{reg}").ok();
             }
