@@ -1,0 +1,1153 @@
+//! The register-pressure list scheduler X86 asks for at 32 bits: `SUnit`
+//! graph (`ScheduleDAGSDNodes`), `ScheduleDAGTopologicalSort`, and
+//! `ScheduleDAGRRList` with `BURegReductionPriorityQueue`.
+//!
+//! # How it works
+//! [`schedule`] groups the selected DAG's nodes into units (a node and
+//! everything glued to it is one unit), adds an edge per data or chain
+//! operand, numbers the units Sethi-Ullman, then schedules from the root
+//! upward: the available unit that `bu_ls_rr_sort` ranks highest goes next,
+//! and the order is reversed at the end. Latencies are one (zero for a
+//! `TokenFactor`), as `createBURRListDAGScheduler` builds it
+//! (`needlatency = false`), and register pressure is not tracked
+//! (`tracksrp = false`).
+//!
+//! ```text
+//! store2 ──chain──▶ store1        bottom-up picks store2, then store1,
+//!   │                  │          then the adds they use, deepest last;
+//!  add ──▶ load      add         the reversed list is the emit order.
+//! ```
+//!
+//! # Example
+//! `x = a + b; y = x * c` with both results stored (chain between the
+//! stores) comes out as load a, load b, add, load c, mul, store x, store y
+//! in one valid order; the stores keep their chain order whatever the
+//! priorities say.
+//!
+//! # Runs
+//! Nothing runs it yet: the emitter (D1b) takes [`schedule`]'s units. The
+//! old selector stays the default; the DAG path is `--isel=dag` (shadow).
+//!
+//! DEVIATE SD20: not translated yet: physical-register live interference
+//! (`DelayForLiveRegsBottomUp`, `BacktrackBottomUp`, `CopyAndMoveSuccessors`,
+//! the call-frame resource), `ClusterNodes`, and the virtual-register cycle
+//! check (`initVRegCycle`, only for blocks that branch to themselves).
+//! Reason: they need the machine instruction descriptions and register
+//! classes of the matcher's output (sdag-c), which does not exist yet; the
+//! flags register travels as glue, so the schedule of a glue-only function
+//! is the pin's. Exit: D1c, before the switch gate. Owner: sdag-d. Review
+//! 2026-12-03.
+//!
+//! DEVIATE SD21: no IR order (`SDNode::getIROrder`), so the call-ordering tie
+//! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
+//! Exit: with the emitter, if line information needs them. Owner: sdag-d.
+//! Review 2026-12-03.
+//!
+//! # See also
+//! `ScheduleDAGRRList.cpp`
+//! ([createBURRListDAGScheduler
+//! L3082](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3082),
+//! [ListScheduleBottomUp
+//! L1548](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L1548),
+//! [BURRSort
+//! L2504](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L2504)),
+//! `ScheduleDAGSDNodes::BuildSchedGraph`
+//! ([L536](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536)),
+//! `ScheduleDAG.cpp` (`SUnit::addPred`, `ScheduleDAGTopologicalSort`).
+
+use std::collections::HashMap;
+
+use super::dag::{NodeData, SDValue, SelectionDAG};
+use super::isd::ISD;
+use super::mvt::EVT;
+
+/// What the scheduler asks of the target's instruction table (`TII->get`).
+pub trait SchedInfo {
+    /// `MCInstrDesc::getNumDefs`.
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize;
+    /// `MCInstrDesc::implicit_defs`, as register numbers.
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16];
+    /// `MCInstrDesc::isCall`.
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool;
+    /// `TRI->regsOverlap`.
+    fn regs_overlap(
+        &self,
+        a: u16,
+        b: u16,
+    ) -> bool {
+        a == b
+    }
+}
+
+/// One scheduled unit: its nodes, the bottom-most (`getNode()`) first, then
+/// each node glued above it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unit {
+    pub nodes: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Data,
+    /// `SDep::Barrier`, a chain edge.
+    Barrier,
+}
+
+/// `SDep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Dep {
+    su: usize,
+    kind: Kind,
+    latency: u32,
+}
+
+impl Dep {
+    fn is_ctrl(self) -> bool {
+        self.kind != Kind::Data
+    }
+
+    /// `SDep::overlaps`: the same unit by the same kind of edge.
+    fn overlaps(
+        self,
+        other: Dep,
+    ) -> bool {
+        self.su == other.su && self.kind == other.kind
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SUnit {
+    nodes: Vec<u32>,
+    preds: Vec<Dep>,
+    succs: Vec<Dep>,
+    num_preds: u32,
+    num_succs: u32,
+    num_preds_left: u32,
+    num_succs_left: u32,
+    latency: u32,
+    depth: u32,
+    height: u32,
+    depth_current: bool,
+    height_current: bool,
+    is_available: bool,
+    is_scheduled: bool,
+    queue_id: u32,
+    is_call: bool,
+    is_call_op: bool,
+    is_schedule_low: bool,
+    has_phys_reg_defs: bool,
+    has_phys_reg_clobbers: bool,
+}
+
+impl SUnit {
+    fn new(node: u32) -> SUnit {
+        SUnit {
+            nodes: vec![node],
+            preds: Vec::new(),
+            succs: Vec::new(),
+            num_preds: 0,
+            num_succs: 0,
+            num_preds_left: 0,
+            num_succs_left: 0,
+            latency: 1,
+            depth: 0,
+            height: 0,
+            depth_current: false,
+            height_current: false,
+            is_available: false,
+            is_scheduled: false,
+            queue_id: 0,
+            is_call: false,
+            is_call_op: false,
+            is_schedule_low: false,
+            has_phys_reg_defs: false,
+            has_phys_reg_clobbers: false,
+        }
+    }
+
+    /// `getNode()`: the bottom-most node of the glued sequence.
+    fn node(&self) -> u32 {
+        self.nodes[0]
+    }
+}
+
+/// `isPassiveNode`: a non-scheduled leaf.
+fn is_passive(opcode: ISD) -> bool {
+    matches!(
+        opcode,
+        ISD::Constant
+            | ISD::TargetConstant
+            | ISD::ConstantFP
+            | ISD::TargetConstantFP
+            | ISD::Register
+            | ISD::GlobalAddress
+            | ISD::TargetGlobalAddress
+            | ISD::ExternalSymbol
+            | ISD::FrameIndex
+            | ISD::ConstantPool
+            | ISD::BasicBlock
+            | ISD::EntryToken
+    )
+}
+
+/// The units of `dag` reachable from `root` in schedule order, the pin's
+/// `ScheduleDAGSDNodes::Run` with the BURR queue.
+pub fn schedule(
+    dag: &SelectionDAG,
+    root: SDValue,
+    info: &dyn SchedInfo,
+) -> Vec<Unit> {
+    let mut graph = Graph::build(dag, root, info);
+    let mut topo = Topo::new(&graph.sus);
+    topo.dirty = true;
+    let mut queue = Queue::default();
+    queue.init(&mut graph, &mut topo);
+    let order = graph.list_schedule_bottom_up(root, &mut queue);
+    order.into_iter().map(|su| Unit { nodes: graph.sus[su].nodes.clone() }).collect()
+}
+
+struct Graph<'a> {
+    dag: &'a SelectionDAG,
+    info: &'a dyn SchedInfo,
+    sus: Vec<SUnit>,
+    /// `SDNode::getNodeId`: the unit a node is in; -1 for none.
+    node_id: Vec<i32>,
+    /// The live users of each node (`N->users()`), by node.
+    users: Vec<Vec<u32>>,
+    cur_cycle: u32,
+}
+
+impl<'a> Graph<'a> {
+    fn ops(
+        &self,
+        n: u32,
+    ) -> &[SDValue] {
+        &self.dag.node(SDValue { node: n, res: 0 }).ops
+    }
+
+    fn values(
+        &self,
+        n: u32,
+    ) -> &[EVT] {
+        &self.dag.node(SDValue { node: n, res: 0 }).values
+    }
+
+    fn opcode(
+        &self,
+        n: u32,
+    ) -> ISD {
+        self.dag.node(SDValue { node: n, res: 0 }).opcode
+    }
+
+    fn machine(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        match self.opcode(n) {
+            ISD::Machine(op) => Some(op),
+            _ => None,
+        }
+    }
+
+    /// `getGluedNode`: the node whose glue result `n` takes as its last
+    /// operand.
+    fn glued_node(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        let last = self.ops(n).last()?;
+        (self.dag.value_type(*last) == EVT::GLUE).then_some(last.node)
+    }
+
+    /// The nodes reachable from `root`, and their users among them: a node the
+    /// builder or a combine left in the arena is not scheduled.
+    fn live_users(
+        dag: &SelectionDAG,
+        root: SDValue,
+    ) -> Vec<Vec<u32>> {
+        let mut users = vec![Vec::new(); dag.node_count()];
+        let mut seen = vec![false; dag.node_count()];
+        let mut work = vec![root.node];
+        seen[root.node as usize] = true;
+        while let Some(n) = work.pop() {
+            for op in &dag.node(SDValue { node: n, res: 0 }).ops {
+                if !users[op.node as usize].contains(&n) {
+                    users[op.node as usize].push(n);
+                }
+                if !std::mem::replace(&mut seen[op.node as usize], true) {
+                    work.push(op.node);
+                }
+            }
+        }
+        users
+    }
+
+    /// `BuildSchedGraph`.
+    fn build(
+        dag: &'a SelectionDAG,
+        root: SDValue,
+        info: &'a dyn SchedInfo,
+    ) -> Graph<'a> {
+        let mut graph = Graph {
+            dag,
+            info,
+            sus: Vec::new(),
+            node_id: vec![-1; dag.node_count()],
+            users: Self::live_users(dag, root),
+            cur_cycle: 0,
+        };
+        graph.build_sched_units(root);
+        graph.add_sched_edges();
+        graph
+    }
+
+    /// `BuildSchedUnits`.
+    fn build_sched_units(
+        &mut self,
+        root: SDValue,
+    ) {
+        let mut visited = vec![false; self.node_id.len()];
+        let mut work = vec![root.node];
+        visited[root.node as usize] = true;
+        let mut calls = Vec::new();
+        while let Some(ni) = work.pop() {
+            for op in self.ops(ni).to_vec() {
+                if !std::mem::replace(&mut visited[op.node as usize], true) {
+                    work.push(op.node);
+                }
+            }
+            if is_passive(self.opcode(ni)) || self.node_id[ni as usize] != -1 {
+                continue;
+            }
+            let num = self.sus.len();
+            let mut su = SUnit::new(ni);
+            // Scan up to find glued preds.
+            let mut n = ni;
+            while let Some(above) = self.glued_node(n) {
+                n = above;
+                self.node_id[n as usize] = num as i32;
+                su.nodes.push(n);
+                if self.machine(n).is_some_and(|op| self.info.is_call(op)) {
+                    su.is_call = true;
+                }
+            }
+            // Scan down to find any glued succs: at most one user takes the
+            // glue result.
+            let mut n = ni;
+            while self.values(n).last() == Some(&EVT::GLUE) {
+                let glue = SDValue { node: n, res: (self.values(n).len() - 1) as u8 };
+                let user = self.users[n as usize].iter().copied().find(|&u| self.ops(u).contains(&glue));
+                let Some(user) = user else { break };
+                self.node_id[n as usize] = num as i32;
+                n = user;
+                su.nodes.insert(0, n);
+                if self.machine(n).is_some_and(|op| self.info.is_call(op)) {
+                    su.is_call = true;
+                }
+            }
+            if su.is_call {
+                calls.push(num);
+            }
+            if self.opcode(ni) == ISD::TokenFactor {
+                su.is_schedule_low = true;
+            }
+            self.node_id[n as usize] = num as i32;
+            su.latency = if self.opcode(n) == ISD::TokenFactor { 0 } else { 1 };
+            self.sus.push(su);
+        }
+        // Find all call operands.
+        while let Some(su) = calls.pop() {
+            for n in self.sus[su].nodes.clone() {
+                if self.opcode(n) != ISD::CopyToReg {
+                    continue;
+                }
+                let src = self.ops(n)[2].node;
+                if is_passive(self.opcode(src)) {
+                    continue;
+                }
+                let id = self.node_id[src as usize] as usize;
+                self.sus[id].is_call_op = true;
+            }
+        }
+    }
+
+    /// `InstrEmitter::CountResults`.
+    fn count_results(
+        &self,
+        n: u32,
+    ) -> usize {
+        let values = self.values(n);
+        let mut count = values.len();
+        while count > 0 && values[count - 1] == EVT::GLUE {
+            count -= 1;
+        }
+        if count > 0 && values[count - 1] == EVT::OTHER {
+            count -= 1;
+        }
+        count
+    }
+
+    fn has_any_use_of_value(
+        &self,
+        n: u32,
+        res: usize,
+    ) -> bool {
+        self.users[n as usize].iter().any(|&u| self.ops(u).iter().any(|op| op.node == n && usize::from(op.res) == res))
+    }
+
+    /// `AddSchedEdges`.
+    fn add_sched_edges(&mut self) {
+        for su in 0..self.sus.len() {
+            let nodes = self.sus[su].nodes.clone();
+            for &n in &nodes {
+                if let Some(op) = self.machine(n)
+                    && !self.info.implicit_defs(op).is_empty()
+                {
+                    self.sus[su].has_phys_reg_clobbers = true;
+                    let mut used = self.count_results(n);
+                    while used != 0 && !self.has_any_use_of_value(n, used - 1) {
+                        used -= 1;
+                    }
+                    if used > self.info.num_defs(op) {
+                        self.sus[su].has_phys_reg_defs = true;
+                    }
+                }
+                for operand in self.ops(n).to_vec() {
+                    let op_node = operand.node;
+                    if is_passive(self.opcode(op_node)) {
+                        continue;
+                    }
+                    let op_su = self.node_id[op_node as usize] as usize;
+                    if op_su == su {
+                        continue;
+                    }
+                    let vt = self.dag.value_type(operand);
+                    debug_assert!(vt != EVT::GLUE, "glued nodes are in one unit");
+                    let is_chain = vt == EVT::OTHER;
+                    let mut latency = if is_chain { 1 } else { self.sus[op_su].latency };
+                    if is_chain && self.opcode(op_node) == ISD::TokenFactor {
+                        latency = 0;
+                    }
+                    let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency };
+                    self.add_pred(su, dep);
+                }
+            }
+        }
+    }
+
+    /// `SUnit::addPred` (Required): false where the edge was already there.
+    fn add_pred(
+        &mut self,
+        su: usize,
+        dep: Dep,
+    ) -> bool {
+        let preds = self.sus[su].preds.clone();
+        for (i, pred) in preds.iter().enumerate() {
+            if pred.overlaps(dep) {
+                if pred.latency < dep.latency {
+                    let forward = Dep { su, ..*pred };
+                    if let Some(s) = self.sus[pred.su].succs.iter_mut().find(|s| **s == forward) {
+                        s.latency = dep.latency;
+                    }
+                    self.sus[su].preds[i].latency = dep.latency;
+                    self.sus[su].depth_current = false;
+                    self.set_height_dirty(dep.su);
+                }
+                return false;
+            }
+        }
+        let n = dep.su;
+        if dep.kind == Kind::Data {
+            self.sus[su].num_preds += 1;
+            self.sus[n].num_succs += 1;
+        }
+        if !self.sus[n].is_scheduled {
+            self.sus[su].num_preds_left += 1;
+        }
+        if !self.sus[su].is_scheduled {
+            self.sus[n].num_succs_left += 1;
+        }
+        self.sus[su].preds.push(dep);
+        self.sus[n].succs.push(Dep { su, ..dep });
+        self.sus[su].depth_current = false;
+        self.set_height_dirty(n);
+        true
+    }
+
+    /// `SUnit::removePred`.
+    fn remove_pred(
+        &mut self,
+        su: usize,
+        dep: Dep,
+    ) {
+        let Some(i) = self.sus[su].preds.iter().position(|p| *p == dep) else { return };
+        let n = dep.su;
+        let forward = Dep { su, ..dep };
+        let j = self.sus[n].succs.iter().position(|s| *s == forward).expect("preds and succs match");
+        if dep.kind == Kind::Data {
+            self.sus[su].num_preds -= 1;
+            self.sus[n].num_succs -= 1;
+        }
+        if !self.sus[n].is_scheduled {
+            self.sus[su].num_preds_left -= 1;
+        }
+        if !self.sus[su].is_scheduled {
+            self.sus[n].num_succs_left -= 1;
+        }
+        self.sus[n].succs.remove(j);
+        self.sus[su].preds.remove(i);
+        self.sus[su].depth_current = false;
+        self.set_height_dirty(n);
+    }
+
+    /// `SUnit::setHeightDirty`: this unit and every predecessor's height.
+    fn set_height_dirty(
+        &mut self,
+        su: usize,
+    ) {
+        if !self.sus[su].height_current {
+            return;
+        }
+        let mut work = vec![su];
+        while let Some(cur) = work.pop() {
+            if !self.sus[cur].height_current {
+                continue;
+            }
+            self.sus[cur].height_current = false;
+            work.extend(self.sus[cur].preds.iter().map(|p| p.su));
+        }
+    }
+
+    /// `SUnit::getHeight`.
+    fn height(
+        &mut self,
+        su: usize,
+    ) -> u32 {
+        if !self.sus[su].height_current {
+            self.compute_height(su);
+        }
+        self.sus[su].height
+    }
+
+    /// `SUnit::getDepth`.
+    fn depth(
+        &mut self,
+        su: usize,
+    ) -> u32 {
+        if !self.sus[su].depth_current {
+            self.compute_depth(su);
+        }
+        self.sus[su].depth
+    }
+
+    fn compute_depth(
+        &mut self,
+        su: usize,
+    ) {
+        let mut work = vec![su];
+        while let Some(&cur) = work.last() {
+            if let Some(p) = self.sus[cur].preds.iter().find(|p| !self.sus[p.su].depth_current) {
+                work.push(p.su);
+                continue;
+            }
+            work.pop();
+            let max = self.sus[cur].preds.iter().map(|p| self.sus[p.su].depth + p.latency).max().unwrap_or(0);
+            self.sus[cur].depth = max;
+            self.sus[cur].depth_current = true;
+        }
+    }
+
+    fn compute_height(
+        &mut self,
+        su: usize,
+    ) {
+        let mut work = vec![su];
+        while let Some(&cur) = work.last() {
+            if let Some(s) = self.sus[cur].succs.iter().find(|s| !self.sus[s.su].height_current) {
+                work.push(s.su);
+                continue;
+            }
+            work.pop();
+            let max = self.sus[cur].succs.iter().map(|s| self.sus[s.su].height + s.latency).max().unwrap_or(0);
+            self.sus[cur].height = max;
+            self.sus[cur].height_current = true;
+        }
+    }
+
+    /// `SUnit::setHeightToAtLeast`.
+    fn set_height_to_at_least(
+        &mut self,
+        su: usize,
+        height: u32,
+    ) {
+        if height <= self.height(su) {
+            return;
+        }
+        self.set_height_dirty(su);
+        self.sus[su].height = height;
+        self.sus[su].height_current = true;
+    }
+
+    /// `canClobberPhysRegDefs`: whether scheduling `su` below `succ` could
+    /// clobber a physical register `succ` defines past its explicit results.
+    fn can_clobber_phys_reg_defs(
+        &self,
+        succ: usize,
+        su: usize,
+    ) -> bool {
+        let n = self.sus[succ].node();
+        let op = self.machine(n).expect("a unit with physical register defs is a machine node");
+        let num_defs = self.info.num_defs(op);
+        let imp_defs = self.info.implicit_defs(op);
+        for &node in &self.sus[su].nodes {
+            let Some(sop) = self.machine(node) else { continue };
+            let su_imp = self.info.implicit_defs(sop);
+            if su_imp.is_empty() {
+                continue;
+            }
+            for i in num_defs..self.values(n).len() {
+                let Some(&reg) = imp_defs.get(i - num_defs) else { break };
+                if su_imp.iter().any(|&r| self.info.regs_overlap(reg, r)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// `ListScheduleBottomUp`, the order top first.
+    fn list_schedule_bottom_up(
+        &mut self,
+        root: SDValue,
+        queue: &mut Queue,
+    ) -> Vec<usize> {
+        let mut sequence = Vec::with_capacity(self.sus.len());
+        if !self.sus.is_empty() {
+            let root_su = self.node_id[root.node as usize] as usize;
+            debug_assert!(self.sus[root_su].succs.is_empty(), "the graph's root has no successors");
+            self.sus[root_su].is_available = true;
+            queue.push(&mut self.sus, root_su);
+        }
+        while let Some(su) = queue.pop(self) {
+            // `AdvancePastStalls` is a no-op without a hazard recognizer and
+            // with unit latencies: the height is at most the cycle.
+            self.schedule_node_bottom_up(su, queue);
+            sequence.push(su);
+        }
+        sequence.reverse();
+        sequence
+    }
+
+    /// `ScheduleNodeBottomUp`.
+    fn schedule_node_bottom_up(
+        &mut self,
+        su: usize,
+        queue: &mut Queue,
+    ) {
+        let cycle = self.cur_cycle;
+        self.set_height_to_at_least(su, cycle);
+        // `AdvanceToCycle(CurCycle + 1)`: no hazard recognizer, one per cycle.
+        self.cur_cycle += 1;
+        for pred in self.sus[su].preds.clone() {
+            self.release_pred(pred.su, queue);
+        }
+        self.sus[su].is_scheduled = true;
+    }
+
+    /// `ReleasePred`.
+    fn release_pred(
+        &mut self,
+        pred: usize,
+        queue: &mut Queue,
+    ) {
+        assert!(self.sus[pred].num_succs_left != 0, "a unit was released too many times");
+        self.sus[pred].num_succs_left -= 1;
+        if self.sus[pred].num_succs_left == 0 {
+            self.sus[pred].is_available = true;
+            queue.push(&mut self.sus, pred);
+        }
+    }
+
+    /// `closestSucc`.
+    fn closest_succ(
+        &mut self,
+        su: usize,
+    ) -> u32 {
+        let mut max = 0;
+        for succ in self.sus[su].succs.clone() {
+            if succ.is_ctrl() {
+                continue;
+            }
+            let mut height = self.height(succ.su);
+            if self.opcode(self.sus[succ.su].node()) == ISD::CopyToReg {
+                height = self.closest_succ(succ.su) + 1;
+            }
+            max = max.max(height);
+        }
+        max
+    }
+}
+
+/// `ScheduleDAGTopologicalSort`.
+struct Topo {
+    node2index: Vec<i32>,
+    index2node: Vec<usize>,
+    dirty: bool,
+    updates: Vec<(usize, usize)>,
+    reachable: HashMap<(usize, usize), bool>,
+}
+
+impl Topo {
+    fn new(sus: &[SUnit]) -> Topo {
+        let mut topo = Topo {
+            node2index: vec![0; sus.len()],
+            index2node: vec![0; sus.len()],
+            dirty: false,
+            updates: Vec::new(),
+            reachable: HashMap::new(),
+        };
+        topo.init(sus);
+        topo
+    }
+
+    /// `InitDAGTopologicalSorting`.
+    fn init(
+        &mut self,
+        sus: &[SUnit],
+    ) {
+        self.dirty = false;
+        self.updates.clear();
+        self.reachable.clear();
+        let size = sus.len();
+        let mut work = Vec::new();
+        for (num, su) in sus.iter().enumerate() {
+            self.node2index[num] = su.succs.len() as i32;
+            if su.succs.is_empty() {
+                work.push(num);
+            }
+        }
+        let mut id = size as i32;
+        while let Some(su) = work.pop() {
+            id -= 1;
+            self.allocate(su, id);
+            for pred in &sus[su].preds {
+                self.node2index[pred.su] -= 1;
+                if self.node2index[pred.su] == 0 {
+                    work.push(pred.su);
+                }
+            }
+        }
+    }
+
+    fn allocate(
+        &mut self,
+        n: usize,
+        index: i32,
+    ) {
+        self.node2index[n] = index;
+        self.index2node[index as usize] = n;
+    }
+
+    /// `FixOrder`.
+    fn fix_order(
+        &mut self,
+        sus: &[SUnit],
+    ) {
+        if self.dirty {
+            self.init(sus);
+            return;
+        }
+        for (y, x) in std::mem::take(&mut self.updates) {
+            self.add_pred(sus, y, x);
+        }
+    }
+
+    /// `AddPredQueued`: `y` now depends on `x`.
+    fn add_pred_queued(
+        &mut self,
+        y: usize,
+        x: usize,
+    ) {
+        self.dirty = self.dirty || self.updates.len() > 10;
+        if !self.dirty {
+            self.updates.push((y, x));
+        }
+    }
+
+    fn add_pred(
+        &mut self,
+        sus: &[SUnit],
+        y: usize,
+        x: usize,
+    ) {
+        let lower = self.node2index[y];
+        let upper = self.node2index[x];
+        if lower < upper {
+            let mut visited = vec![false; sus.len()];
+            let has_loop = self.dfs(sus, y, upper, &mut visited);
+            assert!(!has_loop, "an inserted edge creates a loop");
+            self.shift(&mut visited, lower, upper);
+        }
+        self.reachable.clear();
+    }
+
+    /// `DFS`: whether `su` reaches the node at index `upper`; marks the nodes
+    /// seen.
+    fn dfs(
+        &self,
+        sus: &[SUnit],
+        su: usize,
+        upper: i32,
+        visited: &mut [bool],
+    ) -> bool {
+        let mut work = vec![su];
+        while let Some(su) = work.pop() {
+            visited[su] = true;
+            for succ in sus[su].succs.iter().rev() {
+                let s = succ.su;
+                if self.node2index[s] == upper {
+                    return true;
+                }
+                if !visited[s] && self.node2index[s] < upper {
+                    work.push(s);
+                }
+            }
+        }
+        false
+    }
+
+    fn shift(
+        &mut self,
+        visited: &mut [bool],
+        lower: i32,
+        upper: i32,
+    ) {
+        let mut moved = Vec::new();
+        let mut shift = 0;
+        let mut i = lower;
+        while i <= upper {
+            let w = self.index2node[i as usize];
+            if visited[w] {
+                visited[w] = false;
+                moved.push(w);
+                shift += 1;
+            } else {
+                self.allocate(w, i - shift);
+            }
+            i += 1;
+        }
+        for w in moved {
+            self.allocate(w, i - shift);
+            i += 1;
+        }
+    }
+
+    /// `IsReachable`: whether `target` reaches `su` through successors.
+    fn is_reachable(
+        &mut self,
+        sus: &[SUnit],
+        su: usize,
+        target: usize,
+    ) -> bool {
+        self.fix_order(sus);
+        let lower = self.node2index[target];
+        let upper = self.node2index[su];
+        if lower >= upper {
+            return false;
+        }
+        if let Some(&known) = self.reachable.get(&(target, su)) {
+            return known;
+        }
+        let mut visited = vec![false; sus.len()];
+        let has_loop = self.dfs(sus, target, upper, &mut visited);
+        if !has_loop {
+            self.reachable.insert((target, su), false);
+        }
+        has_loop
+    }
+}
+
+/// `RegReductionPQBase` with `BURegReductionPriorityQueue`: Sethi-Ullman
+/// numbers and `bu_ls_rr_sort`.
+#[derive(Default)]
+struct Queue {
+    queue: Vec<usize>,
+    cur_queue_id: u32,
+    sethi_ullman: Vec<u32>,
+}
+
+impl Queue {
+    /// `initNodes`: `PrescheduleNodesWithMultipleUses` (`!TracksRegPressure`),
+    /// then `CalculateSethiUllmanNumbers`. `AddPseudoTwoAddrDeps` stays off,
+    /// as `-disable-2addr-hack` defaults to true.
+    fn init(
+        &mut self,
+        graph: &mut Graph<'_>,
+        topo: &mut Topo,
+    ) {
+        self.preschedule_nodes_with_multiple_uses(graph, topo);
+        self.sethi_ullman = vec![0; graph.sus.len()];
+        for su in 0..graph.sus.len() {
+            self.calc_sethi_ullman(&graph.sus, su);
+        }
+    }
+
+    /// `PrescheduleNodesWithMultipleUses`.
+    fn preschedule_nodes_with_multiple_uses(
+        &mut self,
+        graph: &mut Graph<'_>,
+        topo: &mut Topo,
+    ) {
+        'unit: for su in 0..graph.sus.len() {
+            if graph.sus[su].num_succs != 0 || graph.sus[su].num_preds != 1 {
+                continue;
+            }
+            let node = graph.sus[su].node();
+            if graph.opcode(node) == ISD::CopyToReg && virtual_register(graph, graph.ops(node)[1]) {
+                continue;
+            }
+            // A call-frame setup among the chain predecessors keeps the unit
+            // where it is. The setup opcode is the target's (SD20).
+            let Some(pred) = graph.sus[su].preds.iter().find(|p| !p.is_ctrl()).map(|p| p.su) else { continue };
+            if graph.sus[pred].has_phys_reg_defs || graph.sus[pred].num_succs == 1 {
+                continue;
+            }
+            if graph.opcode(node) == ISD::CopyFromReg && virtual_register(graph, graph.ops(node)[1]) {
+                continue;
+            }
+            for pred_succ in graph.sus[pred].succs.clone() {
+                let other = pred_succ.su;
+                if other == su {
+                    continue;
+                }
+                if graph.sus[other].num_succs == 0 {
+                    continue 'unit;
+                }
+                if graph.sus[su].has_phys_reg_clobbers
+                    && graph.sus[other].has_phys_reg_defs
+                    && graph.can_clobber_phys_reg_defs(other, su)
+                {
+                    continue 'unit;
+                }
+                if topo.is_reachable(&graph.sus, su, other) {
+                    continue 'unit;
+                }
+            }
+            let mut i = 0;
+            while i < graph.sus[pred].succs.len() {
+                let edge = graph.sus[pred].succs[i];
+                let succ = edge.su;
+                if succ != su {
+                    // `succ` stops depending on `pred` and depends on `su`,
+                    // which takes `pred`'s place beside it.
+                    graph.remove_pred(succ, Dep { su: pred, ..edge });
+                    topo.add_pred_queued(su, pred);
+                    graph.add_pred(su, Dep { su: pred, ..edge });
+                    topo.add_pred_queued(succ, su);
+                    graph.add_pred(succ, Dep { su, ..edge });
+                    continue;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /// `CalcNodeSethiUllmanNumber`, iteratively.
+    fn calc_sethi_ullman(
+        &mut self,
+        sus: &[SUnit],
+        su: usize,
+    ) {
+        if self.sethi_ullman[su] != 0 {
+            return;
+        }
+        let mut work = vec![(su, 0usize)];
+        while let Some(&(cur, processed)) = work.last() {
+            let mut known = true;
+            for p in processed..sus[cur].preds.len() {
+                let pred = sus[cur].preds[p];
+                if pred.is_ctrl() {
+                    continue;
+                }
+                if self.sethi_ullman[pred.su] == 0 {
+                    work.last_mut().expect("nonempty").1 = p + 1;
+                    work.push((pred.su, 0));
+                    known = false;
+                    break;
+                }
+            }
+            if !known {
+                continue;
+            }
+            let (mut number, mut extra) = (0, 0);
+            for pred in sus[cur].preds.iter().filter(|p| !p.is_ctrl()) {
+                let theirs = self.sethi_ullman[pred.su];
+                if theirs > number {
+                    number = theirs;
+                    extra = 0;
+                } else if theirs == number {
+                    extra += 1;
+                }
+            }
+            self.sethi_ullman[cur] = (number + extra).max(1);
+            work.pop();
+        }
+    }
+
+    /// `getNodePriority`.
+    fn node_priority(
+        &self,
+        graph: &Graph<'_>,
+        su: usize,
+    ) -> u32 {
+        let unit = &graph.sus[su];
+        if matches!(graph.opcode(unit.node()), ISD::TokenFactor | ISD::CopyToReg) {
+            return 0;
+        }
+        if unit.num_succs == 0 && unit.num_preds != 0 {
+            return 0xffff;
+        }
+        if unit.num_preds == 0 && unit.num_succs != 0 {
+            return 0;
+        }
+        self.sethi_ullman[su]
+    }
+
+    fn push(
+        &mut self,
+        sus: &mut [SUnit],
+        su: usize,
+    ) {
+        debug_assert_eq!(sus[su].queue_id, 0, "a unit is in the queue already");
+        self.cur_queue_id += 1;
+        sus[su].queue_id = self.cur_queue_id;
+        self.queue.push(su);
+    }
+
+    /// `popFromQueue`: the best of the first 1000 by `bu_ls_rr_sort`.
+    fn pop(
+        &mut self,
+        graph: &mut Graph<'_>,
+    ) -> Option<usize> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        let mut best = 0;
+        for i in 1..self.queue.len().min(1000) {
+            if self.bu_ls_rr_sort(graph, self.queue[best], self.queue[i]) {
+                best = i;
+            }
+        }
+        let su = self.queue.swap_remove(best);
+        graph.sus[su].queue_id = 0;
+        Some(su)
+    }
+
+    /// `bu_ls_rr_sort`: whether `right` goes before `left`.
+    fn bu_ls_rr_sort(
+        &self,
+        graph: &mut Graph<'_>,
+        left: usize,
+        right: usize,
+    ) -> bool {
+        // checkSpecialNodes
+        let (l_low, r_low) = (graph.sus[left].is_schedule_low, graph.sus[right].is_schedule_low);
+        if l_low != r_low {
+            return l_low < r_low;
+        }
+        // BURRSort
+        let (l_phys, r_phys) = (graph.sus[left].has_phys_reg_defs, graph.sus[right].has_phys_reg_defs);
+        if l_phys != r_phys {
+            return l_phys < r_phys;
+        }
+        let mut l_priority = self.node_priority(graph, left);
+        let mut r_priority = self.node_priority(graph, right);
+        if graph.sus[left].is_call && graph.sus[right].is_call_op {
+            let values = graph.values(graph.sus[right].node()).len() as u32;
+            r_priority = r_priority.saturating_sub(values);
+        }
+        if graph.sus[right].is_call && graph.sus[left].is_call_op {
+            let values = graph.values(graph.sus[left].node()).len() as u32;
+            l_priority = l_priority.saturating_sub(values);
+        }
+        if l_priority != r_priority {
+            return l_priority > r_priority;
+        }
+        // The call-ordering tie break reads the IR order (SD21).
+        let (l_dist, r_dist) = (graph.closest_succ(left), graph.closest_succ(right));
+        if l_dist != r_dist {
+            return l_dist < r_dist;
+        }
+        let scratches = |g: &Graph<'_>, su: usize| g.sus[su].preds.iter().filter(|p| !p.is_ctrl()).count();
+        let (l_scratch, r_scratch) = (scratches(graph, left), scratches(graph, right));
+        if l_scratch != r_scratch {
+            return l_scratch > r_scratch;
+        }
+        if (graph.sus[left].is_call && r_priority > 0) || (graph.sus[right].is_call && l_priority > 0) {
+            return graph.sus[left].queue_id > graph.sus[right].queue_id;
+        }
+        if !(graph.sus[left].is_call || graph.sus[right].is_call) {
+            // BUCompareLatency(checkPref = false), without a virtual-register
+            // cycle (SD20) or a hazard recognizer.
+            let (l_height, r_height) = (graph.height(left), graph.height(right));
+            let cycle = graph.cur_cycle;
+            let (l_stall, r_stall) = (cycle < l_height, cycle < r_height);
+            if l_stall {
+                if !r_stall {
+                    return true;
+                }
+                if l_height != r_height {
+                    return l_height > r_height;
+                }
+            } else if r_stall {
+                return false;
+            }
+            if l_height != r_height {
+                return l_height > r_height;
+            }
+            let (l_depth, r_depth) = (graph.depth(left), graph.depth(right));
+            if l_depth != r_depth {
+                return l_depth < r_depth;
+            }
+            let (l_latency, r_latency) = (graph.sus[left].latency, graph.sus[right].latency);
+            if l_latency != r_latency {
+                return l_latency > r_latency;
+            }
+        } else {
+            let (l_height, r_height) = (graph.height(left), graph.height(right));
+            if l_height != r_height {
+                return l_height > r_height;
+            }
+            let (l_depth, r_depth) = (graph.depth(left), graph.depth(right));
+            if l_depth != r_depth {
+                return l_depth < r_depth;
+            }
+        }
+        graph.sus[left].queue_id > graph.sus[right].queue_id
+    }
+}
+
+/// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: register numbers at or
+/// above [`FIRST_VIRTUAL`] are virtual.
+fn virtual_register(
+    graph: &Graph<'_>,
+    reg: SDValue,
+) -> bool {
+    matches!(
+        graph.dag.node(reg).data,
+        NodeData::Register(r) if r >= FIRST_VIRTUAL
+    )
+}
+
+/// The first virtual register number a `Register` node holds; below it the
+/// numbers are the target's physical registers.
+pub const FIRST_VIRTUAL: u32 = 1 << 16;

@@ -48,11 +48,14 @@ pub mod fold;
 pub mod isd;
 pub mod lowering;
 pub mod mvt;
+pub mod schedule;
 
 pub use dag::{BooleanContents, DagConfig, NodeData, SDNode, SDNodeFlags, SDValue, SelectionDAG};
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod schedule_tests;
 #[cfg(test)]
 mod tests;
