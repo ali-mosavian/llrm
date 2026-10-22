@@ -20,7 +20,7 @@ Caveats, for every table:
 | branch | 724 | 699 | +25 |
 | call/ret | 433 | 424 | +9 |
 | push/pop/frame | 807 | 609 | +198 |
-| lea | 890 | 419 | +471 |
+| lea | m32 +471 (-O2), -63 (-Os) | `recpow` 163 against 3, `x_switch` 78 against 6, `x_fir` 54 against 0: multiplications by constants are `lea` chains chosen by the CPU profile's clocks where the pin's `combineMul` leaves `imul` outside 3/5/9 and 2^n+-1 | DEVIATE M1 (AM-M1) in `arithmetic.rs`, priced: chains on vs off over the 71 programs, clocks -5.1% / -5.9% / -6.0% at -O1 / -O2 / -O3, code +3072 / +720 / +688 B, -Os identical | owner w-4, review 2026-12-01 |
 | x87 | 1064 | 1137 | -73 |
 | setcc/cmov | 6 | 13 | -7 |
 | string | 43 | 0 | +43 |

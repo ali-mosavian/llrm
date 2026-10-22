@@ -185,6 +185,7 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod booleans;
 pub mod edges;
 pub mod incremental;
 pub mod intbits;
