@@ -304,6 +304,11 @@ fn call_info(
     }
 }
 
+/// The function attribute of a runtime routine's `available_externally` body
+/// (`llrm-hir`'s `mir/meaning.rs`): the inline copy of what the routine
+/// computes, which `-fno-inline-functions` leaves to the cost model.
+pub const INLINE_COPY: &str = "inline-copy";
+
 /// `getAttributeBasedInliningDecision` (InlineCost.cpp:3191): some verdict the
 /// callee's and call's attributes settle, or none.
 ///
@@ -2734,7 +2739,13 @@ pub fn decide(
     let cost = inline_cost(&site, context.params);
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.
-    let inline =
-        if context.always_only { matches!(cost, InlineCost::Always("always inline attribute")) } else { cost.is_ok() };
+    // A runtime routine's body (`INLINE_COPY`) is the language's own expansion
+    // of it, and is priced all the same.
+    let inline = if context.always_only {
+        matches!(cost, InlineCost::Always("always inline attribute"))
+            || (has_flag(&callee.attrs, INLINE_COPY) && cost.is_ok())
+    } else {
+        cost.is_ok()
+    };
     Some(Decision { callee: callee_id, inline, cost })
 }

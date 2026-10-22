@@ -543,3 +543,51 @@ fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
     assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
 }
+
+/// jpeg_single bq32 under `-fno-inline-functions` (the pin's
+/// OnlyAlwaysInlining): a runtime routine's body (`inline-copy`) stayed a call
+/// and `ASC(MID$(s,i,1))` made a temporary string per byte, +38% clocks against
+/// main; a plain function is still left alone by the flag.
+#[test]
+fn test_an_inline_copy_is_priced_under_the_always_inliner_alone() {
+    let text = "define internal i16 @leaf(i16 %x) {\nentry:\n  %r = add i16 %x, 1\n  ret i16 %r\n}\n\n\
+        define available_externally i16 @llrm.qb.B$ONE(i16 %x) {\nentry:\n  %r = add i16 %x, 2\n  ret i16 %r\n}\n\n\
+        define i16 @main(i16 %x) {\nentry:\n  %a = call i16 @leaf(i16 %x)\n  %b = call i16 @llrm.qb.B$ONE(i16 %a)\n  ret i16 %b\n}\n";
+    let mut module = parsed(text);
+    module
+        .function_mut("llrm.qb.B$ONE")
+        .expect("the copy")
+        .1
+        .attrs
+        .push(llrm_mir::opcode::Attribute::Flag(crate::inlinecost::INLINE_COPY.to_owned()));
+    let layout = DataLayout::default();
+    let main = llrm_mir::context::GlobalId(
+        module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap() as u32,
+    );
+    let counts = crate::inline::call_counts(&module);
+    let none = Default::default();
+    let context = crate::inlinecost::DecideContext {
+        counts: &counts,
+        addressed: &none,
+        recursive: &none,
+        params: InlineParams::from_level(2),
+        size: CallerSize::Speed,
+        always_only: true,
+        tti: None,
+    };
+    let llrm_mir::module::GlobalKind::Function(caller) = &module.global(main).kind else { panic!("main") };
+    let frequencies = crate::inlinecost::caller_frequencies(&module, &layout, caller);
+    let calls: Vec<_> = caller
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            caller.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ))
+        .collect();
+    let leaf =
+        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies).expect("leaf has a body");
+    let copy = crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies)
+        .expect("the copy has a body");
+    assert_eq!((leaf.inline, copy.inline), (false, true));
+}

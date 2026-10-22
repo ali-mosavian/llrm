@@ -121,11 +121,9 @@ fn define(
         module.builder(global).function.parameter_attrs[one].push(Fact::Releases.carrier());
     }
     // The language's own expansion of a routine, not a function the program
-    // chose to call: `-fno-inline-functions` (the pin's OnlyAlwaysInlining)
-    // keeps it inlined, as the QB runtime's `MID$` was (jpeg_single bq32:
-    // B$FMID in the per-byte loop of `ASC(MID$(s, i, 1))` made a temporary
-    // string, +38% clocks).
-    module.builder(global).function.attrs.push(llrm_mir::Attribute::Flag("alwaysinline".to_owned()));
+    // chose to call: the inliner prices it against the call even under
+    // `-fno-inline-functions` (see `inlinecost::INLINE_COPY`).
+    module.builder(global).function.attrs.push(llrm_mir::Attribute::Flag("inline-copy".to_owned()));
     module.globals[global.0 as usize].linkage = Linkage::AvailableExternally;
 }
 
@@ -246,7 +244,7 @@ mod tests {
     /// made a temporary string per byte (parity 93.2 M instructions against
     /// main's 61.6 M).
     #[test]
-    fn a_runtime_routines_body_is_always_inlined() {
+    fn a_runtime_routines_body_is_marked_an_inline_copy() {
         let mut module = llrm_mir::parse::module("declare cc 1000 ptr @llrm.qb.B$FMID(ptr, i32, i32)\n").unwrap();
         let param = |at| Box::new(Expr::Param(at));
         let mid = Meaning {
@@ -289,7 +287,7 @@ mod tests {
         let function = module.global(global).function().expect("a function");
         assert!(!function.is_declaration(), "{}", llrm_mir::print::module(&module));
         assert!(
-            function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "alwaysinline")),
+            function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "inline-copy")),
             "{}",
             llrm_mir::print::module(&module)
         );
