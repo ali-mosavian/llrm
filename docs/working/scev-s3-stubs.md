@@ -3,10 +3,10 @@
 | Rank | Stub | Site | Measured effect |
 |---|---|---|---|
 | 1 | `isKnownViaInduction` (done here) | `scev/predicate.rs` | unroll-and-jam test6/test10 now fold `niter.next != 4` as the pin does (D5 deleted) |
-| 2 | `getRangeForUnknownRecurrence` | `scev/range.rs` | not measured |
-| 3 | `getRangeViaFactoring` | `scev/range.rs` | not measured |
-| 4 | `SolveQuadratic` (D-T2) | `scev/how_many.rs` | not measured |
-| 5 | `createAddRecFromPHIWithCasts` | `scev/create_addrec.rs` | not measured |
+| 2 | `getRangeForUnknownRecurrence` | `scev/range.rs` | translated (alim/feat/scev-s3-stubs); fail-first test; objects: pair s3b |
+| 3 | `getRangeViaFactoring` | `scev/range.rs` | translated; fail-first test (0..39 -> 10..26) |
+| 4 | `SolveQuadratic` (D-T2) | `scev/how_many.rs` | MISSING; measured: 0 of 71 rows programs (-O2, -Os) reach a quadratic exit or range. Owner w-5; translate by 2026-11-20 (pure maths: `SolveQuadraticEquationWrap` over 3x-wide integers, test with the pin's own quadratic cases) |
+| 5 | `createAddRecFromPHIWithCasts` | `scev/create_addrec.rs` | DEVIATE 1 (no SCEV predicates): its result is a predicated recurrence. Exit item: the SCEV predicates row (`AllowPredicates`, `SCEVPredicate`s and their runtime checks); owner w-5; date 2026-11-27 for the plan |
 
 Found while testing rank 1: `getStrengthenedNoWrapFlagsFromBinOp` passed no context instruction on a wrong reading of
 `UseContextForNoWrapFlagInference`; the pin's `cl::init(true)`

@@ -728,16 +728,113 @@ impl ScalarEvolution {
         range
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6467
-    /// `getRangeForUnknownRecurrence`. SEAM (BackedgeCounts): it needs
-    /// `getSmallConstantMaxTripCount`, which is zero until trip counts land,
-    /// and then returns the full set at the same point LLVM does.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6463
+    /// `getRangeForUnknownRecurrence`: a shift recurrence `<start, shift, step>`
+    /// over a loop with a small constant maximum trip count.
     fn get_range_for_unknown_recurrence(
         &mut self,
         cx: &Cx,
         u: Scev,
     ) -> ConstantRange {
-        ConstantRange::full(self.get_type_size_in_bits(cx, self.type_of(u)))
+        use llrm_mir::knownbits::KnownBits;
+        use llrm_mir::opcode::BinaryOp;
+        use llrm_mir::valuetracking::pattern::match_simple_recurrence;
+
+        let bit_width = self.get_type_size_in_bits(cx, self.type_of(u));
+        let full = ConstantRange::full(bit_width);
+
+        // Match a simple recurrence of the form: <start, ShiftOp, Step>, and
+        // then use information about the trip count to improve our available
+        // range. Step may be loop varying here.
+        let Kind::Unknown(Operand::Value(phi_value)) = self.node(u).kind.clone() else { return full };
+        let ValueDef::Instruction(p) = cx.function.value(phi_value).def else { return full };
+        if cx.function.instruction(p).opcode != Opcode::Phi {
+            return full;
+        }
+        let Some(header) = cx.function.parent(p) else { return full };
+
+        // No phi input may come from an unreachable block.
+        if cx.function.predecessors(header).iter().any(|&pred| !cx.tree.is_reachable(pred)) {
+            return full;
+        }
+
+        let q = cx.query(None);
+        let Some((bo, start, step)) = match_simple_recurrence(&q, p) else { return full };
+
+        // A recurrence in reachable code is in a loop; BO may be in a subloop.
+        let Some(lp) = cx.loops.get_loop_for(header) else { return full };
+        let Some(bo_block) = cx.function.parent(bo) else { return full };
+        if !lp.contains(bo_block) {
+            return full;
+        }
+
+        let Opcode::Binary(op) = cx.function.instruction(bo).opcode else { return full };
+        if !matches!(op, BinaryOp::AShr | BinaryOp::LShr | BinaryOp::Shl) {
+            return full;
+        }
+        if cx.function.instruction(bo).operands[0] != Operand::Value(phi_value) {
+            return full;
+        }
+
+        let tc = self.get_small_constant_max_trip_count(cx, header);
+        if tc == 0 || tc >= bit_width {
+            return full;
+        }
+
+        let known_start = compute_known_bits(&q, start, 0);
+        let known_step = compute_known_bits(&q, step, 0);
+
+        // The total shift amount, careful of overflow.
+        let max_shift = known_step.max_value();
+        let mask = llrm_mir::context::mask(bit_width);
+        let Some(total) = max_shift.checked_mul(u128::from(tc - 1)).filter(|total| *total <= mask) else {
+            return full;
+        };
+        let total_shift = KnownBits::constant(bit_width, total);
+
+        match op {
+            BinaryOp::AShr => {
+                // The end value is closer to zero than the start.
+                let known_end = KnownBits::ashr(&known_start, &total_shift, false, false);
+                if known_start.is_non_negative() {
+                    return ConstantRange::non_empty(
+                        bit_width,
+                        known_end.min_value(),
+                        known_start.max_value().wrapping_add(1),
+                    );
+                }
+                if known_start.is_negative() {
+                    return ConstantRange::non_empty(
+                        bit_width,
+                        known_start.min_value(),
+                        known_end.max_value().wrapping_add(1),
+                    );
+                }
+            }
+            BinaryOp::LShr => {
+                // The low end of the unsigned range is the last value produced.
+                let known_end = KnownBits::lshr(&known_start, &total_shift, false, false);
+                return ConstantRange::non_empty(
+                    bit_width,
+                    known_end.min_value(),
+                    known_start.max_value().wrapping_add(1),
+                );
+            }
+            BinaryOp::Shl => {
+                // Iff no bits are shifted out, the value increases on every
+                // shift.
+                let known_end = KnownBits::shl(&known_start, &total_shift, false, false, false);
+                if total < u128::from(known_start.count_min_leading_zeros()) {
+                    return ConstantRange::new(
+                        bit_width,
+                        known_start.min_value(),
+                        known_end.max_value().wrapping_add(1),
+                    );
+                }
+            }
+            _ => unreachable!("filtered out above"),
+        }
+        full
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6836
@@ -887,17 +984,101 @@ impl ScalarEvolution {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L7221
-    /// `getRangeViaFactoring`. SEAM: the select-pattern case needs the IR
-    /// `select` of constants behind an unknown; none is recognised until
-    /// `createSCEV` (S3) lets a `select` stand for two recurrences.
+    /// `getRangeViaFactoring`: `{C?A:B,+,C?P:Q}` is the union of the ranges of
+    /// `{A,+,P}` and `{B,+,Q}`.
     fn get_range_via_factoring(
         &mut self,
-        _cx: &Cx,
-        _start: Scev,
-        _step: Scev,
+        cx: &Cx,
+        start: Scev,
+        step: Scev,
         max_be_count: Ap,
     ) -> ConstantRange {
-        ConstantRange::full(max_be_count.width)
+        let bit_width = max_be_count.width;
+        let full = ConstantRange::full(bit_width);
+        let Some((start_cond, start_true, start_false)) = self.select_pattern(cx, bit_width, start) else {
+            return full;
+        };
+        let Some((step_cond, step_true, step_false)) = self.select_pattern(cx, bit_width, step) else {
+            return full;
+        };
+        if start_cond != step_cond {
+            // Four possibilities would be needed; getRange already does about
+            // as well.
+            return full;
+        }
+        let true_start = self.get_constant(start_true);
+        let true_step = self.get_constant(step_true);
+        let false_start = self.get_constant(start_false);
+        let false_step = self.get_constant(step_false);
+        let true_range = self.get_range_for_affine_ar(cx, true_start, true_step, max_be_count).0;
+        let false_range = self.get_range_for_affine_ar(cx, false_start, false_step, max_be_count).0;
+        true_range.union_with(&false_range, PreferredRangeType::Smallest)
+    }
+
+    /// `getRangeViaFactoring`'s `SelectPattern`: `s` as `select C, T, F` of
+    /// constants behind an integral cast and a constant offset; the condition
+    /// and the two values.
+    fn select_pattern(
+        &mut self,
+        cx: &Cx,
+        bit_width: u32,
+        s: Scev,
+    ) -> Option<(Operand, Ap, Ap)> {
+        use llrm_mir::context::ConstantKind;
+        let mut s = s;
+        let mut offset = Ap::new(bit_width, 0);
+        // Peel off a constant offset.
+        if let Kind::Add(ops) = &self.node(s).kind
+            && ops.len() == 2
+            && let Kind::Constant(off) = self.node(ops[0].scev).kind
+        {
+            offset = off;
+            s = ops[1].scev;
+        }
+        // Peel off a cast operation.
+        let mut cast = None;
+        match self.node(s).kind {
+            Kind::Truncate(op) => {
+                cast = Some(0);
+                s = op.scev;
+            }
+            Kind::ZeroExtend(op) => {
+                cast = Some(1);
+                s = op.scev;
+            }
+            Kind::SignExtend(op) => {
+                cast = Some(2);
+                s = op.scev;
+            }
+            _ => {}
+        }
+        let Kind::Unknown(Operand::Value(value)) = self.node(s).kind.clone() else { return None };
+        let ValueDef::Instruction(select) = cx.function.value(value).def else { return None };
+        let instruction = cx.function.instruction(select);
+        if instruction.opcode != Opcode::Select {
+            return None;
+        }
+        let constant = |operand: Operand| -> Option<Ap> {
+            let Operand::Constant(id) = operand else { return None };
+            let found = cx.context.get(id);
+            let bits = match found.kind {
+                ConstantKind::Int(bits) => bits,
+                ConstantKind::Zero => 0,
+                _ => return None,
+            };
+            Some(Ap::new(cx.context.types.int_bits(found.ty)?, bits))
+        };
+        let (condition, true_value, false_value) =
+            (instruction.operands[0], constant(instruction.operands[1])?, constant(instruction.operands[2])?);
+        // Re-apply the cast peeled off earlier.
+        let recast = |value: Ap| match cast {
+            Some(0) => value.trunc(bit_width),
+            Some(1) => value.zext(bit_width),
+            Some(_) => value.sext(bit_width),
+            None => value,
+        };
+        // Re-apply the constant offset peeled off earlier.
+        Some((condition, recast(true_value).add(offset), recast(false_value).add(offset)))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L5063

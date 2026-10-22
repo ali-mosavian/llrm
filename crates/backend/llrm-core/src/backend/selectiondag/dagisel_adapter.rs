@@ -143,6 +143,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        TargetExternalSymbolNode => pin::TargetExternalSymbol,
+        JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
         // Our target codes are named; the pin's number is looked up by that name.
         Target(code) => llrm_dagisel::generated::ids::x86isd_id(super::x86isd::name(code).trim_start_matches("X86ISD::")).unwrap_or(u16::MAX),

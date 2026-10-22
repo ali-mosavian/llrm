@@ -61,52 +61,57 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
+            let mut done = match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);
                     continue;
                 }
             };
-            if let Err(why) = TypeLegalizer::new(&mut done.dag, &tli).run() {
-                println!("REFUSED {name}:{block_name} types: {why:?}");
-                continue;
-            }
-            if let Err(why) = DagLegalizer::new(&mut done.dag, &tli, &mut NoHooks).run() {
-                println!("REFUSED {name}:{block_name} legalize: {why:?}");
-                continue;
-            }
-            built += 1;
-            if std::env::var_os("DUMP").is_some() {
-                println!("DAG {name}:{block_name}\n{}", done.dag.dump());
-            }
-            let done_root = done.dag.get_root().node;
-            let mut adapter = DagisAdapter::new(&mut done.dag);
-            // Users before operands, as the pin walks `allnodes` backwards.
-            for node in reachable_users_first(&adapter) {
-                // As `DoInstructionSelection`: nothing reads a node that matching made dead (the root has a handle).
-                let root = done_root;
-                if llrm_dagisel::dag::Dag::is_machine(&adapter, node)
-                    || adapter.is_dead(node)
-                    || (node != root && llrm_dagisel::dag::Dag::use_empty(&adapter, node))
-                {
+            // The block's DAG and, for a switch, the blocks it made.
+            let dags: Vec<&mut llrm_core::backend::selectiondag::SelectionDAG> =
+                std::iter::once(&mut done.dag).chain(done.extra.iter_mut().map(|(_, b)| &mut b.dag)).collect();
+            for dag in dags {
+                if let Err(why) = TypeLegalizer::new(dag, &tli).run() {
+                    println!("REFUSED {name}:{block_name} types: {why:?}");
                     continue;
                 }
-                let outcome = select_node(&selector, &mut adapter, &mut hooks, node);
+                if let Err(why) = DagLegalizer::new(dag, &tli, &mut NoHooks).run() {
+                    println!("REFUSED {name}:{block_name} legalize: {why:?}");
+                    continue;
+                }
+                built += 1;
                 if std::env::var_os("DUMP").is_some() {
-                    println!("  select t{node} {:?}: {outcome:?}", adapter.dag.nodes()[node as usize].opcode);
+                    println!("DAG {name}:{block_name}\n{}", dag.dump());
                 }
-                if outcome == Outcome::CannotSelect {
-                    *unselected.entry(adapter.dag.nodes()[node as usize].opcode.name()).or_default() += 1;
+                let done_root = dag.get_root().node;
+                let mut adapter = DagisAdapter::new(dag);
+                // Users before operands, as the pin walks `allnodes` backwards.
+                for node in reachable_users_first(&adapter) {
+                    // As `DoInstructionSelection`: nothing reads a node that matching made dead (the root has a handle).
+                    let root = done_root;
+                    if llrm_dagisel::dag::Dag::is_machine(&adapter, node)
+                        || adapter.is_dead(node)
+                        || (node != root && llrm_dagisel::dag::Dag::use_empty(&adapter, node))
+                    {
+                        continue;
+                    }
+                    let outcome = select_node(&selector, &mut adapter, &mut hooks, node);
+                    if std::env::var_os("DUMP").is_some() {
+                        println!("  select t{node} {:?}: {outcome:?}", adapter.dag.nodes()[node as usize].opcode);
+                    }
+                    if outcome == Outcome::CannotSelect {
+                        *unselected.entry(adapter.dag.nodes()[node as usize].opcode.name()).or_default() += 1;
+                    }
                 }
-            }
-            if std::env::var_os("DUMP").is_some() {
-                println!("SELECTED {name}:{block_name}\n{}", done.dag.dump());
-            }
-            for (at, node) in done.dag.nodes().iter().enumerate() {
-                if let ISD::Machine(code) = node.opcode {
-                    if !DagisAdapterView::dead(&done.dag, at as u32) {
-                        *machine.entry(opcode_name(code)).or_default() += 1;
+                if std::env::var_os("DUMP").is_some() {
+                    println!("SELECTED {name}:{block_name}\n{}", dag.dump());
+                }
+                for (at, node) in dag.nodes().iter().enumerate() {
+                    if let ISD::Machine(code) = node.opcode {
+                        if !DagisAdapterView::dead(&dag, at as u32) {
+                            *machine.entry(opcode_name(code)).or_default() += 1;
+                        }
                     }
                 }
             }

@@ -106,6 +106,15 @@ fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
 }
 
 #[test]
+fn jump_table_external_symbol_and_register_mask_nodes_have_the_pins_numbers() {
+    use super::dagisel_adapter::pin_opcode;
+    use llrm_dagisel::generated::ids::isd as pin;
+    assert_eq!(pin_opcode(ISD::RegisterMask), pin::RegisterMask);
+    assert_eq!(pin_opcode(ISD::JumpTable), pin::JumpTable);
+    assert_eq!(pin_opcode(ISD::TargetExternalSymbolNode), pin::TargetExternalSymbol);
+}
+
+#[test]
 fn a_return_node_is_selected_to_ret() {
     use super::x86isd;
     let mut dag = SelectionDAG::new(DagConfig::default());
