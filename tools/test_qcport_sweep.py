@@ -123,3 +123,22 @@ def test_a_program_is_swept_with_its_own_header_flags_and_a_by_design_refusal_is
     (bins / "llrm-nib").chmod(0o755)
     failed = q.sweep_extra(bins, root=tmp_path)
     assert sorted({program for program, _, _ in failed}) == ["broken.bas"], failed
+
+
+def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(tmp_path):
+    """farchk, hugelp, intrinsics_vbdos, stackdeep and their kin failed at -m32 with three messages (relocation overlaps, a far call in flat code) that were policy, not findings."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "flat.bas").write_text("PRINT 1\n")
+    (corpus / "far.bas").write_text("' dialect: pds71\nPRINT 2\n")
+    (corpus / "huge.bas").write_text("' flags: -O2 --huge-arrays\nPRINT 3\n")
+    (corpus / "frames.bas").write_text("' flags: -O2 --own-frames -fsanitize=stack\nPRINT 4\n")
+    (corpus / "vb.bas").write_text("' dialect: qb45 vbdos\nPRINT 5\n")
+    machines = {}
+    for tool, source, machine, level in q.extra_jobs(tmp_path):
+        if source.parent == corpus:
+            machines.setdefault(source.name, set()).add(machine)
+    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}}, machines
