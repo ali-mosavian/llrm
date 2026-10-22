@@ -206,13 +206,6 @@ use Phase::{Early, Late, Module, Simplify};
 
 const ROWS: &[Disposition] = &[
     row(Early, "ee-instrument", NA, "-pg/-finstrument-functions: no frontend asks for it", ""),
-    row(
-        Early,
-        "lower-expect",
-        Why::Missing,
-        "no llvm.expect reaches MIR: llrm-c compiled __builtin_expect as a call of an undefined `__builtin_expect_` (a link error); #3532 makes it its argument; the weights (LowerExpectIntrinsic from llvm.expect) are the remaining slot; ablation 0 of 12 IRs",
-        "funcattrs-port, 11-09",
-    ),
     row(Early, "callsite-splitting", Why::Missing, "-O3 only; not measured", "funcattrs-port, 11-09"),
     row(Simplify, "speculative-execution", NA, "runs only on a target with divergent branches; x86 has none", ""),
     row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
