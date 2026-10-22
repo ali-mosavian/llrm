@@ -2378,7 +2378,7 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             // A pointer of no known object (a far pointer built from a segment
             // word) reaches any object that may be reached: the unknown one.
             if place.provenance.is_none() {
-                place = reference(&Slice::whole(ObjectRef::UNKNOWN));
+                place.provenance = reference(&Slice::whole(ObjectRef::UNKNOWN)).provenance;
             }
             if through.writes && !_by_value(unit, at, index) {
                 stores.push(place.clone());
