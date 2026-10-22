@@ -32,9 +32,7 @@ fn switch_clusters_match_the_pins() {
             let cases: Vec<(i128, u32)> = instruction.operands[2..]
                 .chunks(2)
                 .map(|pair| {
-                    let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else {
-                        panic!("a case")
-                    };
+                    let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else { panic!("a case") };
                     let ConstantKind::Int(bits) = module.context.get(value).kind else { panic!("an integer case") };
                     let shift = 128 - width;
                     ((((bits << shift) as i128) >> shift), dest.0)

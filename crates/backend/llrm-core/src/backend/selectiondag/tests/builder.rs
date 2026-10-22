@@ -43,21 +43,9 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         for &block in function.layout() {
-            let name = format!(
-                "{}:{}",
-                global.name.as_deref().unwrap(),
-                function.block(block).name.as_deref().unwrap_or("")
-            );
-            match build_block(
-                &module,
-                function,
-                &layout,
-                &target,
-                &llrm_x86_m32::M32,
-                &convention,
-                &mut info,
-                block,
-            ) {
+            let name =
+                format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
+            match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                 Ok(done) => {
                     built.insert(name, normalized(&done.dag.dump()));
                 }
@@ -214,8 +202,7 @@ fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
-    let convention =
-        crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let built = build_block(
         &module,
