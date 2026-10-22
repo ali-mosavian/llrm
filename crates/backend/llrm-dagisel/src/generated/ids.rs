@@ -668,6 +668,7 @@ pub mod x86 {
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const CL: u16 = 11;
     pub const CS: u16 = 12;
     pub const CX: u16 = 13;
     pub const DEC16m: u16 = 1511;
