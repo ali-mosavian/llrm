@@ -5,12 +5,16 @@ use super::isd::ISD;
 
 pub const CALL: ISD = ISD::Target(1);
 pub const RET_GLUE: ISD = ISD::Target(2);
+pub const REP_STOS: ISD = ISD::Target(3);
+pub const REP_MOVS: ISD = ISD::Target(4);
 
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
     match code {
         1 => "X86ISD::CALL".into(),
         2 => "X86ISD::RET_GLUE".into(),
+        3 => "X86ISD::REP_STOS".into(),
+        4 => "X86ISD::REP_MOVS".into(),
         other => format!("X86ISD#{other}"),
     }
 }
