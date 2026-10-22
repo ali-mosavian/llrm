@@ -123,6 +123,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
+use crate::greedy::remat::group_source;
 use crate::greedy::tii::{
     _inserted, _mov, _width, _with, fold_copy_member, is_encodable, load_reg_from_stack_slot, store_reg_to_stack_slot,
 };
@@ -510,7 +511,7 @@ pub fn materialized(
                 insns.push(add);
                 one = rewritten;
             }
-            if let Some(source) = _group_source(&one) {
+            if let Some(source) = group_source(&one) {
                 if let Some(constant) = constants.get(&source.value) {
                     let what = one.what.clone().expect("a group source has semantics");
                     one = _with(&one, |made| {
@@ -755,7 +756,7 @@ fn _sunk_from_copies<'b>(
     body: &'b LirBody,
     reading: &BTreeSet<u32>,
 ) -> Cow<'b, LirBody> {
-    let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
+    let moved = |one: &Insn| group_source(one).is_some_and(|source| reading.contains(&source.value));
     // A copy of a value in `reading` reads it, so it is among that value's
     // readers.
     let any = postings::following(body, |postings| {
@@ -4349,31 +4350,6 @@ fn _address_source(
     }))
 }
 
-/// An unconstrained full-width parallel copy can take a literal in place.
-fn _group_source(one: &Insn) -> Option<Held> {
-    if one.group.is_none() || !one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() {
-        return None;
-    }
-    let what = one.what.as_ref()?;
-    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-        match (what.dests.as_slice(), what.sources.as_slice()) {
-            ([Loc::Held(dest)], [Loc::Held(source)])
-                if dest.width == source.width && one.uses == [source.value] && one.defines == [dest.value] =>
-            {
-                return Some(*source);
-            }
-            // Into a spilled value's slot.
-            ([Loc::Mem(dest)], [Loc::Held(source)])
-                if dest.width == source.width && one.uses == [source.value] && one.defines.is_empty() =>
-            {
-                return Some(*source);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
@@ -4571,7 +4547,7 @@ fn _literals_by(
         }
         if postings.uses(value).iter().any(|at| {
             let one = _at(body, *at);
-            one.group.is_some() && _group_source(one).is_none()
+            one.group.is_some() && group_source(one).is_none()
         }) {
             return None;
         }
@@ -4653,7 +4629,7 @@ fn _literals(
         }
         if one.group.is_some() {
             excluded.extend(one.defines.iter().copied());
-            if _group_source(one).is_none() {
+            if group_source(one).is_none() {
                 excluded.extend(one.uses.iter().copied());
             }
         }
