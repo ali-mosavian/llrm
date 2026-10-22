@@ -6,15 +6,17 @@ Replaces the dates of Phase 1 in [selectiondag-plan](selectiondag-plan.md) (swit
 
 Select-level shadow (sdag-c, #3779), 160 functions of 71 programs, m32 i486, against the pin's `llc -stop-after=finalize-isel` on the same IR; our side is builder, combiner, both legalizers, `select_node`:
 
-| Result | Parity tip + #3779 | + open #3820, #3828, #3821 |
+| Result | Parity tip + #3779 | + #3852, #3820, #3828, #3851 (later run, 159 functions) |
 |---|---|---|
-| equal to the pin | 74 | 74 |
-| `BrCond: promote operand` (type legalizer) | 82 | 84 |
-| `integer wider than a register` (builder) | 2 | 0 |
-| `intrinsic call` (builder) | 1 | 1 |
-| differs (ours-only `SUB32rr`) | 1 | 1 |
+| equal to the pin | 74 | 73 |
+| `BrCond: promote operand` (type legalizer) | 82 | 0 |
+| differs: ours-only `AND8ri`, the promoted i1 branch condition (sdag-b) | 0 | 42 |
+| unselected `SDIVREM`/`UDIVREM` (sdag-c, next) | hidden | 14 |
+| `ConstantFP` libcall / `BrJT` libcall | hidden | 8 / 3 |
+| `ZeroExtend`/`SignExtend` expand; unselected `Constant`; `DEC32r` (pin only) | hidden | 3 / 2 / 2 |
+| intrinsic call (builder), singles, shadow crash | 1 | 1, 10, 1 |
 
-One cause, the i1 branch condition, hides the layer under it: the counts say nothing about calls, FP or the combiner until it lands. Rate so far: 40 SelectionDAG PRs merged on 2026-10-22; sdag-c fixes a newly visible bucket within two days; equal went from 4 to 74 in one change. Not yet measured: QCport, tests/run, qbrt (sdag-a, from 11-02) and m16 (the pin has no m16; the oracle is the old selector, needing a map from its LIR forms to pin opcodes, sdag-c after 10-28).
+The first column's single cause, the i1 branch condition, hid the layer under it; in the second it is gone as a stop and shows as 42 functions that differ by an `AND8ri` the pin does not emit (a promote that keeps a mask). The next layer is visible and small: 14 + 8 + 3 + 3 + 2 + 2 are named buckets with owners, 10 are singles. Rate so far: 40 SelectionDAG PRs merged on 2026-10-22; sdag-c fixes a newly visible bucket within two days; equal went from 4 to 74 in one change. Not yet measured: QCport, tests/run, qbrt (sdag-a, from 11-02) and m16 (the pin has no m16; the oracle is the old selector, needing a map from its LIR forms to pin opcodes, sdag-c after 10-28).
 
 ## What remains, by group
 
@@ -23,7 +25,7 @@ One cause, the i1 branch condition, hides the layer under it: the counts say not
 | builder (sdag-a) | `va_*`, dynamic alloca, atomics, EH, aggregates and freeze, intrinsics beyond `mem*`, switch with phi successors, float call results, `i64` at m16 | byval/sret #3848 open; `va_*` 11-10; alloca 11-12; atomics 11-20; EH 11-27; sweep 12-04; **refuses nothing on the corpus 12-10** (corpus shadow from 11-02) |
 | legalizer, lowering (sdag-b) | i1 branch promote (the 82), i64 div/rem, remaining promote/expand, far ops beyond load, x87 and FP conversions (SD6), bit counts, bswap, abs, funnel shifts | div/rem 11-05; promote/expand 11-14; x87 11-18; bit counts 11-25; **types complete 12-05, lowering incl. x87 12-19** (stated; the pieces end 11-25) |
 | combiner (sdag-b) | eight visitors 12-12; known bits and SimplifyDemandedBits | complete for the scalar corpus 2027-02-12; **not a gate**: a row above main is fixed by landing a visitor |
-| matcher (sdag-c) | hand matchers (FrameIndex to LEA, MUL_LOHI, DIVREM, logic-immediate shrink); x87 goldens; DAG segment overrides; m16 shadow against the old selector | matchers 11-05; x87 11-08; segments 11-10; m16 shadow 11-14; **no CannotSelect: m32 11-12, m16 11-20** (hidden today behind the 82) |
+| matcher (sdag-c) | hand matchers (FrameIndex to LEA, MUL_LOHI, DIVREM, logic-immediate shrink); x87 goldens; DAG segment overrides; m16 shadow against the old selector | matchers 11-05; x87 11-08; segments 11-10; m16 shadow 11-14; **no CannotSelect: m32 11-12, m16 11-20** (its buckets are now visible, 14 + 2 + 2 of them sdag-c's own) |
 | emitter, scheduler, harness (sdag-d) | blocks to `LirBody`/`Selected` (#3800 is the first block); locals, globals, `CALLSEQ`, call clobbers, jump tables, string ops, segment overrides; scheduler physical-register interference and clustering (SD30); weekly corpus runs | `LirBody` 11-06; scheduler 11-13; emitter complete 11-20 (calls after A2b/c); weekly runs from 11-09 |
 
 ## The switch
@@ -42,7 +44,7 @@ sdag-b's signed 12-19 for the whole lowering is after 12-14, but the switch need
 
 ## What moves these dates
 
-- The i1 branch promote (sdag-b): until it lands the shadow sees nothing under it.
+- The 42 `AND8ri` functions (sdag-b's i1 promote): equality, not correctness, but they hide any bucket behind them.
 - sdag-a's corpus shadow on 11-02 and the `i64`-at-m16 date.
 - Calls (A2b/c, then the emitter half): each week past 11-27 moves both switches a week.
 - A new refusal bucket in a run week resets the clean-run count.
