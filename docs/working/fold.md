@@ -49,6 +49,9 @@ vsgcc (568 compiles, 0 failed): 13 objects change, all bigger without `_numbers`
 | the objects still changed get a fix or a numbered row each; savegame is a row (ours-only gain) | 11-01 |
 | delete `_numbers`, then `writes` with its last caller, then floatfold into combine | 11-02 |
 
+## x_fir after #3569: the pass is GVN's load PRE, not GlobalOpt (2026-10-22, 25d838613, llrm-c 25d838613b0a+dirty)
+With `_numbers` off x_fir still has 3 loads of `coef` (offsets 0, 2, 4) in the preheader of the dot-product loop (+279 B at m32 -O2, +900 B at m16). The pin's `gvn` alone removes them on the same MIR (`pin.opt('function(gvn)')` on the 12-pipeline dump: 0 `coef` loads; also with load PRE off), so GlobalOpt's SRA and once-stored fold are not needed for them; the MIR types `coef` as `[32 x i8]`, which GlobalOpt's SRA (arrays up to 16 elements) would not split anyway. In our pipeline `-fno-tree-pre` takes the 3 loads away (asm 189 -> 182 lines, equal to the `_numbers` arm), so the loads are made by our load PRE (`performLoopLoadPRE`) where the pin's GVN finds them fully available. A GVN unit test of the loop-after-loop shape passes, so the case needs the unrolled dump; next: reduce it to a fail-first GVN test. The GlobalOpt step of the plan below is dropped for x_fir.
+
 ## Dates
 
 - 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).
