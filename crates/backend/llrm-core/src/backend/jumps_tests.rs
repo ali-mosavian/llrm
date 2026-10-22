@@ -1918,3 +1918,17 @@ fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
     ]);
     assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
 }
+
+/// `BranchFolder` ran only after placement here; the pin's Control Flow
+/// Optimizer runs before it as well, so two blocks that end alike reach the
+/// placement as one tail (d_faces-sized corpus: 22 of 568 objects, -1487
+/// bytes).
+#[test]
+fn test_tails_are_merged_before_the_blocks_are_placed() {
+    let before = two_zero_tails(true);
+    let blocks = before.blocks.len();
+    PLACED_BLOCKS.with(|one| one.set(0));
+    optimized(&before, cpu::profile("486").unwrap()).unwrap();
+    let placed = PLACED_BLOCKS.with(std::cell::Cell::get);
+    assert!(placed < blocks, "placement got {placed} of the {blocks} blocks: the tails were not merged first");
+}

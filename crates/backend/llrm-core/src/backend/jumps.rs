@@ -6,6 +6,8 @@
 //! (`_explicit`), which makes any order correct. `optimized` then runs these
 //! steps on the body.
 //!
+//! 0. `tailmerge::merged` and `threaded` run once on the body in source order,
+//!    as the pin's Control Flow Optimizer does ahead of placement.
 //! 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
 //!    into it, so the edge block becomes a bare jump that threading can skip.
 //! 2. `_placed` orders the blocks as LLVM's `MachineBlockPlacement` does
@@ -170,7 +172,19 @@ pub fn optimized(
     cpu: &cpu::Profile,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
+    // `BranchFolder::OptimizeFunction` before placement (the pin's Control Flow
+    // Optimizer, which runs ahead of Tail Duplication and placement).
+    let mut first = _hoisted(body);
+    if !first.source_order {
+        for _round in 0..std::cmp::max(1, first.blocks.len() + first.insns().len()) {
+            let explicit = first.with_blocks(_explicit(&first)?);
+            let Some(merged) = tailmerge::merged(&explicit, size)? else {
+                break;
+            };
+            first = machinedce::eliminated(threaded(&merged));
+        }
+    }
+    let mut placed = threaded(&_placed(&first, size, cpu.aggressive)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
@@ -408,6 +422,12 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     _placed(body, false, false)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Blocks `_placed` was given.
+    pub(super) static PLACED_BLOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The blocks in the order `MachineBlockPlacement` lays them out (see
 /// `placement`).
 fn _placed(
@@ -416,6 +436,8 @@ fn _placed(
     aggressive: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
+    #[cfg(test)]
+    PLACED_BLOCKS.with(|one| one.set(explicit.len()));
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
