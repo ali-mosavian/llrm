@@ -110,7 +110,18 @@ pub fn branched(
     if !add_wins && !and_wins {
         return Ok(0);
     }
-    let candidates: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+    // Only the adds and ands are looked at, and not copied before they are: a
+    // copy of every instruction of every function cost d_faces +0.4% of its
+    // -O1 compile (4.8 M instructions).
+    let candidates: Vec<InstId> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| match function.instruction(inst).opcode {
+            Opcode::Binary(BinaryOp::Add) => add_wins,
+            Opcode::Binary(BinaryOp::And) => and_wins,
+            _ => false,
+        })
+        .collect();
     // Each select made, and the instruction only its taken arm needs.
     let mut chains: Vec<(InstId, InstId, bool)> = Vec::new();
     for inst in candidates {
