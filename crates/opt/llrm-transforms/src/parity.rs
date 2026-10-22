@@ -343,6 +343,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machine-sink",
         "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
     ),
+    entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     entry(

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 126 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -24,6 +24,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 126 documented
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
 | coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]), and the interference graph `twoaddr` and the spiller read. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| combiner | A chain of one integer operation rebuilt so the operand that arrives last joins last: LLVM's `MachineCombiner` ([MachineCombiner.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCombiner.cpp)) with the generic reassociation patterns of `TargetInstrInfo`, the only ones i486 has. | On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after | [combiner](combiner.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
 | constpool | Readonly constants the machine phases put in memory, one datum per distinct bytes. | `isel.rs`, for each float constant it loads, and `floatassign.rs`: an | [constpool](constpool.md) |
@@ -41,6 +42,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 126 documented
 | expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and | [expansion](expansion.md) |
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
+| fixupbw | A byte or word load, copy or extension is the dword form when the rest of its register is dead: `X86FixupBWInsts`. | After `Peephole`, optimizing levels only. | [fixupbw](fixupbw.md) |
 | fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
 | flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |

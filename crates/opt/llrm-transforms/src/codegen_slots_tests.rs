@@ -372,10 +372,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine InstCombiner",
-        Missing,
+        Match,
+        "combiner.rs",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 12 (-O2) and 6 (-Os) of 77 IRs",
+        "translated (slot combiner@4, before leaopt): integer add/and/or/xor/imul reassociation only, the one pattern family i486 has; DEVIATE MC1 (trace is the block: no physical-register dependences, so call order is not a depth), MC2, MC3. Pin: changed code in 12 (-O2) and 6 (-Os) of 77 IRs. Ours on the 71 bench programs: 75 of 568 objects change; m32 32 objects (13 programs), 18 differ in size, net +1295 B",
     ),
     row(
         "X86 cmov Conversion",
