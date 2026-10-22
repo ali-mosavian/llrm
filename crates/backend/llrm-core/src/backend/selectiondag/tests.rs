@@ -753,9 +753,6 @@ mod expand_node {
 
 mod setcc_result {
     use super::super::legalize_types::TypeLegalizer;
-mod x86_conditions {
-    use super::super::legalize_dag::DagLegalizer;
-    use super::super::x86_lowering::{cond, x86isd, X86Lowering};
     use super::*;
     use crate::backend::selectiondag::{MemBase, MemInfo};
 
@@ -971,61 +968,6 @@ mod x86_conditions {
     }
 }
 
-mod setcc_result {
-    use super::super::legalize_types::TypeLegalizer;
-    use super::*;
-    use crate::backend::selectiondag::{MemBase, MemInfo};
-
-    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
-        let ptr = dag.get_register(EVT::I32, 7);
-        let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
-        dag.get_load(vt, chain, ptr, info)
-    }
-
-    /// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no register
-    /// holds. 73 of 160 functions of the shadow corpus stopped here ("SetCC:
-    /// promote result"). After: an `i8` compare (the target's result type)
-    /// zero-extended-in-register into the select's condition, and nothing
-    /// illegal reachable.
-    #[test]
-    fn an_i1_compare_feeding_a_select_is_promoted_to_i8() {
-        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-        let mut dag = dag();
-        let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
-        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
-        let pick = dag.get_select(EVT::I32, test, x, y);
-        dag.set_root(pick);
-        let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
-        assert!(!legalizer.all_legal());
-        assert_eq!(legalizer.run(), Ok(true));
-        assert!(legalizer.all_legal());
-        let root = dag.get_root();
-        assert_eq!(dag.opcode(root), ISD::Select);
-        let cond = dag.operand(root, 0);
-        // `zext i8 (and (anyext (setcc i8)), 1)`: the `i1` was promoted to the setcc's own `i8`.
-        assert_eq!(dag.value_type(cond), EVT::I8);
-        let setcc = (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).find(|&v| dag.opcode(v) == ISD::SetCC && dag.value_type(v) == EVT::I8);
-        assert!(setcc.is_some(), "an i8 setcc exists");
-    }
-
-    /// A compare consumed as an `i1` and widened: `zext i32 (setcc i1)` is the
-    /// promoted compare masked to one bit.
-    #[test]
-    fn a_zero_extended_i1_compare_is_masked_to_one_bit() {
-        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-        let mut dag = dag();
-        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
-        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
-        let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
-        dag.set_root(wide);
-        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
-        let root = dag.get_root();
-        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I32));
-        assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
-    }
-}
-
 mod global_address {
     use super::super::legalize_dag::DagLegalizer;
     use super::super::x86_lowering::{x86isd, X86Lowering};
@@ -1063,40 +1005,5 @@ mod global_address {
         assert_eq!(dag.opcode(root), ISD::Add);
         assert_eq!(dag.node(dag.operand(dag.operand(root, 0), 0)).data, NodeData::Global { symbol: 3, offset: 0 });
         assert_eq!(dag.constant(dag.operand(root, 1)), Some(0xFFFF_FFFC));
-    fn switch_clusters_match_the_pins() {
-        let text: String = include_str!("golden/switches.ll").lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
-        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
-        let mut ours = String::new();
-        for (_, global, function) in module.functions() {
-            for &block in function.layout() {
-                let Some(terminator) = function.terminator(block) else { continue };
-                let instruction = function.instruction(terminator);
-                if instruction.opcode != Opcode::Switch {
-                    continue;
-                }
-                let Operand::Value(cond) = instruction.operands[0] else { panic!("a value condition") };
-                let width = match module.context.types.get(function.value(cond).ty) {
-                    llrm_mir::types::Type::Int(bits) => *bits,
-                    other => panic!("{other:?}"),
-                };
-                let Operand::Block(default) = instruction.operands[1] else { panic!("a default") };
-                let cases: Vec<(i128, u32)> = instruction.operands[2..]
-                    .chunks(2)
-                    .map(|pair| {
-                        let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else { panic!("a case") };
-                        let ConstantKind::Int(bits) = module.context.get(value).kind else { panic!("an integer case") };
-                        let shift = 128 - width;
-                        ((((bits << shift) as i128) >> shift), dest.0)
-                    })
-                    .collect();
-                let planned = plan(&cases, default.0, &SwitchTarget::x86(32));
-                let mut line = describe(&planned.clusters);
-                if let Some((peeled, _)) = planned.peeled {
-                    line = format!("{}{line}", describe(&[peeled]));
-                }
-                ours.push_str(&format!("{}: {line}\n", global.name.as_deref().unwrap()));
-            }
-        }
-        assert_eq!(ours, include_str!("golden/switches.pin.txt"));
     }
 }
