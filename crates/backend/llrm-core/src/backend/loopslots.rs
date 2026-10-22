@@ -133,7 +133,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::peephole::{self, _lanes, Lanes};
-use crate::backend::{liveness, select, spiller};
+use crate::backend::{liveness, select};
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::{LIRTransform, OperationCosts};
@@ -892,7 +892,9 @@ pub fn hoisted(
         }
         if !rename.is_empty() {
             for block in &mut blocks {
-                *block = block.with_insns(block.insns.iter().map(|insn| spiller::_renamed(insn, &rename)).collect());
+                *block = block.with_insns(
+                    block.insns.iter().map(|insn| crate::backend::bodyfacts::_renamed(insn, &rename)).collect(),
+                );
             }
         }
         taken.take(one.body.forest(), one.body.index());
