@@ -28,6 +28,17 @@
 //! values wider than a register are refused (`Refused`) until their pieces
 //! land.
 //!
+//! # Example
+//! `%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+//! then `store i32 %s, ptr @g`:
+//!
+//! ```text
+//! t2: i32,ch = CopyFromReg t0, Register:i32 %0
+//! t4: i32,ch = CopyFromReg t0, Register:i32 %1
+//! t5: i32 = add t2, t4
+//! t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+//! ```
+//!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
@@ -95,6 +106,7 @@ pub mod isd;
 pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
+pub mod libcall;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
@@ -112,12 +124,18 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod bundle_tests;
+#[cfg(test)]
 mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
+#[cfg(test)]
+mod fpround_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_ext;

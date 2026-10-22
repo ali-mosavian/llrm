@@ -12,7 +12,11 @@ pub struct FunctionLoweringInfo {
     pub value_regs: IdMap<ValueId, u32>,
     /// `StaticAllocaMap`.
     pub static_allocas: IdMap<ValueId, i32>,
+    /// The register the `sret` parameter is copied to, read back to return it.
+    pub sret_reg: Option<u32>,
     next_reg: u32,
+    /// The register of the high half of a two-register value, by the low's.
+    second: std::collections::BTreeMap<u32, u32>,
     next_jump_table: u32,
     next_frame_index: i32,
 }
@@ -35,14 +39,23 @@ impl FunctionLoweringInfo {
                 }
             }
         }
-        let mut info = FunctionLoweringInfo { value_regs: IdMap::new(), static_allocas: IdMap::new(), next_reg: 0, next_jump_table: 0, next_frame_index: 0 };
+        let mut info = FunctionLoweringInfo {
+            value_regs: IdMap::new(),
+            static_allocas: IdMap::new(),
+            sret_reg: None,
+            next_reg: 0,
+            second: Default::default(),
+            next_jump_table: 0,
+            next_frame_index: 0,
+        };
         let entry = function.entry();
         for &block in function.layout() {
             for inst in function.iter_block(block) {
                 let instruction = function.instruction(inst);
                 let Some(result) = instruction.result else { continue };
                 if let Opcode::Alloca { .. } = instruction.opcode {
-                    if Some(block) == entry && instruction.operands.iter().all(|op| matches!(op, Operand::Constant(_))) {
+                    if Some(block) == entry && instruction.operands.iter().all(|op| matches!(op, Operand::Constant(_)))
+                    {
                         info.static_allocas.insert(result, info.next_frame_index);
                         info.next_frame_index += 1;
                         continue;
@@ -58,16 +71,48 @@ impl FunctionLoweringInfo {
     }
 
     /// `CreateRegs`: the next virtual register, recorded for `value`.
-    pub fn create_reg(&mut self, value: ValueId) -> u32 {
+    pub fn create_reg(
+        &mut self,
+        value: ValueId,
+    ) -> u32 {
         let reg = self.new_reg();
         self.value_regs.insert(value, reg);
         reg
+    }
+
+    /// A new stack object (`CreateStackTemporary`): its frame index.
+    pub fn new_stack_object(&mut self) -> i32 {
+        self.next_frame_index += 1;
+        self.next_frame_index - 1
     }
 
     /// The next jump table index of the function.
     pub fn new_jump_table(&mut self) -> u32 {
         self.next_jump_table += 1;
         self.next_jump_table - 1
+    }
+
+    /// The registers a value of `parts` registers is in, the first being
+    /// `first`.
+    pub fn part_regs(
+        &mut self,
+        first: u32,
+        parts: usize,
+    ) -> Vec<u32> {
+        let mut regs = vec![first];
+        for _ in 1..parts {
+            let last = *regs.last().expect("a register");
+            let next = match self.second.get(&last) {
+                Some(next) => *next,
+                None => {
+                    let next = self.new_reg();
+                    self.second.insert(last, next);
+                    next
+                }
+            };
+            regs.push(next);
+        }
+        regs
     }
 
     /// A register with no value of its own (a constant a phi receives).
