@@ -64,9 +64,9 @@ def test_a_squash_that_deletes_a_file_needs_it_named_in_a_deletes_line(tmp_path)
     root = repo(tmp_path)
     git(root, "rm", "-q", "keep.rs")
     git(root, "commit", "-q", "-m", "remove keep")
-    refused = pc.parity_squash.refusals("HEAD", "Owner: x\nRows: none", "parity", root, "fix: remove")
+    refused = pc.parity_squash.body_checks("HEAD", "Owner: x\nRows: none", "parity", root, "fix: remove")
     assert any("keep.rs" in line and "Deletes" in line for line in refused), refused
-    assert pc.parity_squash.refusals("HEAD", "Owner: x\nRows: none\nDeletes: keep.rs", "parity", root, "fix: remove") == []
+    assert pc.parity_squash.body_checks("HEAD", "Owner: x\nRows: none\nDeletes: keep.rs", "parity", root, "fix: remove") == []
 
 
 def test_an_added_line_naming_a_claude_path_is_refused(tmp_path):
