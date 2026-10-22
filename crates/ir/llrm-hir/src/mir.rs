@@ -83,10 +83,14 @@ fn evaluate_extended(module: &mut Module) {
     for global in &mut module.globals {
         let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
         if !function.is_declaration() {
-            function.attrs.push(Attribute::Str(
-                llrm_mir::constantfolding::FP_EVAL.to_owned(),
-                Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
-            ));
+            function
+                .attrs
+                .push(
+                    Attribute::Str(
+                        llrm_mir::constantfolding::FP_EVAL.to_owned(),
+                        Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
+                    ),
+                );
         }
     }
 }

@@ -2224,7 +2224,8 @@ pub const FP_EVAL_EXTENDED: &str = "x87-extended";
 
 /// `ConstantFoldScalarCall1`'s float arms
 /// ([L2738](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2738)
-/// rounding, [L2899](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2899)
+/// rounding,
+/// [L2899](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2899)
 /// the host libm).
 ///
 /// MIRROR: the rounding group is exact at any width and folds anywhere; the
@@ -2269,7 +2270,12 @@ fn constant_fold_float_call1(
                 !caller
                     .attrs
                     .iter()
-                    .any(|attr| matches!(attr, Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED))
+                    .any(
+                        |attr| matches!(
+                            attr,
+                            Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED
+                        ),
+                    )
             });
             if !host_double {
                 return None;
@@ -2296,7 +2302,10 @@ fn constant_fold_float_call1(
         }
         _ => return None,
     };
-    let libm = matches!(id, Sqrt | Sin | Cos | Atan | Sinh | Cosh | Log | Log2 | Log10 | Exp | Exp2 | Exp10);
+    let libm = matches!(
+        id,
+        Sqrt | Sin | Cos | Atan | Sinh | Cosh | Log | Log2 | Log10 | Exp | Exp2 | Exp10
+    );
     if libm && (!result.is_finite() || (result.abs() < f64::MIN_POSITIVE && value != 0.0 && result != 0.0)) {
         return None;
     }

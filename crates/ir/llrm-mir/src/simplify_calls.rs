@@ -197,7 +197,8 @@ fn try_constant_fold_call(
         return None;
     }
     let constants = args.iter().map(|&one| q.constant(one)).collect::<Option<Vec<_>>>()?;
-    crate::constantfolding::constant_fold_intrinsic(q.context, name, &constants, ty, Some(q.function)).map(Operand::Constant)
+    crate::constantfolding::constant_fold_intrinsic(q.context, name, &constants, ty, Some(q.function))
+        .map(Operand::Constant)
 }
 
 /// `simplifyIntrinsic(CallBase)` and the `simplifyIntrinsic(IID, ...)` it
@@ -214,7 +215,9 @@ fn simplify_intrinsic(
     }
     if let Some(constants) = args.iter().map(|&one| q.constant(one)).collect::<Option<Vec<_>>>() {
         let name = q.tracking().callee_name(inst)?.to_owned();
-        if let Some(folded) = crate::constantfolding::constant_fold_intrinsic(q.context, &name, &constants, ret, Some(q.function)) {
+        if let Some(folded) =
+            crate::constantfolding::constant_fold_intrinsic(q.context, &name, &constants, ret, Some(q.function))
+        {
             return Some(Operand::Constant(folded));
         }
     }
