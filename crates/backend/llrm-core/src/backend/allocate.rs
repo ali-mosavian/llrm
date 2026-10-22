@@ -1542,12 +1542,18 @@ pub fn greedy_rewritten(
     let empty = BTreeSet::new();
     let mut unspill: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
     unspill.extend(protected.unwrap_or(&empty).iter().copied());
+    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+        eprintln!("greedy-entry {} phis={}", body.name, body.blocks.iter().any(|block| !block.phis.is_empty()));
+    }
     let mut current = body.clone();
     let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
     let mut floor = splitkit::_next_value(&current);
     // The spills are written into the function as the allocation goes
     // (`InlineSpiller`); the rounds below are the fallback.
-    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
+    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS")
+        && !llrm_support::env_flag!("LLRM_FORCE_FALLBACK")
+        && body.blocks.iter().all(|block| block.phis.is_empty())
+    {
         let kept = frame.saved();
         // The classes are all the greedy allocator reads of `Facts`, as
         // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
@@ -1661,7 +1667,7 @@ pub fn greedy_rewritten(
             sets: Some(&sets),
         };
         let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
-        if decided.report.stats.failed > 0 {
+        if decided.report.stats.failed > 0 || llrm_support::env_flag!("LLRM_FORCE_FALLBACK") {
             break;
         }
         let to_spill: BTreeSet<u32> = decided.spilled.iter().copied().collect();
