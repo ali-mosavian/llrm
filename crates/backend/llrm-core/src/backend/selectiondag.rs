@@ -69,23 +69,20 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
+pub mod actions;
 pub mod builder;
 mod dag;
-pub mod actions;
 pub mod dump;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
-pub mod function_lowering;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 
-pub use dag::{Rauw, BooleanContents, DagConfig, MemBase, MemInfo, NodeData, SDNode, SDNodeFlags, SDValue, SelectionDAG};
 pub use actions::{Action, Features, LoadExt, TargetLowering};
-pub use lowering::{TargetLoweringInfo, TypeAction};
+pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
 pub use isd::{CondCode, ISD};
-pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 

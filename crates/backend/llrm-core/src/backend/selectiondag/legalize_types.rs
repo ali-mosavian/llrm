@@ -35,7 +35,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::actions::TargetLowering;
-use super::dag::{Rauw, SDValue, SelectionDAG};
+use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::lowering::TypeAction;
 use super::mvt::EVT;
@@ -340,15 +340,38 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::Load => {
+                // The access keeps its memory type; the result is wider
+                // (an extending load), and the chain follows.
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+                let loaded = self.dag.get_load(to, chain, ptr, info);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
+                loaded
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
         Ok(())
     }
 
-    fn promote_integer_operand(&mut self, n: u32, _at: usize) -> Result<bool, LegalizeError> {
-        let node = self.dag.node(SDValue { node: n, res: 0 });
-        Err(LegalizeError::Unsupported { op: node.opcode, ty: node.values[0], what: "promote operand" })
+    /// `PromoteIntegerOperand`: true if `n` was updated in place and must be
+    /// looked at again.
+    fn promote_integer_operand(&mut self, n: u32, at: usize) -> Result<bool, LegalizeError> {
+        let node = SDValue { node: n, res: 0 };
+        let result = match self.dag.opcode(node) {
+            ISD::Truncate => {
+                let operand = self.promoted_integer(self.dag.operand(node, at));
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[operand])
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "promote operand" }),
+        };
+        if result.node == n {
+            return Ok(true);
+        }
+        self.replace_value_with(node, result);
+        Ok(false)
     }
 
     // --- expansion -------------------------------------------------------
@@ -389,9 +412,22 @@ impl<'a> TypeLegalizer<'a> {
         Ok(())
     }
 
-    fn expand_integer_operand(&mut self, n: u32, _at: usize) -> Result<bool, LegalizeError> {
-        let node = self.dag.node(SDValue { node: n, res: 0 });
-        Err(LegalizeError::Unsupported { op: node.opcode, ty: node.values[0], what: "expand operand" })
+    /// `ExpandIntegerOperand`.
+    fn expand_integer_operand(&mut self, n: u32, at: usize) -> Result<bool, LegalizeError> {
+        let node = SDValue { node: n, res: 0 };
+        let result = match self.dag.opcode(node) {
+            ISD::Truncate => {
+                let (lo, _) = self.expanded_integer(self.dag.operand(node, at));
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[lo])
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "expand operand" }),
+        };
+        if result.node == n {
+            return Ok(true);
+        }
+        self.replace_value_with(node, result);
+        Ok(false)
     }
 
     /// True if no reachable node has an illegal result or operand type
