@@ -16,8 +16,9 @@
 //! none). Exit: arbitrary-width `Ap`. Owner w-5. Review 2026-11-27.
 //!
 //! # Example
-//! `{0,+,1,+,2}` is `n*n`: zero at `n = 0`. `{-49,+,1,+,2}` (`n*n - 49`) is zero
-//! at `n = 7`: the equation `2n^2 + 0n - 98 = 0` over the doubled coefficients.
+//! `{0,+,1,+,2}` is `n*n`: zero at `n = 0`. `{-49,+,1,+,2}` (`n*n - 49`) is
+//! zero at `n = 7`: the equation `2n^2 + 0n - 98 = 0` over the doubled
+//! coefficients.
 
 /// The root and the bit width of its `APInt`: the width of the coefficients
 /// for the zero root, three times it otherwise.

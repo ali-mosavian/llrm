@@ -52,8 +52,6 @@ mod golden_tests;
 pub mod guards;
 #[cfg(test)]
 mod guards_tests;
-#[cfg(test)]
-mod range_factoring_tests;
 pub mod how_many;
 pub mod implied;
 pub mod invariant;
@@ -61,11 +59,13 @@ pub mod lcssa_form;
 pub mod minmax;
 pub mod normalize;
 pub mod pattern;
-pub mod quadratic;
 pub mod poison;
 pub mod predicate;
 pub mod print;
+pub mod quadratic;
 pub mod range;
+#[cfg(test)]
+mod range_factoring_tests;
 pub mod rewrite;
 pub mod scope;
 #[cfg(test)]
