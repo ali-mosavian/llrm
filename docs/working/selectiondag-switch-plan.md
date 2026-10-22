@@ -75,7 +75,7 @@ This week `builder.rs` was touched by 6 commits (981 lines, mostly sdag-a) and `
 
 ## A November m32 switch
 
-It needs the weekly runs on 11-16 and 11-23 and the switch on **11-24**. What moves:
+On the m32 corpus (C 124 programs, nib 30, qb 18 of 132, qbrt 30 of 124; the rest of qb/qbrt do not compile at m32) the builder's blockers are: cast FPRound 26 (round through memory, not elided), libm intrinsics 26, FP call result 6, `va_start` 4, `freeze` 1, `umin` 1, `memcpy` from constant data 1, `llrm.ia16.asm` in nib 1. A switch on **11-30 (run) / 12-01** needs the weekly runs on 11-23 and 11-30: everything on m32 done by 11-20 (builder 11-17, legalizer 11-18, emitter 11-20), three days of slack for FPRound-through-memory moving the 11-13 sweep. A switch a week earlier (11-24) needs the runs on 11-16 and 11-23, so everything by 11-13, which is what moves:
 
 | Step | Now | Needed | Days | Who needs help |
 |---|---|---|---|---|
