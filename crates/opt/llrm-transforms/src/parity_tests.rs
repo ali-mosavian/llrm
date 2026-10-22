@@ -80,7 +80,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("fold@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
@@ -114,6 +114,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check_backend(
         &[
             "cmpsub@1",
+            "processimpdefs@2",
             "optimizephis@1",
             "fixupsetcc@5",
             "machinelicm@4",

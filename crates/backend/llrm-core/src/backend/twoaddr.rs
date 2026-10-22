@@ -123,24 +123,35 @@ pub fn tied(
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::new(&facts, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for (place, one) in block.insns.iter().enumerate() {
-            let mut one = Arc::clone(one);
+        let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
+        let mut place = 0;
+        while place < work.len() {
+            let mut one = Arc::clone(&work[place]);
             let dist = walk.pass(&one);
-            if let Some(chosen) = walk.try_instruction_commute(&one, dist) {
+            let commuted = walk.try_instruction_commute(&one, dist);
+            if let Some(chosen) = &commuted {
                 changed = true;
-                one = chosen;
+                one = Arc::clone(chosen);
+            }
+            // `rescheduleMIBelowKill`: a tied instruction whose source dies in
+            // a later reader goes below it.
+            if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
+                changed = true;
+                continue;
             }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
-                && !walk.killed_at(&block.insns[place], base.value)
-                && crate::twoaddress::flags_dead_after(&block.insns, place, body.regs(), body.bits)
+                && !walk.killed_at(&work[place], base.value)
+                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
             {
                 changed = true;
                 insns.push(three);
+                place += 1;
                 continue;
             }
+            place += 1;
             let Some(fix) = _untied(&one, &mut mint) else {
                 insns.push(one);
                 continue;
@@ -399,8 +410,15 @@ fn _untied(
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
-    let movement =
+    let mut movement =
         _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
+    // The copy of an undef source reads it as undef
+    // (TwoAddressInstructionPass.cpp: `RegBUndef`).
+    if let Some(value) = first_value.filter(|value| one.undefs.contains(value)) {
+        let copy = Arc::make_mut(&mut movement);
+        copy.uses.retain(|used| *used != value);
+        copy.undefs.push(value);
+    }
     let remaining: BTreeSet<u32> = what.sources[1..].iter().flat_map(ir::values).map(|value| value.value).collect();
     let uses: Vec<u32> = one
         .uses
@@ -413,6 +431,7 @@ fn _untied(
     sources.extend(what.sources[1..].iter().cloned());
     fixed.what = Some(Semantics { sources, ..what.clone() });
     fixed.uses = std::iter::once(into.value).chain(uses).collect::<IndexSet<u32>>().into_iter().collect();
+    fixed.undefs.retain(|value| first_value != Some(*value) || remaining.contains(value));
     Some(vec![movement, Arc::new(fixed)])
 }
 
@@ -979,6 +998,62 @@ mod tests {
         let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
         assert!(lea(&tied(&of(live_source_add(-1, "add")), AddSub)));
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
+    }
+
+    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied
+    /// instruction.
+    fn lea_of(
+        at: i64,
+        into: u32,
+        base: u32,
+    ) -> Arc<Insn> {
+        use crate::model::ir::Mem;
+        let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
+        let what = Semantics {
+            name: Some("lea".to_owned()),
+            dests: vec![held(into, 4)],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![base]))
+    }
+
+    fn position(
+        body: &LirBody,
+        name: &str,
+    ) -> usize {
+        names_of(body).iter().position(|one| one == name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more,
+    /// by a `lea`, and dies there: the add goes below the `lea`, so `v1`
+    /// dies at the add and the copy it needs joins.
+    #[test]
+    fn test_a_tied_add_goes_below_the_one_reader_that_kills_its_source() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, lea_of(2, 5, 7), read(3, 8), read(4, 5)];
+        // `live_source_add` reads v7 and defines v8.
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// The pin's checks: a kill that is a copy, or a call between, leaves the
+    /// add where it was.
+    #[test]
+    fn test_a_tied_add_stays_where_the_kill_is_a_copy_or_something_stands_between() {
+        let add = || live_source_add(5, "add")[1].clone();
+        let copy_kill = vec![imm_def(0, 7), add(), copy_insn(2, 5, 7), read(3, 8), read(4, 5)];
+        let got = tied(&of(copy_kill), Off);
+        assert!(
+            position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2
+        );
+        let call = {
+            let what = Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![], vec![]))
+        };
+        let blocked = vec![imm_def(0, 7), add(), call, lea_of(3, 5, 7), read(4, 8), read(5, 5)];
+        let got = tied(&of(blocked), Off);
+        assert!(position(&got, "add") < position(&got, "lea"), "{:?}", names_of(&got));
     }
 
     #[test]

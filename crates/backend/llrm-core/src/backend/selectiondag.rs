@@ -85,11 +85,13 @@ pub mod actions;
 pub mod builder;
 mod dag;
 pub mod dag_combiner;
+pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
+pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
@@ -108,6 +110,8 @@ pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
 #[cfg(test)]

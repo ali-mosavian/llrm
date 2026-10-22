@@ -170,3 +170,13 @@ def test_a_pr_that_adds_no_slot_needs_no_pipeline_test(tmp_path):
     root = repo(tmp_path)
     commit(root, "notes.md", "nothing\n", "pr")
     assert pc.slot_without_pipeline_test(root, "parity") == []
+
+
+def test_a_changed_rust_file_that_fmt_would_change_is_named(tmp_path, monkeypatch):
+    """The runner formats an unformatted PR by pushing to its branch: a PR formatted before it is marked ready never races with that push."""
+    root = repo(tmp_path)
+    commit(root, "a.rs", "fn  a( ) {}\n", "pr")
+    monkeypatch.setattr(pc.parity_squash, "fmt_differs", lambda root_, files: {f for f in files if f == "a.rs"})
+    monkeypatch.setattr(pc, "changed_packages", lambda root_, files: [])
+    why = pc.precheck(root, "style: x", "Owner: w-8\nRows: none", "parity", subprocess.run)
+    assert any("a.rs: tools/fmt.sh would change it" in line for line in why), why

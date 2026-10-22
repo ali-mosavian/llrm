@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fixupbw.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fixupbw.rs sha256:3815707d3bc0e1aab1355b8a0fffd5e51fff6a5b9ea8e8d310a2ca77a4c69e73 -->
+<!-- src: crates/backend/llrm-core/src/backend/fixupbw.rs sha256:baa9a25181ddce2333046ed0809272e0af6608f6f20d84ab48b9830b1f44b783 -->
 
 # fixupbw
 
@@ -31,6 +31,16 @@ rewrite is made only if it is no longer. Exit: none (a fact of the encoding).
 DEVIATE W3 (no number yet): the pin refuses `movsx ax,al` only as the
 registers AX and AL; here a `movsx` within one register is refused whatever
 the registers. Owner w-5.
+
+## Example
+`unsigned char c = *p;` at `-m32 -O2`, where the rest of `eax` is dead:
+
+```text
+mov al, byte ptr [ebx]        ->    movzx eax, byte ptr [ebx]
+mov cl, dl                    ->    mov ecx, edx
+```
+
+From `test_a_byte_load_into_a_dead_register_is_the_zero_extending_load` and `test_a_byte_or_word_copy_is_the_dword_copy_when_the_rest_is_dead` in `tests/fixup_bw.rs`.
 
 ## Runs
 After `Peephole`, optimizing levels only.

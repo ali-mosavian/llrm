@@ -3508,6 +3508,20 @@ impl Selector<'_, '_, '_> {
             return self.float(operand, at, out);
         }
         let width = self.width(ty)?;
+        // Poison and undef are any value: an `implicit_def`, which
+        // `ProcessImplicitDefs` turns into undef reads (isel's `IMPLICIT_DEF`).
+        if let Operand::Constant(id) = operand
+            && matches!(
+                self.module.context.get(id).kind,
+                ConstantKind::Poison | ConstantKind::Undef
+            )
+        {
+            let held = Held { value: self.fresh(), width };
+            let what =
+                semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+            out.push(insn(at, what));
+            return Ok(held);
+        }
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
             // A narrow zero is written whole where the target runs narrow

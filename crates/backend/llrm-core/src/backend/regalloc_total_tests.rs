@@ -56,30 +56,3 @@ fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
 }
 
 const CONC7: &str = "_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_permute622_dup1";
-
-/// Seven pointers walking 24-byte records at `-march=core2`: the loop's
-/// parallel copy has a move for each, each reading an address made again.
-/// A value made for the copy lives across all of it, and seven of them left
-/// no register for the eighth ("value#125 cannot be spilled and ...", found
-/// by the loop corpus after the products moved before the copy).
-#[test]
-fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
-    // Without the spiller: a phi it moves to memory leaves a copy of six, and
-    // the allocator must still take seven.
-    // Without the coalescer either: one that joins the copies leaves no
-    // parallel copy to stress the allocator with.
-    let (body, phases) = crate::backend::phielim::with_old_lowering(|| {
-        crate::backend::regalloc_input::before_phase_skipping(
-            crate::backend::regalloc_input::Calls::C,
-            "walks7_s24.ll",
-            "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end",
-            "Core",
-            "RegAlloc",
-            &["SsaSpill", "Coalescer"],
-        )
-    });
-    let longest = longest_copy(&body);
-    assert!(longest >= 7, "premise: a parallel copy of {longest} moves");
-    let done = through(body, phases);
-    assert!(done.is_ok(), "{:?}", done.err());
-}

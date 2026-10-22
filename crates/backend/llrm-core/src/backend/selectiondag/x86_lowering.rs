@@ -120,6 +120,7 @@ impl Hooks for X86Lowering {
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             _ => None,
         }
     }
@@ -512,4 +513,45 @@ fn combine_mul(
         }
     }
     new_mul
+}
+
+/// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width
+/// shift by a variable amount as two shifts, a funnel shift and selects on
+/// bit 5 of the amount.
+fn lower_shift_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lo, hi, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let bits = u128::from(vt.size_in_bits());
+    let amount_vt = dag.value_type(amount);
+    let is_shl = dag.opcode(node) == ISD::ShlParts;
+    let is_sra = dag.opcode(node) == ISD::SraParts;
+    let mask = dag.get_constant(bits - 1, amount_vt);
+    let safe = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+    let tmp1 = if is_sra {
+        let sign = dag.get_constant(bits - 1, amount_vt);
+        dag.get_node(ISD::Sra, vt, &[hi, sign])
+    } else {
+        dag.get_constant(0, vt)
+    };
+    let (tmp2, tmp3) = if is_shl {
+        (dag.get_node(ISD::FShl, vt, &[hi, lo, amount]), dag.get_node(ISD::Shl, vt, &[lo, safe]))
+    } else {
+        (
+            dag.get_node(ISD::FShr, vt, &[hi, lo, amount]),
+            dag.get_node(if is_sra { ISD::Sra } else { ISD::Srl }, vt, &[hi, safe]),
+        )
+    };
+    let width = dag.get_constant(bits, amount_vt);
+    let and = dag.get_node(ISD::And, amount_vt, &[amount, width]);
+    let zero = dag.get_constant(0, amount_vt);
+    let cond = dag.get_setcc(EVT::I8, and, zero, CondCode::SetNe);
+    let (out_lo, out_hi) = if is_shl {
+        (dag.get_select(vt, cond, tmp1, tmp3), dag.get_select(vt, cond, tmp3, tmp2))
+    } else {
+        (dag.get_select(vt, cond, tmp3, tmp2), dag.get_select(vt, cond, tmp1, tmp3))
+    };
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[out_lo, out_hi])
 }

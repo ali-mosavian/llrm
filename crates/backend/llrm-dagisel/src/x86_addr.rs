@@ -514,9 +514,9 @@ impl<D: AddrDag> Matcher<'_, D> {
         }
         let backup = *am;
         let operand = self.operand(n, 0);
-        let Some(wrapped) = self.dag.wrapped_symbol(operand) else {
-            panic!("unhandled symbol reference node");
-        };
+        // A symbol our DAG cannot name (a constant pool, a jump table) stays a
+        // register operand.
+        let Some(wrapped) = self.dag.wrapped_symbol(operand) else { return true };
         am.symbol = Some(wrapped.symbol);
         am.symbol_flags = wrapped.flags;
         // `ExternalSymbol` and `MCSymbol` carry no offset.

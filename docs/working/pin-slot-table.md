@@ -326,7 +326,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
 | -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
@@ -337,7 +337,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O1 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O1 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O1 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O1 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
@@ -434,7 +434,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O2 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O2 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O2 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -448,7 +448,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O2 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O2 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O2 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -552,7 +552,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O3 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O3 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O3 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -566,7 +566,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O3 | Simplify | simple-loop-unswitch<nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O3 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O3 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -672,7 +672,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -Os | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -Os | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -Os | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
@@ -686,7 +686,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -Os | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -Os | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -Os | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |

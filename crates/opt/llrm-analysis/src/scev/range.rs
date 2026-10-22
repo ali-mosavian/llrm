@@ -728,16 +728,113 @@ impl ScalarEvolution {
         range
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6467
-    /// `getRangeForUnknownRecurrence`. SEAM (BackedgeCounts): it needs
-    /// `getSmallConstantMaxTripCount`, which is zero until trip counts land,
-    /// and then returns the full set at the same point LLVM does.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6463
+    /// `getRangeForUnknownRecurrence`: a shift recurrence `<start, shift,
+    /// step>` over a loop with a small constant maximum trip count.
     fn get_range_for_unknown_recurrence(
         &mut self,
         cx: &Cx,
         u: Scev,
     ) -> ConstantRange {
-        ConstantRange::full(self.get_type_size_in_bits(cx, self.type_of(u)))
+        use llrm_mir::knownbits::KnownBits;
+        use llrm_mir::opcode::BinaryOp;
+        use llrm_mir::valuetracking::pattern::match_simple_recurrence;
+
+        let bit_width = self.get_type_size_in_bits(cx, self.type_of(u));
+        let full = ConstantRange::full(bit_width);
+
+        // Match a simple recurrence of the form: <start, ShiftOp, Step>, and
+        // then use information about the trip count to improve our available
+        // range. Step may be loop varying here.
+        let Kind::Unknown(Operand::Value(phi_value)) = self.node(u).kind.clone() else { return full };
+        let ValueDef::Instruction(p) = cx.function.value(phi_value).def else { return full };
+        if cx.function.instruction(p).opcode != Opcode::Phi {
+            return full;
+        }
+        let Some(header) = cx.function.parent(p) else { return full };
+
+        // No phi input may come from an unreachable block.
+        if cx.function.predecessors(header).iter().any(|&pred| !cx.tree.is_reachable(pred)) {
+            return full;
+        }
+
+        let q = cx.query(None);
+        let Some((bo, start, step)) = match_simple_recurrence(&q, p) else { return full };
+
+        // A recurrence in reachable code is in a loop; BO may be in a subloop.
+        let Some(lp) = cx.loops.get_loop_for(header) else { return full };
+        let Some(bo_block) = cx.function.parent(bo) else { return full };
+        if !lp.contains(bo_block) {
+            return full;
+        }
+
+        let Opcode::Binary(op) = cx.function.instruction(bo).opcode else { return full };
+        if !matches!(op, BinaryOp::AShr | BinaryOp::LShr | BinaryOp::Shl) {
+            return full;
+        }
+        if cx.function.instruction(bo).operands[0] != Operand::Value(phi_value) {
+            return full;
+        }
+
+        let tc = self.get_small_constant_max_trip_count(cx, header);
+        if tc == 0 || tc >= bit_width {
+            return full;
+        }
+
+        let known_start = compute_known_bits(&q, start, 0);
+        let known_step = compute_known_bits(&q, step, 0);
+
+        // The total shift amount, careful of overflow.
+        let max_shift = known_step.max_value();
+        let mask = llrm_mir::context::mask(bit_width);
+        let Some(total) = max_shift.checked_mul(u128::from(tc - 1)).filter(|total| *total <= mask) else {
+            return full;
+        };
+        let total_shift = KnownBits::constant(bit_width, total);
+
+        match op {
+            BinaryOp::AShr => {
+                // The end value is closer to zero than the start.
+                let known_end = KnownBits::ashr(&known_start, &total_shift, false, false);
+                if known_start.is_non_negative() {
+                    return ConstantRange::non_empty(
+                        bit_width,
+                        known_end.min_value(),
+                        known_start.max_value().wrapping_add(1),
+                    );
+                }
+                if known_start.is_negative() {
+                    return ConstantRange::non_empty(
+                        bit_width,
+                        known_start.min_value(),
+                        known_end.max_value().wrapping_add(1),
+                    );
+                }
+            }
+            BinaryOp::LShr => {
+                // The low end of the unsigned range is the last value produced.
+                let known_end = KnownBits::lshr(&known_start, &total_shift, false, false);
+                return ConstantRange::non_empty(
+                    bit_width,
+                    known_end.min_value(),
+                    known_start.max_value().wrapping_add(1),
+                );
+            }
+            BinaryOp::Shl => {
+                // Iff no bits are shifted out, the value increases on every
+                // shift.
+                let known_end = KnownBits::shl(&known_start, &total_shift, false, false, false);
+                if total < u128::from(known_start.count_min_leading_zeros()) {
+                    return ConstantRange::new(
+                        bit_width,
+                        known_start.min_value(),
+                        known_end.max_value().wrapping_add(1),
+                    );
+                }
+            }
+            _ => unreachable!("filtered out above"),
+        }
+        full
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6836

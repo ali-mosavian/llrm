@@ -53,6 +53,13 @@
 //! piece 4): a source that dies is never converted; the pin also converts one
 //! that dies when the destination is mapped to another register.
 //!
+//! `rescheduleMIBelowKill` moves a tied instruction below the one local reader
+//! that kills its source (and the copies of its result), so the source dies at
+//! the tied instruction and no copy is made
+//! (TwoAddressInstructionPass.cpp#L928). A load never moves (the pin's latency
+//! test refuses it, DEVIATE TA-7: no itineraries), and the pin's copy chain is
+//! moved in order, where its splice reverses a chain of two.
+//!
 //! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
 //! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
 //! 2026-11-14): the kills come from one backward scan of each block over the
@@ -96,7 +103,7 @@ pub struct BodyFacts {
     insn: HashMap<InstrKey, Arc<Insn>>,
     /// (instruction, value): the use is the value's last, nothing after reads
     /// it.
-    killed: HashSet<(InstrKey, u32)>,
+    killed: std::cell::RefCell<HashSet<(InstrKey, u32)>>,
 }
 
 impl BodyFacts {
@@ -107,7 +114,7 @@ impl BodyFacts {
             refs: HashMap::default(),
             block_of: HashMap::default(),
             insn: HashMap::default(),
-            killed: HashSet::default(),
+            killed: Default::default(),
         };
         for (at, block) in body.blocks.iter().enumerate() {
             // Whether each value read in this block is live after the point the
@@ -126,7 +133,7 @@ impl BodyFacts {
                     facts.refs.entry(value).or_default().push((key, false));
                     let after = *live.entry(value).or_insert_with(|| rows.live_out(block.at, value));
                     if !after {
-                        facts.killed.insert((key, value));
+                        facts.killed.get_mut().insert((key, value));
                     }
                     live.insert(value, true);
                 }
@@ -141,6 +148,82 @@ impl BodyFacts {
     ) -> &[(InstrKey, bool)] {
         self.refs.get(&value).map_or(&[], Vec::as_slice)
     }
+}
+
+/// An instruction nothing moves past: control flow, a call, a push or pop, a
+/// string operation, a fixed register, a volatile access or an unmodeled
+/// effect.
+fn barrier(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return true };
+    matches!(
+        what.op,
+        Op::Jump
+            | Op::Branch
+            | Op::Call
+            | Op::Return
+            | Op::Escape
+            | Op::Barrier
+            | Op::Push
+            | Op::Pop
+            | Op::Leave
+            | Op::Fill
+            | Op::Copy
+            | Op::Restore
+            | Op::Data
+            | Op::Exchange
+    ) || one.call.is_some()
+        || one.volatile
+        || !one.clobbers.is_empty()
+        || !one.clobbers_high.is_empty()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+        || one.group.is_some()
+}
+
+/// `isSafeToMove` with a store seen: arithmetic on values alone, no memory, no
+/// fixed register.
+fn movable(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return false };
+    !barrier(one)
+        && matches!(
+            what.op,
+            Op::Binary | Op::Unary | Op::Move | Op::Extend | Op::Address | Op::Funnel | Op::Select
+        )
+        && what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::Held(_) | Loc::Imm(_)))
+}
+
+fn flag_lanes(
+    one: &Insn,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+) -> Option<(bool, bool)> {
+    use crate::backend::liveness;
+    let flags = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
+    let effect = liveness::effect(regs, bits, one)?;
+    Some((flags(&effect.all_reads()), flags(&effect.writes)))
+}
+
+/// Whether `one` writes the flags (an unknown effect does).
+fn flags_written(
+    one: &Insn,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+) -> bool {
+    flag_lanes(one, regs, bits).is_none_or(|(_, writes)| writes)
+}
+
+/// Whether `one` neither reads nor writes the flags (an unknown effect does
+/// both).
+fn flags_untouched(
+    one: &Insn,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+) -> bool {
+    flag_lanes(one, regs, bits).is_some_and(|(reads, writes)| !reads && !writes)
 }
 
 /// Which tied instructions become a `lea`: none; the adds and subs (a target
@@ -373,7 +456,7 @@ impl<'a> Commuter<'a> {
         key: InstrKey,
         reg: u32,
     ) -> bool {
-        self.facts.killed.contains(&(key, reg))
+        self.facts.killed.borrow().contains(&(key, reg))
     }
 
     /// `isKilled`: whether `reg`, used by the instruction, dies there, looking
@@ -463,6 +546,114 @@ impl<'a> Commuter<'a> {
         reg: u32,
     ) -> bool {
         self.is_killed(one.id(), reg)
+    }
+
+    /// `rescheduleMIBelowKill` for the tied instruction `work[at]` (its source
+    /// `reg`): move it, with the copies that follow it, below the
+    /// instruction that kills `reg`, where nothing in between objects. True
+    /// when the list changed; `at` then holds what came after the instruction.
+    pub fn reschedule_mi_below_kill(
+        &mut self,
+        work: &mut Vec<Arc<Insn>>,
+        at: usize,
+        regs: llrm_lir::registers::Regs,
+        bits: u32,
+    ) -> bool {
+        let mi = Arc::clone(&work[at]);
+        // Only an instruction the pass would untie: tied, and writing another
+        // value than it reads.
+        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
+            return false;
+        };
+        if into.value == source.value {
+            return false;
+        }
+        let source = *source;
+        let reg = source.value;
+        if !self.distance.contains_key(&mi.id()) || !movable(&mi) {
+            return false;
+        }
+        // The last reader of `reg` in the block, which must be the kill and no
+        // later definition.
+        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
+            return false;
+        };
+        if work[last + 1..].iter().any(|one| one.defines.contains(&reg))
+            || !self.facts.killed.borrow().contains(&(work[last].id(), reg))
+        {
+            return false;
+        }
+        let kill = Arc::clone(&work[last]);
+        if crate::coalescer::pair::full_copy(&kill).is_some() || barrier(&kill) {
+            return false;
+        }
+        // `isTwoAddrUse`: a kill that ties `reg` itself stays.
+        if let Some(what) = kill.what.as_ref()
+            && crate::backend::twoaddr::ties(what)
+            && matches!(
+                what.sources.first(),
+                Some(Loc::Held(held)) if held.value == reg
+            )
+        {
+            return false;
+        }
+        let uses: Vec<u32> = mi.uses.clone();
+        let mut defs: Vec<u32> = mi.defines.clone();
+        let kills: Vec<u32> =
+            mi.uses.iter().copied().filter(|&value| value != reg && self.killed_at(&mi, value)).collect();
+        // The copies connected to it move down as well.
+        let mut end = at + 1;
+        while end < work.len()
+            && let Some((dst, src)) = crate::coalescer::pair::full_copy(&work[end])
+            && defs.contains(&src.value)
+        {
+            defs.push(dst.value);
+            end += 1;
+        }
+        // The flags it writes are not to be read or written between.
+        let writes_flags = flags_written(&mi, regs, bits);
+        if end > last {
+            return false;
+        }
+        let mut visited = 0;
+        for other in &work[end..=last] {
+            if visited > 10 {
+                return false;
+            }
+            visited += 1;
+            if barrier(other) {
+                return false;
+            }
+            if writes_flags && !flags_untouched(other, regs, bits) {
+                return false;
+            }
+            if other.defines.iter().any(|value| uses.contains(value) || defs.contains(value)) {
+                return false;
+            }
+            for &value in &other.uses {
+                if defs.contains(&value) {
+                    return false;
+                }
+                let kills_here = self.facts.killed.borrow().contains(&(other.id(), value));
+                if value != reg && ((kills_here && uses.contains(&value)) || kills.contains(&value)) {
+                    return false;
+                }
+                if value == reg && !kills_here {
+                    return false;
+                }
+            }
+        }
+        let moved: Vec<Arc<Insn>> = work.drain(at..end).collect();
+        let after = last - (end - at) + 1;
+        for (place, one) in moved.into_iter().enumerate() {
+            work.insert(after + place, one);
+        }
+        let mut killed = self.facts.killed.borrow_mut();
+        killed.remove(&(kill.id(), reg));
+        killed.insert((mi.id(), reg));
+        self.distance.remove(&mi.id());
+        true
     }
 
     /// `tryInstructionCommute` for the instruction `one` (at `dist`): the
