@@ -2,8 +2,8 @@
 //! `LowerPARITY`, `LowerCTPOP`, `LowerABS`) and the generic promotions and
 //! expansion behind them.
 
-use super::legalize_dag::DagLegalizer;
-use super::x86_lowering::{X86Lowering, cond, x86isd};
+use super::super::legalize_dag::DagLegalizer;
+use super::super::x86_lowering::{X86Lowering, cond, x86isd};
 use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
 

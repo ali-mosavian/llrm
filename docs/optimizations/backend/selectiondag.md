@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:e821476b2d60f12d17ec1b415d0e5767facb653d6b34b3d5e67f0059705f217d -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:07bc4c75b8018c075887beb08a3f8c4515ce0573bee79e7240801512a82a5538 -->
 
 # selectiondag
 
@@ -31,6 +31,17 @@ A `switch` of range clusters is the split-and-chain compare blocks of
 `visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
 intrinsics, floats and values wider than a
 register are refused (`Refused`) until their pieces land.
+
+## Example
+`%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+then `store i32 %s, ptr @g`:
+
+```text
+t2: i32,ch = CopyFromReg t0, Register:i32 %0
+t4: i32,ch = CopyFromReg t0, Register:i32 %1
+t5: i32 = add t2, t4
+t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+```
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The

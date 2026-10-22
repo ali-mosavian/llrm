@@ -4,7 +4,7 @@ and why each of ours was left (`LLRM_COALESCE_WHY=1`).
 usage: copywhy.py LLRM_C LLC OUT_DIR FUNCTION... -- llrm-c args (source, flags, includes)
 
 Ours counts `dst := mov src` with a register destination in `ISEL_DUMP=1`; a store of a register is no copy. The pin
-runs `llc -O2` on the dump's `*-addresssink.ll` (llc has no -Os). The reasons come from a probe on the coalescer's
+runs `llc -O2` on the dump's `*-cgpaddr.ll` (llc has no -Os). The reasons come from a probe on the coalescer's
 final state, so a probe that joins changes the state the next sees: a count, not a replay.
 """
 import collections
@@ -58,8 +58,8 @@ def main() -> None:
         if line.startswith("WHY\t"):
             _, fn, reason = line.split("\t")
             why[fn][reason] += 1
-    pin = pin_counts(llc, glob.glob(os.path.join(out, "*-addresssink.ll"))[0])
-    print("pin = llc -O2 on the addresssink dump; ours = llrm-c as run (see header of tools/copywhy.py)")
+    pin = pin_counts(llc, glob.glob(os.path.join(out, "*-cgpaddr.ll"))[0])
+    print("pin = llc -O2 on the cgpaddr dump; ours = llrm-c as run (see header of tools/copywhy.py)")
     print("function | phi pin/ours | twoaddr pin/ours | coalescer pin/ours | why ours were left")
     for f in funcs:
         cells = [f"{pin.get((s, f))}/{ours.get((s, f))}" for s in STAGES]
