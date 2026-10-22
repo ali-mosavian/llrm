@@ -25,6 +25,19 @@ X=$S/lib/Target/X86
 # Only the tables name matcher symbols; the predicate code after them names types too.
 sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/X86GenDAGISel.inc" |
   grep -oE '\b(ISD|X86ISD|MVT|X86|TargetOpcode|MCRegister)::[A-Za-z0-9_]+' | sort -u > "$WORK/symbols.txt"
+# MayLoad and MayStore of each instruction, from the rows of the pin's MCInstrDesc table.
+"$LLVM_BUILD/bin/llvm-tblgen" -gen-instr-info -I"$X" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" \
+  -omit-comments "$X/X86.td" -o "$WORK/X86GenInstrInfo.inc"
+python3 -I - "$WORK/X86GenInstrInfo.inc" "$WORK/memflags.txt" <<'PY'
+import re, sys
+rows = re.compile(r"^\s*\{ (\d+),.*\},\s*// \w+$")
+with open(sys.argv[1]) as src, open(sys.argv[2], "w") as out:
+    for line in src:
+        m = rows.match(line)
+        if m and ("MCID::MayLoad" in line or "MCID::MayStore" in line):
+            out.write(f"{m.group(1)} {int('MCID::MayLoad' in line)} {int('MCID::MayStore' in line)}\n")
+PY
+
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
 extras=$(cat "$ROOT/tools/dagisel/extra_symbols.txt")
 { cat "$WORK/symbols.txt"; echo "$extras"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
@@ -44,4 +57,4 @@ g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" -I"$X" -I"$LLVM_BUILD/l
 
 mkdir -p "$OUT"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
-"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --out "$OUT"
+"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --out "$OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --memflags "$WORK/memflags.txt"

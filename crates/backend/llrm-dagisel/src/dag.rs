@@ -43,6 +43,8 @@ pub type MemRef = u32;
 
 pub trait Dag {
     fn opcode(&self, node: u32) -> Opcode;
+    /// `SDNode::isMachineOpcode`.
+    fn is_machine(&self, node: u32) -> bool;
     fn num_operands(&self, node: u32) -> usize;
     fn operand(&self, node: u32, index: usize) -> SDValue;
     fn num_values(&self, node: u32) -> usize;
@@ -54,6 +56,12 @@ pub trait Dag {
     fn use_empty(&self, node: u32) -> bool;
     /// `SDNode::hasOneUse`.
     fn node_has_one_use(&self, node: u32) -> bool;
+    /// The uses of `value`: the user node and the operand number.
+    fn users(&self, value: SDValue) -> Vec<(u32, usize)>;
+    /// `SDNode::getGluedUser`.
+    fn glued_user(&self, node: u32) -> Option<u32>;
+    /// `SDNode::isOnlyUserOf`: `def` has no user but `node`.
+    fn is_only_user_of(&self, node: u32, def: u32) -> bool;
     /// `SDNode::hasNUsesOfValue(n, res)`.
     fn has_n_uses_of_value(&self, value: SDValue, n: usize) -> bool;
     /// `ConstantSDNode::getAPIntValue().trySExtValue()`.

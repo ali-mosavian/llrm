@@ -28,6 +28,7 @@ pub mod isd {
     pub const BUILD_VECTOR: u16 = 162;
     pub const BUILTIN_OP_END: u16 = 475;
     pub const BasicBlock: u16 = 7;
+    pub const BlockAddress: u16 = 20;
     pub const CALLSEQ_END: u16 = 334;
     pub const CALLSEQ_START: u16 = 333;
     pub const CATCHRET: u16 = 329;
@@ -40,6 +41,7 @@ pub mod isd {
     pub const CTTZ_ZERO_POISON: u16 = 216;
     pub const Constant: u16 = 12;
     pub const ConstantFP: u16 = 13;
+    pub const ConstantPool: u16 = 18;
     pub const CopyFromReg: u16 = 52;
     pub const CopyToReg: u16 = 51;
     pub const DEACTIVATION_SYMBOL: u16 = 474;
@@ -49,6 +51,7 @@ pub mod isd {
     pub const EXTRACT_SUBVECTOR: u16 = 167;
     pub const EXTRACT_VECTOR_ELT: u16 = 164;
     pub const EntryToken: u16 = 1;
+    pub const ExternalSymbol: u16 = 19;
     pub const FABS: u16 = 261;
     pub const FADD: u16 = 99;
     pub const FDIV: u16 = 102;
@@ -67,12 +70,14 @@ pub mod isd {
     pub const FSQRT: u16 = 262;
     pub const FSUB: u16 = 100;
     pub const FrameIndex: u16 = 16;
+    pub const GlobalAddress: u16 = 14;
     pub const HANDLENODE: u16 = 346;
     pub const INSERT_SUBVECTOR: u16 = 166;
     pub const INSERT_VECTOR_ELT: u16 = 163;
     pub const INTRINSIC_VOID: u16 = 50;
     pub const INTRINSIC_WO_CHAIN: u16 = 48;
     pub const INTRINSIC_W_CHAIN: u16 = 49;
+    pub const JumpTable: u16 = 17;
     pub const LIFETIME_END: u16 = 389;
     pub const LIFETIME_START: u16 = 388;
     pub const LLRINT: u16 = 294;
@@ -141,6 +146,7 @@ pub mod isd {
     pub const TargetGlobalTLSAddress: u16 = 40;
     pub const TargetJumpTable: u16 = 42;
     pub const TokenFactor: u16 = 2;
+    pub const UADDO_CARRY: u16 = 75;
     pub const UADDSAT: u16 = 86;
     pub const UBSANTRAP: u16 = 351;
     pub const UINT_TO_FP: u16 = 235;
@@ -421,6 +427,7 @@ pub mod x86isd {
     pub const SEG_ALLOCA: u16 = 737;
     pub const SELECTS: u16 = 738;
     pub const SETCC: u16 = 739;
+    pub const SETCC_CARRY: u16 = 740;
     pub const SHUF128: u16 = 741;
     pub const SHUFP: u16 = 742;
     pub const SINT_TO_FP_RND: u16 = 743;
@@ -456,6 +463,7 @@ pub mod x86isd {
     pub const UCOMI: u16 = 773;
     pub const UCOMX: u16 = 774;
     pub const UINT_TO_FP_RND: u16 = 775;
+    pub const UMUL: u16 = 776;
     pub const UMWAIT: u16 = 777;
     pub const UNPCKH: u16 = 778;
     pub const UNPCKL: u16 = 779;
@@ -636,6 +644,12 @@ pub mod x86isd {
     pub const WrapperRIP: u16 = 954;
     pub const XOR: u16 = 955;
     pub const XTEST: u16 = 956;
+}
+
+pub mod x86 {
+    pub const NEG16r: u16 = 2854;
+    pub const NEG32r: u16 = 2864;
+    pub const NEG8r: u16 = 2884;
 }
 
 pub mod mvt {

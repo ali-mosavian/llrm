@@ -20,8 +20,8 @@ fn main() {
         let mut dag = TestDag::new();
         let a = dag.input(1, mvt::i32);
         let b = dag.input(2, mvt::i32);
-        let c = dag.constant(40, mvt::i32);
-        let shl_amount = dag.constant(3, mvt::i8);
+        let c = dag.make_constant(40, mvt::i32);
+        let shl_amount = dag.make_constant(3, mvt::i8);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, b]), 0);
         let load = dag.add(Node {
             opcode: isd::LOAD,

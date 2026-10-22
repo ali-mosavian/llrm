@@ -85,3 +85,137 @@ fn neither_cpu_emits_cmov_and_only_p5_emits_cmpxchg8b() {
     assert!(emits(x86_p5::MACHINE_OPCODES, "LCMPXCHG8B"), "P5 has cx8");
     assert!(emits(table::MACHINE_OPCODES, "ADD32rr"), "the table must not be empty of the basics");
 }
+
+mod x86_addr {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_addr::{AddressMode, AddressOperands, BaseType, Matcher, SymbolKind};
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn hooks() -> X86Hooks {
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true })
+    }
+
+    fn constant_of(dag: &TestDag, v: SDValue) -> Option<i64> {
+        dag.nodes[v.node as usize].constant
+    }
+
+    /// `a[i + 2]` for `int a[]`: the address is `a + ((i + 2) << 2)`.
+    fn indexed_address(dag: &mut TestDag) -> (SDValue, SDValue, SDValue) {
+        let base = dag.input(1, mvt::i32);
+        let i = dag.input(2, mvt::i32);
+        let two = dag.make_constant(2, mvt::i32);
+        let shift = dag.make_constant(2, mvt::i8);
+        let i_plus_2 = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[i, two]), 0);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[i_plus_2, shift]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[base, scaled]), 0);
+        (address, base, i)
+    }
+
+    fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
+        Matcher { dag, pointer_type: mvt::i32 }
+    }
+
+    #[test]
+    fn a_index_plus_two_scaled_by_four_is_one_base_index_disp_operand() {
+        let mut dag = TestDag::new();
+        let (address, base, i) = indexed_address(&mut dag);
+
+        let AddressOperands { base: b, scale, index, disp, .. } = matcher(&mut dag).select_addr(address).unwrap();
+
+        assert_eq!((b, index), (base, i));
+        assert_eq!(constant_of(&dag, scale), Some(4));
+        assert_eq!(constant_of(&dag, disp), Some(8), "the +2 folds into the displacement, scaled");
+    }
+
+    #[test]
+    fn a_load_of_that_address_is_mov32rm_with_the_folded_operands() {
+        let mut dag = TestDag::new();
+        let (address, base, i) = indexed_address(&mut dag);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i32, mvt::Other],
+            ops: vec![SDValue::new(0, 0), address, SDValue::new(0, 0)],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        let mut hooks = hooks();
+
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, load), Outcome::Selected);
+
+        assert_eq!(selected(&dag, load), "MOV32rm");
+        let ops = &dag.nodes[load as usize].ops;
+        assert_eq!((ops[0], ops[2]), (base, i));
+        assert_eq!(constant_of(&dag, ops[1]), Some(4));
+        assert_eq!(constant_of(&dag, ops[3]), Some(8));
+    }
+
+    #[test]
+    fn a_frame_slot_plus_a_constant_is_a_frame_base_with_a_displacement() {
+        let mut dag = TestDag::new();
+        let slot = dag.frame_index(3, mvt::i32);
+        let four = dag.make_constant(4, mvt::i32);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[slot, four]), 0);
+
+        let a = matcher(&mut dag).select_addr(address).unwrap();
+
+        assert_eq!(dag.nodes[a.base.node as usize].opcode, isd::TargetFrameIndex);
+        assert_eq!(constant_of(&dag, a.disp), Some(4));
+    }
+
+    #[test]
+    fn a_wrapped_global_plus_a_constant_keeps_the_symbol_and_folds_the_offset() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global(7, 0, mvt::i32);
+        let twelve = dag.make_constant(12, mvt::i32);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[global, twelve]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(address, &mut am));
+
+        let symbol = am.symbol.unwrap();
+        assert_eq!((symbol.kind, symbol.id, am.disp), (SymbolKind::Global, 7, 12));
+        assert!(am.base_reg.is_none() && am.index_reg.is_none() && am.base_type == BaseType::Reg);
+    }
+
+    #[test]
+    fn lea_wants_more_than_a_plain_add() {
+        let mut dag = TestDag::new();
+        let (address, ..) = indexed_address(&mut dag);
+        let a = dag.input(3, mvt::i32);
+        let b = dag.input(4, mvt::i32);
+        let plain = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, b]), 0);
+
+        assert!(matcher(&mut dag).select_lea_addr(address).is_some(), "base + index*4 + 8 is worth an lea");
+        assert!(matcher(&mut dag).select_lea_addr(plain).is_none(), "a + b is an add");
+    }
+
+    #[test]
+    fn two_times_an_index_becomes_base_plus_index() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let shift = dag.make_constant(1, mvt::i8);
+        let address = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[x, shift]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(address, &mut am));
+
+        assert_eq!((am.base_reg, am.index_reg, am.scale), (Some(x), Some(x), 1), "lea (x,x), not (,x,2)");
+    }
+
+    #[test]
+    fn a_displacement_near_the_limit_is_not_folded_next_to_a_register() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let huge = dag.make_constant(0x4000_0000, mvt::i32);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[p, huge]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag).match_address(address, &mut am));
+
+        assert_eq!(am.disp, 0, "isInt<31> fails: the constant stays a register operand");
+        assert!(am.base_reg.is_some() && am.index_reg.is_some());
+    }
+}

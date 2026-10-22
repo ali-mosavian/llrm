@@ -20,6 +20,8 @@ pub mod generated;
 pub mod interp;
 pub mod matcher;
 pub mod predicates;
+pub mod x86_addr;
+pub mod x86_hooks;
 
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;
