@@ -343,3 +343,52 @@ rule immediate_argument
     when    free(@0, held_copy), free(@1, pushed_held), same_width(v, i), width_in(v, [16, 32]),
             used_once(v), defines_only(@0, v), uses_only(@1, v)
     rewrite @0: =@1 i {defines: [], uses: []} ; drop @1
+
+
+// X86FixupBWInsts (X86FixupBWInsts.cpp L165): after allocation, a byte or word load, copy or
+// extension whose register's other bytes are dead after it is the dword form. A zero
+// extending load needs no merge with the old upper bytes, and a dword copy has no
+// partial-register write. `mov al,[m]` is not widened for size (it takes a byte more);
+// `ah` is never the destination (the pin's `sub_8bit_hi`); `movsx ax,al` stays `cbw`.
+group byte_word_fixup
+    walk each
+
+rule loaded_byte
+    match   mov d:reg8, src:mem8
+    when    !for_size(), low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movzx widen(d), src
+
+rule loaded_word
+    match   mov d:reg16, src:mem16
+    when    low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movzx widen(d), src
+
+rule copied_byte
+    match   mov d:reg8, s:reg8
+    when    low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: mov widen(d), widen(s)
+
+rule copied_word
+    match   mov d:reg16, s:reg16
+    when    low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: mov widen(d), widen(s)
+
+rule sign_extended_byte
+    match   movsx d:reg16, s:reg8
+    when    low_view(d), low_view(s), !same_root(d, s), free(@0, widening), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movsx widen(d), s
+
+rule sign_extended_byte_cell
+    match   movsx d:reg16, s:mem8
+    when    low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movsx widen(d), s
+
+rule zero_extended_byte
+    match   movzx d:reg16, s:reg8
+    when    low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movzx widen(d), s
+
+rule zero_extended_byte_cell
+    match   movzx d:reg16, s:mem8
+    when    low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), encodable($0)
+    rewrite @0: movzx widen(d), s

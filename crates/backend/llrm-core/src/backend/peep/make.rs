@@ -57,6 +57,15 @@ pub fn root_upper(
     _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| lane.1 >= 2).collect()
 }
 
+/// The lanes of a register's root that the register itself does not cover.
+pub fn rest_of_root(
+    regs: Regs,
+    one: Reg,
+) -> Lanes {
+    let own = _lanes(regs, one.register);
+    _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| !own.contains(lane)).collect()
+}
+
 /// The whole register a view belongs to, as a dword operand.
 pub fn widen(
     _regs: Regs,

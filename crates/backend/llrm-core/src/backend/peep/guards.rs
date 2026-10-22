@@ -285,6 +285,21 @@ pub fn byte_loadable(
         && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
 }
 
+/// `d` is the low part of its root (not `ah`): the byte or word starts the
+/// dword, so a dword access to the root keeps its place.
+pub fn low_view(
+    cx: &Cx,
+    d: Reg,
+) -> bool {
+    let regs = cx.regs();
+    _lanes(regs, d.register).iter().all(|lane| lane.1 < d.width as u32)
+}
+
+/// The code is for size (`shouldOptimizeForSize`).
+pub fn for_size(cx: &Cx) -> bool {
+    cx.cpu().size
+}
+
 /// The target prices `add r,r` below `shl r,1`.
 pub fn doubles_by_add(cx: &Cx) -> bool {
     cx.cpu().doubling().is_ok_and(|form| form == "alu_rr")
