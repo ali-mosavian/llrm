@@ -784,3 +784,52 @@ def test_a_change_to_any_crate_source_also_runs_the_scan_crates_lib_tests():
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/extload.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set())
     assert asked == [{"llrm-transforms", "llrm-mir"}]
+
+
+def test_a_unit_the_head_passes_names_the_offender_and_the_rest_are_tested_once():
+    """19:12, 19:22 and 19:37: batches failed `no_file_gains_*` and were halved and halved again. With the offender named by the failing unit alone, 8 PRs cost 2 tests, not 7."""
+    landed, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return "6" not in group
+
+    ps.batch([str(n) for n in range(1, 9)], passes, landed.append, refused.append, lambda group: ["6"])
+    assert refused == ["6"] and landed == ["1", "2", "3", "4", "5", "7", "8"]
+    assert tested == [[str(n) for n in range(1, 9)], ["1", "2", "3", "4", "5", "7", "8"]]
+
+
+def test_an_offender_hook_that_names_nobody_or_everybody_falls_back_to_halving():
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: "3" not in group, landed.append, refused.append, lambda group: [])
+    assert landed == ["1", "2", "4"] and refused == ["3"]
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: "3" not in group, landed.append, refused.append, lambda group: list(group))
+    assert landed == ["1", "2", "4"] and refused == ["3"]
+
+
+def test_two_offenders_are_both_dropped_and_the_others_land():
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: not {"2", "3"} & set(group), landed.append, refused.append, lambda group: ["2", "3"])
+    assert refused == ["2", "3"] and landed == ["1", "4"]
+
+
+def test_a_head_with_a_conflict_marker_in_an_added_line_is_left_out_by_name(tmp_path):
+    """sdag-a pushed markers to open branches twice in a day."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "base")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (tmp_path / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.rs").write_text("fn a() {}\n" + "<" * 7 + " HEAD\nfn b() {}\n=======\nfn c() {}\n" + ">" * 7 + " origin\n")
+    (tmp_path / "ok.rs").write_text("let x = 1 << 7; // " + "<" * 8 + "\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    why = ps.conflict_markers("base", "pr", tmp_path)
+    assert why == ["a.rs: an added line is a merge conflict marker; resolve the merge and push again"]
+    assert any("conflict marker" in line for line in ps.refusals("pr", "Owner: x", "base", tmp_path, "fix: x"))

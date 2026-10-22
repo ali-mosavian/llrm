@@ -141,10 +141,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
-    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload,
+    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa,
+    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
+    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -467,7 +468,7 @@ impl Options {
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
+            "indvars" | "window" | "gepoffset" | "addresssink" | "cgpaddr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -595,6 +596,10 @@ impl FunctionPass for Slot {
 
     fn reads(&self) -> llrm_mir::footprint::Footprint {
         self.inner.reads()
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.inner.wants_sizes()
     }
 
     fn run(
@@ -1167,6 +1172,11 @@ pub fn recorded(
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
     }
+    // After addresssink: the address arithmetic of a block's accesses, made in
+    // that block (CodeGenPrepare's optimizeMemoryInst).
+    if applied.options.wanted("cgpaddr") {
+        manager.add(cgpaddr::CgpAddr);
+    }
     // After addresssink, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
@@ -1270,6 +1280,9 @@ fn rerun(
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    if fixed.wants_sizes() {
+        declared.count_referenced(module);
+    }
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
@@ -1541,6 +1554,10 @@ impl Fixed {
 impl FunctionPass for Fixed {
     fn dumps_inputs_itself(&self) -> bool {
         true
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.passes.iter().any(|pass| pass.wants_sizes())
     }
 
     fn name(&self) -> &'static str {
