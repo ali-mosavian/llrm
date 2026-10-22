@@ -68,6 +68,7 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "MachineCombiner",
     "FixupSetCC",
     "CopyPropagation",
     "X86OptimizeLEAs",
@@ -82,6 +83,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("PhiElimination", "phielim@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("MachineCombiner", "combiner@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
@@ -147,6 +149,9 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
+        // operation rebuilt so its late operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),

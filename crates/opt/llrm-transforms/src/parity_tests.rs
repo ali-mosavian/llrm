@@ -117,6 +117,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "fixupsetcc@5",
             "machinecse@4",
             "machinesink@4",
+            "combiner@4",
             "floatalloc@8",
             "coalesce@10",
             "latecleanup@13",
