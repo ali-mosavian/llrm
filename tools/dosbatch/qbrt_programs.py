@@ -23,6 +23,12 @@ LLRM_ONLY = ("events_", "keys_", "llrm_", "bc_nodevices")
 ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
 SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
 
+# (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
+# test so the entry goes.  Only the flat target has any.
+KNOWN: dict[tuple[str, str], str] = {
+    ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
+}
+
 
 def differential(sources: dict[str, Path], work: Path) -> dict[str, dict]:
     """Each program as BCOM45 builds it (the oracle) and ours at each target, run and compared."""
