@@ -1733,8 +1733,25 @@ fn an_effect_of_what_a_callee_reaches_covers_a_fresh_slice_of_an_escaped_global(
         "not a global whose address never escaped"
     );
     assert!(
-        !effect(vec![nonlocal]).covers(&effect(vec![reference(one(&frame, 0, 4))])),
+        !effect(vec![nonlocal.clone()]).covers(&effect(vec![reference(one(&frame, 0, 4))])),
         "not a frame object, escaped or not"
+    );
+    // `objects_may_alias` asks both objects addressed before it asks captured.
+    let unaddressed = MemoryObject {
+        identity: Some(Identity::Global(6)),
+        extent: Some(8),
+        captured: true,
+        addressed: false,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    assert!(
+        !effect(vec![nonlocal]).covers(&effect(vec![reference(one(&unaddressed, 0, 8))])),
+        "not a global nothing computes the address of, captured or not"
+    );
+    let unknown = reference(UNKNOWN.clone());
+    assert!(
+        !effect(vec![unknown]).covers(&effect(vec![reference(one(&unaddressed, 0, 8))])),
+        "the unknown object does not reach it either"
     );
 }
 

@@ -2289,6 +2289,9 @@ impl Effect {
             let whole = |kind: MemoryKind| {
                 kept_slices().any(|one| one.object.kind == kind && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31)
             };
+            // `objects_may_alias` asks both objects addressed first, then the
+            // other one captured.
+            let reached = |slice: &Slice| slice.object.addressed() && slice.object.captured();
             let unknown_whole = whole(MemoryKind::Unknown);
             // What a callee may reach (`Nonlocal`) meets what escaped, a frame
             // object aside: `objects_may_alias`' own rule.
@@ -2302,9 +2305,9 @@ impl Effect {
                                 .iter()
                                 .all(
                                     |slice| slice_covered(slice, kept_slices())
-                                        || (unknown_whole && slice.object.captured())
+                                        || (unknown_whole && reached(slice))
                                         || (nonlocal_whole
-                                            && slice.object.captured()
+                                            && reached(slice)
                                             && !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)),
                                 )
                         }))
