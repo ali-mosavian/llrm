@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:14448644d43b7dc2c95caf1cd038594eefaf6ec4a431071220c1b78386ee8cdc -->
+<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:650d5e8dd150c64b3364a8219ef763ff56b5ea128ed0aa32e71e7573de2461ce -->
 
 # machinelicm
 
@@ -32,6 +32,19 @@ moves to the end of the preheader, before its jump, when:
 DEVIATE ML2: no preheader is made where a loop has none; no load of an
 invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
 (`MayCSE`).
+
+## Example
+A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
+sum is made by instruction selection, after the IR's LICM has run). The
+sum is made once, ahead of the loop:
+
+```text
+  pre:                              pre:
+    jmp loop                          v9 := add k, 0x3
+  loop:                       =>      jmp loop
+    v9 := add k, 0x3                loop:
+    v10 := imul v8, v9                v10 := imul v8, v9
+```
 
 ## Runs
 A machine phase before `precse` (`flow::machine_with`), at every -O level
