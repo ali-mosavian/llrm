@@ -107,6 +107,8 @@ pub trait Dag {
     fn machine_node(&mut self, opcode: u16, vts: &[Vt], operands: &[SDValue]) -> u32;
     /// `MorphNodeTo`: the node now, and the nodes it deleted when an equal one existed.
     fn morph_node_to(&mut self, node: u32, opcode: u16, vts: &[Vt], operands: &[SDValue]) -> (u32, Vec<u32>);
+    /// `UpdateNodeOperands`: `node` now has `operands`; the node it is, or the equal one that existed.
+    fn update_node_operands(&mut self, node: u32, operands: &[SDValue]) -> u32;
     fn replace_uses(&mut self, from: SDValue, to: SDValue);
     /// `ReplaceAllUsesWith` for all results, then `RemoveDeadNode`.
     fn replace_node(&mut self, from: u32, to: u32);
