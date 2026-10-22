@@ -84,6 +84,7 @@ pub mod actions;
 pub mod builder;
 mod dag;
 pub mod dump;
+pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
@@ -97,11 +98,15 @@ pub mod switchcg;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
-pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
+pub use dag::{
+    BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
+};
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod emit_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]

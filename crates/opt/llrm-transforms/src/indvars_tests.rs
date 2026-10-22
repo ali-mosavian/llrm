@@ -144,8 +144,8 @@ fn a_counter_extended_past_the_index_width_stays() {
     let text = clearing("e-p:16:16-n8:16:32")
         .replace("i32 %w", "i16 %w16")
         .replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// `clearing` for `short i`: signed, tested by `slt`, read through `sext`.
@@ -189,8 +189,9 @@ fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() 
 #[test]
 fn an_unsigned_counter_read_through_sext_is_not_widened() {
     let text = clearing("e-p:32:32-n8:16:32").replace("zext i16 %i to i32", "sext i16 %i to i32");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    // The pin stamps `nuw` on the step (its context inference) and widens nothing.
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the
@@ -746,7 +747,7 @@ fn counted_loops(loops: usize) -> String {
     for at in 0..loops {
         let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
         text += &format!(
-            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
+            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add nuw nsw i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
         );
     }
     text + "done:\n  ret i32 0\n}\n"
