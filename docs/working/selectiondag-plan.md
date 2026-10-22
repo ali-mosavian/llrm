@@ -168,8 +168,9 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD35 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
 | SD36 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
 | SD37 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
+| SD38 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 
-Next free: **SD38**.
+Next free: **SD39**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
