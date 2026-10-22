@@ -253,6 +253,33 @@ impl Builder<'_> {
         self.target.legal_ints.iter().find(|legal| **legal >= bits).map(|legal| EVT::integer(*legal)).ok_or(Refused("integer wider than a register"))
     }
 
+    /// How a value of `vt` is carried across blocks and calls: the type of
+    /// each register and how many (an integer of twice the widest register
+    /// is two of them).
+    fn parts(&self, vt: EVT) -> Result<(EVT, usize), Refused> {
+        match self.register_type(vt) {
+            Ok(reg_vt) => Ok((reg_vt, 1)),
+            Err(_) => {
+                let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
+                if vt.is_integer() && vt.size_in_bits() == 2 * widest.size_in_bits() {
+                    Ok((widest, 2))
+                } else {
+                    Err(Refused("integer wider than two registers"))
+                }
+            }
+        }
+    }
+
+    /// `getCopyToParts` for two parts: the high half is extracted first.
+    fn split_value(&mut self, value: SDValue, part: EVT) -> [SDValue; 2] {
+        let pointer = self.target.dag.pointer;
+        let one = self.dag.get_constant(1, pointer);
+        let zero = self.dag.get_constant(0, pointer);
+        let high = self.dag.get_node(ISD::ExtractElement, part, &[value, one]);
+        let low = self.dag.get_node(ISD::ExtractElement, part, &[value, zero]);
+        [low, high]
+    }
+
     fn operand_type(&self, operand: Operand) -> Result<EVT, Refused> {
         let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("block operand"))?;
         self.type_of(ty)
@@ -332,25 +359,29 @@ impl Builder<'_> {
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let vt = self.type_of(self.function.value(arg).ty)?;
-            if self.register_type(vt)? != vt {
-                return Err(Refused("argument of an illegal integer type"));
-            }
+            let (part_vt, parts) = self.parts(vt)?;
             let entry_node = self.dag.entry_node();
-            let value = match self.convention.parameters.get(at) {
+            let mut pieces = Vec::new();
+            match self.convention.parameters.get(at) {
                 Some(Parameter::Cell(_)) => {
-                    fixed += 1;
-                    let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
-                    let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
-                    let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(-fixed) };
-                    self.dag.get_load(vt, entry_node, ptr, info)
+                    for _ in 0..parts {
+                        fixed += 1;
+                        let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
+                        let align = self.layout.align(&self.module.context.types, self.function.value(arg).ty) as u32;
+                        let info = MemInfo { mem_vt: part_vt, align, volatile: false, base: MemBase::Stack(-fixed) };
+                        pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
+                    }
                 }
-                Some(Parameter::Registers(regs)) if regs.len() == 1 => {
-                    let vreg = self.info.new_reg();
-                    self.live_ins.push((regs[0], vreg));
-                    self.dag.get_copy_from_reg(entry_node, vreg, vt)
+                Some(Parameter::Registers(regs)) if regs.len() == parts => {
+                    for reg in regs {
+                        let vreg = self.info.new_reg();
+                        self.live_ins.push((*reg, vreg));
+                        pieces.push(self.dag.get_copy_from_reg(entry_node, vreg, part_vt));
+                    }
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
-            };
+            }
+            let value = if parts == 2 { self.dag.get_node(ISD::BuildPair, vt, &pieces) } else { pieces[0] };
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
@@ -394,9 +425,7 @@ impl Builder<'_> {
         let mut values = Vec::new();
         for argument in arguments {
             let value = self.get_value(*argument)?;
-            if self.register_type(self.dag.value_type(value))? != self.dag.value_type(value) {
-                return Err(Refused("argument of an illegal integer type"));
-            }
+            self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
         let attrs = |at: usize| info.argument_attrs.get(at).map_or(&[][..], Vec::as_slice);
@@ -422,27 +451,32 @@ impl Builder<'_> {
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
         for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
+            let (part_vt, parts) = self.parts(self.dag.value_type(*value))?;
+            let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
                 Parameter::Cell(displacement) => {
-                    // a narrow argument fills its stack slot (`CCPromoteToType`)
-                    let slot = EVT::integer(self.arch.stack_slot_bytes() as u32 * 8);
-                    let narrow = self.dag.value_type(*value);
-                    let value = &if narrow.is_integer() && narrow.bits_lt(slot) {
-                        self.dag.get_node(extends.get(at).copied().unwrap_or(ISD::AnyExtend), slot, &[*value])
-                    } else {
-                        *value
-                    };
-                    let sp = *stack_pointer.get_or_insert_with(|| {
-                        let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
-                        self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
-                    });
-                    let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
-                    let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
-                    let vt = self.dag.value_type(*value);
-                    let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown };
-                    stores.push(self.dag.get_store(chain, *value, address, mem));
+                    for (index, piece) in pieces.iter().enumerate() {
+                        // a narrow argument fills its stack slot (`CCPromoteToType`)
+                        let slot = EVT::integer(self.arch.stack_slot_bytes() as u32 * 8);
+                        let narrow = self.dag.value_type(*piece);
+                        let piece = &if narrow.is_integer() && narrow.bits_lt(slot) {
+                            self.dag.get_node(extends.get(at).copied().unwrap_or(ISD::AnyExtend), slot, &[*piece])
+                        } else {
+                            *piece
+                        };
+                        let sp = *stack_pointer.get_or_insert_with(|| {
+                            let sp = self.arch.register_named(if self.target.dag.pointer == EVT::I16 { "sp" } else { "esp" });
+                            self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
+                        });
+                        let part_bytes = i64::from(part_vt.size_in_bits() / 8);
+                        let offset = self.dag.get_constant((displacement - first + index as i64 * part_bytes) as u128, self.target.dag.pointer);
+                        let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
+                        let vt = self.dag.value_type(*piece);
+                        let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown };
+                        stores.push(self.dag.get_store(chain, *piece, address, mem));
+                    }
                 }
-                Parameter::Registers(regs) if regs.len() == 1 => copies.push((regs[0], *value)),
+                Parameter::Registers(regs) if regs.len() == pieces.len() => copies.extend(regs.iter().copied().zip(pieces)),
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
         }
@@ -473,14 +507,22 @@ impl Builder<'_> {
         if vt.is_floating_point() {
             return Err(Refused("floating-point result of a call"));
         }
-        let [reg] = plan.returns[..] else { return Err(Refused("result in several registers")) };
-        if self.register_type(vt)? != vt {
-            return Err(Refused("result of an illegal integer type"));
+        let (part_vt, parts) = self.parts(vt)?;
+        if plan.returns.len() != parts {
+            return Err(Refused("result in registers the value does not fill"));
         }
-        let reg = self.sized_register(reg, vt);
-        let result = self.dag.get_copy_from_phys_reg(chain, reg, vt, glue);
-        chain = SDValue { node: result.node, res: 1 };
+        // each register read after the one before, on its chain and glue
+        let mut glue = glue;
+        let mut pieces = Vec::new();
+        for reg in plan.returns.clone() {
+            let reg = self.sized_register(reg, part_vt);
+            let copy = self.dag.get_copy_from_phys_reg(chain, reg, part_vt, glue);
+            chain = SDValue { node: copy.node, res: 1 };
+            glue = SDValue { node: copy.node, res: 2 };
+            pieces.push(copy);
+        }
         self.dag.set_root(chain);
+        let result = if parts == 2 { self.dag.get_node(ISD::BuildPair, vt, &pieces) } else { pieces[0] };
         Ok(Some(result))
     }
 
@@ -503,15 +545,18 @@ impl Builder<'_> {
                 // x87 returns in st(0), which no register names: the value is RET_GLUE's operand
                 ops.push(value);
             } else {
-                let [reg] = self.convention.returns[..] else { return Err(Refused("result in several registers")) };
-                if self.register_type(vt)? != vt {
-                    return Err(Refused("result of an illegal integer type"));
+                let (part_vt, parts) = self.parts(vt)?;
+                if self.convention.returns.len() != parts || (parts == 1 && part_vt != vt) {
+                    return Err(Refused("result in registers the value does not fill"));
                 }
-                let reg = self.sized_register(reg, vt);
-                let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, glue);
-                chain = SDValue { node: copy.node, res: 0 };
-                glue = Some(SDValue { node: copy.node, res: 1 });
-                ops.push(self.dag.get_phys_register(vt, reg));
+                let pieces = if parts == 2 { self.split_value(value, part_vt).to_vec() } else { vec![value] };
+                for (piece, reg) in pieces.into_iter().zip(self.convention.returns.clone()) {
+                    let reg = self.sized_register(reg, part_vt);
+                    let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(part_vt, reg));
+                }
             }
         }
         let popped = self.dag.get_constant_with(self.convention.popped as u128, EVT::I32, true, false);
@@ -588,8 +633,15 @@ impl Builder<'_> {
     /// `RegsForValue::getCopyFromRegs`: the register's type, truncated to the
     /// value's when the register is wider.
     fn copy_from_reg(&mut self, reg: u32, vt: EVT) -> Result<SDValue, Refused> {
-        let reg_vt = self.register_type(vt)?;
+        let (reg_vt, parts) = self.parts(vt)?;
         let entry = self.dag.entry_node();
+        if parts == 2 {
+            // each part's copy chained to the one before; the halves paired
+            let regs = self.info.part_regs(reg, 2);
+            let low = self.dag.get_copy_from_reg(entry, regs[0], reg_vt);
+            let high = self.dag.get_copy_from_reg(SDValue { node: low.node, res: 1 }, regs[1], reg_vt);
+            return Ok(self.dag.get_node(ISD::BuildPair, vt, &[low, high]));
+        }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
     }
@@ -598,9 +650,17 @@ impl Builder<'_> {
     fn copy_value_to_register(&mut self, operand: Operand, reg: u32, extend: ISD) -> Result<(), Refused> {
         let value = self.non_register_value(operand)?;
         let vt = self.dag.value_type(value);
-        let reg_vt = self.register_type(vt)?;
-        let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
+        let (reg_vt, parts) = self.parts(vt)?;
         let entry = self.dag.entry_node();
+        if parts == 2 {
+            let regs = self.info.part_regs(reg, 2);
+            let halves = self.split_value(value, reg_vt);
+            let copies: Vec<SDValue> = halves.iter().zip(&regs).map(|(half, reg)| self.dag.get_copy_to_reg(entry, *reg, *half)).collect();
+            let chain = self.dag.get_token_factor(&copies);
+            self.pending_exports.push(chain);
+            return Ok(());
+        }
+        let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
         let chain = self.dag.get_copy_to_reg(entry, reg, value);
         self.pending_exports.push(chain);
         Ok(())
@@ -972,7 +1032,11 @@ impl Builder<'_> {
                     },
                     Operand::Block(_) => return Err(Refused("block as a phi input")),
                 };
-                self.phi_updates.push((result, reg));
+                let phi_type = self.type_of(instruction.ty)?;
+                let (_, parts) = self.parts(phi_type)?;
+                for reg in self.info.part_regs(reg, parts) {
+                    self.phi_updates.push((result, reg));
+                }
             }
         }
         self.constants_out.clear();
