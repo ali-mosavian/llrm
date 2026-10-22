@@ -13,6 +13,21 @@
 //! as `setb` and made again by `add byte, 0xff`. A reader right after another
 //! of the same byte reuses the `test`. The pseudo instructions go.
 //!
+//! Pin functions, in order: [`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263) is `lowered`;
+//! [`collectCondsInRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721) and [`promoteCondToReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744) are the
+//! byte made per condition (`bytes`, `setcc` at the copy);
+//! [`getCondOrInverseInReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761) is the shared byte for a condition and
+//! its inverse (`PAIRS`); [`insertTest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775) is the `test`;
+//! [`rewriteSetCC`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785) and [`rewriteMI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899) (jcc, cmov) are the
+//! `Read::Cond` arm; [`rewriteArithmetic`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824) (adc, sbb) is the
+//! `Read::Carry` arm.
+//!
+//! DEVIATE R2 (no number yet): the pin finds `COPY $eflags` that isel and
+//! earlier passes leave; LIR has none, so the copy is the pseudo pair and
+//! `lowered` takes the place of the search. The pin splits blocks
+//! ([`splitBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149)) to follow a copy across them; see R1. Owner w-5,
+//! review 2026-11-19; exit: an isel producer of a flags copy.
+//!
 //! DEVIATE R1 (no number yet): a copy and its restore must be in one block (the
 //! pin follows the copy across blocks by dominance); else the pass fails.
 //! Exit: the first isel producer of a cross-block copy. Nothing in isel makes
