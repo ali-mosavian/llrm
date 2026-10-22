@@ -53,14 +53,15 @@
 //! # See also
 //! LLVM's
 //! [`TwoAddressInstructionPass`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp),
-//! translated in `twoaddress.rs` for the commuting; the rest is this file's own.
+//! translated in `twoaddress.rs` for the commuting; the rest is this file's
+//! own.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::{coalesce, spiller};
+use crate::backend::coalesce;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -98,7 +99,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
     let mut changed = false;
-    let mut counter = spiller::_next_value(body);
+    let mut counter = body.next_value();
     let mut mint = || {
         counter += 1;
         counter - 1
@@ -449,12 +450,12 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use super::{Fixed, _untied, tied};
+    use super::{_untied, Fixed, tied};
     use crate::liveness::liveintervals::LiveIntervals;
-    use crate::twoaddress::Commuter;
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+    use crate::twoaddress::Commuter;
 
     fn held(
         value: u32,
@@ -528,7 +529,8 @@ mod tests {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
     }
 
-    /// The instruction at `at` of one block, as the commuting walk of `tied` leaves it.
+    /// The instruction at `at` of one block, as the commuting walk of `tied`
+    /// leaves it.
     fn commuted(
         insns: Vec<Arc<Insn>>,
         at: usize,
@@ -549,7 +551,10 @@ mod tests {
     }
 
     /// `v3 := op v1, v2` with `v1` read afterwards and `v2` dying at it.
-    fn dying_second(op_name: &str, op: Operation) -> Vec<Arc<Insn>> {
+    fn dying_second(
+        op_name: &str,
+        op: Operation,
+    ) -> Vec<Arc<Insn>> {
         vec![imm_def(0, 1), imm_def(1, 2), sum(2, op_name, op), read(3, 1), read(4, 3)]
     }
 
@@ -823,11 +828,12 @@ mod tests {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]))
     }
 
-    /// `getSingleDef(Reg, MBB)` ignores definitions in other blocks: the loop's temporary is
-    /// defined in the preheader and by the back-edge copy, and the chain `c = copy tmp; tmp = copy
-    /// a` still reaches `a`. A walk that gave up on a definition elsewhere found no chain, and
-    /// x_adler's `(x & 255) + s` tied the `and` result and copied the accumulator (x_adler -O2
-    /// 0.968 -> 1.029 of min(gcc, clang)).
+    /// `getSingleDef(Reg, MBB)` ignores definitions in other blocks: the loop's
+    /// temporary is defined in the preheader and by the back-edge copy, and
+    /// the chain `c = copy tmp; tmp = copy a` still reaches `a`. A walk
+    /// that gave up on a definition elsewhere found no chain, and x_adler's
+    /// `(x & 255) + s` tied the `and` result and copied the accumulator
+    /// (x_adler -O2 0.968 -> 1.029 of min(gcc, clang)).
     #[test]
     fn test_a_copy_chain_through_a_loop_temporary_defined_in_the_preheader_is_found() {
         let body = LirBody::new(
