@@ -1111,8 +1111,23 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = if target.selector == Selector::Dag {
-        timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch))
+    let dag = match target.selector {
+        Selector::Old => None,
+        Selector::Dag => {
+            Some(timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)))
+        }
+        Selector::Shadow => {
+            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)) {
+                Ok(done) => Some(Ok(done)),
+                Err(why) => {
+                    llrm_support::debug!("isel", "{name} refused: {}", why.0);
+                    None
+                }
+            }
+        }
+    };
+    let selected = if let Some(done) = dag {
+        done
     } else {
         timed("isel", || {
         isel::selected_with(
