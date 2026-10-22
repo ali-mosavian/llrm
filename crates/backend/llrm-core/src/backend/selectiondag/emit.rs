@@ -23,7 +23,7 @@
 //! `x = a + b` with `a`, `b` in virtual registers 1 and 2 and the result
 //! copied to register 3: `v10 := add v1, v2` then `v3 := mov v10`.
 //!
-//! DEVIATE SD43: `EmitLoweredSelect` expands one `CMOV_GR*` at a time: a run
+//! DEVIATE SD45: `EmitLoweredSelect` expands one `CMOV_GR*` at a time: a run
 //! of selects on one condition (case 1) and the cascaded form (case 2) each
 //! get their own diamond, the same values with more branches. Reason: the
 //! pin looks ahead in the block it is rewriting; this emitter is a single
