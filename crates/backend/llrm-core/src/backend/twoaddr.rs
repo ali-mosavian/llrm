@@ -152,7 +152,7 @@ pub fn tied(
                 continue;
             }
             // `rescheduleKillAboveMI`: the reader that kills the source goes above the tied instruction.
-            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+            commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
                 changed = true;
                 continue;
             }
@@ -1043,7 +1043,7 @@ mod tests {
     fn test_the_reader_that_kills_the_source_of_a_tied_add_with_a_load_goes_above_it() {
         use crate::model::ir::Mem;
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(8, 4)],
             sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
             ..Semantics::new(Operation::Binary)
