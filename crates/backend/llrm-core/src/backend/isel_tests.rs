@@ -6941,3 +6941,24 @@ no:
     assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
 }
+
+/// `X86TargetLowering::LowerBRCOND` branches on a boolean truncation by testing
+/// its low bit (X86testpat, X86InstrFragments.td#L805; `TEST8ri`,
+/// X86InstrArithmetic.td#L1330): x_collatz made `and dl, 1` first (and a copy)
+/// for `br (trunc x to i1)`.
+#[test]
+fn test_a_branch_on_a_boolean_truncation_is_a_test_of_the_low_bit() {
+    let text = "define i16 @f(i16 %a) addrspace(1) {
+entry:
+  %b = trunc i16 %a to i1
+  br i1 %b, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("test ")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("and ")), "{got:?}");
+}

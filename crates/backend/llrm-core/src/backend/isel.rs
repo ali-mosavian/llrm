@@ -2407,6 +2407,14 @@ impl Selector<'_, '_, '_> {
             // A branch reads one condition of the flags.
             Opcode::FCmp(predicate)
                 if float_conditions(predicate).is_some_and(|(_, test)| matches!(test, Test::One(_))) => {}
+            // `X86TargetLowering::LowerBRCOND` tests a boolean truncation's low
+            // bit (`TEST8ri`, X86InstrArithmetic.td#L1330): `test x, 1`, not
+            // an `and` made first.
+            Opcode::Cast(CastOp::Trunc)
+                if self.types().int_bits(instruction.ty) == Some(1)
+                    && function.operand_type(&self.module.context, instruction.operands[0]).is_some_and(|ty| {
+                        self.types().int_bits(ty).is_some_and(|bits| bits <= 16) && !self.is_wide(ty)
+                    }) => {}
             _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
@@ -6892,9 +6900,10 @@ impl Selector<'_, '_, '_> {
     /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
     /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
     /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
-    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a libcall
-    /// would move. Exit: a runtime `_memcpy` in each C target and a target
-    /// "has memcpy" fact, then the libcall here, queued after the tuning phase.
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a
+    /// libcall would move. Exit: a runtime `_memcpy` in each C target and a
+    /// target "has memcpy" fact, then the libcall here, queued after the
+    /// tuning phase.
     ///
     /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
     /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
@@ -7546,6 +7555,15 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Test, Unselected> {
         let instruction = self.function.instruction(inst);
+        if instruction.opcode == Opcode::Cast(CastOp::Trunc) {
+            let operand = instruction.operands[0];
+            let ty = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+            let held = self.held(operand, ty, at, out)?;
+            let low = Loc::Held(Held { width: 1, ..held });
+            let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
+            out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![low, one])));
+            return Ok(Test::One("jne"));
+        }
         if let Opcode::FCmp(predicate) = instruction.opcode {
             return self.float_compare(predicate, inst, at, out);
         }
