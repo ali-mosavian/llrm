@@ -33,7 +33,10 @@
 //!    operations; `simplifyFMAFMul`'s `computeKnownFPClass` of a value, `FMA`,
 //!    `FCmp`, `AndOrOfFCmps`, `Ldexp`, constrained calls and `bitcast (uitofp
 //!    X)` remain: #2246.
-//! 4. Loads, pointer compares, `addrspacecast`: #2247.
+//! 4. Pointer compares, `addrspacecast`: #2247. `simplifyLoadInst` is
+//!    `simplify_load`: the load of a constant address; a load whose address is
+//!    an instruction over a constant global (the
+//!    `stripAndAccumulateConstantOffsets` half) is not translated.
 //! 5. `simplifyICmpWithIntrinsicOnLHS`, the call arm of
 //!    `simplifyWithOpsReplaced`, the floating-point intrinsics: #2248, #2246.
 //!    `simplifyCall`'s integer intrinsics are `simplify_calls.rs`; the callee
@@ -4213,6 +4216,25 @@ fn simplify_gep(
 
 /// `simplifyInstruction`
 /// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741),
+/// `simplifyLoadInst`
+/// ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702)):
+/// the value a non-volatile load of a constant address reads from a constant
+/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`). DEVIATE:
+/// the half for an address that is an instruction (`getUnderlyingObject` and
+/// `stripAndAccumulateConstantOffsets`) is not translated.
+fn simplify_load(
+    q: &Query,
+    volatile: bool,
+    ptr: Operand,
+    ty: TypeId,
+) -> Option<Operand> {
+    if volatile {
+        return None;
+    }
+    let Operand::Constant(ptr) = ptr else { return None };
+    constantfolding::constant_fold_load_from_const_ptr(q.context, q.layout, q.globals, ptr, ty).map(Operand::Constant)
+}
+
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
 pub fn simplify_instruction(
     context: &Context,
@@ -4285,6 +4307,7 @@ fn simplify_instruction_with_operands(
         }
         Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
         Opcode::Phi => simplify_phi(q, inst),
+        Opcode::Load { volatile, .. } => simplify_load(q, *volatile, operands[0], instruction.ty),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
         Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
