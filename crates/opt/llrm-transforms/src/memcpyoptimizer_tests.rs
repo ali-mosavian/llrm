@@ -41,7 +41,7 @@ fn stores(
 #[test]
 fn four_byte_stores_are_one_memset() {
     let after = merged(&stores(4, 8, "0"), &[&[7]]);
-    assert!(after.contains("@llvm.memset.p0.i16(ptr %p0, i8 0, i16 4, i1 false)"), "{after}");
+    assert!(after.contains("@llvm.memset.p0.i16(ptr align 1 %p0, i8 0, i16 4, i1 false)"), "{after}");
     assert!(!after.contains("store i8 0, ptr %p1"), "{after}");
 }
 
@@ -88,7 +88,7 @@ fn a_load_ends_the_scan() {
 fn an_i8_value_is_the_byte() {
     let text = stores(4, 8, "%b").replace("(i16 %x)", "(i16 %x)").replace("b0:\n", "b0:\n  %b = trunc i16 %x to i8\n");
     let after = merged(&text, &[&[7]]);
-    assert!(after.contains("llvm.memset.p0.i16(ptr %p0, i8 %b, i16 4, i1 false)"), "{after}");
+    assert!(after.contains("llvm.memset.p0.i16(ptr align 1 %p0, i8 %b, i16 4, i1 false)"), "{after}");
 }
 
 /// A memset beside two stores of its byte is one memset (always worth it).
@@ -127,8 +127,10 @@ fn separate_runs_cost_in_proportion() {
     assert!(large as f64 <= 2.5 * small as f64, "{small} steps for 100 runs, {large} for 200");
 }
 
-/// The memset made keeps the alignment of the lowest access it replaces (`MemsetRange::Alignment`): lru's two `align 2` fills became one memset with
-/// no alignment, which the backend wrote as `rep stosb` of 28 bytes (+20% clocks at -Os).
+/// The memset made keeps the alignment of the lowest access it replaces
+/// (`MemsetRange::Alignment`): lru's two `align 2` fills became one memset with
+/// no alignment, which the backend wrote as `rep stosb` of 28 bytes (+20%
+/// clocks at -Os).
 #[test]
 fn a_merged_memset_keeps_the_alignment_of_its_first_access() {
     let text = "@a = global [64 x i8] zeroinitializer\ndeclare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine i16 @f(i16 %x) {\nb0:\n  call void @llvm.memset.p0.i16(ptr align 2 @a, i8 -1, i16 14, i1 false)\n  %p = getelementptr i8, ptr @a, i16 14\n  call void @llvm.memset.p0.i16(ptr align 2 %p, i8 -1, i16 14, i1 false)\n  %r = load i16, ptr @a\n  ret i16 %r\n}\n";

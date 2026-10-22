@@ -260,8 +260,10 @@ b3:
     assert!(!body.contains("load"), "{text}");
 }
 
-/// A declaration a pass makes is seen by the passes after it in the same run, as LLVM's `getOrInsertFunction` puts it in the module at once. Loop idiom
-/// declared `llvm.memset` (the module had none), and the merge after it did not know the callee for a memset: lru's two 14-byte fills stayed two calls,
+/// A declaration a pass makes is seen by the passes after it in the same run,
+/// as LLVM's `getOrInsertFunction` puts it in the module at once. Loop idiom
+/// declared `llvm.memset` (the module had none), and the merge after it did not
+/// know the callee for a memset: lru's two 14-byte fills stayed two calls,
 /// 52 clocks and 61 bytes at -Os.
 #[test]
 fn two_fills_made_into_memsets_in_a_module_with_none_are_one_memset() {

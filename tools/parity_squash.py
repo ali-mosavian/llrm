@@ -549,6 +549,33 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+def new_lib_failures(
+    files: list[str],
+    on_merged=None,
+    on_head=None,
+) -> set[str]:
+    """The failing lib tests of the crates `files` change (not their dependants) on the merged tree that the head, checked out where `on_head` runs them again, passes: a red test in a
+    changed crate. #3578 landed four of them because the fast path builds the tests (cargo check --all-targets) and runs none. `on_merged(packages)` -> failing `unit <pkg>::<test>`
+    names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
+    smoke = parity_smoke_module()
+    packages, _ = smoke.workspace_graph()
+    touched = smoke.touched_packages(files, packages)
+    failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
+    if not failed:
+        return set()
+    by_package: dict[str, set[str]] = {}
+    for name in failed:
+        package, test = name[len("unit "):].split("::", 1)
+        by_package.setdefault(package, set()).add(test)
+    also = (on_head or _failing_on_head)(by_package)
+    return failed - also
+
+
+def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
+    clean_checkout(BASE)
+    return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
+
+
 def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
     """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
     it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
@@ -612,6 +639,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if broken := _workspace_check(ROOT):
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             return False
+        # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
+        if os.environ.get("LAND_FAST_TESTS") == "1":
+            changed = git("diff", "--name-only", BASE, "HEAD").split()
+            if new := sorted(new_lib_failures(changed)):
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                return False
         return True
 
     def passes(group: list[str]) -> bool:
