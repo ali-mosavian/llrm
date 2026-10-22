@@ -115,7 +115,7 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
-                if let Some(to) = global_alignment(module, layout.as_ref(), variable, placed_here) {
+                if let Some(to) = global_alignment(module, layout.as_ref(), variable, placed_here, segment_bytes.is_some()) {
                     items.push(masm::Datum::Align(masm::Align { to }));
                 }
                 for datum in globals::datums(module, global, &built.names)? {
@@ -149,7 +149,7 @@ impl Placed {
             let mut items = Vec::new();
             for global in objects {
                 if let GlobalKind::Variable(variable) = &module.global(global).kind
-                    && let Some(to) = global_alignment(module, layout.as_ref(), variable, true)
+                    && let Some(to) = global_alignment(module, layout.as_ref(), variable, true, segment_bytes.is_some())
                 {
                     items.push(masm::Datum::Align(masm::Align { to }));
                 }
@@ -205,12 +205,17 @@ impl Placed {
 /// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
 /// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
 /// section attribute; a global the frontend placed in a named segment counts
-/// as one in a section (`in_section`).
+/// as one in a section (`in_section`). DEVIATE E2: where data lives in 64K
+/// segments (`segmented`), an initialized global over 16 bytes is not raised to
+/// 16 (`DataLayout::getPreferredAlign`, DataLayout.cpp#L1175): the object's
+/// segment would become paragraph aligned, up to 15 dead bytes of the scarce
+/// DGROUP per object (QB runtime `input.c`: +32 B, `dgroup_nearly_full`).
 fn global_alignment(
     module: &Module,
     layout: Option<&llrm_mir::datalayout::DataLayout>,
     variable: &llrm_mir::module::GlobalVariable,
     in_section: bool,
+    segmented: bool,
 ) -> Option<i64> {
     // A module with no data layout states its own alignments only.
     let Some(layout) = layout else { return variable.align.map(|to| to as i64) };
@@ -220,6 +225,7 @@ fn global_alignment(
         variable.align,
         in_section,
         variable.initializer.is_some(),
+        !segmented,
     );
     (to > 1).then_some(to as i64)
 }
@@ -351,18 +357,22 @@ mod tests {
                 "{layout}@w = global i32 5\n@big = global [40 x i8] zeroinitializer\n@b = global i8 1\n@s = global i8 1, align 2\n"
             )
         };
-        let aligned = |layout: &str| {
+        let aligned = |layout: &str, segmented: bool| {
             let module = llrm_mir::parse::module(&text(layout)).unwrap();
             let layout =
                 module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
             ["w", "big", "b", "s"].map(|name| {
                 let id = module.named(name).unwrap();
                 let GlobalKind::Variable(variable) = &module.global(id).kind else { unreachable!("a variable") };
-                global_alignment(&module, layout.as_ref(), variable, false)
+                global_alignment(&module, layout.as_ref(), variable, false, segmented)
             })
         };
-        assert_eq!(aligned("target datalayout = \"e-i32:32-i8:8\"\n"), [Some(4), Some(16), None, Some(2)]);
-        assert_eq!(aligned(""), [None, None, None, Some(2)], "no layout: only what is stated");
+        let flat = "target datalayout = \"e-i32:32-i8:8\"\n";
+        assert_eq!(aligned(flat, false), [Some(4), Some(16), None, Some(2)]);
+        assert_eq!(aligned("", false), [None, None, None, Some(2)], "no layout: only what is stated");
+        // QB runtime input.c: a 19-byte table raised to 16 made its segment
+        // paragraph aligned, +32 B of DGROUP; dgroup_nearly_full ran out.
+        assert_eq!(aligned(flat, true), [Some(4), None, None, Some(2)], "64K segments: no raise to 16");
     }
 
     fn size(part: &[Datum]) -> usize {

@@ -1,6 +1,8 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static int weight(int k)
+static i32 weight(i32 k)
 {
     switch (k) {
     case 0: return 3;
@@ -18,10 +20,10 @@ static int weight(int k)
     default: return 1;
     }
 }
-long bench_x_switch_dense(int n)
+long bench_x_switch_dense(i32 n)
 {
-    int i; long sum = 0; unsigned r = 5;
-    for (i = 0; i < n; ++i) { r = r * 1103515245u + 12345u; sum += weight((int)((r >> 16) % 14)); }
+    i32 i; long sum = 0; u32 r = 5;
+    for (i = 0; i < n; ++i) { r = r * 1103515245ul + 12345ul; sum += weight((i32)((r >> 16) % 14)); }
     return sum;
 }
 

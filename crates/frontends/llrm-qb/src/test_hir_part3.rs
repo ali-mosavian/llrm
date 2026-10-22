@@ -1357,6 +1357,33 @@ fn test_a_poke_does_not_reach_a_local_whose_address_is_never_taken() {
     assert!(!text.contains("alloca"), "{text}");
 }
 
+/// The range check of EXP and LOG kept its operand in a cell of the operand's
+/// own type, rounding an 80-bit chain to 64 bits before FEXP/FLN:
+/// log_exp_digits printed .9048374180359595 for BC's ...596 (D-RFP5 again). The
+/// operand goes from its arithmetic to FEXP/FLN, past the check, without a
+/// cell.
+#[test]
+fn test_a_range_checked_operand_is_not_kept_in_a_cell() {
+    use llrm_core::hir::model::{Op, Operand};
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "CHAIN.BAS",
+        b"DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\r\nREAD a, b, c\r\nPRINT EXP(a * b + c); LOG(a * b + c)\r\nDATA 1.5, 2.5, 0.25\r\n",
+    );
+    let program = parsed_as(&basic, "qb45", "qb45");
+    let function = program.modules[0].functions.iter().find(|one| one.name == "__main").expect("the main code");
+    let instructions: Vec<_> = function.blocks.iter().flat_map(|block| &block.instructions).collect();
+    let mut checked = 0;
+    for one in instructions.iter().filter(|one| matches!(one.op, Op::Fexp | Op::Fln)) {
+        let Some(Operand::ValueRef(argument)) = one.operands.first() else { panic!("FEXP/FLN of a value") };
+        let made = instructions.iter().find(|other| other.results.contains(&argument.value)).expect("its definition");
+        assert_eq!(made.op, Op::Fadd, "the operand was kept in a cell: {made:?}");
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
+}
+
 /// Rotation panicked ("stepping is not in list") on a loop whose counter
 /// update is not in the latch block.
 #[test]
