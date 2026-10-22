@@ -953,3 +953,64 @@ fn a_machine_opcode_is_named_for_its_instruction_not_for_a_register_that_shares_
         assert!(!name.contains("RegClassID") && name.split('|').all(|n| !["CS", "DS", "ES", "FS", "GS", "SS"].contains(&n)), "{name}");
     }
 }
+
+mod select_loop {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::{Node, TestDag};
+    use crate::x86_addr::AddrMode;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn hooks() -> X86Hooks {
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: AddrMode::Flat32 })
+    }
+
+    #[test]
+    fn a_store_of_a_loaded_sum_is_one_read_modify_write_instruction() {
+        // `*p += r`: load, X86ISD::ADD, store.
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let r = dag.input(2, mvt::i32);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i32, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        let add = dag.node(x86isd::ADD, &[mvt::i32, mvt::i32], &[SDValue::new(load, 0), r]);
+        let store = dag.add(Node {
+            opcode: isd::STORE,
+            vts: vec![mvt::Other],
+            ops: vec![SDValue::new(load, 1), SDValue::new(add, 0), p, off],
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+
+        let outcome = select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks(), store);
+
+        assert_eq!(outcome, Outcome::Selected);
+        let names: Vec<_> = dag.live().filter_map(|(_, n)| n.machine.map(machine_name)).collect();
+        assert_eq!(names, ["ADD32mr"], "not a load, an add and a store");
+    }
+
+    #[test]
+    fn a_shift_by_n_plus_32_copies_n_itself_into_cl() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let n = dag.input(2, mvt::i8);
+        let thirty_two = dag.make_constant(32, mvt::i8);
+        let count = SDValue::new(dag.node(isd::ADD, &[mvt::i8], &[n, thirty_two]), 0);
+        let shift = dag.node(isd::SHL, &[mvt::i32], &[x, count]);
+
+        let outcome = select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks(), shift);
+
+        assert_eq!(outcome, Outcome::Selected);
+        let to_cl = dag.live().find(|(_, n)| n.opcode == isd::CopyToReg && dag.nodes[n.ops[1].node as usize].register == Some(x86::CL));
+        assert_eq!(to_cl.expect("the count goes to CL").1.ops[2], n, "the +32 is gone");
+    }
+}
