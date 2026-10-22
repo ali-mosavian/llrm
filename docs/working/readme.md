@@ -26,6 +26,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qcport-vs-main](qcport-vs-main.md) | QCport -Os and -O2, parity against main, per module, with the owner of each module above main |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
+| [greedy-switchover-plan](greedy-switchover-plan.md) | What the greedy path still takes from the old allocator modules, what is dead, and the dated pieces that delete them |
 
 ## Docs with the change
 
