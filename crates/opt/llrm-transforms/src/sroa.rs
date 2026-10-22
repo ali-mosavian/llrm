@@ -25,8 +25,10 @@
 //!   L6066): an alloca a `Declare` names is processed like any other, so `-g`
 //!   does not change the code. One that SROA splits loses its `Declare` with
 //!   the alloca (the variable is reported dropped), where LLVM migrates it to
-//!   the new allocas as fragments (exit: a `Declare` that carries a fragment,
-//!   owner mir-undef).
+//!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
+//!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
+//!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
+//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
