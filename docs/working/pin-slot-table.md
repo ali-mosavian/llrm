@@ -97,7 +97,7 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Late | mergeicmps | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | expand-memcmp | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Module | called-value-propagation | -O1,-O2,-O3,-Os | indirect calls only; not measured |
-| Module | globaldce | -O1,-O2,-O3,-Os | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |
+| Module | globaldce | -O1,-O2,-O3,-Os | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |
 | Module | rpo-function-attrs | -O1,-O2,-O3,-Os | no stage of ours is known to do it; unverified |
 | Module | constmerge | -O1,-O2,-O3,-Os | merging identical constants: data bytes at -Os; not measured |
 | Simplify | jump-table-to-switch | -O2,-O3,-Os | ablation 0 of 12 IRs |
@@ -409,13 +409,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O1 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
 | -O1 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O1 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O1 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O1 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O1 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
+| -O1 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-02 |
 | -O1 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -526,13 +526,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O2 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
 | -O2 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O2 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O2 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O2 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O2 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
+| -O2 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-02 |
 | -O2 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -647,13 +647,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -O3 | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
 | -O3 | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -O3 | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -O3 | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -O3 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -O3 | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
+| -O3 | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-02 |
 | -O3 | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -764,13 +764,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Module | deadargelim |  | DEVIATE |  | DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block |  |
 | -Os | Module | coro-cleanup |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
-| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
+| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
 | -Os | Module | elim-avail-extern |  | EXECUTED |  | available-externally |  |
 | -Os | Module | rpo-function-attrs |  | MISSING |  | no stage of ours is known to do it; unverified | w-6, 11-09 |
 | -Os | Module | recompute-globalsaa |  | N/A |  | an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs) Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | alloc-token |  | N/A |  | clang option, off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner unassigned) |  |
-| -Os | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-09 |
+| -Os | Module | globaldce |  | EXECUTED |  | globaldce (once). MISSING: the pin's second globaldce, after the Late list, has no stage of ours (owner w-6, 11-02) |  |
+| -Os | Module | constmerge |  | MISSING |  | merging identical constants: data bytes at -Os; not measured | w-6, 11-02 |
 | -Os | Module | cg-profile |  | N/A |  | profile data Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | rel-lookup-table-converter |  | N/A |  | relative lookup tables are a PIC feature; no PIC targets Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | lower-comment-string |  | N/A |  | #pragma comment strings Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
