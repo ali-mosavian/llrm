@@ -1353,3 +1353,31 @@ mod switch_dags {
         }
     }
 }
+
+mod libcall {
+    use super::super::libcall::{CallEnv, Place, Returned, lib_call};
+    use super::*;
+
+    /// A helper call with a stack argument and a register argument reads
+    /// `callseq_start, store, CopyToReg, CALL, callseq_end, CopyFromReg`
+    /// in that order, the result on the call's chain and glue. Without
+    /// `lib_call` a legalizer would build its own variant of the sequence.
+    #[test]
+    fn a_helper_call_has_the_builders_shape() {
+        let mut dag = dag();
+        let env = CallEnv { arch: &llrm_x86_m32::M32, pointer: EVT::I32 };
+        let (a, b) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2));
+        let callee = dag.get_target_external_symbol(EVT::I32, "helper");
+        let eax = llrm_target::Target::register_named(&llrm_x86_m32::M32, "eax");
+        let edx = llrm_target::Target::register_named(&llrm_x86_m32::M32, "edx");
+        let root = dag.entry_node();
+        let (chain, results) = lib_call(&mut dag, &env, root, callee, &[(a, Place::Stack(0)), (b, Place::Register(edx))], 4, 0, &[Returned { reg: eax, vt: EVT::I32 }]);
+        let opcodes: Vec<String> = dag.nodes().iter().map(|node| node.opcode.name()).collect();
+        let position = |name: &str| opcodes.iter().position(|one| one == name).unwrap_or_else(|| panic!("{name} in {opcodes:?}"));
+        assert!(position("callseq_start") < position("store") && position("store") < position("CopyToReg"));
+        assert!(position("CopyToReg") < position("X86ISD::CALL") && position("X86ISD::CALL") < position("callseq_end"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(dag.opcode(results[0]), ISD::CopyFromReg);
+        assert_eq!(chain, SDValue { node: results[0].node, res: 1 });
+    }
+}
