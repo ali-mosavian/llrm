@@ -122,7 +122,7 @@ fn jump_to(
     Arc::new(Insn::new(
         at,
         Some((at, at)),
-        Some(Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) }),
+        Some(Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) }),
         Vec::new(),
         Vec::new(),
     ))
@@ -170,11 +170,7 @@ fn seq_of(
                     let opposite = _OPPOSITE.get(branch.name.as_deref()?)?;
                     let at = items.len() - 1;
                     let flipped = Arc::new(Insn {
-                        what: Some(Semantics {
-                            name: Some((*opposite).to_owned()),
-                            target: Some(way),
-                            ..branch.clone()
-                        }),
+                        what: Some(Semantics { name: Some((*opposite).into()), target: Some(way), ..branch.clone() }),
                         ..(*items[at].insn).clone()
                     });
                     items[at].insn = flipped;

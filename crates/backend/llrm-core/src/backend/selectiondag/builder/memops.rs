@@ -151,7 +151,7 @@ impl Builder<'_> {
 
     /// `getMemcpyLoadsAndStores`: loads from the source and stores to the
     /// destination, the chains joined as `load0:1, store0, load1:1, ...`.
-    fn inline_memcpy(
+    pub(super) fn inline_memcpy(
         &mut self,
         chain: SDValue,
         dst: SDValue,
@@ -179,8 +179,7 @@ impl Builder<'_> {
                 mem_vt: vt,
                 align: common_alignment(src_align, src_off) as u32,
                 volatile: false,
-                base: MemBase::Unknown,
-                ext: None,
+                base: MemBase::Unknown, ext: None
             };
             let value = self.dag.get_load(vt, chain, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -188,8 +187,7 @@ impl Builder<'_> {
                 mem_vt: vt,
                 align: common_alignment(dst_align, dst_off) as u32,
                 volatile: false,
-                base: MemBase::Unknown,
-                ext: None,
+                base: MemBase::Unknown, ext: None
             };
             let store = self.dag.get_store(chain, value, to, info);
             chains.push(SDValue { node: value.node, res: 1 });
@@ -228,8 +226,7 @@ impl Builder<'_> {
                 mem_vt: vt,
                 align: common_alignment(src_align, off) as u32,
                 volatile: false,
-                base: MemBase::Unknown,
-                ext: None,
+                base: MemBase::Unknown, ext: None
             };
             let value = self.dag.get_load(vt, chain, from, info);
             placed.push((value, off, vt));
@@ -245,8 +242,7 @@ impl Builder<'_> {
                 mem_vt: vt,
                 align: common_alignment(dst_align, at) as u32,
                 volatile: false,
-                base: MemBase::Unknown,
-                ext: None,
+                base: MemBase::Unknown, ext: None
             };
             stores.push(self.dag.get_store(joined, value, to, info));
         }
@@ -282,8 +278,7 @@ impl Builder<'_> {
                 mem_vt: vt,
                 align: common_alignment(align, off) as u32,
                 volatile: false,
-                base: MemBase::Unknown,
-                ext: None,
+                base: MemBase::Unknown, ext: None
             };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;
@@ -433,7 +428,7 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
-        let _ = self.lower_call(target_symbol, values, &extends, &plan, first, pointer_type)?;
+        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type)?;
         Ok(self.dag.get_root())
     }
 

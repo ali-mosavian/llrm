@@ -235,7 +235,7 @@ mod tests {
             at,
             Some((at, at + 3)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![Loc::Reg(Reg { register, width: 2 })],
                 sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
                 ..Semantics::new(Operation::Move)

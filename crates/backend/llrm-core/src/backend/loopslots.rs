@@ -555,7 +555,7 @@ fn made(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
 }
 
@@ -1357,7 +1357,7 @@ mod tests {
                             Arc::new(Insn::new(
                                 0x13,
                                 Some((0x13, 0x13)),
-                                Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }),
+                                Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }),
                                 vec![],
                                 vec![],
                             )),
@@ -1396,7 +1396,7 @@ mod tests {
                             0x16,
                             Some((0x16, 0x17)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),
@@ -1450,7 +1450,7 @@ mod tests {
     fn test_a_register_a_string_move_advances_is_not_loop_invariant() {
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
         let copy = Semantics {
-            name: Some("movsd".to_owned()),
+            name: Some("movsd".into()),
             dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(RegId::SI), reg(RegId::DI), reg(RegId::CX)],
             sources: vec![reg(RegId::CX), reg(RegId::SI), reg(RegId::DI), reg(RegId::DS), reg(RegId::ES)],
             ..Semantics::new(Operation::Copy)
@@ -1472,7 +1472,7 @@ mod tests {
                             0x15,
                             Some((0x15, 0x16)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),
@@ -1542,7 +1542,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x30,
             Some((0x30, 0x31)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1606,7 +1606,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x30,
             Some((0x30, 0x31)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1657,7 +1657,7 @@ mod tests {
         loop_body.push(Arc::new(Insn::new(
             0x500,
             Some((0x500, 0x501)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         )));
@@ -1750,7 +1750,7 @@ mod tests {
                             0x18,
                             Some((0x18, 0x19)),
                             Some(Semantics {
-                                name: Some("jne".to_owned()),
+                                name: Some("jne".into()),
                                 target: Some(0x10),
                                 ..Semantics::new(Operation::Branch)
                             }),

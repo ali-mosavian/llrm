@@ -531,7 +531,7 @@ fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 /// Every return of `body` as `retf bytes`, for a callee that removes its
@@ -1080,7 +1080,7 @@ fn built(
                                 .map(Item::Semantics),
                             );
                             out.push(Item::Semantics(Semantics {
-                                name: Some("ret".to_owned()),
+                                name: Some("ret".into()),
                                 sources: vec![],
                                 ..what.clone()
                             }));
@@ -1092,7 +1092,7 @@ fn built(
                         Some(name) if !name.is_empty() => name.to_owned(),
                         _ => (if procedure.far { "retf" } else { "ret" }).to_owned(),
                     };
-                    out.push(Item::Semantics(Semantics { name: Some(name), ..what.clone() }));
+                    out.push(Item::Semantics(Semantics { name: Some(name.into()), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(what.clone())),
             }
@@ -2097,7 +2097,7 @@ mod tests {
         // the last two sources.
         let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();
         let semantics = |dests: usize, sources: Vec<Loc>| Semantics {
-            name: Some("movsw".to_owned()),
+            name: Some("movsw".into()),
             dests: results(dests),
             sources,
             ..Semantics::new(Operation::Copy)
@@ -2114,7 +2114,7 @@ mod tests {
         );
         assert_eq!(_instruction(regs, &semantics(3, vec![held(2), held(3)]), &no_names(), 0).unwrap(), ["movsw"]);
         let ss = |name: &str, sources: Vec<Loc>| Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: results(4),
             sources,
             ..Semantics::new(Operation::Copy)
