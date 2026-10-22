@@ -17,9 +17,9 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 | level | MATCH | N/A | EXECUTED | DEVIATE | MISSING | ORDER | slots |
 |---|---|---|---|---|---|---|---|
 | -O1 | 38 | 20 | 10 | 11 | 24 | 1 | 104 |
-| -O2 | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
-| -O3 | 49 | 26 | 10 | 6 | 30 | 0 | 121 |
-| -Os | 49 | 25 | 10 | 5 | 28 | 0 | 117 |
+| -O2 | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
+| -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
+| -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
 
 At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 3 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
@@ -432,7 +432,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table | w-6, 11-09 |
+| -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
 | -O2 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
@@ -550,7 +550,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table | w-6, 11-09 |
+| -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
 | -O3 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
@@ -670,7 +670,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | speculative-execution<only-if-divergent-target> | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | runs only on a target with divergent branches; x86 has none Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@668:Translated |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
-| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table | w-6, 11-09 |
+| -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
 | -Os | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |

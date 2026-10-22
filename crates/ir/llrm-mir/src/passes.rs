@@ -159,9 +159,22 @@ pub struct Declared {
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
     first_node: u32,
+    /// The live instructions of each defined function by id, `None` for a
+    /// declaration, while a pass that `wants_sizes` runs: no other body is
+    /// visible to a function pass (`Function::getInstructionCount`).
+    sizes: Vec<Option<usize>>,
 }
 
 impl Declared {
+    /// How many instructions function `id` has, as the pass that `wants_sizes`
+    /// found it, or `None` for a declaration.
+    pub fn size_of(
+        &self,
+        id: GlobalId,
+    ) -> Option<usize> {
+        self.sizes.get(id.0 as usize).copied().flatten()
+    }
+
     pub fn of(module: &Module) -> Self {
         counted("declared names", false);
         let ids = module
@@ -177,6 +190,7 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: module.metadata.len() as u32,
+            sizes: Vec::new(),
         }
     }
 
@@ -195,6 +209,7 @@ impl Declared {
             pending: Vec::new(),
             nodes: Vec::new(),
             first_node: metadata as u32,
+            sizes: Vec::new(),
         }
     }
 
@@ -2492,6 +2507,14 @@ pub trait FunctionPass {
         true
     }
 
+    /// The pass reads how many instructions another function has
+    /// (`Function::getInstructionCount`): the manager counts them once before
+    /// the pass runs over the module and again for each function it changed
+    /// (`Declared::size_of`).
+    fn wants_sizes(&self) -> bool {
+        false
+    }
+
     /// The pass dumps the bodies it is run over itself (the pipeline does, per
     /// function), so the manager dumps none.
     fn dumps_inputs_itself(&self) -> bool {
@@ -2843,6 +2866,19 @@ impl PassManager {
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
+            let sized = pass.wants_sizes();
+            if sized {
+                declared.sizes = module
+                    .globals
+                    .iter()
+                    .map(|global| match &global.kind {
+                        GlobalKind::Function(function) if !function.is_declaration() => {
+                            Some(function.live_instructions())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
                 // The other bodies as they stand, for an audit that reads a
@@ -2894,6 +2930,9 @@ impl PassManager {
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                 if moved {
                     analyses.edit_log.push(id);
+                }
+                if sized && let GlobalKind::Function(function) = &module.globals[at].kind {
+                    declared.sizes[at] = Some(function.live_instructions());
                 }
                 spanned("declared", || declared.place(module))?;
             }
