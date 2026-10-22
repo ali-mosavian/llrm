@@ -132,11 +132,11 @@ pub fn classes(
     classes_with(body, prefer_indexes, segments, registers, false)
 }
 
-/// `MachineRegisterInfo::recomputeRegClass` (MachineRegisterInfo.cpp, called from
-/// `LiveRangeEdit::calculateRegClassAndHint`, LiveRangeEdit.cpp#L426-L430, and
-/// SplitKit.cpp#L628): the registers `value` is confined to by the instructions
-/// that name it, which a value made from another by the spiller or a split does
-/// not inherit. None where its instructions confine it to nothing.
+/// `MachineRegisterInfo::recomputeRegClass` (MachineRegisterInfo.cpp, called
+/// from `LiveRangeEdit::calculateRegClassAndHint`, LiveRangeEdit.cpp#L426-L430,
+/// and SplitKit.cpp#L628): the registers `value` is confined to by the
+/// instructions that name it, which a value made from another by the spiller or
+/// a split does not inherit. None where its instructions confine it to nothing.
 ///
 /// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
 /// {SI,DI}; the pin has no such model. A pair member keeps its side.
@@ -1189,9 +1189,9 @@ mod tests {
         assert!(webs.get(&entry_segment).is_some());
     }
     /// A reload made for a stored word: the spiller gave it its parent's class,
-    /// {EBX} (ls.c `_ls_animate@3`, `[abs+516 + %53 + v16] := mov %51`), where its
-    /// instructions only store it. Recomputed, it is confined to nothing and the
-    /// base keeps the address class.
+    /// {EBX} (ls.c `_ls_animate@3`, `[abs+516 + %53 + v16] := mov %51`), where
+    /// its instructions only store it. Recomputed, it is confined to
+    /// nothing and the base keeps the address class.
     #[test]
     fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
         let (base, word) = (1, 2);

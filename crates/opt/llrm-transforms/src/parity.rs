@@ -314,7 +314,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
-    // Runs in the strength slot, before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    // Runs in the strength slot,
+    // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
@@ -377,6 +378,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "branch-folder, block-placement, tailduplication",
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
+    entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
@@ -430,6 +432,16 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         off: false,
         deps: &[],
         oracle: "tools/llvmport/domcompare.py: DomTree against the pinned LLVM on the corpus (#2292)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "globals-modref",
+        symbol: "GlobalsModRefAnalysis",
+        llvm: "GlobalsAA (GlobalsModRef.cpp)",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "globalsmodref_tests.rs against the rules of GlobalsModRef.cpp at the pin; opt -O2 on noinline callees (pt1n/pt1in cases)",
         replaced_by: "",
     },
     AnalysisEntry {
@@ -548,12 +560,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     old_analysis("summaries updated", "counted(\"summaries updated\")", "none", "with summaries: funcattrs-port"),
     old_analysis("callee-effects", "CalleeEffects", "none", "none: DEVIATE or delete candidate (passes.rs)"),
     old_analysis(
-        "callbacks",
-        "Callbacks",
-        "none",
-        "none: DEVIATE or delete candidate (effects of calling back into the module)",
-    ),
-    old_analysis(
         "call-graph",
         "CallGraphAnalysis",
         "CallGraphAnalysis",
@@ -625,8 +631,13 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("points-to", "Pointers", "BasicAA", "basicaa-port (aa.rs): alias::pointers goes"),
     old_analysis("annotated", "Annotated", "MemoryLocation", "basicaa-port: references.rs MemoryLocation callers"),
-    old_analysis("call-effects", "CallEffects", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
     old_analysis("writes", "Writes", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
+    old_analysis(
+        "call-footprints",
+        "CallFootprints",
+        "AAResults::getModRefInfo(Call)",
+        "basicaa-port with GlobalsModRef: one walk of a body's calls for Writes and Accesses",
+    ),
     old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("through-memory", "ThroughMemory", "MemorySSA + GVN value numbering", "mssa and the GVN translation"),
