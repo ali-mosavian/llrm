@@ -27,11 +27,10 @@
 //! Walks each value's users once, with a visited set: O(users).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
@@ -203,7 +202,7 @@ impl IvUsers {
         let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
-            let order: HashMap<InstId, usize> =
+            let order: IdMap<InstId, usize> =
                 cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect();
             users.sort_by_key(|user| std::cmp::Reverse(order.get(user).copied()));
         }
