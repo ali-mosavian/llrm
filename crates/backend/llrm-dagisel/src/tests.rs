@@ -1205,3 +1205,37 @@ mod masked_operand_that_is_not_a_shift {
         Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
     }
 }
+
+mod mul_lohi {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// `hi:lo = *MUL_LOHI a, b` (i32), both halves used, as the division-by-constant combine makes.
+    fn multiply(opcode: u16) -> Vec<u16> {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        let mut hooks = X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        machine(&dag)
+    }
+
+    /// Without the hand case the table has no pattern for MUL_LOHI: it was `CannotSelect`.
+    #[test]
+    fn an_unsigned_wide_multiply_is_mul32r() {
+        assert!(multiply(isd::UMUL_LOHI).contains(&x86::MUL32r));
+    }
+
+    #[test]
+    fn a_signed_wide_multiply_is_imul32r() {
+        assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
+    }
+}

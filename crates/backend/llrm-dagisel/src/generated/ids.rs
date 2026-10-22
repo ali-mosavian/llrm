@@ -728,10 +728,14 @@ pub mod x86 {
     pub const IDIV16r: u16 = 1760;
     pub const IDIV32m: u16 = 1763;
     pub const IDIV32r: u16 = 1766;
+    pub const IMUL32m: u16 = 1821;
+    pub const IMUL32r: u16 = 1824;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
+    pub const MUL32m: u16 = 2784;
+    pub const MUL32r: u16 = 2787;
     pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
     pub const NEG32m: u16 = 2859;

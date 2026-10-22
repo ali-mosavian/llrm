@@ -18,6 +18,7 @@
 
 use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt, target_opcode, x86};
+use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, known_zero};
 use crate::x86_hooks::X86Hooks;
 
@@ -68,6 +69,13 @@ pub fn select_divrem<D: AddrDag>(dag: &mut D, hooks: &X86Hooks, node: u32) -> bo
         in_glue = SDValue::new(dag.machine_node(reg_op, &[mvt::Glue], &[n1, in_glue]), 0);
     }
 
+    copy_results(dag, node, nvt, lo, hi, in_glue);
+    true
+}
+
+/// Copies the low and high results of `node` out of `lo` and `hi`, the ones that are used, then
+/// deletes `node`.
+pub(crate) fn copy_results<D: AddrDag>(dag: &mut D, node: u32, nvt: Vt, lo: u16, hi: u16, mut in_glue: SDValue) {
     for (result, reg) in [(0u8, lo), (1, hi)] {
         let value = SDValue::new(node, result);
         if dag.users(value).is_empty() {
@@ -79,5 +87,4 @@ pub fn select_divrem<D: AddrDag>(dag: &mut D, hooks: &X86Hooks, node: u32) -> bo
         dag.replace_uses(value, SDValue::new(from, 0));
     }
     dag.remove_dead_node(node);
-    true
 }
