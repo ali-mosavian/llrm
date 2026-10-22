@@ -507,6 +507,42 @@ pub fn pointer_base_with_constant_offset(
     (base, offset.expect("a stop at a variable index leaves a constant offset"))
 }
 
+/// Whether an object is below `from`: a pointer made, through casts and geps,
+/// of a global or an alloca. A selector cast over one is no pointer into it
+/// (`segment:0`); one over a pointer made of an integer names no object.
+pub(crate) fn object_below(
+    context: &Context,
+    function: &Function,
+    from: Operand,
+) -> bool {
+    let mut at = from;
+    for _ in 0..16 {
+        match at {
+            Operand::Constant(id) => match &context.get(id).kind {
+                ConstantKind::Global(_) => return true,
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+                    at = Operand::Constant(*value)
+                }
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = Operand::Constant(operands[0]),
+                _ => return false,
+            },
+            Operand::Value(value) => {
+                let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+                let instruction = function.instruction(inst);
+                match instruction.opcode {
+                    Opcode::Alloca { .. } => return true,
+                    Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => {
+                        at = instruction.operands[0]
+                    }
+                    _ => return false,
+                }
+            }
+            Operand::Block(_) => return false,
+        }
+    }
+    false
+}
+
 fn strip_offsets(
     context: &Context,
     layout: &DataLayout,
@@ -532,7 +568,17 @@ fn strip_offsets(
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
                     Opcode::GetElementPtr { source } => (Some(source), &instruction.operands),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, &instruction.operands),
+                    // A selector alone names no object (DEVIATE C1).
+                    Opcode::Cast(CastOp::AddrSpaceCast)
+                        if !(function.operand_type(context, instruction.operands[0]).is_some_and(|ty| {
+                            matches!(
+                                context.types.get(ty),
+                                crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                            )
+                        }) && object_below(context, function, instruction.operands[0])) =>
+                    {
+                        (None, &instruction.operands)
+                    }
                     _ => break,
                 }
             }
@@ -541,7 +587,12 @@ fn strip_offsets(
                     made = operands.iter().map(|&one| Operand::Constant(one)).collect();
                     (Some(*source), &made)
                 }
-                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value })
+                    if !(matches!(
+                        context.types.get(context.get(*value).ty),
+                        crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                    ) && object_below(context, function, Operand::Constant(*value))) =>
+                {
                     made = vec![Operand::Constant(*value)];
                     (None, &made)
                 }
