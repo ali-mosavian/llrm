@@ -8,14 +8,14 @@ Pin d1106deb71cc, [`TwoAddressInstructionPass.cpp`](https://github.com/llvm/llvm
 
 | function | PHIElimination pin/ours | TwoAddress pin/ours | Coalescer pin/ours |
 |---|---|---|---|
-| `_dl_muzzle@3` | 34/36 | 47/61 | 3/13 |
-| `_dl_decay@3` | 27/18 | 34/24 | 10/3 |
-| `_dl_explosion@3` | 23/25 | 30/34 | 3/8 |
+| `_dl_muzzle@3` | 34/33 | 47/58 | 3/10 |
+| `_dl_decay@3` | 27/17 | 34/23 | 10/2 |
+| `_dl_explosion@3` | 23/22 | 30/31 | 3/5 |
 | `_dl_live@3` | 34/30 | 38/36 | 7/3 |
-| `_dl_mark@3` | 53/42 | 59/51 | 15/8 |
-| `_dl_relink@3` | 72/66 | 101/107 | 12/28 |
+| `_dl_mark@3` | 53/38 | 59/47 | 15/4 |
+| `_dl_relink@3` | 72/57 | 101/98 | 12/19 |
 
-Copies added by the pass, pin/ours: muzzle 13/25, decay 7/6, explosion 7/9, live 4/6, mark 6/9, relink 29/41. Ours adds more in every function but decay. After the coalescer the sign flips in decay, live and mark (ours fewer), so the final count is not one-directional and the opcode difference may be most of it. What the count supports: the pass adds more copies than the pin's in five of six functions, most in muzzle and relink. It does not support a claim about the final copies.
+Copies added by the pass, pin/ours: muzzle 13/25, decay 7/6, explosion 7/9, live 4/6, mark 6/9, relink 29/41. Ours adds more in every function but decay. After the coalescer ours leaves more in muzzle, explosion and relink and fewer in decay, live and mark, so the final count is not one-directional and the opcode difference may be most of it. What the count supports: the pass adds more copies than the pin's in five of six functions, most in muzzle and relink. It does not support a claim about the final copies.\n\nCorrection (2026-10-22): the first version of this table counted a store of a register to memory as a copy on our side (the pattern matched the source operand only), which added 3 to 22 to each cell. The cells above count a register destination only. The copies added by the pass are unchanged; the cell values and the coalescer column moved.
 
 ## Data the pass needs that LIR does not have
 
