@@ -92,13 +92,17 @@ mod tests {
         let value = dag.get_constant(7, EVT::I32);
         let fixup = dag.get_target_global_address(EVT::I32, 0, 0);
         let root = dag.entry_node();
-        let (chain, results) = lower_asm(&mut dag, root, "llrm.ia16.asm.90", &[fixup], &[(ax, value)], &[(dx, EVT::I32)]);
+        let (chain, results) =
+            lower_asm(&mut dag, root, "llrm.ia16.asm.90", &[fixup], &[(ax, value)], &[(dx, EVT::I32)]);
         assert_eq!(results.len(), 1);
         let read = dag.operand(results[0], 2);
         let node = SDValue { node: read.node, res: 0 };
         assert_eq!(dag.opcode(node), x86isd::LLRM_ASM);
         let ops: Vec<ISD> = (0..5).map(|at| dag.opcode(dag.operand(node, at))).collect();
-        assert_eq!(ops, [ISD::CopyToReg, ISD::TargetExternalSymbolNode, ISD::TargetGlobalAddress, ISD::Register, ISD::CopyToReg]);
+        assert_eq!(
+            ops,
+            [ISD::CopyToReg, ISD::TargetExternalSymbolNode, ISD::TargetGlobalAddress, ISD::Register, ISD::CopyToReg]
+        );
         assert_eq!(chain.res, 1);
     }
 }
