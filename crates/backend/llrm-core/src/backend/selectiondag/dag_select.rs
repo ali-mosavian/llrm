@@ -34,8 +34,8 @@ use llrm_dagisel::x86_hooks::X86Hooks;
 use llrm_dagisel::x86_select::select_node;
 
 use super::actions::TargetLowering;
-use super::dagisel_adapter::DagisAdapter;
 use super::dag_combiner::{CombineLevel, DagCombiner};
+use super::dagisel_adapter::DagisAdapter;
 use super::emit::{EmitContext, Emitted, emit};
 use super::isd::ISD;
 use super::legalize_dag::DagLegalizer;

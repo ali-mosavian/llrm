@@ -369,7 +369,9 @@ impl Emitter<'_, '_> {
         let NodeData::FrameIndex(index) = self.dag.node(group[0]).data else {
             return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
         };
-        if self.address_register(group[2], Role::Index)?.is_some() || self.address_register(group[4], Role::Segment)?.is_some() {
+        if self.address_register(group[2], Role::Index)?.is_some()
+            || self.address_register(group[4], Role::Segment)?.is_some()
+        {
             return Err(EmitError::Unsupported("an indexed or segment-overridden frame cell".to_owned()));
         }
         let disp = self.constant(group[3])?;

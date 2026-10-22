@@ -10,12 +10,12 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::x86_lowering::X86Lowering;
 use super::emit::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
+use super::x86_lowering::X86Lowering;
 use crate::backend::isel::Parameter;
 use crate::model::ir::{Addr, Mem, Space};
 
@@ -85,15 +85,17 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let cells =
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
-    let ctx = EmitContext { frame: &frame, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32, map: &map, names: &names };
+    let ctx =
+        EmitContext { frame: &frame, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32, map: &map, names: &names };
     let mut info = FunctionLoweringInfo::new(function);
     let mut out = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(&module, function, &layout, &target, &machine, &convention, &mut info, block)
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
-        let emitted = select_block(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &selector, &mut hooks(), &Info, &ctx)
-            .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
+        let emitted =
+            select_block(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &selector, &mut hooks(), &Info, &ctx)
+                .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
         for b in emitted.blocks {
             out.push(
                 b.insns
@@ -129,13 +131,16 @@ fn the_combiner_runs_between_the_legalizers() {
     use super::isd::ISD;
     let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %a) {\nentry:\n  %m = mul i32 %a, 5\n  ret i32 %m\n}\n";
     let module = llrm_mir::parse::module(text).expect("parses");
-    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
+    let layout =
+        module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
     let machine = llrm_x86_m32::M32;
     let (id, _, function) = module.functions().next().expect("a function");
     let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let block = function.layout()[0];
-    let mut built = build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block).expect("builds");
+    let mut built =
+        build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
+            .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }).expect("legalizes");
     let root = built.dag.get_root();
