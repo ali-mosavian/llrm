@@ -50,7 +50,7 @@
 //!
 //! # Provides
 //! `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`] (call
-//! summaries and `callbacks_over`, via [`crate::manager`]'s `Callbacks`) and
+//! summaries and `callbacks_over`) and
 //! the `interprocedural` pass in llrm-transforms.
 
 use std::collections::BTreeSet;
