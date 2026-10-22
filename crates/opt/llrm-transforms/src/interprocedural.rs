@@ -687,10 +687,16 @@ pub fn optimized_with<E: From<String>>(
     // body that does not recurse writes before it reads is that body's stack
     // slot: GlobalOpt's `SRAGlobal` and its localizing branch.
     for at in 0..count {
-        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+        let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
             crate::globalsra::split(module, &program.layout)
-        }) {
-            edited(&mut modules[at], &[id]);
+        });
+        // Every body is told changed before the first runs again: the global
+        // analyses see the new variables once, not once per body.
+        edited(&mut modules[at], &ids);
+        if !ids.is_empty() {
+            modules[at].invalidate(&PreservedAnalyses::none());
+        }
+        for id in ids {
             reoptimised(&mut program.modules[at], &mut modules[at], id, "globalsra.")?;
         }
     }
