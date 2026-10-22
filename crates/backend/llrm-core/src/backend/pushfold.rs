@@ -1,5 +1,7 @@
-//! A pushed value that a load made and nothing else reads is pushed from
-//! memory: `mov r, [m]; push r` is `push [m]`. Translated from
+//! A value that a load made and nothing else reads is read from memory where it
+//! is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1`
+//! with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a
+//! commutative operation the load is. Translated from
 //! [X86CallFrameOptimization.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp)
 //! (`canFoldIntoRegPush`, and the `PUSH32rmm` branch of `adjustCallSequence`).
 //!
@@ -69,6 +71,8 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::backend::storedhomes::may_write;
+use llrm_lir::Held;
+
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -124,7 +128,7 @@ pub fn folded(body: &LirBody) -> LirBody {
                 continue;
             };
             let load = Arc::clone(&insns[home]);
-            let push = Arc::clone(&insns[at]);
+            let consumer = Arc::clone(&insns[at]);
             let Some(cell) = load.what.as_ref().and_then(|what| match what.sources.as_slice() {
                 [Loc::Mem(cell)] => Some(cell.clone()),
                 _ => None,
@@ -132,13 +136,24 @@ pub fn folded(body: &LirBody) -> LirBody {
                 at += 1;
                 continue;
             };
-            let mut what = push.what.clone().expect("a push");
-            what.sources = vec![Loc::Mem(cell)];
-            let mut fused = (*push).clone();
+            let mut what = consumer.what.clone().expect("a consumer");
+            what.sources = match what.sources.as_slice() {
+                // A push reads the cell; a commutative two-operand operation keeps its other operand first, as the memory form of the instruction has it.
+                [Loc::Held(_)] => vec![Loc::Mem(cell)],
+                [first, second] => {
+                    let other = if matches!(second, Loc::Held(h) if h.value == value) { first } else { second };
+                    vec![other.clone(), Loc::Mem(cell)]
+                }
+                _ => {
+                    at += 1;
+                    continue;
+                }
+            };
+            let mut fused = (*consumer).clone();
             fused.what = Some(what);
-            fused.uses = push.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
+            fused.uses = consumer.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
             fused.uses.dedup();
-            fused.widths = push
+            fused.widths = consumer
                 .widths
                 .iter()
                 .chain(&load.widths)
@@ -165,8 +180,28 @@ fn candidate(
     reads: &HashMap<u32, usize>,
 ) -> Option<(usize, u32)> {
     let push = &insns[at];
-    let what = push.what.as_ref().filter(|what| what.op == Operation::Push && what.dests.is_empty())?;
-    let [Loc::Held(held)] = what.sources.as_slice() else { return None };
+    let what = push.what.as_ref()?;
+    // The value a push or a two-operand operation reads from a load: the push's only source, the second of `add`/`sub`/`and`/`or`/`xor` or the first of a commutative one.
+    let held = match (what.op, what.sources.as_slice()) {
+        (Operation::Push, [Loc::Held(held)]) if what.dests.is_empty() => *held,
+        (Operation::Binary, [Loc::Held(first), Loc::Held(second)]) if what.dests.len() == 1 => {
+            let name = what.name.as_deref().unwrap_or_default();
+            let commutative = matches!(name, "add" | "and" | "or" | "xor");
+            let loaded = |held: &Held| reads.get(&held.value) == Some(&1) && insns[..at].iter().any(|one| defines(one, held.value));
+            let Loc::Held(dest) = &what.dests[0] else { return None };
+            if !matches!(name, "add" | "sub" | "and" | "or" | "xor") || first.value == second.value || dest.width != first.width || dest.width != second.width {
+                return None;
+            }
+            if loaded(second) {
+                *second
+            } else if commutative && loaded(first) {
+                *first
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
     let plain = push.clobbers.is_empty()
         && push.requires.is_empty()
         && push.delivers.is_empty()
@@ -213,6 +248,14 @@ fn candidate(
                 .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
     });
     (!blocked).then_some((home, held.value))
+}
+
+/// Whether `one` defines the value.
+fn defines(
+    one: &Insn,
+    value: u32,
+) -> bool {
+    one.what.as_ref().is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == value)))
 }
 
 #[cfg(test)]
