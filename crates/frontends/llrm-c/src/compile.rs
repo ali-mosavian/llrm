@@ -112,6 +112,7 @@ pub(crate) fn prepared(
     unit.wrapv = wrapv;
     let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
     profile.lifetimes = codegen.pipeline.optimize;
+    profile.expects = codegen.pipeline.optimize;
     // Only a program linked against the target's own start-up library asks
     // for it.
     if !entry_requests {
@@ -257,6 +258,10 @@ pub struct Profile {
     /// Whether a block's locals are marked with `llvm.lifetime` (the pipeline
     /// optimizes: clang's `ShouldEmitLifetimeMarkers`).
     pub lifetimes: bool,
+    /// Whether `__builtin_expect` is the `llvm.expect` intrinsic, which
+    /// `lower-expect` turns into branch weights: clang's at -O1 and up; below
+    /// it is its argument.
+    pub expects: bool,
 }
 
 impl Profile {
@@ -352,6 +357,7 @@ impl Profile {
             header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
             lifetimes: false,
+            expects: false,
             // Only a target that has inline code naming registers states them.
             hardware: match frontend.get("registers").and_then(toml::Value::as_table) {
                 Some(table) => crate::hwreg::Registers::parse(table)?,

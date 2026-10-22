@@ -1635,8 +1635,10 @@ b1:
 /// A float phi's constant input is loaded as any float constant is: taken
 /// for an address, it refused `an address of no global` and left deedlines'
 /// CREATEOBJECT and qbdemo's FRACLINE unselected.
-// The constant is made on the edge that reads it (MachineSink): no `fstp st(0)`
-// to drop the other path's.
+// The pin's llc does the same (tools/pairs/pin.py llc -m 32, i486): `fldz`
+// above the compare, `fstp st(0); fld1` on the other path. MachineSink leaves a
+// def that writes the flags where a successor reads them (`SinkInstruction`'s
+// zombie check, fae5196031), so the constant is no longer made on each edge.
 #[test]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
@@ -1656,14 +1658,13 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "cmp word ptr [bp+6], 0",
-            "jle L0_4294967297",
-            "L0_2:",
-            "fld1",
-            "pop bp",
-            "retf",
-            "L0_4294967297:",
             "fldz",
+            "cmp word ptr [bp+6], 0",
+            "jle L0_3",
+            "L0_2:",
+            "fstp st(0)",
+            "fld1",
+            "L0_3:",
             "pop bp",
             "retf"
         ]
@@ -5979,6 +5980,21 @@ fn test_an_undef_initializer_is_zero_bytes() {
     };
     assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
+}
+
+/// Old: a switch lookup table with `poison` holes (the pin's holes for cases
+/// the guard never reaches) was refused as "a poison initializer": item.c at
+/// every level once a conditional-branch chain became a `switch`. The holes are
+/// zero.
+#[test]
+fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@t = private constant [4 x i8] [i8 1, i8 poison, i8 poison, i8 4]\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
+    assert_eq!(datums, [Datum::Label(Label { name: "t".to_owned() }), Datum::Bytes(vec![1, 0, 0, 4])]);
 }
 
 /// A load only an add reads is the add's memory operand, as `ADD32rm` is

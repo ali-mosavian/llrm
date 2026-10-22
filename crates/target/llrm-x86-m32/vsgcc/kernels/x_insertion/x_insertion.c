@@ -1,11 +1,13 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static int a[256];
-long bench_x_insertion(int n)
+static i32 a[256];
+long bench_x_insertion(i32 n)
 {
-    unsigned s = 777;
-    int i, j, v; long sum = 0;
-    for (i = 0; i < n; ++i) { s = s * 1664525u + 1013904223u; a[i] = (int)(s >> 20); }
+    u32 s = 777;
+    i32 i, j, v; long sum = 0;
+    for (i = 0; i < n; ++i) { s = s * 1664525ul + 1013904223ul; a[i] = (i32)(s >> 20); }
     for (i = 1; i < n; ++i) {
         v = a[i];
         for (j = i - 1; j >= 0 && a[j] > v; --j) a[j + 1] = a[j];

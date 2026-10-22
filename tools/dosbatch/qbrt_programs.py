@@ -30,6 +30,46 @@ KNOWN: dict[tuple[str, str], str] = {
 }
 
 
+# Programs whose output is not real BC's text today, strict: one that starts to match must leave this table.
+BC_KNOWN: dict[str, str] = {
+    "real_print_wide": "#3506 (7a99c56e9): the range checks spill the operand as a double, ^ prints 15 digits; goes with its revert or fix-forward",
+}
+
+
+def real_bc_text(source: Path) -> list[str] | None:
+    """Real BC's output lines for a program, where it is checked in: `NAME.bcout` beside the source (taken from BC.EXE + LINK + BCOM45; a bench program's `.out` is for
+    its own input, so it is not used). The differential's reference is our compiler on the MS runtime, not BC's code, so a digit our expansions get wrong is the same in both arms."""
+    found = source.with_suffix(".bcout")
+    return lines_of(found.read_text(errors="replace")) if found.exists() else None
+
+
+def lines_of(text: str) -> list[str]:
+    return [one.rstrip() for one in text.replace("\r", "").split("\n") if one.strip()]
+
+
+def not_real_bc(
+    stored: list[str],
+    reference: str,
+    candidate: str,
+) -> str | None:
+    """Why a run is not real BC's text, or None. A reference and a candidate that agree with each other and not with BC are said so: that is the case the byte-for-byte
+    comparison alone passes."""
+    ref, cand = lines_of(reference), lines_of(candidate)
+    if ref == cand and ref != stored:
+        return f"reference and candidate agree but are not real BC's text (first difference: {first_difference(stored, ref)})"
+    if cand != stored:
+        return f"candidate is not real BC's text ({first_difference(stored, cand)})"
+    return None
+
+
+def first_difference(want: list[str], got: list[str]) -> str:
+    for at in range(max(len(want), len(got))):
+        w, g = (want[at] if at < len(want) else "<end>"), (got[at] if at < len(got) else "<end>")
+        if w != g:
+            return f"line {at + 1}: BC {w!r}, got {g!r}"
+    return ""
+
+
 def differential(sources: dict[str, Path], work: Path) -> dict[str, dict]:
     """Each program as BCOM45 builds it (the oracle) and ours at each target, run and compared."""
     objects = {}

@@ -2,8 +2,10 @@
 //! A routine the runtime description states is defined in the module, for the
 //! inliner to price against its call.
 
+use llrm_transforms::inline::Threshold;
+
 use super::driver as qb_driver;
-use super::test_hir::{emitted_mir, optimized_mir, written};
+use super::test_hir::{emitted_mir, optimized_mir, optimized_mir_inlining, written};
 
 /// Five loops over the bytes of a string, as a program reads one, and two reads
 /// of runtime temporaries.
@@ -106,6 +108,31 @@ fn an_asc_of_mid_loop_has_no_temporary_or_far_call() {
         }
         let text = body(&mir, "T%");
         assert_eq!(calls(text, "B$FASC"), 2, "{dialect}: a runtime temporary is freed by the runtime\n{text}");
+    }
+}
+
+/// ASC and MID$ inlined only where the size model or `-fno-inline-functions`
+/// let them: crc's loop kept a far call each under `-Os` and with inlining
+/// off, 2.7k clocks against 2.7k x several. They inline whatever the model
+/// says.
+#[test]
+fn asc_and_mid_inline_whatever_the_size_model_says() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "bytes.bas", SOURCE.as_bytes());
+    let frontend = qb_driver::Frontend::new("qb45", "qb45");
+    let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
+    for (name, threshold) in [
+        ("none", Threshold::new(0)),
+        ("size", Threshold { limit: 0, ..Threshold::default().for_size() }),
+        ("tiny", Threshold::new(1)),
+    ] {
+        let mir = optimized_mir_inlining(&program, threshold);
+        for function in ["A&", "B&", "C&", "D&", "E&"] {
+            let text = body(&mir, function);
+            for routine in ["B$FMID", "B$FASC"] {
+                assert_eq!(calls(text, routine), 0, "{name} {function}: {routine} stays\n{text}");
+            }
+        }
     }
 }
 
