@@ -432,3 +432,25 @@ def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():
         stderr = "boom"
 
     assert ps.group_failures("/bins", run=lambda *a, **k: Silent()) == {"run-groups-did-not-finish"}
+
+
+def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path):
+    """#3422 broke QCport `item` at four levels and passed the gate: qc_modules compiled four modules at -O2. A crate PR now compiles all 65 at four levels, and a failing one is a name."""
+    assert ps.touches_the_compiler(["crates/opt/llrm-transforms/src/simplifycfg.rs"]) and not ps.touches_the_compiler(["docs/arch.md", "tools/gate/gate.py"])
+    (tmp_path / "src").mkdir()
+    (tmp_path / "inc").mkdir()
+    import os
+
+    os.environ["QCPORT"], os.environ["QCPORT_INC"] = str(tmp_path / "src"), str(tmp_path / "inc")
+    try:
+        seen = {}
+
+        def sweep(compiler, qcport, include):
+            seen["compiler"] = compiler
+            return [("item", "-O1", "a poison initializer"), ("item", "-Os", "a poison initializer")]
+
+        assert ps.qcport_failures("/bins", sweep=sweep) == {"qc item -O1", "qc item -Os"}
+        assert str(seen["compiler"]) == "/bins/llrm-c"
+        assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
+    finally:
+        del os.environ["QCPORT"], os.environ["QCPORT_INC"]
