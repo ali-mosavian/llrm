@@ -539,6 +539,43 @@ impl SelectionDAG {
         self.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops)
     }
 
+    /// A call's `RegisterMask` operand: the registers the callee preserves
+    /// are the allocator's to know, so the node carries none.
+    pub fn get_register_mask(&mut self) -> SDValue {
+        self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
+    }
+
+    pub fn get_target_global_address(&mut self, vt: EVT, symbol: u32, offset: i64) -> SDValue {
+        self.intern(ISD::TargetGlobalAddress, &[vt], &[], SDNodeFlags::default(), NodeData::Global { symbol, offset })
+    }
+
+    /// `getCopyFromReg` of a physical register with glue: the value, the
+    /// chain and the glue.
+    pub fn get_copy_from_phys_reg(&mut self, chain: SDValue, reg: llrm_lir::registers::RegId, vt: EVT, glue: SDValue) -> SDValue {
+        let reg_node = self.get_phys_register(vt, reg);
+        self.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[chain, reg_node, glue])
+    }
+
+    /// `getCopyFromReg` of a physical register without glue.
+    pub fn get_copy_from_phys_reg_plain(&mut self, chain: SDValue, reg: llrm_lir::registers::RegId, vt: EVT) -> SDValue {
+        let reg_node = self.get_phys_register(vt, reg);
+        self.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER], &[chain, reg_node])
+    }
+
+    /// `getCALLSEQ_START`: `callseq_start chain, bytes, 0` (chain and glue).
+    pub fn get_callseq_start(&mut self, chain: SDValue, bytes: u64) -> SDValue {
+        let size = self.get_constant_with(u128::from(bytes), EVT::I32, true, false);
+        let zero = self.get_constant_with(0, EVT::I32, true, false);
+        self.get_node_multi(ISD::CallSeqStart, &[EVT::OTHER, EVT::GLUE], &[chain, size, zero])
+    }
+
+    /// `getCALLSEQ_END`: `callseq_end chain, bytes, popped, glue`.
+    pub fn get_callseq_end(&mut self, chain: SDValue, bytes: u64, popped: u64, glue: SDValue) -> SDValue {
+        let size = self.get_constant_with(u128::from(bytes), EVT::I32, true, false);
+        let pop = self.get_constant_with(u128::from(popped), EVT::I32, true, false);
+        self.get_node_multi(ISD::CallSeqEnd, &[EVT::OTHER, EVT::GLUE], &[chain, size, pop, glue])
+    }
+
     pub fn get_register(&mut self, vt: EVT, reg: u32) -> SDValue {
         self.intern(ISD::Register, &[vt], &[], SDNodeFlags::default(), NodeData::Register(reg))
     }
