@@ -66,7 +66,7 @@
 //!  DominatedEdges   Registers
 //!  Bounded          Registers, Counted, DominatedEdges
 //!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
-//!  Accesses         Annotated, PointerValues                (memoryssa)
+//!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
 //!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
@@ -1118,13 +1118,16 @@ impl Analysis for Counted {
     }
 }
 
-/// What each call writes, as its attributes and `GlobalsModRef` say
-/// (`alias::calls_by_attributes`): the `Calls` consts and floatfacts take.
-pub struct Writes;
+/// What each call reads and writes, as its attributes and `GlobalsModRef` say
+/// (`alias::calls_by_attributes`), made once for the body: `Writes` and
+/// `Accesses` take it. Each made it afresh (39 and 11 walks of the body's
+/// calls on d_faces -O2, 32 M Ir) where `CallEffects` was kept past the edits
+/// that reach no call.
+pub struct CallFootprints;
 
-impl Analysis for Writes {
-    type Result = Result<Calls, String>;
-    const NAME: &'static str = "writes";
+impl Analysis for CallFootprints {
+    type Result = Result<std::rc::Rc<llrm_mir::dense::IdMap<InstId, alias::Effect>>, String>;
+    const NAME: &'static str = "call-footprints";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
@@ -1140,7 +1143,30 @@ impl Analysis for Writes {
         if let Ok(values) = &*values {
             unit = unit.with_point_values(values);
         }
-        Ok(alias::calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect())
+        Ok(std::rc::Rc::new(alias::calls_by_attributes(&unit)))
+    }
+}
+
+/// What each call writes: the stores of `CallFootprints`, the `Calls` consts
+/// and floatfacts take.
+pub struct Writes;
+
+impl Analysis for Writes {
+    type Result = Result<Calls, String>;
+    const NAME: &'static str = "writes";
+    const SKIPS: bool = true;
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
+    }
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let footprints = analyses.get::<CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
+        Ok(footprints.iter().map(|(at, effect)| (at, effect.stores.clone())).collect())
     }
 }
 

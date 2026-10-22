@@ -724,6 +724,24 @@ fn test_annotated_does_not_solve_what_escapes() {
     assert_eq!(crate::alias::escape_solves() - before, 1, "Pointers solves what escapes once");
 }
 
+/// `Writes` and `Accesses` each walked the body's calls for their attributes'
+/// footprints (39 and 11 walks, 32 M Ir on d_faces -O2, once `CallEffects` no
+/// longer held them): the footprints are one analysis both read.
+#[test]
+fn test_writes_and_accesses_of_a_body_share_one_walk_of_its_calls() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  call void @g(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::alias::footprints_made();
+    analyses.get::<super::Writes>(context, &layout, f);
+    analyses.get::<crate::memoryssa::Accesses>(context, &layout, f);
+    assert_eq!(crate::alias::footprints_made() - before, 1, "the calls' footprints were worked out twice");
+}
+
 /// `Annotated` worked out every value's stride congruence (`congruences_of`,
 /// a pass over the loops' inductions) in every solve, for the accesses with a
 /// variable index alone to ask: 24.0 M of d_faces' 3,218 M at -O1, 123 solves

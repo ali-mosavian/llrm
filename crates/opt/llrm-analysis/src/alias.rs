@@ -2299,6 +2299,7 @@ impl Effect {
 /// globals the callee may touch (all of them where `GlobalsModRef` has nothing
 /// of the callee).
 pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect> {
+    FOOTPRINTS.with(|made| made.set(made.get() + 1));
     let tracked: Vec<GlobalId> =
         unit.globals_aa.into_iter().flat_map(|aa| aa.tracked_globals().iter().copied()).collect();
     let reference = |one: &Slice| {
@@ -2584,6 +2585,13 @@ thread_local! {
     static ESCAPE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FOOTPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out the footprints of a body's calls
+/// (`calls_by_attributes`), for a test that `Writes` and `Accesses` share one.
+pub fn footprints_made() -> usize {
+    FOOTPRINTS.with(std::cell::Cell::get)
 }
 
 /// How many rounds over the blocks the value solves of this thread have made,

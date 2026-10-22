@@ -344,6 +344,8 @@ impl Analysis for Accesses {
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
+        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
         // The pointer value solve `Annotated` shares: the objects a call's
@@ -354,7 +356,7 @@ impl Analysis for Accesses {
         if let Ok(values) = &*values {
             unit = unit.with_point_values(values);
         }
-        let made = Self::of(&unit, references.clone());
+        let made = Self::of_with(&unit, references.clone(), footprints);
         Ok(Rc::new(Self { source: Some(annotated), ..made }))
     }
 
@@ -491,7 +493,15 @@ impl Accesses {
     ) -> Self {
         // A call's reads and writes as its attributes and `GlobalsModRef` say;
         // no points-to solve.
-        let calls = crate::alias::calls_by_attributes(unit);
+        Self::of_with(unit, references, &crate::alias::calls_by_attributes(unit))
+    }
+
+    /// `of`, the calls' effects given (the manager's `CallFootprints`).
+    pub fn of_with(
+        unit: &Unit,
+        references: IndexMap<InstId, MemRef>,
+        calls: &llrm_mir::dense::IdMap<InstId, crate::alias::Effect>,
+    ) -> Self {
         Self {
             fills: initialized_by_calls(unit),
             ..Self::new(unit, references, |inst| {
