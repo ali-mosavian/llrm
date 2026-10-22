@@ -22,7 +22,11 @@
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
-//!   L6066): an alloca a `Declare` names is left alone.
+//!   L6066): an alloca a `Declare` names is processed like any other, so `-g`
+//!   does not change the code. One that SROA splits loses its `Declare` with
+//!   the alloca (the variable is reported dropped), where LLVM migrates it to
+//!   the new allocas as fragments (exit: a `Declare` that carries a fragment,
+//!   owner mir-undef).
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
@@ -1263,7 +1267,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     /// `SROA::runSROA`. SROA.cpp#L6430
     fn run_sroa(&mut self) -> bool {
         let Some(entry) = self.function().entry() else { return false };
-        let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
             .iter_block(entry)
@@ -1271,7 +1274,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
             ))
-            .filter(|inst| !declared.contains(inst))
             .collect();
         for inst in allocas {
             self.worklist.push(inst);
