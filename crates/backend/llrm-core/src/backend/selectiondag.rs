@@ -14,7 +14,7 @@
 //! The builder (`builder::build_block`) visits a block's instructions in order
 //! and keeps the pin's chain bookkeeping: pending loads, pending exports,
 //! `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-//! lives in a virtual register (`lowering::FunctionLoweringInfo`): the block
+//! lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the block
 //! that defines it ends in `CopyToReg`, the blocks that read it start from
 //! `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
@@ -71,14 +71,18 @@
 
 pub mod builder;
 mod dag;
+pub mod actions;
 pub mod dump;
 pub mod fold;
+pub mod function_lowering;
 pub mod isd;
 pub mod lowering;
 pub mod mvt;
 
 pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, SDNode, SDNodeFlags, SDValue, SelectionDAG};
 pub use isd::{CondCode, ISD};
+pub use actions::{Action, Features, LoadExt, TargetLowering};
+pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
