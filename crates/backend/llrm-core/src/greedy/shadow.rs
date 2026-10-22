@@ -860,6 +860,9 @@ pub fn decide_with_split(
             greedy.pinned.insert(reg);
         }
     }
+    if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+        eprintln!("== {}", body.name);
+    }
     greedy.allocate_phys_regs();
     if inline {
         greedy.stacked_spills();
