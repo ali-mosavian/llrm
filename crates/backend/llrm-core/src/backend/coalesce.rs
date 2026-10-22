@@ -744,9 +744,12 @@ mod tests {
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, RegId::ES)]);
-        let result =
-            allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::m16())
-                .expect("applies");
+        let result = crate::backend::rewriter::rewrite(
+            &body,
+            &allocated(&body, &body.pins),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("applies");
         let insns = result.insns();
         assert_eq!(insns.len(), 1);
         assert_eq!(insns[0].covers, body.insns()[0].covers);
