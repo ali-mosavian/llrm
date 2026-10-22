@@ -1518,13 +1518,13 @@ impl ScalarEvolution {
         let (a, b, _, m, bit_width) = self.quadratic_equation_of(cx, add_rec)?;
 
         // The solution is "unknown" (no answer yet) or known, possibly absent.
-        let mut solve_for_boundary = |this: &mut Self, bound: i128| -> (Option<(i128, u32)>, bool) {
+        let solve_for_boundary = |this: &mut Self, bound: i128| -> (Option<(i128, u32)>, bool) {
             // The quadratic equation's multiplier.
             let Some(bound) = bound.checked_mul(m) else { return (None, false) };
             // Signed overflow and unsigned overflow: pick the lower solution.
             let so = if bit_width > 1 { solve(a, b, -bound, bit_width + 1, bit_width) } else { None };
             let uo = solve(a, b, -bound, bit_width + 1, bit_width + 1);
-            let mut leaves_range = |this: &mut Self, (x, width): (i128, u32)| -> Option<bool> {
+            let leaves_range = |this: &mut Self, (x, width): (i128, u32)| -> Option<bool> {
                 let v0 = this.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
                 if range.contains(v0.bits) {
                     return Some(false);
