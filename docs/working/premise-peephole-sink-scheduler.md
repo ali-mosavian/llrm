@@ -6,14 +6,16 @@ Instrument: `tools/pairs/premise.py OURS_LLRM_C LEVEL PASSFLAG` (a copy of w-4's
 
 | pass off in the pin | level | ours | pin with | pin without | pin's value (instr / bytes) |
 |---|---|--:|--:|--:|---|
-| `--disable-peephole` | -Os | 5241 | 5048 | 5302 | +254 / +554 B |
-| `--disable-peephole` | -O2 | 9800 | 8414 | 8742 | +328 / +786 B |
-| `--disable-machine-sink` | -Os | 5241 | 5048 | 5060 | +12 / +24 B |
-| `--disable-machine-sink` | -O2 | 9800 | 8414 | 8404 | -10 / -16 B |
-| `-enable-misched=false` | -Os | 5241 | 5048 | 5041 | -7 / -29 B |
-| `-enable-misched=false` | -O2 | 9800 | 8414 | 8430 | +16 / +96 B |
+| `--disable-peephole` | -Os | 4899 | 5048 | 5302 | +254 / +554 B |
+| `--disable-peephole` | -O2 | 9228 | 8414 | 8742 | +328 / +786 B |
+| `--disable-machine-sink` | -Os | 4899 | 5048 | 5060 | +12 / +24 B |
+| `--disable-machine-sink` | -O2 | 9228 | 8414 | 8404 | -10 / -16 B |
+| `-enable-misched=false` | -Os | 4899 | 5048 | 5041 | -7 / -29 B |
+| `-enable-misched=false` | -O2 | 9228 | 8414 | 8430 | +16 / +96 B |
 
-Ours is above the pin with every pass by 193 instructions at -Os (3.8%) and 1386 at -O2 (16.5%): that is the whole gap, not any one pass's. Largest per-program gaps: x_ll_div 24, lru 21, x_mergesort 19 (since #3654 fixed), x_transpose 19 at -Os; recpow 184, matmul 111, quicksort 74, x_fir 70, x_switch 70 at -O2.
+**Correction (the first version of this note counted our listing's directive lines as instructions, `public f`, `extern g`, `f endp`, `align 16`: ours was 5241 / 9800, not 4899 / 9228).** Corrected, ours is 3.0% below the pin with all passes at -Os (4899 against 5048) and 9.7% above it at -O2 (9228 against 8414); the "3.8% / 16.5% above" that went into the queue was that miscount.
+
+By mnemonic (`tools/pairs/premise_classes.py`, 71 programs, ours / pin with / pin without Peephole), -O2: `cmp` 346 / 325 / **8** and `sub` 144 / 275 / **598**: without its Peephole the pin selects `sub` where a `cmp` is meant (the pass turns a `sub` whose result is dead into `cmp`), and ours selects `cmp` directly, so that part of the pin's value (323 instructions) is not a gap of ours. `mov` 2328 / 2225 / 2535: the pass removes 310 copies in the pin and ours is 103 above the pin with it. `lea` 888 / 419 / 416 (+469) against `imul` 84 / 182 (-98) and `shl` +77: a difference of lowering (ours decomposes constant multiplies, which the i486 price asks for), not of the pass. At -Os the large classes are `sub` 69 / 202 / 425, `pop` 381 / 244 / 249 (+137 callee-save pops), `pushd` 57 / 0 (+57).
 
 ## Clocks, spills and copies (the corrected instrument)
 
@@ -32,7 +34,7 @@ Ours against the pin on the programs the sink moves (clocks, our build 49a8d96bf
 
 - **MachineSink**: not zero. The pin's pass is worth +1.0% clocks (-O2) and +1.6% (-O3) as a geomean and up to +25..35% on x_collatz; ours is at the pin's no-sink clocks on x_collatz, so the sink is missing a step there. The x_collatz diagnosis (the constant copy on a guard edge that reaches a shared exit should sink into the shared block; the `emptyblocks` work, #3350) is a hypothesis for which step, not shown here. Translate the missing step into machinesink.rs; the byte reading above (+12 / +24 B) was the wrong price.
 - **Machine Scheduler**: on i486 the pin's pass is worth +0.13% clocks (-O2), +0.19% (-O3), spills unchanged (0 / -6), static copies +7 / +16; one program stands out (x_list +2.4% / +7.1%, where ours is +9.7% / +5.3% above the pin). DEVIATE MS1 stands now on clocks, not on bytes: no scheduler; `pressuresink.rs` stands in; owner llrm-w-2; review 2026-11-20, or when a P5 model is measured (this is i486 only).
-- **Peephole**: the pin's value is real in bytes and instructions (table above); its clocks are not measured yet. Before a translation PR, classify the gap per mnemonic class on the programs named above to find which of PeepholeOptimizer.cpp's pieces (`optimizeCmpInstr`, `optimizeExtInstr`, `optimizeSelect`, `optimizeCondBranch`, `foldImmediate`, the copy rewriters) ours lacks; plan note and first code PR dates 11-02 / 11-06 stand.
+- **Peephole**: its value in the pin is mostly the `sub`-to-`cmp` conversion (323 of the -O2 instructions), which ours does not need; what is left is the copy side (`mov`: the pin's pass removes 310, ours is +103 above the pin with it). A translation PR needs a function where ours keeps a copy the pin's `optimizeCoalescableCopy`/`foldImmediate`/copy rewriters remove; the next step is that per-function `mov` diff (not an instruction-count gap); plan note 11-02 stands and the PR date 11-06 is open until a piece is shown missing.
 
 ## Not measured
 
