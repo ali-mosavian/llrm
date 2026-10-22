@@ -449,7 +449,7 @@ fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselecte
 
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
-pub(crate) fn convention(
+pub fn convention(
     module: &Module,
     layout: &DataLayout,
     global: GlobalId,

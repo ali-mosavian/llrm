@@ -1,6 +1,6 @@
 //! The interpreter against the generated i486 table, on hand-built DAGs.
 
-use crate::dag::SDValue;
+use crate::dag::{Dag, SDValue};
 use crate::generated::ids::{isd, mvt};
 use crate::generated::x86_i486 as table;
 use crate::interp::{Outcome, Selector};
@@ -1067,4 +1067,25 @@ fn an_x86isd_node_is_found_by_name_in_the_pins_numbers() {
     assert_eq!(x86isd_id("RET_GLUE"), Some(x86isd::RET_GLUE));
     assert_eq!(x86isd_id("CMOV"), Some(x86isd::CMOV));
     assert_eq!(x86isd_id("NO_SUCH_NODE"), None);
+}
+
+#[test]
+fn a_return_glue_node_is_selected_to_ret() {
+    use crate::generated::ids::x86isd;
+    let mut dag = crate::testing::TestDag::new();
+    let zero = dag.target_constant(0, mvt::i32);
+    let ret = dag.node(x86isd::RET_GLUE, &[mvt::Other], &[SDValue::new(0, 0), zero]);
+
+    let mut hooks = crate::x86_hooks::X86Hooks::new(crate::x86_hooks::Options {
+        cpu: crate::x86_hooks::Cpu::I486,
+        opt_none: false,
+        opt_for_size: false,
+        min_size: false,
+        has_frame_pointer: true,
+        address_mode: crate::x86_addr::AddrMode::Flat32,
+    });
+
+    assert_eq!(crate::x86_select::select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, ret), Outcome::Selected);
+
+    assert_eq!(selected(&dag, ret), "RET");
 }

@@ -45,7 +45,14 @@ fn main() {
         address_mode: AddrMode::Flat32,
     });
 
-    for (_, global, function) in module.functions() {
+    for (id, global, function) in module.functions() {
+        let convention = match llrm_core::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32) {
+            Ok(c) => c,
+            Err(why) => {
+                println!("REFUSED {}: convention: {why:?}", global.name.as_deref().unwrap_or("?"));
+                continue;
+            }
+        };
         let name = global.name.as_deref().unwrap_or("?");
         let mut info = FunctionLoweringInfo::new(function);
         let (mut blocks, mut built) = (0, 0);
@@ -54,7 +61,7 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(&module, function, &layout, &target, &mut info, block) {
+            let mut done = match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);
@@ -70,15 +77,25 @@ fn main() {
                 continue;
             }
             built += 1;
+            if std::env::var_os("DUMP").is_some() {
+                println!("DAG {name}:{block_name}\n{}", done.dag.dump());
+            }
             let mut adapter = DagisAdapter::new(&mut done.dag);
             // Users before operands, as the pin walks `allnodes` backwards.
             for node in reachable_users_first(&adapter) {
                 if llrm_dagisel::dag::Dag::is_machine(&adapter, node) || adapter.is_dead(node) {
                     continue;
                 }
-                if select_node(&selector, &mut adapter, &mut hooks, node) == Outcome::CannotSelect {
+                let outcome = select_node(&selector, &mut adapter, &mut hooks, node);
+                if std::env::var_os("DUMP").is_some() {
+                    println!("  select t{node} {:?}: {outcome:?}", adapter.dag.nodes()[node as usize].opcode);
+                }
+                if outcome == Outcome::CannotSelect {
                     *unselected.entry(adapter.dag.nodes()[node as usize].opcode.name()).or_default() += 1;
                 }
+            }
+            if std::env::var_os("DUMP").is_some() {
+                println!("SELECTED {name}:{block_name}\n{}", done.dag.dump());
             }
             for (at, node) in done.dag.nodes().iter().enumerate() {
                 if let ISD::Machine(code) = node.opcode {

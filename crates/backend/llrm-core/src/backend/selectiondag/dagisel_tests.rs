@@ -2,6 +2,7 @@
 
 use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
+use llrm_dagisel::x86_select::select_node;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::dagisel_adapter::DagisAdapter;
@@ -102,4 +103,18 @@ fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
             .then(|| node.ops[2])
     });
     assert_eq!(copied, Some(n), "CL gets n, not n + 32");
+}
+
+#[test]
+fn a_return_node_is_selected_to_ret() {
+    use super::x86isd;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let ret = dag.get_node(x86isd::RET_GLUE, EVT::OTHER, &[entry, zero]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), ret.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, ret.node), "RET");
 }
