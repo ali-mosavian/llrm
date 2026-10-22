@@ -39,6 +39,19 @@ The x_fir coefficient table is an array global of 16 elements stored by constant
 ## What `_numbers` still changes in QCport (2026-10-22, 41febda30, `FOLD_NO_NUMBERS=1` vs not, same binary; 260 compiles: 65 modules x -O1/-O2/-O3/-Os, 0 failed)
 19 objects differ, 11 modules. Bigger without `_numbers`: host/savegame (+44/+81/+83/+18 B at O1/O2/O3/Os), game/mdl_ai O1 +71, game/ent O2/O3 +14, game/weapons O1 +7, sound/snd_mix O1/Os +5/+1, ui/sbar O1/O2 +5/+2, render/dl O1 +2. Smaller without it (`_numbers` makes them bigger): host/cmd O1 -17, host/keybind O1/O2/O3/Os -15/-15/-5/-5, render/d_alias O1 -11. These 11 modules are the deletion list for `_numbers`; savegame is ours-only (the pin does not get it). Script: `numbers-corpus.py` (not in git).
 
+## Deletion list for `_numbers` (2026-10-22, 41febda30, vsgcc corpus + QCport, `FOLD_NO_NUMBERS=1` vs not, same binary)
+vsgcc (568 compiles, 0 failed): 13 objects change, all bigger without `_numbers`: x_fir m32/m16 O2,O3 (+558/+1385 B; GVN forwarding of the coefficient loads, #3569, then GlobalOpt SRA and once-stored fold), nbody_fixed O2,O3 m32/m16 (+287..+406 B), x_cordic O3 m32/m16 (+50/+110 B), lru m16 O2,O3,Os (+82 B). QCport: the list above (savegame is ours-only). Unattributed objects: nbody_fixed, x_cordic, lru m16, and the QCport modules other than savegame; each needs its pin pass named (as for x_fir) before it can be a PR.
+
+| step | date |
+|---|---|
+| name the pin pass for nbody_fixed, x_cordic, lru m16, mdl_ai, ent, weapons, snd_mix, sbar, dl | 10-29 |
+| GVN forwarding (#3569) and GlobalOpt SRA of small arrays plus the once-stored fold | 10-30 |
+| the objects still changed get a fix or a numbered row each; savegame is a row (ours-only gain) | 11-01 |
+| delete `_numbers`, then `writes` with its last caller, then floatfold into combine | 11-02 |
+
+## x_fir after #3569: the pass is GVN's load PRE, not GlobalOpt (2026-10-22, 25d838613, llrm-c 25d838613b0a+dirty)
+With `_numbers` off x_fir still has 3 loads of `coef` (offsets 0, 2, 4) in the preheader of the dot-product loop (+279 B at m32 -O2, +900 B at m16). The pin's `gvn` alone removes them on the same MIR (`pin.opt('function(gvn)')` on the 12-pipeline dump: 0 `coef` loads; also with load PRE off), so GlobalOpt's SRA and once-stored fold are not needed for them; the MIR types `coef` as `[32 x i8]`, which GlobalOpt's SRA (arrays up to 16 elements) would not split anyway. In our pipeline `-fno-tree-pre` takes the 3 loads away (asm 189 -> 182 lines, equal to the `_numbers` arm), so the loads are made by our load PRE (`performLoopLoadPRE`) where the pin's GVN finds them fully available. A GVN unit test of the loop-after-loop shape passes, so the case needs the unrolled dump; next: reduce it to a fail-first GVN test. The GlobalOpt step of the plan below is dropped for x_fir.
+
 ## Dates
 
 - 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).
