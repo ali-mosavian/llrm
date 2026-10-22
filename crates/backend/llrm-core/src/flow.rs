@@ -71,6 +71,7 @@ const UNOPTIMIZED: &[&str] = &[
     "PushFold",
     "FixupSetCC",
     "CopyPropagation",
+    "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
 ];
@@ -85,6 +86,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("FlagsCopy", "flagscopy@5"),
@@ -158,6 +160,12 @@ pub fn machine_with<'a>(
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
+        // On SSA, last: an instruction up to the last definition of what it
+        // reads (the pin: LiveRangeShrink, x86 addPreRegAlloc).
+        Box::new(crate::backend::liverangeshrink::LiveRangeShrink {
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+        }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {

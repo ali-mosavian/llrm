@@ -119,6 +119,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "flagscopy@5",
             "machinecse@4",
             "machinesink@4",
+            "liverangeshrink@4",
             "floatalloc@8",
             "pushfold@6",
             "coalesce@10",
