@@ -105,7 +105,7 @@ States: MATCH (a translation), EXECUTED (ours-own code does the work), DEVIATE (
 | 97 | X86 vzeroupper inserter | N/A |  |  | AVX only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 98 | X86 Byte/Word Instruction Fixup | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 63 (-O2) and 62 (-Os) of 77 IRs |
 | 99 | X86 Atom pad short functions | N/A |  |  | acts on Atom (`padShortFunctions`); not i486. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
-| 100 | X86 LEA Fixup | MISSING |  |  | funcattrs-port; 2026-11-13: changed code in 37 (-O2) and 41 (-Os) of 77 IRs |
+| 100 | X86 LEA Fixup | DEVIATE | peephole.rs (`addresses`, `increments`) |  | CG6: i486 runs only `optTwoAddrLEA`; it is not translated; reason: ours makes an LEA only where it prices below the add (`addresses`), so no scale-1 LEA has its destination as a source (0 of 3855 LEAs, 115 tests/run/c programs, -O2 m32 sysv i486); cost: none measured; exit: pre-RA LEA formation (row 62) or a site found (docs/working/lea-fixup-plan.md, LF-2); owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs |
 | 101 | X86 Fixup Inst Tuning | N/A |  |  | tunes SSE shuffles and blends; features -sse. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 102 | X86 Fixup Vector Constants | N/A |  |  | vector constants; no vectors. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |
 | 103 | Compressing EVEX instrs when possible | N/A |  |  | AVX-512 only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs |

@@ -5,7 +5,7 @@ Owner: w-6. Pin: [X86FixupLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1
 ## What the pin does on i486
 
 `runOnMachineFunction` ([L232](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L232)) reads `slowLEA`, `slow3OpsLEA`,
-`leaUsesAG`; i486 sets none ([X86.td]), so only `optTwoAddrLEA`
+`leaUsesAG`; i486 sets none (X86.td: `Proc<"i486", [FeatureX87]>`), so only `optTwoAddrLEA`
 ([L564](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L564)) runs on each LEA, per block, in order:
 
 1. `lea r1,[r1+r2]` (scale 1, no disp) -> `add r1,r2` (case 1).
