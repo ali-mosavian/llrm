@@ -8,6 +8,7 @@ tests/fixtures/pin-pipeline by default. The Rust test `pin_pipeline_slots` reads
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,11 +35,27 @@ def main(argv: list[str]) -> int:
             sys.stderr.write(done.stderr)
             return 1
         body = [line for line in done.stdout.splitlines() if not line.startswith(";")]
+        extra = []
+        if level == "Os":
+            # `opt` rejects default<Os>; clang -Os is the other way to ask the pin for it. Its list has clang's own extra passes, so it is
+            # compared with clang -O2's: the same.
+            def clang(level):
+                done = subprocess.run(
+                    [str(pin.PINNED_BIN / "clang"), f"-{level}", "-c", "-x", "c", "/dev/null", "-o", "/dev/null", "--target=i386-unknown-linux-gnu", "-march=i486", "-mllvm", "-print-pipeline-passes"],
+                    capture_output=True, text=True,
+                )
+                return [line for line in (done.stdout + done.stderr).splitlines() if line and not line.startswith(";")]
+
+            printed = clang("Os")
+            if printed != clang("O2"):
+                sys.stderr.write("clang -Os prints another list than clang -O2: the Os fixture is wrong\n")
+                return 1
+            extra = ["; cross-check: `clang -Os -mllvm -print-pipeline-passes` prints the same list as clang -O2 (md5 " + hashlib.md5("\n".join(printed).encode()).hexdigest() + ")"]
         header = [
             f"; pin: LLVM d1106deb71cc, opt md5 {md5}",
             f"; command: tools/pairs/pin_pipeline.py (opt -passes={passes} -print-pipeline-passes, {pin.header(of)})",
         ]
-        (out / f"{level}.txt").write_text("\n".join(header + body) + "\n")
+        (out / f"{level}.txt").write_text("\n".join(header + extra + body) + "\n")
         print(level, len(body), "lines")
     return 0
 

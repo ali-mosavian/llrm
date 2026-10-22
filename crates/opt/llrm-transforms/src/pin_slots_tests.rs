@@ -21,7 +21,8 @@ struct PinSlot {
     /// top-level function group is Early, the second Cleanup, the function
     /// groups of the CGSCC Simplify, those after it Late, the rest Module.
     phase: Phase,
-    /// Its place in the nest, as the pin prints it (`cgscc/devirt<4>/function`).
+    /// Its place in the nest, as the pin prints it
+    /// (`cgscc/devirt<4>/function`).
     path: String,
     /// The pass without its parameters.
     name: String,
@@ -139,7 +140,10 @@ fn applied(level: &str) -> Applied {
 
 /// The registry entries the pipeline of `level` builds in `phase`, grouped by
 /// the line they stand at, in the order built.
-fn built_groups(level: &str, phase: Phase) -> Vec<(String, Vec<Entry>)> {
+fn built_groups(
+    level: &str,
+    phase: Phase,
+) -> Vec<(String, Vec<Entry>)> {
     let mut groups: Vec<(String, Vec<Entry>)> = Vec::new();
     for slot in pipeline::llvm_order(&applied(level), phase).iter().map(|one| one.name()) {
         let Some(entry) = parity::REGISTRY.iter().find(|one| one.slot == slot && one.phase == phase) else { continue };
@@ -152,6 +156,242 @@ fn built_groups(level: &str, phase: Phase) -> Vec<(String, Vec<Entry>)> {
     groups
 }
 
+/// What a slot of the pin's pipeline that ours does not match stands as.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Why {
+    /// Not applicable at this target or to our frontends; the reason.
+    NotApplicable,
+    /// A deliberate difference, with where it is stated.
+    Deviate,
+    /// Not translated or not in the registry: the row has an owner and a date.
+    Missing,
+    /// Ours stands earlier or later than the pin's; the owner fixes the order.
+    Order,
+    /// Run by a stage of ours that is outside the registry (the executed order
+    /// of a compile, `--dump` of d_faces -O1/-O2/-Os: globalopt, ports, stamp,
+    /// the early function list, ipo-early, sccp, the cleanup list, walk, the
+    /// late list, interprocedural, writeonly, globaldce,
+    /// available-externally, calleepop, ...; pipeline.rs `recorded`).
+    Executed,
+}
+
+struct Disposition {
+    /// The pin pass's phase and name; for ours-only groups the group's text.
+    phase: Phase,
+    name: &'static str,
+    why: Why,
+    /// The reason, the stage, or the effect measured by
+    /// tools/pairs/pin_ablate.py (the pin's -O2 pipeline over the 12 bench
+    /// C programs, one instance removed).
+    note: &'static str,
+    /// For Missing and Order: who and by when; `unassigned` until the
+    /// coordinator does.
+    owner: &'static str,
+}
+
+const NA: Why = Why::NotApplicable;
+const UNASSIGNED: &str = "unassigned (coordinator, 10-26)";
+
+const fn row(
+    phase: Phase,
+    name: &'static str,
+    why: Why,
+    note: &'static str,
+    owner: &'static str,
+) -> Disposition {
+    Disposition { phase, name, why, note, owner }
+}
+
+use Phase::{Early, Late, Module, Simplify};
+
+const ROWS: &[Disposition] = &[
+    row(Early, "ee-instrument", NA, "-pg/-finstrument-functions: no frontend asks for it", ""),
+    row(
+        Early,
+        "lower-expect",
+        Why::Missing,
+        "llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs",
+        UNASSIGNED,
+    ),
+    row(Early, "callsite-splitting", Why::Missing, "-O3 only; not measured", UNASSIGNED),
+    row(Simplify, "speculative-execution", NA, "runs only on a target with divergent branches; x86 has none", ""),
+    row(Simplify, "jump-table-to-switch", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "libcalls-shrinkwrap", Why::Missing, "errno-setting libm calls; ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "constraint-elimination", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "loop-instsimplify", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "loop-simplifycfg", Why::Missing, "registry Missing entry; ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "extra-simple-loop-unswitch-passes", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "vector-combine", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
+    row(Simplify, "mldst-motion", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Simplify, "move-auto-init", NA, "needs -ftrivial-auto-var-init metadata; no frontend emits it", ""),
+    row(Simplify, "coro-elide", NA, "coroutines: no frontend", ""),
+    row(Late, "drop-unnecessary-assumes", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "alignment-from-assumptions", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "lower-constant-intrinsics", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(
+        Late,
+        "loop-rotate",
+        Why::Missing,
+        "the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched)",
+        UNASSIGNED,
+    ),
+    row(Late, "loop-deletion", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "loop-distribute", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "inject-tli-mappings", NA, "maps scalar libcalls to vector ones; vectors deferred", ""),
+    row(Late, "loop-vectorize", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
+    row(Late, "slp-vectorizer", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
+    row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(
+        Late,
+        "instcombine",
+        Why::Missing,
+        "the three late runs; ours has no combine slot in the late list",
+        UNASSIGNED,
+    ),
+    row(Late, "loop-unroll", Why::Missing, "the late loop-unroll<O2>; ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "transform-warning", NA, "diagnostic for failed pragmas; no output", ""),
+    row(
+        Late,
+        "sroa",
+        Why::Missing,
+        "the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs",
+        UNASSIGNED,
+    ),
+    row(Late, "loop-sink", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "div-rem-pairs", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", UNASSIGNED),
+    row(
+        Late,
+        "tailcallelim",
+        Why::Missing,
+        "the late run after expand-memcmp; ablation +1 instruction in 1 of 12 IRs",
+        UNASSIGNED,
+    ),
+    row(Late, "vector-combine", NA, "vectors deferred (user ruling 10-20), -sse target", ""),
+    row(Late, "annotation-remarks", NA, "remarks off", ""),
+    row(Late, "chr", NA, "control-height-reduction needs profile data", ""),
+    row(
+        Late,
+        "licm",
+        Why::Order,
+        "ours builds licm@1508 first in the Late list; the pin runs it after loop-interchange/loop-distribute/..",
+        "w-6",
+    ),
+    row(
+        Late,
+        "loop-interchange",
+        Why::Order,
+        "ours after licm@1508, before the pin's loop-rotate/loop-deletion",
+        UNASSIGNED,
+    ),
+    row(Late, "loop-load-elim", Why::Order, "stands earlier than the pin's", UNASSIGNED),
+    row(
+        Late,
+        "instsimplify",
+        Why::Order,
+        "stands earlier than the pin's (after the late instcombine runs)",
+        UNASSIGNED,
+    ),
+    row(
+        Simplify,
+        "adce",
+        Why::Order,
+        "-O1 only: ours runs the O2 order minus the absent passes; the pin's O1 list is its own",
+        UNASSIGNED,
+    ),
+    row(Simplify, "bdce", Why::Order, "-O1 only, as adce", UNASSIGNED),
+    row(Simplify, "instcombine", Why::Order, "-O1 only, as adce", UNASSIGNED),
+    row(Simplify, "sccp", Why::Order, "-O1 only, as adce", UNASSIGNED),
+    row(Simplify, "simplifycfg", Why::Order, "-O1 only, as adce", UNASSIGNED),
+    row(Module, "memprof-remove-attributes", NA, "memprof: no profile", ""),
+    row(Module, "annotation2metadata", NA, "no source annotations", ""),
+    row(Module, "forceattrs", NA, "command-line forced attributes: none given", ""),
+    row(
+        Module,
+        "inferattrs",
+        Why::Executed,
+        "stamp (interprocedural::Stamp): states what a body does, llrm's own form",
+        "",
+    ),
+    row(Module, "coro-early", NA, "coroutines: no frontend", ""),
+    row(Module, "coro-split", NA, "coroutines: no frontend", ""),
+    row(Module, "coro-annotation-elide", NA, "coroutines: no frontend", ""),
+    row(Module, "coro-cleanup", NA, "coroutines: no frontend", ""),
+    row(Module, "openmp-opt", NA, "OpenMP: no frontend", ""),
+    row(Module, "openmp-opt-cgscc", NA, "OpenMP: no frontend", ""),
+    row(
+        Module,
+        "ipsccp",
+        Why::Executed,
+        "ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; pipeline.rs DEVIATE: what flows between bodies is ModuleIpo's",
+        "",
+    ),
+    row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", UNASSIGNED),
+    row(Module, "globalopt", Why::Executed, "globalopt (first), writeonly, calleepop: a subset of GlobalOpt", ""),
+    row(Module, "always-inline", Why::Executed, "walk (the CGSCC walk's inliner)", ""),
+    row(Module, "inline", Why::Executed, "walk, and interprocedural (inlines again after the clones)", ""),
+    row(
+        Module,
+        "function-attrs",
+        Why::Executed,
+        "interprocedural (states what each body does); not compared pass by pass",
+        "",
+    ),
+    row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", UNASSIGNED),
+    row(Module, "deadargelim", Why::Executed, "ipo-early (walk::ModuleIpo: ipa-deadargs)", ""),
+    row(
+        Module,
+        "argpromotion",
+        Why::Missing,
+        "-O3 only; argpromotion.rs exists, where it runs is not in the registry: unverified",
+        UNASSIGNED,
+    ),
+    row(Module, "recompute-globalsaa", NA, "an analysis recompute; ours holds and freezes GlobalsAA (pipeline.rs)", ""),
+    row(Module, "globaldce", Why::Executed, "globaldce (once; the pin runs it twice)", ""),
+    row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
+    row(Module, "constmerge", Why::Missing, "merging identical constants: data bytes at -Os; not measured", UNASSIGNED),
+    row(Module, "alloc-token", NA, "clang option, off", ""),
+    row(Module, "cg-profile", NA, "profile data", ""),
+    row(Module, "rel-lookup-table-converter", NA, "relative lookup tables are a PIC feature; no PIC targets", ""),
+    row(Module, "lower-comment-string", NA, "#pragma comment strings", ""),
+];
+
+/// The built slot groups no pin slot is matched to, with why.
+const OURS_ONLY: &[(&str, &str)] = &[
+    (
+        "1438: simplifycfg@1438",
+        "registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is)",
+    ),
+    ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
+    (
+        "764: loopsimplify@764 + lcssa@764",
+        "llrm's loop-simplify/lcssa stand-ins that LLVM's loop pass adaptor makes implicit (parity.rs RUN_COUNTS_OPEN)",
+    ),
+    ("772: loopsimplify@772 + lcssa@772", "as 764"),
+    (
+        "669: cvp@669",
+        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
+    ),
+    (
+        "787: inferspace@787",
+        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
+    ),
+    (
+        "809: decide@809",
+        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
+    ),
+    (
+        "810: cvp@810",
+        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
+    ),
+    (
+        "820: dse@820",
+        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
+    ),
+    ("823: loopsimplify@823 + lcssa@823 + licm@823", "-O1 only, as 669 (unverified slot by slot)"),
+];
+
 #[derive(Debug)]
 struct Row {
     level: &'static str,
@@ -159,6 +399,13 @@ struct Row {
     /// The group of ours it stands against, or why none does.
     ours: String,
     state: &'static str,
+}
+
+impl Row {
+    /// The row that accounts for an unmatched slot of the pin, if any.
+    fn account(&self) -> Option<&'static Disposition> {
+        ROWS.iter().find(|one| one.phase == self.pin.phase && one.name == self.pin.name)
+    }
 }
 
 fn rows() -> Vec<Row> {
@@ -184,7 +431,8 @@ fn rows() -> Vec<Row> {
                         if state == "match" {
                             cursor = at + 1;
                         }
-                        let kinds: Vec<String> = groups[at].1.iter().map(|one| format!("{}:{:?}", one.slot, one.kind)).collect();
+                        let kinds: Vec<String> =
+                            groups[at].1.iter().map(|one| format!("{}:{:?}", one.slot, one.kind)).collect();
                         rows.push(Row { level, pin: slot.clone(), ours: kinds.join(" + "), state });
                     }
                     None => rows.push(Row { level, pin: slot.clone(), ours: String::new(), state: "none" }),
@@ -194,7 +442,12 @@ fn rows() -> Vec<Row> {
                 if !taken[at] {
                     let names: Vec<String> = entries.iter().map(|one| one.slot.to_owned()).collect();
                     let pin_name = PinSlot { phase, path: String::new(), name: String::new(), text: String::new() };
-                    rows.push(Row { level, pin: pin_name, ours: format!("{group}: {}", names.join(" + ")), state: "ours-only" });
+                    rows.push(Row {
+                        level,
+                        pin: pin_name,
+                        ours: format!("{group}: {}", names.join(" + ")),
+                        state: "ours-only",
+                    });
                 }
             }
         }
@@ -202,17 +455,90 @@ fn rows() -> Vec<Row> {
     rows
 }
 
+fn table(rows: &[Row]) -> String {
+    let mut text = String::from(
+        "| level | phase | pin slot | nest | state | ours | row | note | owner |\n|---|---|---|---|---|---|---|---|---|\n",
+    );
+    for row in rows {
+        let account = if row.state == "match" { None } else { row.account() };
+        let (why, note, owner) = account.map_or(("", "", ""), |one| (why_word(one.why), one.note, one.owner));
+        text.push_str(&format!(
+            "| {} | {:?} | {} | {} | {} | {} | {} | {} | {} |\n",
+            row.level, row.pin.phase, row.pin.text, row.pin.path, row.state, row.ours, why, note, owner
+        ));
+    }
+    text
+}
+
+fn why_word(why: Why) -> &'static str {
+    match why {
+        Why::NotApplicable => "N/A",
+        Why::Deviate => "DEVIATE",
+        Why::Missing => "MISSING",
+        Why::Order => "ORDER",
+        Why::Executed => "EXECUTED (outside the registry)",
+    }
+}
+
 #[test]
 fn the_pin_slot_table_is_written_on_request() {
     let rows = rows();
     assert!(rows.iter().any(|one| one.state == "match"), "nothing matched: the fixtures or the registry moved");
-    let Ok(path) = std::env::var("LLRM_PIN_SLOT_TABLE") else { return };
-    let mut text = String::from("| level | phase | pin slot | nest | state | ours |\n|---|---|---|---|---|---|\n");
-    for row in &rows {
-        text.push_str(&format!(
-            "| {} | {:?} | {} | {} | {} | {} |\n",
-            row.level, row.pin.phase, row.pin.text, row.pin.path, row.state, row.ours
-        ));
+    if let Ok(path) = std::env::var("LLRM_PIN_SLOT_TABLE") {
+        std::fs::write(path, table(&rows)).expect("table written");
     }
-    std::fs::write(path, text).expect("table written");
+}
+
+/// A slot of the pin's pipeline that ours does not match in position, a slot
+/// of ours that no pin slot is matched to, and a row that accounts for neither
+/// are errors: a gap is a row with an owner and a date, a difference is a
+/// DEVIATE, and a row nothing needs is removed.
+#[test]
+fn every_pin_slot_is_matched_or_accounted_for() {
+    let rows = rows();
+    let mut errors = Vec::new();
+    for row in &rows {
+        match row.state {
+            "match" => {}
+            "none" | "inverted" => match row.account() {
+                None => errors
+                    .push(format!("{} {:?} {}: {} with no row", row.level, row.pin.phase, row.pin.text, row.state)),
+                Some(one) if row.state == "inverted" && one.why != Why::Order => {
+                    errors.push(format!("{} {}: inverted, but its row is not an ORDER row", row.level, row.pin.text))
+                }
+                Some(one)
+                    if matches!(one.why, Why::Missing | Why::Order)
+                        && !one.owner.contains("w-")
+                        && one.owner != UNASSIGNED =>
+                {
+                    errors.push(format!("{}: a gap row without an owner", one.name))
+                }
+                Some(_) => {}
+            },
+            "ours-only" => {
+                if !OURS_ONLY.iter().any(|(group, _)| row.ours.starts_with(group)) {
+                    errors.push(format!("{}: ours-only with no row ({})", row.level, row.ours));
+                }
+            }
+            other => errors.push(format!("unknown state {other}")),
+        }
+    }
+    for one in ROWS {
+        let used =
+            rows.iter().any(|row| row.state != "match" && row.pin.phase == one.phase && row.pin.name == one.name);
+        if !used {
+            errors.push(format!(
+                "{:?} {}: a row nothing needs (the slot matches now, or the pin lost it)",
+                one.phase, one.name
+            ));
+        }
+    }
+    for (group, _) in OURS_ONLY {
+        if !rows.iter().any(|row| row.state == "ours-only" && row.ours.starts_with(group)) {
+            errors.push(format!("{group}: an ours-only row nothing needs"));
+        }
+    }
+    errors.sort();
+    errors.dedup();
+    assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
 }
