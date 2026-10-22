@@ -552,7 +552,9 @@ impl<'a, 'b> Collection<'a, 'b> {
             use_map: HashMap::default(),
             address_limit: tti
                 .address_registers()
-                .map(|registers| registers.saturating_sub(outside_address_registers(cx, l))),
+                .map(|registers| registers.saturating_sub(outside_address_registers(cx, l)))
+                // Only where a formula of two registers certainly overflows.
+                .filter(|limit| *limit <= 1),
             reg_uses: RegUseTracker::default(),
             factors: IndexSet::default(),
             types: IndexSet::default(),
