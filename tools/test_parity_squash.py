@@ -870,6 +870,33 @@ def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tm
     assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))
 
 
+def test_a_batch_that_does_not_build_drops_the_pr_that_breaks_the_build_alone_and_lands_the_rest():
+    """The 21:02 batch failed to build (#3763 added ISD variants #3806's code did not cover) and every PR in it was refused."""
+    broken = {"3763"}
+    merged = []
+
+    def merge_alone(number):
+        merged.append(number)
+        return number != "3807"  # cannot join: skipped, not blamed
+
+    check = lambda: "dagisel_adapter.rs:33: non-exhaustive patterns" if merged[-1] in broken else ""  # noqa: E731
+    group = ["3763", "3812", "3736", "3807", "3793"]
+    assert ps.build_offenders(group, merge_alone, check) == ["3763"]
+    landed, refused, tested = [], [], []
+
+    def passes(prs):
+        tested.append(list(prs))
+        return not broken & set(prs)
+
+    ps.batch(group, passes, landed.append, refused.append, lambda prs: ps.build_offenders(prs, merge_alone, check))
+    assert refused == ["3763"] and landed == ["3812", "3736", "3807", "3793"]
+    assert tested == [group, ["3812", "3736", "3807", "3793"]]
+
+
+def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved():
+    group = ["1", "2", "3", "4"]
+    assert ps.build_offenders(group, lambda number: True, lambda: "") == []
+
 def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
     """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
     asked = []
@@ -882,3 +909,16 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
     assert "llrm-c" not in asked[1]
+
+
+def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
+    """#3817 changed parity_smoke while the batch that held the old parity_squash was running: half old, half new tools refused the 15 known llrm-c reds as new."""
+    (tmp_path / "fake_tool.py").write_text("VERSION = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("fake_tool", None)
+    ps.preload_tools(("fake_tool",))
+    (tmp_path / "fake_tool.py").write_text("VERSION = 2\n")  # a landing merged into the checkout
+    import importlib
+
+    assert importlib.import_module("fake_tool").VERSION == 1
+    assert {"parity_smoke", "xfail", "buildslot"} <= set(ps.TOOL_MODULES)
