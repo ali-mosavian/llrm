@@ -39,10 +39,13 @@
 //! TwoAddressInstructionPass.cpp#L801, #L1402): no copy of `a` is made, so the
 //! result can join a loop's register while `a` stays in its own.
 //!
-//! DEVIATE TA-4 (exit: B2, the 16-bit address forms under the upper-zero
-//! proof of `peep/upperzero.rs`): only a target whose addresses read whole
-//! registers converts; at m16 the post-RA peephole fuses `mov z,y; add z,x` into
-//! a `lea` where the registers allow, as before.
+//! DEVIATE TA-4 (no exit while the target reads addresses through a prefix): a
+//! dword or 16-bit result of a `lea` at m16 is the 32-bit prefixed form
+//! (`lea ecx, [eax-1]`), which costs a prefix byte where the pin's `LEA32r` has
+//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there the
+//! adds and subs convert and the shifts stay the peephole's, which fuses them
+//! with the add after them (`ThreeAddress::AddSub`). `upperzero::wide_roots`
+//! does not count a `lea` cell: it is arithmetic, not an address read.
 //!
 //! DEVIATE TA-5 (exit: `isProfitableToConv3Addr` needs the register maps of
 //! piece 4): a source that dies is never converted; the pin also converts one
@@ -82,7 +85,7 @@ pub fn prepare(
             todo.extend([first.value, second.value]);
         }
         // `convertInstTo3Addr` asks whether the tied source dies.
-        if three_address(one).is_some()
+        if three_address(one, ThreeAddress::All).is_some()
             && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
         {
             todo.push(base.value);
@@ -104,11 +107,28 @@ pub fn prepare(
     }
 }
 
+/// Which tied instructions become a `lea`: none; the adds and subs (a target that reads
+/// addresses through a prefix, where the fusion of a shift with the add that follows
+/// stays the peephole's); or those and the shifts by 1 to 3.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ThreeAddress {
+    #[default]
+    Off,
+    AddSub,
+    All,
+}
+
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
 /// instruction is not such an add or sub of dwords: the instruction
 /// `convertToThreeAddress` makes of an `ADD32ri`, `ADD32rr` or `SUB32ri`.
-pub fn three_address(one: &Insn) -> Option<Arc<Insn>> {
+pub fn three_address(
+    one: &Insn,
+    mode: ThreeAddress,
+) -> Option<Arc<Insn>> {
     use crate::model::ir::{Imm, Mem, Operation};
+    if mode == ThreeAddress::Off {
+        return None;
+    }
     let what = one.what.as_ref()?;
     if what.op != Operation::Binary
         || !matches!(what.name.as_deref(), Some("add" | "sub" | "shl"))
@@ -127,7 +147,7 @@ pub fn three_address(one: &Insn) -> Option<Arc<Insn>> {
     let cell = match (&what.sources[1], what.name.as_deref()) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
-        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl")) => Mem {
+        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl")) if mode == ThreeAddress::All => Mem {
             base: (*shift == 1).then_some(*base),
             index: Some(*base),
             scale: if *shift == 1 { 1 } else { 1 << shift },

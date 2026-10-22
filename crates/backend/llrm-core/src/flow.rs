@@ -167,7 +167,13 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress { native: target.dword_address_form().is_some_and(|form| !form.secondary) }),
+        Box::new(twoaddr::TwoAddress {
+            lea: match target.dword_address_form() {
+                None => crate::twoaddress::ThreeAddress::Off,
+                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSub,
+                Some(_) => crate::twoaddress::ThreeAddress::All,
+            },
+        }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
