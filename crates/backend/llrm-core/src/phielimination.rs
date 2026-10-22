@@ -19,9 +19,10 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
-//! No deviation for a phi that reads from a block outside the body: LLVM's phis list
-//! only predecessors in their function, so it is an error here too (the verifier
-//! says the same, `a phi ... is not a predecessor`); it was left alone before.
+//! No deviation for a phi that reads from a block outside the body: LLVM's phis
+//! list only predecessors in their function, so it is an error here too (the
+//! verifier says the same, `a phi ... is not a predecessor`); it was left alone
+//! before.
 //!
 //! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
 //! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
@@ -427,16 +428,15 @@ mod tests {
     /// phi of the block rewrites. Each phi is lowered through a register of
     /// its own, as LLVM's are; left to `phielim`'s parallel copy (DEVIATE P5)
     /// they cost idiv_loop_os 14% of its estimate at -O2 and recgcd as much.
-    /// A phi that reads from a block that is not in the body: LLVM has no such phi, and the old pass left it
-    /// a phi for `phielim`'s own lowering. It is an error now (no program of 71 x 2 vsgcc and 65 QCport
+    /// A phi that reads from a block that is not in the body: LLVM has no such
+    /// phi, and the old pass left it a phi for `phielim`'s own lowering. It
+    /// is an error now (no program of 71 x 2 vsgcc and 65 QCport
     /// modules has one: the verifier rule found none).
     #[test]
     fn test_a_phi_reading_from_a_block_outside_the_body_is_refused() {
         let phi = Phi { result: 5, incoming: vec![(0, 1), (9, 2)] };
-        let was = body(vec![
-            block(0, vec![def(1), def(2), jump(1)], &[1], vec![]),
-            block(1, vec![read(5)], &[], vec![phi]),
-        ]);
+        let was =
+            body(vec![block(0, vec![def(1), def(2), jump(1)], &[1], vec![]), block(1, vec![read(5)], &[], vec![phi])]);
         let got = lowered(&was);
         assert!(got.as_ref().is_err_and(|why| why.contains("not a block of the body")), "{got:?}");
     }

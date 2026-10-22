@@ -489,8 +489,9 @@ fn _values(
             }
         }
     }
-    // A phi reads one value for each predecessor of its block, and from none else
-    // (the IR verifier's rule: "PHI nodes must have one entry for each predecessor").
+    // A phi reads one value for each predecessor of its block, and from none
+    // else (the IR verifier's rule: "PHI nodes must have one entry for each
+    // predecessor").
     let mut preds: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
     for block in &body.blocks {
         for &to in block.succ.iter() {
@@ -586,13 +587,17 @@ mod tests {
 
     /// C crc32 returned -1141145971 after an eliminated phi lost its
     /// definition.
-    /// An IR phi has one entry for each predecessor and no other: a LIR phi that reads from a block
-    /// that is not one is a body a pass broke (the old PHIElimination left it alone, silently).
+    /// An IR phi has one entry for each predecessor and no other: a LIR phi
+    /// that reads from a block that is not one is a body a pass broke (the
+    /// old PHIElimination left it alone, silently).
     #[test]
     fn test_a_phi_reading_from_a_block_that_is_not_a_predecessor_is_reported() {
         use crate::model::lir::{LirBlock, Phi};
         let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, Vec::new()) };
-        let next = LirBlock { phis: vec![Phi { result: 2, incoming: vec![(0, 1), (7, 1)] }].into(), ..LirBlock::new(1, Vec::new()) };
+        let next = LirBlock {
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (7, 1)] }].into(),
+            ..LirBlock::new(1, Vec::new())
+        };
         let body = LirBody::new("p", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
         let said = verify(&body, true);
         assert!(said.iter().any(|one| one.contains("is not a predecessor")), "{said:?}");
