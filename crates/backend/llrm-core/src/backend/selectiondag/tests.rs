@@ -499,6 +499,23 @@ mod builder {
         }
     }
 
+    /// An `i64` at m32 travels as two `i32` registers: parameters are two
+    /// loads and a `build_pair`, a value across blocks is two
+    /// `extract_element` copies, a call or return uses two registers. These
+    /// functions (the shadow's x_ll_arith, x_ll_div) were refused as wider
+    /// than a register.
+    #[test]
+    fn two_register_integers_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/wide.ll");
+        let pin = pin_blocks(include_str!("golden/wide.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
     #[test]
     fn indirect_calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/indirect.ll");
