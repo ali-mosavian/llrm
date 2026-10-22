@@ -284,7 +284,7 @@ pub fn checked(
             &body,
             segments,
             classes,
-            &crate::backend::ssaspill::untouchable(&body),
+            &crate::backend::regclass::untouchable(&body),
         );
         let peak = found
             .iter()

@@ -1636,11 +1636,7 @@ fn test_the_next_value_is_one_past_the_largest_the_body_names() {
                     seen.extend(one.defines.iter().chain(&one.uses).copied());
                 }
             }
-            assert_eq!(
-                crate::backend::splitkit::_next_value(&body),
-                seen.last().copied().expect("seeded") + 1,
-                "seed {seed}"
-            );
+            assert_eq!(body.next_value(), seen.last().copied().expect("seeded") + 1, "seed {seed}");
         }
     }
 }

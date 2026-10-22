@@ -1784,7 +1784,7 @@ fn _identities_dropped(body: &LirBody) -> LirBody {
             let mut same = vec![value];
             let mut next = at + 1;
             while let Some(one) = block.insns.get(next) {
-                match crate::backend::coalesce::_copy(one) {
+                match one.copy_of() {
                     Some((to, from)) if same.contains(&from) && one.group.is_none() => same.push(to),
                     _ => break,
                 }
@@ -5185,19 +5185,6 @@ pub(crate) fn _encodable(
         ..what.clone()
     };
     Ok(super::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
-}
-
-/// One past the highest value id this body names.
-pub fn _next_value(body: &LirBody) -> u32 {
-    let mut seen: BTreeSet<u32> = BTreeSet::from([0]);
-    for block in &body.blocks {
-        seen.extend(block.arrives());
-        for one in &block.insns {
-            seen.extend(one.defines.iter().copied());
-            seen.extend(one.uses.iter().copied());
-        }
-    }
-    seen.last().copied().expect("seeded with zero") + 1
 }
 
 #[cfg(test)]
