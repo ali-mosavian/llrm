@@ -103,7 +103,7 @@ impl LoopIdiomRecognize {
             }
         }
 
-        None
+        Some(self.run_on_noncountable_loop(run))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L383

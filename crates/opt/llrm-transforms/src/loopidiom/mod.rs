@@ -494,6 +494,7 @@ pub mod build;
 pub mod driver;
 pub mod pass;
 pub mod process;
+pub mod strlen;
 
 #[cfg(test)]
 mod tests;
