@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/addresssink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/addresssink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:18ac0a28fab72f51e9ea51bb9e1bd3035504dd489700a35f7691584ef995d66f -->
+<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:25f0d6a8da1ca393bc46a5376bc09175377a5df6ed01c38c29048c0857bb057b -->
 
 # addresssink
 
@@ -47,9 +47,10 @@ with and without the pass (`docs/working/codegenprepare.md`): at m32 the
 pass changes 16-17 of about 160 functions in the pin and ours is at its
 level (at -Os 1287 instructions against 1271 with and 1343 without), and
 the `lea` count equals the pin's with the pass (2092 against 2139, 3983
-without, QCport -Os). Owner w-4, review 2026-12-01. At m16 the same
-comparison leaves up to 1544 of 4132 instructions of excess in functions
-the pin's address sinking helps: row AM-C2.
+without, QCport -Os). Owner w-4, review 2026-12-01. At m16 (QCport -Os)
+ours has fewer `lea` than the pin with the pass (2118 against 2264) and
+holds 59% of its gain; the residual 1505 instructions are spills and
+reloads, not addresses: row AM-C2, resolved.
 
 ## Example
 Before:
