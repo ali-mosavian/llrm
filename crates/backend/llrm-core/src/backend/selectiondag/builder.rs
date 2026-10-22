@@ -827,7 +827,7 @@ impl Builder<'_> {
             CastOp::FPToUI => self.dag.get_node(ISD::FpToUInt, dest, &[operand]),
             CastOp::SIToFP => self.dag.get_node(ISD::SIntToFp, dest, &[operand]),
             CastOp::UIToFP => self.dag.get_node_flags(ISD::UIntToFp, dest, &[operand], flags),
-            _ => return Err(Refused("cast not in the scalar subset")),
+            other => return Err(Refused(Box::leak(format!("cast {other:?}").into_boxed_str()))),
         })
     }
 
