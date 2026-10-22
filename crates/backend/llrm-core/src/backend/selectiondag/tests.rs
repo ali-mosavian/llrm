@@ -26,6 +26,7 @@ mod i1_branch;
 mod legalize_dag;
 mod legalize_types;
 mod pair_arith;
+mod pair_mul;
 mod setcc_result;
 mod switch_dags;
 mod switches;
