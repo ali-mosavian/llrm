@@ -57,6 +57,9 @@
 //! never moves (the pin's latency test refuses it, DEVIATE TA-7: no itineraries), and
 //! the pin's copy chain is moved in order, where its splice reverses a chain of two.
 //!
+//! DEVIATE TA-8 (exit: loads folded into their reader before this pass, as isel does in the
+//! pin): a value a load defines is not the operand that is tied (`is_profitable_to_commute`).
+//!
 //! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
 //! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
 //! 2026-11-14): the kills come from one backward scan of each block over the
