@@ -10,7 +10,7 @@ fn combined(module: &mut Module) -> bool {
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared)
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared)
 }
 
 fn check(
@@ -171,6 +171,7 @@ fn without_sinking_it_stays() {
     let changed = super::combine_with_sinking(
         context,
         &globals,
+        &Default::default(),
         &metadata,
         &DataLayout::default(),
         function,
@@ -180,4 +181,42 @@ fn without_sinking_it_stays() {
     );
     assert!(!changed);
     assert_eq!(printed(&module), printed(&parsed(SINKABLE)));
+}
+
+/// `isInstructionTriviallyDead` named opcodes only: a dead call to a readnone
+/// nounwind willreturn function stayed (the pin deletes it).
+#[test]
+fn a_dead_pure_call_is_deleted() {
+    let mut module = parsed(
+        "declare i32 @pure(i32) nounwind willreturn memory(none)\n\ndefine i32 @f(i32 %a) {\nb0:\n  %x = call i32 @pure(i32 %a)\n  ret i32 %a\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let callees = llrm_mir::memory::callees(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    combine(context, &globals, &callees, &metadata, &DataLayout::default(), function, &mut declared);
+    assert!(!printed(&module).contains("call i32 @pure"), "{}", printed(&module));
+}
+
+/// x_hash at -m16 (UB: a shift by 24 of a 16-bit value): `br i1 undef` left
+/// both arms live and their code in place. A branch on undef is UB, so no
+/// successor is live: the phi input over each edge is poison and the dead
+/// blocks hold no instruction but their terminator
+/// (`prepareWorklist`, InstructionCombining.cpp#L6105).
+#[test]
+fn a_branch_on_undef_has_no_live_successor() {
+    check(
+        "define i16 @f(i16 %x, i16 %y) {\nb0:\n  br i1 undef, label %a, label %b\na:\n  %p = add i16 %x, 1\n  br label %j\nb:\n  %q = add i16 %y, 2\n  br label %j\nj:\n  %r = phi i16 [ %p, %a ], [ %q, %b ]\n  ret i16 %r\n}\n",
+        "define i16 @f(i16 %x, i16 %y) {\nb0:\n  br i1 undef, label %a, label %b\n\na:\n  br label %j\n\nb:\n  br label %j\n\nj:\n  ret i16 poison\n}\n",
+    );
+}
+
+/// The same for a `switch` on poison.
+#[test]
+fn a_switch_on_poison_has_no_live_successor() {
+    check(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  switch i16 poison, label %d [\n    i16 1, label %c\n  ]\nc:\n  store i16 %x, ptr @g\n  br label %j\nd:\n  store i16 7, ptr @g\n  br label %j\nj:\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  switch i16 poison, label %d [\n    i16 1, label %c\n  ]\n\nc:\n  br label %j\n\nd:\n  br label %j\n\nj:\n  ret i16 poison\n}\n",
+    );
 }

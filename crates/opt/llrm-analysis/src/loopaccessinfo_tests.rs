@@ -17,7 +17,8 @@ use crate::scev::{Cx, ScalarEvolution};
 /// `print<access-info>` of the one function `text` defines.
 fn printed(text: &str) -> String {
     let module = llrm_mir::parse::module(text).expect("a module");
-    let (_, name, function) = module.functions().find(|(_, _, function)| function.entry().is_some()).expect("a function");
+    let (_, name, function) =
+        module.functions().find(|(_, _, function)| function.entry().is_some()).expect("a function");
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("a layout");
     let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
@@ -36,7 +37,8 @@ fn printed(text: &str) -> String {
     let labels = Labels::of(function);
     let text_of = PinText::of(&module, function);
     let mut se = ScalarEvolution::new();
-    let mut out = format!("Printing analysis 'Loop Access Analysis' for function '{}':\n", name.name.owned().unwrap_or_default());
+    let mut out =
+        format!("Printing analysis 'Loop Access Analysis' for function '{}':\n", name.name.owned().unwrap_or_default());
 
     // `appendLoopsToWorklist`, popped from the back: the last loop of the
     // preorder first.
@@ -107,16 +109,19 @@ corpus!(
     write_only,
 );
 
-/// DEVIATE 25: the pin speculates `%s == 1` for `b[i * s]` (an `Equal predicate`
-/// and a `{%b,+,4}` bound); with no predicates the pointer is bounded by its
-/// general range, `[b umin (b + 4 (n - 1) s), 4 + b umax (b + 4 (n - 1) s))`, and
-/// the access is still checked.
+/// DEVIATE 25: the pin speculates `%s == 1` for `b[i * s]` (an `Equal
+/// predicate` and a `{%b,+,4}` bound); with no predicates the pointer is
+/// bounded by its general range, `[b umin (b + 4 (n - 1) s), 4 + b umax (b + 4
+/// (n - 1) s))`, and the access is still checked.
 #[test]
 fn a_symbolic_stride_is_checked_over_its_whole_range_not_speculated_unit() {
     let ours = printed(include_str!("../tests/laa/symbolic_stride.ll"));
     let pin = include_str!("../tests/laa/symbolic_stride.expected");
     assert!(pin.contains("Equal predicate: %s == 1"), "premise: the pin speculates");
     assert!(ours.contains("Memory dependences are safe with run-time checks"), "{ours}");
-    assert!(ours.contains("(Low: (((4 * (-1 + %n) * %s) + %b) umin %b) High: (4 + (((4 * (-1 + %n) * %s) + %b) umax %b)))"), "{ours}");
+    assert!(
+        ours.contains("(Low: (((4 * (-1 + %n) * %s) + %b) umin %b) High: (4 + (((4 * (-1 + %n) * %s) + %b) umax %b)))"),
+        "{ours}"
+    );
     assert!(!ours.contains("Equal predicate"), "{ours}");
 }

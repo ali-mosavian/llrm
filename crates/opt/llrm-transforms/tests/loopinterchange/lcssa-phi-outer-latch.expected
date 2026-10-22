@@ -1,0 +1,37 @@
+== -loop-interchange-profitabilities=ignore
+@main
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i16 [ %v10, %B9 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v7, %B8 ], [ 1, %B3 ]
+  br label %B5
+B5:
+  %v2 = getelementptr i16, ptr %a, i16 %v0
+  %v3 = load i16, ptr %v2
+  %v4 = select i1 false, i16 0, i16 0
+  br label %B6
+B6:
+  %v5 = add i16 %v0, 1
+  %v6 = icmp slt i16 %v0, 42
+  br label %B7
+B7:
+  br label %B8
+B8:
+  %v7 = add i64 %v1, 1
+  %v8 = icmp ugt i64 %v1, 0
+  br i1 %v8, label %B4, label %B9
+B9:
+  %v9 = phi i16 [ %v4, %B8 ]
+  %v10 = add i16 %v0, 1
+  %v11 = icmp slt i16 %v0, 42
+  br i1 %v11, label %B2, label %B10
+B10:
+  %v12 = phi i16 [ %v9, %B9 ]
+  ret i16 %v12

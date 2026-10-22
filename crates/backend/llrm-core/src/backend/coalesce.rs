@@ -81,7 +81,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::Loc;
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, IndexMap};
@@ -147,7 +147,16 @@ impl Coalescer {
         pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
         let pins: IndexMap<u32, RegId> =
             pins.into_iter().map(|(value, register)| (value, body.regs().root(register))).collect();
-        let where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        let mut where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        // A value made in another's class (a phi's temporary, in its result's)
+        // has that one where its own uses give it none.
+        for (value, like) in body.class_like.iter() {
+            if !where_of.contains_key(value)
+                && let Some(class) = where_of.get(like).cloned()
+            {
+                where_of.insert(*value, class);
+            }
+        }
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
         let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
         for block in &body.blocks {
@@ -168,7 +177,7 @@ impl Coalescer {
         }
         let depths = ranges::depths_shared(body);
         let depth = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
-        Some((crate::coalescer::env::TargetEnv { palettes, pins, size: self.size }, depth))
+        Some((crate::coalescer::env::TargetEnv { palettes: palettes.into(), pins, size: self.size }, depth))
     }
 }
 
@@ -393,7 +402,7 @@ pub fn _interference_among(
                 index = first as i64 - 1;
                 continue;
             }
-            let copy = _copy(one);
+            let copy = one.copy_of();
             let mut equal = None;
             if let Some(copy) = copy {
                 if one.defines == [copy.0] && one.uses == [copy.1] {
@@ -613,21 +622,6 @@ pub fn _merged(
     run(&mut out, &big[at..]);
     let weight = if other.weight > one.weight { other.weight } else { one.weight };
     Interval { value: one.value, segments: out, weight }
-}
-
-/// The (written, read) pair this instruction is a plain move of.
-pub fn _copy(one: &Insn) -> Option<(u32, u32)> {
-    let what = one.what.as_ref()?;
-    if what.op != Operation::Move {
-        return None;
-    }
-    if what.dests.len() != 1 || what.sources.len() != 1 {
-        return None;
-    }
-    match (&what.dests[0], &what.sources[0]) {
-        (Loc::Held(into), Loc::Held(out_of)) => Some((into.value, out_of.value)),
-        _ => None,
-    }
 }
 
 /// One instruction with every joined value naming its survivor.

@@ -17,8 +17,8 @@
 //!   [`guards`] (what dominating compares and `assume`s prove),
 //!   [`assumptions`].
 //! - Loops: [`induction`] (counters, trip counts, recurrences), [`peelsize`]
-//!   (is a full copy worth it), [`access`] (affine access functions),
-//!   [`dependence`] (distances for loop distribution and interchange).
+//!   (is a full copy worth it), [`depanalysis`] (dependences between memory
+//!   accesses, for loop interchange).
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
@@ -42,7 +42,7 @@
 //!   val["<b>consts, demanded</b>"]:::mid
 //!   rng["<b>ranges, difference,</b><br/><small>guards, floatfacts,<br/>floatbounds</small>"]:::out
 //!   ind["<b>induction</b>"]:::mid
-//!   loop["<b>peelsize, dependence</b>"]:::out
+//!   loop["<b>peelsize, depanalysis</b>"]:::out
 //!   mem["<b>memory, regions, pointerfacts,</b><br/><small>alias, effects, frameescape,<br/>globalsaa, sliceset, cellmap</small>"]:::opt
 //!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural,<br/>parameter_ranges</small>"]:::out
 //!   man["<b>manager (cache)</b>"]:::data
@@ -78,7 +78,7 @@
 //! with `depends`, if the change log cannot have altered it; or it is updated
 //! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
-//! entries (`GlobalsAA`, `Summaries`, `Callbacks`) are dropped unless every run
+//! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated
 //! results equal a fresh solve. Free-standing analyses (not manager entries)
 //! are recomputed per call; a `Unit` (see [`memory`]) carries the cached ones
@@ -89,7 +89,6 @@
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
 pub mod aa;
-pub mod access;
 pub mod accessanalysis;
 pub mod aggregate;
 pub mod alias;
@@ -115,12 +114,12 @@ mod corpus_tests;
 pub mod demanded;
 pub mod demandedbits;
 pub mod depanalysis;
-pub mod dependence;
 pub mod difference;
 pub mod effects;
 pub mod equivalence;
 pub mod floatbounds;
 pub mod floatfacts;
+pub mod forging;
 pub mod frameescape;
 pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
@@ -130,9 +129,9 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
-pub mod ivdescriptors;
 pub mod initializes;
 pub mod interprocedural;
+pub mod ivdescriptors;
 #[cfg(test)]
 mod laa_testing;
 pub mod liveness;

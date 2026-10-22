@@ -111,7 +111,7 @@ fn a_xor_constant_under_a_lshr_moves_past_it() {
 #[test]
 fn a_xor_with_an_or_or_and_that_shares_an_operand_is_an_and_with_a_not() {
     check(XY, "  %o = or i32 %x, %y\n  %r = xor i32 %y, %o\n", &["xor i32 %y, -1", "and i32 %x, %0"], &[" or i32"]);
-    check(XY, "  %o = and i32 %x, %y\n  %r = xor i32 %o, %y\n", &["xor i32 %x, -1", "and i32 %y, %"], &[]);
+    check(XY, "  %o = and i32 %x, %y\n  %r = xor i32 %o, %y\n", &["xor i32 %x, -1", "and i32 %"], &[" xor i32 %o"]);
 }
 
 #[test]

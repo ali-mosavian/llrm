@@ -4,7 +4,9 @@
 //! `TargetEnv` answers `CoalescerEnv::can_share` from the old coalescer's own
 //! facts: two values may share a register when the registers each may take
 //! (their class palettes) have one in common and they are not pinned to
-//! different registers. `joined` numbers the body, builds its live intervals,
+//! different registers. A join narrows the surviving value's palette to the
+//! registers both had, so the next join is judged against the merged value.
+//! `joined` numbers the body, builds its live intervals,
 //! runs the driver and returns the body with the copies joined away.
 //! `LLRM_CHECK_LIVEINTERVALS=1` checks every interval the joins left against
 //! one made afresh (points live, touching segments as one).
@@ -22,6 +24,7 @@
 //! # Used by
 //! `backend::coalesce`.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
@@ -34,7 +37,7 @@ use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
 pub struct TargetEnv {
-    pub palettes: IndexMap<u32, BTreeSet<RegId>>,
+    pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
 }
@@ -54,9 +57,25 @@ impl CoalescerEnv for TargetEnv {
                 return false;
             }
         }
-        match (self.palettes.get(&a), self.palettes.get(&b)) {
+        let palettes = self.palettes.borrow();
+        match (palettes.get(&a), palettes.get(&b)) {
             (Some(x), Some(y)) => x.intersection(y).next().is_some(),
             _ => true,
+        }
+    }
+
+    fn narrow(
+        &self,
+        dst: u32,
+        src: u32,
+    ) {
+        let mut palettes = self.palettes.borrow_mut();
+        let Some(from) = palettes.get(&src).cloned() else { return };
+        match palettes.get_mut(&dst) {
+            Some(into) => into.retain(|register| from.contains(register)),
+            None => {
+                palettes.insert(dst, from);
+            }
         }
     }
 }
@@ -70,10 +89,62 @@ pub fn joined(
     let mut lis = LiveIntervals::new(body);
     let stats = driver::run(&mut lis, env, depth);
     let after = lis.body_like(body);
+    if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
+        for reason in why_left(&mut lis, env) {
+            eprintln!("WHY\t{}\t{reason}", body.name);
+        }
+    }
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") && stats.joined > 0 {
         // The premise: the intervals the joins left are the ones made afresh.
         let compared = lis.assert_intervals_cover_afresh(&after);
         assert!(compared > 0, "{}: the check compared no interval", body.name);
     }
     after
+}
+
+/// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A full copy is
+/// probed by running `join_copy` on the final state; a probe that joins changes the state the
+/// next sees, so the reasons are a count, not a replay. A store of a register is no copy.
+pub(super) fn why_left(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+) -> Vec<&'static str> {
+    use super::pair::full_copy;
+    use super::register_coalescer::{JoinResult, State, join_copy};
+    use crate::model::ir::{Loc, Operation};
+    use std::collections::HashSet;
+    let mut copies = Vec::new();
+    for block in 0..lis.cfg.preds.len() {
+        for one in lis.block_insns(block) {
+            let Some(what) = one.what.as_ref() else { continue };
+            if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
+                continue;
+            }
+            let register = |loc: &Loc| matches!(loc, Loc::Held(_) | Loc::Reg(_));
+            if register(&what.dests[0]) && register(&what.sources[0]) {
+                copies.push(std::sync::Arc::clone(one));
+            }
+        }
+    }
+    let mut state = State::default();
+    let mut reasons = Vec::new();
+    for one in copies {
+        let what = one.what.as_ref().unwrap();
+        reasons.push(if one.group.is_some() {
+            "parallel-copy member"
+        } else if !matches!((&what.dests[0], &what.sources[0]), (Loc::Held(_), Loc::Held(_))) {
+            "physical register"
+        } else if full_copy(&one).is_none() {
+            "width differs"
+        } else if super::pair::CoalescerPair::set_registers(&one, env).is_none() {
+            "can_share refused"
+        } else {
+            match join_copy(lis, env, &mut state, &mut HashSet::default(), one.id()) {
+                JoinResult::Joined => "joinable now (not tried)",
+                JoinResult::Deferred => "conflict (deferred)",
+                JoinResult::Rejected => "rejected (high cost)",
+            }
+        });
+    }
+    reasons
 }

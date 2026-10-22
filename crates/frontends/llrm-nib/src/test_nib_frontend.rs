@@ -1528,7 +1528,8 @@ fn main() -> i16:
     let program = driver::parsed(&source, &crate::real_mode(), None).expect("parses");
     let text = listing_on(&program, "main", &level("O2"), "486");
     let body = between(&text, "F proc far", "F endp");
-    let spills = |width: &str| body.lines().filter(|line| line.trim().starts_with(&format!("fstp {width} ptr [bp-"))).count();
+    let spills =
+        |width: &str| body.lines().filter(|line| line.trim().starts_with(&format!("fstp {width} ptr [bp-"))).count();
     assert!(spills("qword") > 0 && spills("dword") == 0, "{body}");
 }
 

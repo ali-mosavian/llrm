@@ -132,8 +132,14 @@ impl Candidate {
 
         let load_ptr_scev = se.get_scev(cx, load_ptr);
         let store_ptr_scev = se.get_scev(cx, store_ptr);
-        debug_assert!(matches!(se.node(load_ptr_scev).kind, Kind::AddRec(..)), "Loading from something other than indvar?");
-        debug_assert!(matches!(se.node(store_ptr_scev).kind, Kind::AddRec(..)), "Storing to something other than indvar?");
+        debug_assert!(
+            matches!(se.node(load_ptr_scev).kind, Kind::AddRec(..)),
+            "Loading from something other than indvar?"
+        );
+        debug_assert!(
+            matches!(se.node(store_ptr_scev).kind, Kind::AddRec(..)),
+            "Storing to something other than indvar?"
+        );
 
         // We don't need to check non-wrapping here because forward/backward
         // dependence wouldn't be valid if these weren't monotonic accesses.
@@ -208,7 +214,10 @@ impl LoadEliminationForLoop<'_> {
             let mut source = dep_checker.source(dep);
             let mut destination = dep_checker.destination(dep);
 
-            if matches!(dep.ty, DepType::Unknown | DepType::IndirectUnsafe | DepType::InvariantUnsafe) {
+            if matches!(
+                dep.ty,
+                DepType::Unknown | DepType::IndirectUnsafe | DepType::InvariantUnsafe
+            ) {
                 if is_load(cx.function, source) {
                     loads_with_unsafe_dependence.insert(source);
                 }
@@ -364,8 +373,8 @@ impl LoadEliminationForLoop<'_> {
         // st0 forwards to ld0 if the accesses in st4 and st1 don't overlap
         // with ld0.
         //
-        // `max_element` returns the first of equal elements' last; `min_element`
-        // the first.
+        // `max_element` returns the first of equal elements' last;
+        // `min_element` the first.
         let mut last_load = candidates[0].load;
         for cand in candidates {
             if self.instr_index(last_load) <= self.instr_index(cand.load) {
@@ -418,11 +427,14 @@ impl LoadEliminationForLoop<'_> {
         rtc.checks
             .iter()
             .filter(|&&(first, second)| {
-                rtc.checking_groups[first].members.iter().any(|&ptr_idx1| {
-                    rtc.checking_groups[second].members.iter().any(|&ptr_idx2| {
-                        self.needs_checking(ptr_idx1, ptr_idx2, &ptrs_written_on_fwding_path, &cand_load_ptrs)
-                    })
-                })
+                rtc.checking_groups[first]
+                    .members
+                    .iter()
+                    .any(
+                        |&ptr_idx1| rtc.checking_groups[second].members.iter().any(|&ptr_idx2| {
+                            self.needs_checking(ptr_idx1, ptr_idx2, &ptrs_written_on_fwding_path, &cand_load_ptrs)
+                        }),
+                    )
             })
             .copied()
             .collect()
@@ -552,7 +564,9 @@ fn propagate_stored_value_to_load_users(
     let ptr = pointer_operand(rw.function, cand.load);
     let cx = rw.env.cx(&*rw.context, &*rw.function);
     let ptr_scev = rw.se.get_scev(&cx, ptr);
-    let Kind::AddRec(operands, _) = rw.se.node(ptr_scev).kind.clone() else { unreachable!("Loading from something other than indvar?") };
+    let Kind::AddRec(operands, _) = rw.se.node(ptr_scev).kind.clone() else {
+        unreachable!("Loading from something other than indvar?")
+    };
     let start = operands[0].scev;
     let ph = {
         let found = rw.env.loops.get_loop_for(lp).expect("the header of a loop");
@@ -562,23 +576,27 @@ fn propagate_stored_value_to_load_users(
     let Ty::Ptr(space) = rw.se.type_of(start) else { unreachable!("a pointer expression") };
 
     exp.set_insert_point(ph_terminator);
-    let initial_ptr = exp.expand_code_for(&rw.env, rw.context, rw.declared, rw.function, rw.se, start, Some(Ty::Ptr(space)));
+    let initial_ptr =
+        exp.expand_code_for(&rw.env, rw.context, rw.declared, rw.function, rw.se, start, Some(Ty::Ptr(space)));
 
     let load_inst = rw.function.instruction(cand.load);
     let load_ty = load_inst.ty;
     let Opcode::Load { align, .. } = load_inst.opcode else { unreachable!("a load") };
-    let initial = rw.function.create_instruction(
-        Opcode::Load { align, volatile: false },
-        load_ty,
-        vec![initial_ptr],
-        Flags::default(),
-        Some("load_initial"),
-    );
+    let initial = rw
+        .function
+        .create_instruction(
+            Opcode::Load { align, volatile: false },
+            load_ty,
+            vec![initial_ptr],
+            Flags::default(),
+            Some("load_initial"),
+        );
     rw.function.insert(initial, Position::Before(ph_terminator)).expect("the preheader");
     let initial_value = Operand::Value(rw.function.instruction(initial).result.expect("a value"));
 
     let header_first = rw.function.block(lp).first().expect("a header");
-    let phi = rw.function.create_instruction(Opcode::Phi, load_ty, Vec::new(), Flags::default(), Some("store_forwarded"));
+    let phi =
+        rw.function.create_instruction(Opcode::Phi, load_ty, Vec::new(), Flags::default(), Some("store_forwarded"));
     rw.function.insert(phi, Position::Before(header_first)).expect("the header");
     let phi_value = rw.function.instruction(phi).result.expect("a value");
 
@@ -592,7 +610,15 @@ fn propagate_stored_value_to_load_users(
     let mut forwarded = store_value;
     if load_ty != store_ty {
         let op = bit_or_pointer_cast_op(rw, store_ty, load_ty);
-        let cast = rw.function.create_instruction(Opcode::Cast(op), load_ty, vec![store_value], Flags::default(), Some("store_forward_cast"));
+        let cast = rw
+            .function
+            .create_instruction(
+                Opcode::Cast(op),
+                load_ty,
+                vec![store_value],
+                Flags::default(),
+                Some("store_forward_cast"),
+            );
         rw.function.insert(cast, Position::Before(cand.store)).expect("the store");
         forwarded = Operand::Value(rw.function.instruction(cast).result.expect("a value"));
     }
@@ -601,10 +627,7 @@ fn propagate_stored_value_to_load_users(
         let found = rw.env.loops.get_loop_for(lp).expect("the header of a loop");
         found.get_loop_latch(&*rw.function).expect("a latch")
     };
-    rw.function.set_operands(
-        phi,
-        vec![initial_value, Operand::Block(ph), forwarded, Operand::Block(latch)],
-    );
+    rw.function.set_operands(phi, vec![initial_value, Operand::Block(ph), forwarded, Operand::Block(latch)]);
 
     let load_value = rw.function.instruction(cand.load).result.expect("a load result");
     rw.function.replace_all_uses_with(load_value, Operand::Value(phi_value));
@@ -628,7 +651,15 @@ fn bit_or_pointer_cast_op(
 /// `Function::hasOptSize` (D33).
 fn has_opt_size(function: &Function) -> bool {
     use llrm_mir::opcode::Attribute;
-    function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        )
 }
 
 impl FunctionPass for LoopLoadElim {
@@ -654,7 +685,12 @@ impl FunctionPass for LoopLoadElim {
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         let worklist: Vec<BlockId> = {
             let (_, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
-            env.loops.get_loops_in_preorder().into_iter().filter(|one| one.is_innermost()).map(|one| one.get_header()).collect()
+            env.loops
+                .get_loops_in_preorder()
+                .into_iter()
+                .filter(|one| one.is_innermost())
+                .map(|one| one.get_header())
+                .collect()
         };
 
         // Now walk the identified inner loops.
@@ -671,7 +707,9 @@ impl FunctionPass for LoopLoadElim {
                 let Some(found) = cx.loops.get_loop_for(header) else { continue };
                 // Match historical behavior.
                 let latch = found.get_loop_latch(cx.function);
-                if !latch.is_some_and(|latch| found.is_loop_exiting(cx.function, latch)) || found.get_exiting_block(cx.function).is_none() {
+                if !latch.is_some_and(|latch| found.is_loop_exiting(cx.function, latch))
+                    || found.get_exiting_block(cx.function).is_none()
+                {
                     continue;
                 }
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
@@ -722,11 +760,15 @@ impl FunctionPass for LoopLoadElim {
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
                 let cx = env.cx(&*unit.context, &*unit.function);
                 candidates.retain(|cand| {
-                    [cand.load, cand.store].into_iter().all(|inst| {
-                        let ptr = pointer_operand(cx.function, inst);
-                        let scev = se.get_scev(&cx, ptr);
-                        matches!(se.node(scev).kind, Kind::AddRec(..))
-                    })
+                    [cand.load, cand.store]
+                        .into_iter()
+                        .all(
+                            |inst| {
+                                let ptr = pointer_operand(cx.function, inst);
+                                let scev = se.get_scev(&cx, ptr);
+                                matches!(se.node(scev).kind, Kind::AddRec(..))
+                            },
+                        )
                 });
             }
 

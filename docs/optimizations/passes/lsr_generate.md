@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_generate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_generate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:1c47ff7bc8996c4049b4df72019b11ea1b7c75fe7bc615f1bddc828f4c49092a -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:2782b6a59181cb4ad67b76b61ea9e9813a4f9b1d4aef69052d4da2f9acf50af2 -->
 
 # lsr_generate
 
@@ -37,7 +37,8 @@ Work per use is bounded by the formulae it has, which the caps bound.
 DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
 of the product, but for an odd factor `x == 0` and `x * c == 0` are the same
 compare (multiplying by it is a bijection mod 2^bits), so it ignores the
-significant bits there, for the counter alone compared to zero. The pin keeps a loop's exit counter beside the
-scaled one it is a multiple of (recsum: `dec; add -3; jne`); this exits on
-the scaled one (`add -3; jne`), as the stand-in LSR did. Exit: none, a
-proof; if LLVM does the same, delete the line.
+significant bits there, for the counter alone compared to zero. The pin
+keeps a loop's exit counter beside the scaled one it is a multiple of
+(recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
+as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
+the line.

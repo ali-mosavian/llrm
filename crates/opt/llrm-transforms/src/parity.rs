@@ -101,6 +101,7 @@ use SlotKind::{Missing, Old, Partial, Translated};
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
 pub(crate) const REGISTRY: &[Entry] = &[
+    entry("lowerexpect@1177", Early, "lower-expect", Translated, "lowerexpect.rs"),
     partial(
         "decide@1178",
         Early,
@@ -242,6 +243,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
+    entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",
         Simplify,
@@ -261,6 +263,21 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry(
+        "loop-interchange@1631",
+        Late,
+        "loop-interchange",
+        Translated,
+        "loopinterchange.rs, loopinterchange_transform.rs; deviations D1-D6 of its header (LoopInfo made again after a swap, no LoopCacheAnalysis so the cache rule decides nothing, no remarks); output equal to opt's on 108 runs of the pin's LoopInterchange tests (tools/loopinterchange_oracle.py)",
+    ),
+    // l.1474: a loop pass manager of its own, before LoopUnrollPass.
+    entry(
+        "loop-unroll-and-jam@1474",
+        Late,
+        "loop-unroll-and-jam",
+        Translated,
+        "loopunrollandjam.rs, loopunrollruntime.rs (the epilog subset of UnrollRuntimeLoopRemainder); parity with the pin: output equal to opt's on 16 of the 24 runs of the pin's LoopUnrollAndJam tests, the other 8 classified in tools/loopunrollandjam_expected.toml (tools/loopunrollandjam_oracle.py); deviations D1-D7 of its header: D1 on at -O3 and -Omax only (the pin's default pipelines have it off), exit none, the particle -O3 row; D2 no loop metadata; D3 LoopInfo made again; D4 epilog only; D5 no remarks; D6 BasicAA lacks aliasPHI (exit: BasicAA); D7 isKnownViaInduction is a stub (exit: S5)",
+    ),
     // l.1400: after `infer-alignment`; LoopLoadElimination at the target's
     // vector width (no vector registers on llrm's targets).
     partial(
@@ -273,21 +290,22 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg@1438",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; DEVIATE LS1: not in the pin's default pipeline (enable-unroll-and-jam is false); at the pin, if enabled, L1438 comes first, then the jam at L1474; llrm runs the jam first because the matcher needs the pre-L1438 nest (needCanonicalLoops(false) breaks it: only_o3_jams_a_nest_that_sweeps_the_same_cells); exit: the matcher accepts the L1438 form, no date; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (foldValueComparisonIntoPredecessors SimplifyCFG.cpp:1475, simplifySwitchOnSelect :5192; switchvalue.rs holds simplifyEqualityComparisonWithOnlyPredecessor); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
+    entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (foldValueComparisonIntoPredecessors SimplifyCFG.cpp:1475, simplifySwitchOnSelect :5192; switchvalue.rs holds simplifyEqualityComparisonWithOnlyPredecessor); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     partial(
         "simplifycfg@2376",
         Late,
         "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting, and the value-comparison step of simplifySwitch (foldValueComparisonIntoPredecessors SimplifyCFG.cpp:1475, simplifySwitchOnSelect :5192; switchvalue.rs holds simplifyEqualityComparisonWithOnlyPredecessor); criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: switchvalue translated (llrm-w-4, 2026-10-23)",
+        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
@@ -296,13 +314,18 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
+    // Runs in the strength slot,
+    // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
+    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     partial(
@@ -325,6 +348,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Old,
         "lir-cleanup-poc",
     ),
+    entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
@@ -343,6 +367,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
     entry("prologue@13", Backend, "prologepilog", Old, ""),
+    entry("latecleanup@13", Backend, "machine-latecleanup (MachineLateInstrsCleanup.cpp)", Translated, ""),
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
@@ -352,6 +377,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "branch-folder, block-placement, tailduplication",
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
+    entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
     // (lir-cleanup-port, 2026-11-13).
@@ -405,6 +431,16 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         off: false,
         deps: &[],
         oracle: "tools/llvmport/domcompare.py: DomTree against the pinned LLVM on the corpus (#2292)",
+        replaced_by: "",
+    },
+    AnalysisEntry {
+        key: "globals-modref",
+        symbol: "GlobalsModRefAnalysis",
+        llvm: "GlobalsAA (GlobalsModRef.cpp)",
+        kind: Translated,
+        off: false,
+        deps: &[],
+        oracle: "globalsmodref_tests.rs against the rules of GlobalsModRef.cpp at the pin; opt -O2 on noinline callees (pt1n/pt1in cases)",
         replaced_by: "",
     },
     AnalysisEntry {
@@ -503,6 +539,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "globalsmodref.rs (funcattrs-port, #2636), caching on top (parity-pipeline)",
     ),
     old_analysis(
+        "forged-selectors",
+        "ForgedSelectors",
+        "none",
+        "none: DEVIATE or delete candidate (a data-segment pointer forged from an integer is a real-mode fact; globals-aa reads it)",
+    ),
+    old_analysis(
         "summaries",
         "Summaries",
         "FunctionAttrs memory effects + GlobalsModRef FunctionInfo",
@@ -516,12 +558,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("summaries updated", "counted(\"summaries updated\")", "none", "with summaries: funcattrs-port"),
     old_analysis("callee-effects", "CalleeEffects", "none", "none: DEVIATE or delete candidate (passes.rs)"),
-    old_analysis(
-        "callbacks",
-        "Callbacks",
-        "none",
-        "none: DEVIATE or delete candidate (effects of calling back into the module)",
-    ),
     old_analysis(
         "call-graph",
         "CallGraphAnalysis",
@@ -594,8 +630,13 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("points-to", "Pointers", "BasicAA", "basicaa-port (aa.rs): alias::pointers goes"),
     old_analysis("annotated", "Annotated", "MemoryLocation", "basicaa-port: references.rs MemoryLocation callers"),
-    old_analysis("call-effects", "CallEffects", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
     old_analysis("writes", "Writes", "AAResults::getModRefInfo", "basicaa-port with GlobalsModRef"),
+    old_analysis(
+        "call-footprints",
+        "CallFootprints",
+        "AAResults::getModRefInfo(Call)",
+        "basicaa-port with GlobalsModRef: one walk of a body's calls for Writes and Accesses",
+    ),
     old_analysis("plain-accesses", "PlainAccesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("accesses", "Accesses", "MemorySSA", "mssa (memoryssa-port)"),
     old_analysis("through-memory", "ThroughMemory", "MemorySSA + GVN value numbering", "mssa and the GVN translation"),

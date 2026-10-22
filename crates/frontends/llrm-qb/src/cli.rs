@@ -48,7 +48,11 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a
     // Microsoft one.
     let mut frontend = Frontend::new("vbdos", "llrm");
-    let (mut dump_hir, mut flags, mut dump) = (None, Flags::default(), None);
+    // BC stores every assignment to a SINGLE or DOUBLE variable rounded to its
+    // type, whatever the level: `-fexcess-precision=fast` asks for the other.
+    let mut flags = Flags::default();
+    flags.float_store = true;
+    let (mut dump_hir, mut dump) = (None, None);
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -119,7 +123,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
-    let codegen = bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?);
+    let codegen = llrm_core::driver::Options {
+        spills_extended: true,
+        ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
+    };
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
 }
 
@@ -173,6 +180,22 @@ mod tests {
     fn runtime(argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|one| one.to_string()).collect();
         parse_args(&argv).expect("parses").frontend.runtime
+    }
+
+    fn float_stores(argv: &[&str]) -> (bool, bool) {
+        let argv: Vec<String> = argv.iter().map(|one| one.to_string()).collect();
+        let parsed = parse_args(&argv).expect("parses");
+        (parsed.frontend.float_store, parsed.flags.float_store)
+    }
+
+    /// BC rounds what is stored to a SINGLE variable, so llrm-qb did not: the
+    /// promoted copies of nbody_single's positions kept the x87's precision
+    /// and the program printed 86015 where BC prints 86016.
+    #[test]
+    fn a_single_assignment_rounds_unless_fast_excess_precision_is_asked() {
+        assert_eq!(float_stores(&["p.bas"]), (true, true));
+        assert_eq!(float_stores(&["p.bas", "-fexcess-precision=fast"]), (false, false));
+        assert_eq!(float_stores(&["p.bas", "-fexcess-precision=standard"]), (true, true));
     }
 
     /// llrm-qb called the Microsoft VB-DOS runtime unless told otherwise; the

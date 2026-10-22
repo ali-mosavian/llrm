@@ -32,51 +32,32 @@
 //! %b = mul i32 %a, 2   ; reads %x after the pass
 //! ```
 
+use llrm_analysis::effects::Declarations;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
+use llrm_mir::memory::Callees;
 use llrm_mir::module::{Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::FunctionAnalyses;
 
-/// `isInstructionTriviallyDead`: nothing reads it and running it does nothing
-/// else.
-fn is_trivially_dead(
-    function: &Function,
-    inst: InstId,
-) -> bool {
-    let instruction = function.instruction(inst);
-    let Some(result) = instruction.result else { return false };
-    function.users(result).is_empty()
-        && matches!(
-            instruction.opcode,
-            Opcode::Binary(_)
-                | Opcode::Cast(_)
-                | Opcode::ICmp(_)
-                | Opcode::FCmp(_)
-                | Opcode::Select
-                | Opcode::Phi
-                | Opcode::GetElementPtr { .. }
-                | Opcode::Alloca { .. }
-                | Opcode::FNeg
-                | Opcode::Freeze
-                | Opcode::ExtractValue(_)
-                | Opcode::InsertValue(_)
-                | Opcode::Load { volatile: false, .. }
-        )
-}
+use crate::local::is_instruction_trivially_dead;
 
 /// `RecursivelyDeleteTriviallyDeadInstructions`: `dead` erased, then each
 /// operand's defining instruction that nothing reads now.
 fn delete_dead(
+    context: &Context,
+    callees: &Callees,
+    declarations: &Declarations,
     function: &mut Function,
     mut dead: Vec<InstId>,
 ) {
     while let Some(inst) = dead.pop() {
         // One whose reader is still to go is met again through that reader.
-        if function.parent(inst).is_none() || !is_trivially_dead(function, inst) {
+        if function.parent(inst).is_none()
+            || !is_instruction_trivially_dead(context, callees, declarations, function, inst)
+        {
             continue;
         }
         let operands = function.instruction(inst).operands.to_vec();
@@ -97,6 +78,7 @@ pub fn instsimplify(
     globals: &[GlobalValue],
     metadata: &[MetadataNode],
     layout: &DataLayout,
+    callees: &Callees,
     function: &mut Function,
 ) -> bool {
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function);
@@ -116,7 +98,7 @@ pub fn instsimplify(
                 if !to_simplify.is_empty() && !to_simplify.contains(&inst) {
                     continue;
                 }
-                if is_trivially_dead(function, inst) {
+                if is_instruction_trivially_dead(context, callees, globals, function, inst) {
                     dead.push(inst);
                     changed = true;
                     continue;
@@ -138,11 +120,11 @@ pub fn instsimplify(
                 }
                 function.replace_value(result, found);
                 changed = true;
-                if is_trivially_dead(function, inst) {
+                if is_instruction_trivially_dead(context, callees, globals, function, inst) {
                     dead.push(inst);
                 }
             }
-            delete_dead(function, dead);
+            delete_dead(context, callees, globals, function, dead);
         }
         std::mem::swap(&mut to_simplify, &mut next);
         next.clear();
@@ -173,7 +155,7 @@ impl FunctionPass for InstSimplify {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        if instsimplify(unit.context, &outer.globals, unit.metadata, unit.layout, unit.function) {
+        if instsimplify(unit.context, &outer.globals, unit.metadata, unit.layout, outer.callees(), unit.function) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

@@ -19,7 +19,7 @@ fn same_answers(body: &str) {
     let metadata = after.metadata.clone();
     let mut declared = Declared::of(&after);
     let (context, function) = after.function_mut("f").expect("@f");
-    combine(context, &globals, &metadata, &DataLayout::default(), function, &mut declared);
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
     declared.place(&mut after).expect("placed");
     let answer = |module: &llrm_mir::module::Module, t: i128| {
         run(module, "f", vec![Val::Int { bits: (t as u128) & 0xffff, width: 16 }], 10_000)

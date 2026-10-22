@@ -330,6 +330,15 @@ pub fn text_by(
     module: &Module,
     listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>,
 ) -> Result<String, Unprintable> {
+    // The listing writer is a step of its own: with `-S` it was 21 M of a
+    // d_faces -O2 compile that no timed step held.
+    crate::support::debug::timed("masm text", || text_listed(module, listed))
+}
+
+fn text_listed(
+    module: &Module,
+    listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>,
+) -> Result<String, Unprintable> {
     let mut out: Vec<String> = module.object.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
@@ -2031,9 +2040,11 @@ pub fn _memory(
             };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
-        // A direct address, as `[disp16]`: the offset is unsigned.
+        // A direct address, as `[disp16]` (`[disp32]` where the cell says its
+        // displacement is a dword): the offset is unsigned.
         Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
-            return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
+            let kept = if cell.disp_width >= 4 { 0xFFFF_FFFF } else { 0xFFFF };
+            return Ok(format!("{size}[{}]", address.disp & kept));
         }
         Space::Far if address.segment != (RegId::None).iced() => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };

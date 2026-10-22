@@ -190,7 +190,13 @@ pub fn executed(
             return false;
         }
         // Don't hoist the instruction if it's unsafe or expensive.
-        if !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(context, spec.layout, function, spec.outer, inst) {
+        if !crate::licm::hoist::is_safe_to_speculatively_execute_for_cfg(
+            context,
+            spec.layout,
+            function,
+            spec.outer,
+            inst,
+        ) {
             if stored.is_some() {
                 return false;
             }

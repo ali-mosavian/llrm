@@ -1,0 +1,30 @@
+== 
+@foo
+B0:
+  %v0 = getelementptr inbounds i8, ptr %aa, i64 512
+  br label %B1
+B1:
+  %v1 = phi i64 [ %v14, %B3 ], [ 1, %B0 ]
+  %v2 = add nsw i64 %v1, -1
+  %v3 = getelementptr inbounds [128 x float], ptr %v0, i64 0, i64 %v2
+  %v4 = getelementptr inbounds [128 x float], ptr %v0, i64 0, i64 %v1
+  br label %B2
+B2:
+  %v5 = phi i64 [ %v12, %B2 ], [ 1, %B1 ]
+  %v6 = getelementptr inbounds [128 x float], ptr %bb, i64 %v5, i64 %v1
+  %v7 = load float, ptr %v6
+  %v8 = load float, ptr %v3
+  %v9 = fadd fast float %v8, %v7
+  store float %v9, ptr %v3
+  %v10 = load float, ptr %v4
+  %v11 = getelementptr inbounds [128 x float], ptr %cc, i64 %v5, i64 %v1
+  store float %v10, ptr %v11
+  %v12 = add nuw nsw i64 %v5, 1
+  %v13 = icmp ne i64 %v12, 1024
+  br i1 %v13, label %B2, label %B3
+B3:
+  %v14 = add nuw nsw i64 %v1, 1
+  %v15 = icmp ne i64 %v14, 128
+  br i1 %v15, label %B1, label %B4
+B4:
+  ret void

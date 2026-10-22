@@ -676,7 +676,16 @@ fn strip_and_accumulate_constant_offsets(
                 }
                 value = source;
             }
-            Some(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value: source }) => value = source,
+            // A selector alone is no pointer into the object it was made from:
+            // back to far it is segment:0 (DEVIATE C1).
+            Some(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value: source }) => {
+                if pointer_space(context, ty_of(context, source))
+                    .is_some_and(|space| layout.has_unstable_representation(space))
+                {
+                    return value;
+                }
+                value = source
+            }
             _ => return value,
         }
     }
@@ -685,6 +694,7 @@ fn strip_and_accumulate_constant_offsets(
 /// `getUnderlyingObject` of a constant.
 fn get_underlying_object(
     context: &Context,
+    layout: &DataLayout,
     c: ConstantId,
 ) -> ConstantId {
     let mut value = c;
@@ -692,10 +702,19 @@ fn get_underlying_object(
         return c;
     }
     for _ in 0..6 {
-        match expr(context, value) {
-            Some(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
-            Some(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+        // Read in place: a clone of the expression's operands per step was most
+        // of this function's cost (every load is asked).
+        match &context.get(value).kind {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => value = operands[0],
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value: source }) => {
+                let source = *source;
                 if !is_pointer(context, ty_of(context, source)) {
+                    return value;
+                }
+                // A selector alone names no object (DEVIATE C1).
+                if pointer_space(context, ty_of(context, source))
+                    .is_some_and(|space| layout.has_unstable_representation(space))
+                {
                     return value;
                 }
                 value = source;
@@ -868,6 +887,13 @@ pub fn is_eliminable_cast_pair(
                 std::cmp::Ordering::Equal => CastOp::BitCast,
             })
         }
+        // DEVIATE C1: the pin composes any two addrspacecasts. A space the
+        // target declares non-integral (`ni:` in its datalayout: the selector-
+        // alone space) is not a point on the way: near -> selector keeps the
+        // segment and drops the offset, selector -> far gives segment:0, and
+        // near -> far keeps the offset. Exit: the day our casts through the
+        // selector space compose (a pin-shaped far-pointer model).
+        12 if pointer_space(context, mid).is_some_and(|space| layout.has_unstable_representation(space)) => None,
         12 => Some(if pointer_space(context, src) != pointer_space(context, dst) {
             CastOp::AddrSpaceCast
         } else {
@@ -1302,7 +1328,7 @@ fn constant_fold_load_from_const_ptr_at(
     mut offset: u128,
     width: u32,
 ) -> Option<ConstantId> {
-    let underlying = get_underlying_object(context, ptr);
+    let underlying = get_underlying_object(context, env.layout, ptr);
     let (global, initializer) = definitive_constant_initializer(env, context, underlying)?;
     let stripped = strip_and_accumulate_constant_offsets(context, env.layout, ptr, &mut offset, width, true);
     if let ConstantKind::Global(found) = context.get(stripped).kind
@@ -1570,7 +1596,7 @@ fn constant_fold_inst_operands_impl(
                 op,
                 BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
             ) {
-                return None;
+                return constfold::float_binary(context, *op, flags, ops[0], ops[1]);
             }
             constant_fold_binary_op_operands(context, env, *op, ops[0], ops[1])
         }

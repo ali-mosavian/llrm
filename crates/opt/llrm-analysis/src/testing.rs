@@ -85,6 +85,14 @@ pub fn parse_corpus_entry(
     llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
+/// `unit` carrying its shape and the manager's registers: none, since the
+/// manager keeps no map of constants (`Registers::run`).
+pub fn with_manager_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
+    let none = Box::leak(Box::new(llrm_support::hash::IndexMap::default()));
+    let shape = Box::leak(Box::new(crate::cfg::Shape::of(unit.function)));
+    unit.with_registers(none).with_shape(shape)
+}
+
 /// `unit` carrying what is known of its body without memory and its shape,
 /// derived once for the body a test built, which no manager has seen. (Kept for
 /// the life of the test run.)
@@ -92,4 +100,12 @@ pub fn with_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> 
     let known = Box::leak(Box::new(crate::consts::known(&crate::memory::Unit { registers: None, ..unit })));
     let shape = Box::leak(Box::new(crate::cfg::Shape::of(unit.function)));
     unit.with_registers(known).with_shape(shape)
+}
+
+/// `unit` carrying where its pointer values point and which frames are
+/// exposed, as the manager's `Writes` and `ThroughMemory` read them.
+pub fn with_points(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
+    let values = Box::leak(Box::new(crate::alias::point_values(&unit).expect("points-to")));
+    let exposed = Box::leak(Box::new(crate::memory::exposed_frames(&unit)));
+    unit.with_point_values(values).with_exposed(exposed)
 }

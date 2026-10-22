@@ -1660,7 +1660,6 @@ fn bounded_solved_under(
         _ => *unit,
     };
     let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
     let positions: IdMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let shape = unit.shape();
     let assumed = unit.assumptions();
@@ -2022,8 +2021,8 @@ fn bounded_solved_under(
         // The edges into a block with no other way in, from the block it is
         // reached by.
         let edges_into = |one: i64, found: &mut Vec<(usize, usize, i64)>| {
-            if let Some(parents) = predecessors.get(&one).filter(|parents| parents.len() == 1)
-                && let Some(&from) = parents.iter().next().and_then(|parent| positions.get(parent))
+            if let [parent] = function.predecessors(cfg::block(one))[..]
+                && let Some(&from) = positions.get(&cfg::id(parent))
             {
                 for (index, &successor) in graph[from].succ.iter().enumerate() {
                     if successor == one {
@@ -2296,7 +2295,6 @@ fn bounded_solved_under(
             &shape,
             &assumed,
             &graph,
-            &predecessors,
             &positions,
             &operations,
             &loop_.body,

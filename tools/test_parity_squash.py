@@ -725,3 +725,49 @@ def test_a_refactor_pr_that_changes_pass_code_needs_a_rows_line():
     assert not ps.perf_needs_rows("fix(analysis): bug", "Owner: x", code)
     assert not ps.perf_needs_rows("feat(analysis): new", "Owner: x", code)
     assert ps.perf_needs_rows("perf(analysis): faster", "Owner: x", [])
+
+
+def test_a_new_failing_test_inside_an_already_red_step_is_refused_and_a_fixed_one_is_noted():
+    """The gate compared steps: a head red on `ratchet:x` hid a second test of x going red (llrm-qb lib went from 4 to 27 red tests with no refusal)."""
+    head = {"ratchet:x::old_one", "run p [-O2]"}
+    merged = {"ratchet:x::old_one", "ratchet:x::new_one", "run p [-O2]"}
+    why = ps.subset_refusals(head, merged, fixes=False)
+    assert why and "ratchet:x::new_one" in why[0] and "old_one" not in why[0].split(", which")[0], why
+    assert ps.subset_refusals(head, set(head), fixes=False) == []
+    assert ps.fixed_names(head, {"run p [-O2]"}) == ["ratchet:x::old_one"]
+
+
+def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
+    """A failure set cached before steps named their tests holds `ratchet:x`: the tests inside it are not new for that head."""
+    assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
+
+
+def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """#3578 landed with four red llrm-transforms lib tests: the fast path ran no test. With LAND_FAST_TESTS the changed crates' lib tests run on the merged tree and a failing one the head
+    passes refuses the batch. Control on the real functions (a planted `assert!(false)` in llrm-transforms): refused naming it in 88 s; none on the clean head."""
+    files = ["crates/opt/llrm-transforms/src/memcpyoptimizer.rs", "docs/x.md"]
+    red = {"unit llrm-transforms::memcpyoptimizer::tests::four_byte_stores_are_one_memset"}
+    asked = {}
+
+    def on_merged(packages):
+        asked["packages"] = set(packages)
+        return set(red)
+
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: set()) == red
+    assert asked["packages"] == {"llrm-transforms"}
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+
+
+def test_a_passing_batch_prints_what_the_lib_layer_ran(capsys):
+    """A gate silent on a pass cannot be told from one that never ran: the layer prints crates, tests passed, a hash of the test names and the seconds, on a pass too."""
+    smoke = ps.parity_smoke_module()
+
+    def on_merged(packages):
+        smoke.LAST_LIB.update(crates=len(packages), passed=940, names="abcd1234", seconds=11.6)
+        return set()
+
+    assert ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 1 crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 0 crates, 0 tests passed (no crate changed)" in capsys.readouterr().out

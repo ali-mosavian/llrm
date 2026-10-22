@@ -1,0 +1,13 @@
+[package]
+name = "llrm-dagisel-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Decodes the pin's X86GenDAGISel.inc into llrm-dagisel's matcher table, pruned to a CPU's features"
+
+[dependencies]
+llrm-dagisel = { path = "../llrm-dagisel" }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

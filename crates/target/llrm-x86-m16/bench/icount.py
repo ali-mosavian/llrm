@@ -57,6 +57,7 @@ class Run:
     region: Counts | None = None  # None: the region was never entered
     error: str = ""
     files: dict[str, bytes] = field(default_factory=dict)
+    rep_iterations: int = 0  # flat target: the region's repeated string instructions' iterations after the first of each (tools/bench/flatcount.py)
 
 
 def _multiplier(multiplier_of, uc, one):

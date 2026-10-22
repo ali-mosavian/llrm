@@ -333,8 +333,11 @@ pub trait GreedyEnv: SpillWeightEnv {
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
 pub struct SpillContext<'a, 'b> {
     pub lis: &'a mut LiveIntervals,
-    pub vrm: &'a mut VirtRegMap,
+    pub matrix: &'a mut LiveRegMatrix,
     pub vrai: &'a mut VirtRegAuxInfo<'b>,
+    /// Assigned registers whose range the spill shrank
+    /// (`LRE_WillShrinkVirtReg`): unassigned, to be queued again.
+    pub shrunk: &'a mut Vec<u32>,
 }
 
 /// `Spiller` (Spiller.h): rewrites the uses and defs of a virtual register
@@ -363,6 +366,10 @@ pub trait Spiller {
     fn failed(&self) -> bool {
         false
     }
+
+    /// The ranges of the homes the spills went to (`LiveStacks`), left where
+    /// the allocator's caller reads them, once the allocation is done.
+    fn stacked(&mut self) {}
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -435,6 +442,11 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// `LiveStacks` left for the caller (the spiller's homes' ranges).
+    pub fn stacked_spills(&mut self) {
+        self.spiller.stacked();
     }
 
     /// Whether the spiller failed to write a spill.
@@ -806,14 +818,46 @@ impl<'a> RAGreedy<'a> {
                 // If !MaxCost.isMax(), then we're just looking for a cheap
                 // register. Evicting another local live range
                 // in this case could lead to suboptimal
-                // coloring. (Local reassignment is off by default.)
-                if !max_cost.is_max() && is_local && self.lis.interval_is_in_one_mbb(&intf).is_some() {
+                // coloring, unless it can move (`EnableLocalReassign`, on: the
+                // subtarget answers true, TargetSubtargetInfo.cpp#L59).
+                if !max_cost.is_max()
+                    && is_local
+                    && self.lis.interval_is_in_one_mbb(&intf).is_some()
+                    && !self.can_reassign(&intf, phys)
+                {
                     return false;
                 }
             }
         }
         *max_cost = cost;
         true
+    }
+
+    /// `canReassign` (RegAllocGreedy.cpp#L590): `virt` could take a register
+    /// other than `from` that nothing assigned interferes with.
+    fn can_reassign(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        from: RegId,
+    ) -> bool {
+        let order = self.order_of(virt.reg());
+        for (reg, _) in order.iter() {
+            if reg == from {
+                continue;
+            }
+            // If no units have interference, reassignment is possible.
+            let mut clash = false;
+            for unit in self.matrix.tri().regunits(reg) {
+                if !self.matrix.query_vregs(virt.reg(), &virt.range, unit, 1).is_empty() {
+                    clash = true;
+                    break;
+                }
+            }
+            if !clash {
+                return true;
+            }
+        }
+        false
     }
 
     /// `tryFindEvictionCandidate` (RegAllocEvictionAdvisor.cpp#L323).
@@ -964,9 +1008,11 @@ impl<'a> RAGreedy<'a> {
         }
         // Finally spill VirtReg itself.
         let mut spilled: Vec<u32> = Vec::new();
+        let mut shrunk: Vec<u32> = Vec::new();
         {
             let mut vrai = VirtRegAuxInfo::new(self.env, &self.original);
-            let ctx = SpillContext { lis: &mut self.lis, vrm: &mut self.matrix.vrm, vrai: &mut vrai };
+            let ctx =
+                SpillContext { lis: &mut self.lis, matrix: &mut self.matrix, vrai: &mut vrai, shrunk: &mut shrunk };
             self.spiller.spill(ctx, virt.reg(), &mut spilled);
             for (reg, hints) in vrai.hints {
                 self.hints.insert(reg, hints);
@@ -975,6 +1021,7 @@ impl<'a> RAGreedy<'a> {
         self.stats.spilled_ranges += 1;
         self.extra.set_stage_all(&spilled, LiveRangeStage::Done);
         new_vregs.extend(spilled);
+        new_vregs.extend(shrunk);
         // The live virtual register requesting allocation was spilled, so tell
         // the caller not to allocate anything during this round.
         Select::None
@@ -1195,7 +1242,7 @@ mod tests {
             &self,
             instr: &Insn,
         ) -> Option<(u32, u32)> {
-            crate::backend::coalesce::_copy(instr)
+            instr.copy_of()
         }
 
         fn pinned(

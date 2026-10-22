@@ -849,8 +849,6 @@ b0:
 #[test]
 fn test_unknown_reads_of_a_call_reach_a_local_only_after_its_capture() {
     use super::alias::AliasQuery;
-    use crate::alias::{Effect, NONLOCAL, UNKNOWN};
-    use crate::memory::MemRef;
     let parsed = Parsed::new(
         "declare void @use(ptr)
 
@@ -885,11 +883,7 @@ b2:
         ))
         .collect();
     let [_use, after_capture, before_capture] = calls[..] else { panic!("{calls:?}") };
-    let unknown: std::rc::Rc<[MemRef]> =
-        std::rc::Rc::from(vec![MemRef::reach(1, UNKNOWN.clone()), MemRef::reach(1, NONLOCAL.clone())]);
-    let effect = Effect { loads: unknown, stores: std::rc::Rc::from(Vec::new()), fills: Vec::new() };
-    let effects = [(after_capture, effect.clone()), (before_capture, effect)].into_iter().collect();
-    let accesses = Accesses::of(&unit, references, &effects);
+    let accesses = Accesses::of(&unit, references, &crate::alias::calls_by_attributes(&unit));
     let aa = AliasQuery::new(&unit, &accesses);
     let store = unit
         .function
@@ -903,4 +897,69 @@ b2:
     let slot = aa.location_of(store).expect("the slot");
     assert!(aa.get_mod_ref_info(after_capture, &slot).reads, "after the capture the call may read the slot");
     assert!(!aa.get_mod_ref_info(before_capture, &slot).reads, "before any capture it cannot");
+}
+
+/// LLRM_CHECK_LICM_GRAPH accepted every kept answer once it let a later one
+/// pass; an earlier one (a clobber missed) must still fail.
+#[test]
+fn test_a_kept_answer_is_safe_only_when_the_fresh_one_dominates_it() {
+    use super::shadow::{Name, answer_is_safe};
+    let parsed = Parsed::new(
+        "define void @f(i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+  br i1 %c, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 32)
+  br i1 %c, label %b3, label %b4
+
+b4:
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let (fresh, _) = translated(&unit);
+    let at = |name: &str| crate::cfg::id(crate::testing::block(unit.function, name));
+    let (first, second) = (Name::Phi(at("b1")), Name::Phi(at("b3")));
+    let store = Name::Site(unit.function.block(crate::testing::block(unit.function, "b1")).first().expect("a store"));
+    assert!(answer_is_safe(&fresh, &second, &first), "a later answer than the fresh one is safe");
+    assert!(answer_is_safe(&fresh, &first, &first));
+    assert!(!answer_is_safe(&fresh, &first, &second), "an earlier answer misses the second loop's clobber");
+    assert!(!answer_is_safe(&fresh, &Name::Live, &store), "live on entry misses the store");
+    assert!(answer_is_safe(&fresh, &store, &Name::Live));
+}
+
+/// LLRM_CHECK_PRESERVED said `earlycse@1180 left mssa held but stale` of 172
+/// programs: a load the walker had moved above a store it does not alias
+/// (`MemoryUse::isOptimized`) differed from the fresh graph's nearest def. A
+/// graph the walker has answered for equals one made afresh.
+#[test]
+fn a_graph_with_walked_uses_equals_one_made_afresh() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "define i8 @f() {
+b0:
+  store i32 7, ptr @g
+  store i8 1, ptr getelementptr (i8, ptr @g, i16 4)
+  %r = load i8, ptr @g
+  ret i8 %r
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = std::rc::Rc::new(Accesses::plain(&unit, &crate::consts::Calls::default()));
+    let build = || Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses, unit.function));
+    let mut held = build();
+    let aa = AliasQuery::new(&unit, &accesses);
+    shadow::walked(&mut held, &aa, unit.function);
+    let graph = |mssa| crate::manager::MssaGraph { mssa, accesses: std::rc::Rc::clone(&accesses) };
+    assert!(graph(held) == graph(build()));
 }

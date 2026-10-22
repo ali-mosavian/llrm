@@ -196,6 +196,16 @@ impl DataLayout {
         spec.bits != spec.index_bits || spec.unstable
     }
 
+    /// Whether `ni:` names `space`: its pointers are not addresses (a selector
+    /// alone), as the layout says it, where `is_non_integral_address_space`
+    /// also holds a far pointer (its bits exceed its index).
+    pub fn has_unstable_representation(
+        &self,
+        space: u32,
+    ) -> bool {
+        self.pointer(space).unstable
+    }
+
     /// `DataLayout::mustNotIntroduceIntToPtr`
     /// ([DataLayout.h:461](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h#L461)).
     pub fn must_not_introduce_int_to_ptr(
@@ -297,8 +307,9 @@ impl DataLayout {
     /// and `AsmPrinter::getGVAlignment`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L380-L405>):
     /// the type's preferred alignment, raised to the stated one, and 16 for an
-    /// initialized global over 128 bits that states none. A stated alignment of
-    /// a global in a section is kept exactly.
+    /// initialized global over 128 bits that states none (`large_to_16`; a
+    /// target of 64K segments does not make it, `driver/data.rs` DEVIATE E2).
+    /// A stated alignment of a global in a section is kept exactly.
     pub fn global_align(
         &self,
         types: &Types,
@@ -306,13 +317,14 @@ impl DataLayout {
         stated: Option<u64>,
         in_section: bool,
         initialized: bool,
+        large_to_16: bool,
     ) -> u64 {
         let mut align = self.pref_align(types, ty);
         match stated {
             Some(stated) if in_section => return stated,
             Some(stated) if stated >= align => align = stated,
             Some(stated) => align = stated.max(self.align(types, ty)),
-            None if initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
+            None if large_to_16 && initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
             None => {}
         }
         match stated {
@@ -587,8 +599,9 @@ mod tests {
             variable.ty
         };
         let layout = DataLayout::parse("i32:32-i8:8").unwrap();
-        let align =
-            |name, stated, section, initialized| layout.global_align(types, of(name), stated, section, initialized);
+        let align = |name, stated, section, initialized| {
+            layout.global_align(types, of(name), stated, section, initialized, true)
+        };
         assert_eq!(align("w", None, false, true), 4);
         assert_eq!(align("b", None, false, true), 1);
         assert_eq!(align("big", None, false, true), 16, "over 128 bits and initialized");
@@ -596,5 +609,10 @@ mod tests {
         assert_eq!(align("small", Some(8), false, true), 8, "a stated alignment is kept");
         assert_eq!(align("w", Some(1), false, true), 4, "raised to the type's ABI alignment");
         assert_eq!(align("w", Some(1), true, true), 1, "kept exactly in a section");
+        assert_eq!(
+            layout.global_align(types, of("big"), None, false, true, false),
+            1,
+            "a target of 64K segments does not raise a large global"
+        );
     }
 }

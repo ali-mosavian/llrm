@@ -1,0 +1,264 @@
+== -allow-unroll-and-jam
+@test
+B0:
+  %v0 = alloca [8 x [8 x i32]]
+  %v1 = alloca [8 x [8 x i32]]
+  %v2 = alloca [8 x [8 x i32]]
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v3 = phi i32 [ %v7, %B12 ], [ 0, %B1 ]
+  %v4 = add nuw nsw i32 %v3, 1
+  %v5 = add nuw nsw i32 %v3, 2
+  %v6 = add nuw nsw i32 %v3, 3
+  %v7 = add nuw nsw i32 %v3, 4
+  br label %B3
+B3:
+  %v8 = phi i32 [ %v32, %B11 ], [ 0, %B2 ]
+  %v9 = phi i32 [ %v53, %B11 ], [ 0, %B2 ]
+  %v10 = phi i32 [ %v74, %B11 ], [ 0, %B2 ]
+  %v11 = phi i32 [ %v95, %B11 ], [ 0, %B2 ]
+  br label %B4
+B4:
+  %v12 = phi i32 [ %v30, %B4 ], [ 0, %B3 ]
+  %v13 = zext i32 %v3 to i64
+  %v14 = zext i32 %v8 to i64
+  %v15 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v13, i64 %v14
+  %v16 = load i32, ptr %v15
+  %v17 = zext i32 %v3 to i64
+  %v18 = zext i32 %v12 to i64
+  %v19 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v17, i64 %v18
+  %v20 = load i32, ptr %v19
+  %v21 = zext i32 %v12 to i64
+  %v22 = zext i32 %v8 to i64
+  %v23 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v21, i64 %v22
+  %v24 = load i32, ptr %v23
+  %v25 = mul nsw i32 %v20, %v24
+  %v26 = add nsw i32 %v16, %v25
+  %v27 = zext i32 %v3 to i64
+  %v28 = zext i32 %v8 to i64
+  %v29 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v27, i64 %v28
+  store i32 %v26, ptr %v29
+  %v30 = add nuw nsw i32 %v12, 1
+  %v31 = icmp ult i32 %v12, 7
+  br i1 %v31, label %B4, label %B5
+B5:
+  %v32 = add nuw nsw i32 %v8, 1
+  br label %B6
+B6:
+  %v33 = phi i32 [ %v51, %B6 ], [ 0, %B5 ]
+  %v34 = zext i32 %v4 to i64
+  %v35 = zext i32 %v9 to i64
+  %v36 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v34, i64 %v35
+  %v37 = load i32, ptr %v36
+  %v38 = zext i32 %v4 to i64
+  %v39 = zext i32 %v33 to i64
+  %v40 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v38, i64 %v39
+  %v41 = load i32, ptr %v40
+  %v42 = zext i32 %v33 to i64
+  %v43 = zext i32 %v9 to i64
+  %v44 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v42, i64 %v43
+  %v45 = load i32, ptr %v44
+  %v46 = mul nsw i32 %v41, %v45
+  %v47 = add nsw i32 %v37, %v46
+  %v48 = zext i32 %v4 to i64
+  %v49 = zext i32 %v9 to i64
+  %v50 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v48, i64 %v49
+  store i32 %v47, ptr %v50
+  %v51 = add nuw nsw i32 %v33, 1
+  %v52 = icmp ult i32 %v33, 7
+  br i1 %v52, label %B6, label %B7
+B7:
+  %v53 = add nuw nsw i32 %v9, 1
+  br label %B8
+B8:
+  %v54 = phi i32 [ %v72, %B8 ], [ 0, %B7 ]
+  %v55 = zext i32 %v5 to i64
+  %v56 = zext i32 %v10 to i64
+  %v57 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v55, i64 %v56
+  %v58 = load i32, ptr %v57
+  %v59 = zext i32 %v5 to i64
+  %v60 = zext i32 %v54 to i64
+  %v61 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v59, i64 %v60
+  %v62 = load i32, ptr %v61
+  %v63 = zext i32 %v54 to i64
+  %v64 = zext i32 %v10 to i64
+  %v65 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v63, i64 %v64
+  %v66 = load i32, ptr %v65
+  %v67 = mul nsw i32 %v62, %v66
+  %v68 = add nsw i32 %v58, %v67
+  %v69 = zext i32 %v5 to i64
+  %v70 = zext i32 %v10 to i64
+  %v71 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v69, i64 %v70
+  store i32 %v68, ptr %v71
+  %v72 = add nuw nsw i32 %v54, 1
+  %v73 = icmp ult i32 %v54, 7
+  br i1 %v73, label %B8, label %B9
+B9:
+  %v74 = add nuw nsw i32 %v10, 1
+  br label %B10
+B10:
+  %v75 = phi i32 [ %v93, %B10 ], [ 0, %B9 ]
+  %v76 = zext i32 %v6 to i64
+  %v77 = zext i32 %v11 to i64
+  %v78 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v76, i64 %v77
+  %v79 = load i32, ptr %v78
+  %v80 = zext i32 %v6 to i64
+  %v81 = zext i32 %v75 to i64
+  %v82 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v80, i64 %v81
+  %v83 = load i32, ptr %v82
+  %v84 = zext i32 %v75 to i64
+  %v85 = zext i32 %v11 to i64
+  %v86 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v84, i64 %v85
+  %v87 = load i32, ptr %v86
+  %v88 = mul nsw i32 %v83, %v87
+  %v89 = add nsw i32 %v79, %v88
+  %v90 = zext i32 %v6 to i64
+  %v91 = zext i32 %v11 to i64
+  %v92 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v90, i64 %v91
+  store i32 %v89, ptr %v92
+  %v93 = add nuw nsw i32 %v75, 1
+  %v94 = icmp ult i32 %v75, 7
+  br i1 %v94, label %B10, label %B11
+B11:
+  %v95 = add nuw nsw i32 %v11, 1
+  %v96 = icmp samesign ult i32 %v11, 7
+  br i1 %v96, label %B3, label %B12
+B12:
+  %v97 = icmp samesign ult i32 %v6, 7
+  br i1 %v97, label %B2, label %B13
+B13:
+  ret i32 0
+== -allow-unroll-and-jam
+@test
+B0:
+  %v0 = alloca [8 x [8 x i32]]
+  %v1 = alloca [8 x [8 x i32]]
+  %v2 = alloca [8 x [8 x i32]]
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v3 = phi i32 [ %v7, %B12 ], [ 0, %B1 ]
+  %v4 = add nuw nsw i32 %v3, 1
+  %v5 = add nuw nsw i32 %v3, 2
+  %v6 = add nuw nsw i32 %v3, 3
+  %v7 = add nuw nsw i32 %v3, 4
+  br label %B3
+B3:
+  %v8 = phi i32 [ %v32, %B11 ], [ 0, %B2 ]
+  %v9 = phi i32 [ %v53, %B11 ], [ 0, %B2 ]
+  %v10 = phi i32 [ %v74, %B11 ], [ 0, %B2 ]
+  %v11 = phi i32 [ %v95, %B11 ], [ 0, %B2 ]
+  br label %B4
+B4:
+  %v12 = phi i32 [ %v30, %B4 ], [ 0, %B3 ]
+  %v13 = zext i32 %v3 to i64
+  %v14 = zext i32 %v8 to i64
+  %v15 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v13, i64 %v14
+  %v16 = load i32, ptr %v15
+  %v17 = zext i32 %v3 to i64
+  %v18 = zext i32 %v12 to i64
+  %v19 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v17, i64 %v18
+  %v20 = load i32, ptr %v19
+  %v21 = zext i32 %v12 to i64
+  %v22 = zext i32 %v8 to i64
+  %v23 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v21, i64 %v22
+  %v24 = load i32, ptr %v23
+  %v25 = mul nsw i32 %v20, %v24
+  %v26 = add nsw i32 %v16, %v25
+  %v27 = zext i32 %v3 to i64
+  %v28 = zext i32 %v8 to i64
+  %v29 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v27, i64 %v28
+  store i32 %v26, ptr %v29
+  %v30 = add nuw nsw i32 %v12, 1
+  %v31 = icmp ult i32 %v12, 7
+  br i1 %v31, label %B4, label %B5
+B5:
+  %v32 = add nuw nsw i32 %v8, 1
+  br label %B6
+B6:
+  %v33 = phi i32 [ %v51, %B6 ], [ 0, %B5 ]
+  %v34 = zext i32 %v4 to i64
+  %v35 = zext i32 %v9 to i64
+  %v36 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v34, i64 %v35
+  %v37 = load i32, ptr %v36
+  %v38 = zext i32 %v4 to i64
+  %v39 = zext i32 %v33 to i64
+  %v40 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v38, i64 %v39
+  %v41 = load i32, ptr %v40
+  %v42 = zext i32 %v33 to i64
+  %v43 = zext i32 %v9 to i64
+  %v44 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v42, i64 %v43
+  %v45 = load i32, ptr %v44
+  %v46 = mul nsw i32 %v41, %v45
+  %v47 = add nsw i32 %v37, %v46
+  %v48 = zext i32 %v4 to i64
+  %v49 = zext i32 %v9 to i64
+  %v50 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v48, i64 %v49
+  store i32 %v47, ptr %v50
+  %v51 = add nuw nsw i32 %v33, 1
+  %v52 = icmp ult i32 %v33, 7
+  br i1 %v52, label %B6, label %B7
+B7:
+  %v53 = add nuw nsw i32 %v9, 1
+  br label %B8
+B8:
+  %v54 = phi i32 [ %v72, %B8 ], [ 0, %B7 ]
+  %v55 = zext i32 %v5 to i64
+  %v56 = zext i32 %v10 to i64
+  %v57 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v55, i64 %v56
+  %v58 = load i32, ptr %v57
+  %v59 = zext i32 %v5 to i64
+  %v60 = zext i32 %v54 to i64
+  %v61 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v59, i64 %v60
+  %v62 = load i32, ptr %v61
+  %v63 = zext i32 %v54 to i64
+  %v64 = zext i32 %v10 to i64
+  %v65 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v63, i64 %v64
+  %v66 = load i32, ptr %v65
+  %v67 = mul nsw i32 %v62, %v66
+  %v68 = add nsw i32 %v58, %v67
+  %v69 = zext i32 %v5 to i64
+  %v70 = zext i32 %v10 to i64
+  %v71 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v69, i64 %v70
+  store i32 %v68, ptr %v71
+  %v72 = add nuw nsw i32 %v54, 1
+  %v73 = icmp ult i32 %v54, 7
+  br i1 %v73, label %B8, label %B9
+B9:
+  %v74 = add nuw nsw i32 %v10, 1
+  br label %B10
+B10:
+  %v75 = phi i32 [ %v93, %B10 ], [ 0, %B9 ]
+  %v76 = zext i32 %v6 to i64
+  %v77 = zext i32 %v11 to i64
+  %v78 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v76, i64 %v77
+  %v79 = load i32, ptr %v78
+  %v80 = zext i32 %v6 to i64
+  %v81 = zext i32 %v75 to i64
+  %v82 = getelementptr inbounds [8 x [8 x i32]], ptr %v0, i64 0, i64 %v80, i64 %v81
+  %v83 = load i32, ptr %v82
+  %v84 = zext i32 %v75 to i64
+  %v85 = zext i32 %v11 to i64
+  %v86 = getelementptr inbounds [8 x [8 x i32]], ptr %v1, i64 0, i64 %v84, i64 %v85
+  %v87 = load i32, ptr %v86
+  %v88 = mul nsw i32 %v83, %v87
+  %v89 = add nsw i32 %v79, %v88
+  %v90 = zext i32 %v6 to i64
+  %v91 = zext i32 %v11 to i64
+  %v92 = getelementptr inbounds [8 x [8 x i32]], ptr %v2, i64 0, i64 %v90, i64 %v91
+  store i32 %v89, ptr %v92
+  %v93 = add nuw nsw i32 %v75, 1
+  %v94 = icmp ult i32 %v75, 7
+  br i1 %v94, label %B10, label %B11
+B11:
+  %v95 = add nuw nsw i32 %v11, 1
+  %v96 = icmp samesign ult i32 %v11, 7
+  br i1 %v96, label %B3, label %B12
+B12:
+  %v97 = icmp samesign ult i32 %v6, 7
+  br i1 %v97, label %B2, label %B13
+B13:
+  ret i32 0

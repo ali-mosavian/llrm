@@ -73,9 +73,17 @@ pub struct Options {
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
     /// `rounds_float_spills`): set by llrm-c, which follows the pin.
     pub rounds_float_spills: bool,
+    /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
+    /// `spills_extended`): set by llrm-qb, which follows real BC.
+    pub spills_extended: bool,
     /// `-mcode-segment=`: the segment every module's code is in, where it is
     /// not its own `<MODULE>_TEXT`.
     pub code_segment: Option<String>,
+    /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
+    /// attribute), whichever frontend made them.
+    pub no_inline: Vec<String>,
+    /// `--isel=`: the instruction selector.
+    pub isel: crate::backend::shadow::Selector,
 }
 
 impl Options {
@@ -99,7 +107,10 @@ impl Options {
             abi: None,
             float_store: false,
             rounds_float_spills: false,
+            spills_extended: false,
             code_segment: None,
+            no_inline: Vec::new(),
+            isel: Default::default(),
         }
     }
 
@@ -147,8 +158,49 @@ impl Options {
             self.float_store,
             self.pipeline.aggressive_codegen(),
             self.rounds_float_spills,
+            self.spills_extended,
         )
     }
+}
+
+/// Whether the global `have` is the function `asked` for: the same name in
+/// either case, or with a BASIC type suffix (`%&!#$`) that `asked` leaves
+/// off (`BENCHFIB&` is `BenchFib`).
+fn is_named(
+    have: &str,
+    asked: &str,
+) -> bool {
+    have.eq_ignore_ascii_case(asked)
+        || have.strip_suffix(['%', '&', '!', '#', '$']).is_some_and(|bare| bare.eq_ignore_ascii_case(asked))
+}
+
+/// Each function of `names` defined in `program` marked `noinline`, as the
+/// pin's attribute does; a name that no function has is an error, not a flag
+/// that did nothing. A name matches as `is_named` says.
+fn no_inlined(
+    program: &mut Program,
+    names: &[String],
+) -> Result<(), String> {
+    for name in names {
+        let mut found = false;
+        for module in &mut program.modules {
+            for global in &mut module.globals {
+                if !global.name.as_deref().is_some_and(|have| is_named(have, name)) {
+                    continue;
+                }
+                if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                    && !function.is_declaration()
+                {
+                    function.attrs.push(llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Never).carrier());
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            return Err(format!("-fno-inline={name}: the program defines no function of that name"));
+        }
+    }
+    Ok(())
 }
 
 /// `program` compiled for the machine: emitted, optimized, then each module
@@ -185,6 +237,7 @@ pub fn compiled(
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,
+                options.isel,
                 &*options.arch,
             )
         })?;
@@ -265,6 +318,7 @@ pub fn compiled_module(
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
+            options.isel,
             &*options.arch,
         )
     })?;
@@ -385,6 +439,7 @@ pub fn optimized(
     program: &mut Program,
     options: &Options,
 ) -> Result<(), String> {
+    no_inlined(program, &options.no_inline)?;
     let applied = llrm_transforms::pipeline::Applied {
         options: options.pipeline.clone(),
         dump: options.dump.clone(),
@@ -445,13 +500,13 @@ pub fn optimized(
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let profile = options.cpu()?;
         timed("mir selects", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(
-                    |module| crate::backend::selects::lowered(module, &*tti, &|ty| layout.expands_for("select", ty)),
-                )
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::selects::priced(module, &*tti, &|ty| layout.expands_for("select", ty), &|name| {
+                    profile.cost(name).ok()
+                })
+            })
         })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {

@@ -28,10 +28,32 @@ pub trait CoalescerEnv {
         b: u32,
     ) -> bool;
 
+    /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
+    /// `dst`, which may now take only the registers both could.
+    fn narrow(
+        &self,
+        _dst: u32,
+        _src: u32,
+    ) {
+    }
+
     /// A build for size: a copy of a constant is made again only where that
     /// leaves no second copy of the constant (DEVIATE C10).
     fn tuned_for_size(&self) -> bool {
         false
+    }
+
+    /// `MachineInstr::isTerminator`: the instruction ends its block.
+    fn is_terminator(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        insn.what
+            .as_ref()
+            .is_some_and(|what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ))
     }
 
     /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI) &&

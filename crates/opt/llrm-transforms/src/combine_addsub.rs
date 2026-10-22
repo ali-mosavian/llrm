@@ -16,9 +16,8 @@
 //!
 //! DEVIATE 2 (temporary, `uselist-port`): steps that call a helper another
 //! family owns are left out and named where they stood:
-//! `foldUsingDistributiveLaws` and `foldBinOpShiftWithShift` (shared helpers,
-//! next in `combine_shared`). Each is a `// DEVIATE 2:` comment at its place in
-//! the order. `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
+//! Each is a `// DEVIATE 2:` comment at its place in the order.
+//! `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
 //! `foldBinOpSelectBinOp` are the phi and select families'.
 //!
 //! DEVIATE 3 (temporary): the folds that build an intrinsic call (`usub.sat`,
@@ -59,10 +58,12 @@ use llrm_mir::valuetracking::{Query, known, nonzero, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_add_idioms::fold_add_rest;
+use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_shared::{
     binop, commutative, fold_constants, has_one_use, inst_def, parts, query, simplify_associative_or_commutative,
     simplify_visited, specific_int, width, wrap_of,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 /// `InstCombiner::AddOne` and `SubOne` of a constant.
 pub fn add_to(
@@ -658,7 +659,9 @@ pub fn visit_add(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: foldUsingDistributiveLaws.
+    if let Some(v) = fold_using_distributive_laws(c, inst) {
+        return Visit::Replace(v);
+    }
     if let Some(r) = fold_box_multiply(c, inst) {
         return r;
     }
@@ -671,7 +674,9 @@ pub fn visit_add(
     if let Some(r) = fold_no_wrap_add(c, inst) {
         return r;
     }
-    // DEVIATE 2: foldBinOpShiftWithShift.
+    if let Some(r) = fold_binop_shift_with_shift(c, inst) {
+        return r;
+    }
     if let Some(r) = combine_add_sub_with_shl_add_sub(c, inst) {
         return r;
     }

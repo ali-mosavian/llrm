@@ -89,6 +89,18 @@ impl Builder {
         self.next
     }
 
+    /// A copy of `value` for one role of an address: isel copies a value into
+    /// a fresh one for each, so no value is a base and an index.
+    fn role_copy(
+        &mut self,
+        value: u32,
+        out: &mut Vec<Insn>,
+    ) -> u32 {
+        let copy = self.fresh();
+        out.push(self.mov(copy, held(value), &[value]));
+        copy
+    }
+
     fn insn(
         &mut self,
         op: Operation,
@@ -147,19 +159,25 @@ impl Builder {
             2 | 3 => {
                 out.push(self.insn(Operation::Binary, "add", vec![held(d)], vec![held(d), held(s)], &[d], &[d, s]))
             }
-            // A base and an index.
+            // A base and an index, each a copy made for its role, as isel
+            // makes them: a value used as a base and as an index in one body
+            // would be joined into a class neither role has.
             4 => {
+                let (base, index) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: s, width: 2 }),
-                    index: Some(Held { value: t, width: 2 }),
+                    base: Some(Held { value: base, width: 2 }),
+                    index: Some(Held { value: index, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
                 };
-                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[s, t]));
+                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[base, index]));
             }
             5 => {
-                let cell =
-                    Mem { base: Some(Held { value: s, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 2)), 2) };
-                out.push(self.insn(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(d)], &[], &[s, d]));
+                let base = self.role_copy(s, out);
+                let cell = Mem {
+                    base: Some(Held { value: base, width: 2 }),
+                    ..Mem::new(Some(Addr::new(Space::Literal, 2)), 2)
+                };
+                out.push(self.insn(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(d)], &[], &[base, d]));
             }
             // dx:ax product, the high half redefined.
             6 if d != s && s != t && d != t => out.push(self.insn(
@@ -199,12 +217,20 @@ impl Builder {
             }
             // A far access: a selector and a base.
             10 if s != t => {
+                let (base, selector) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: s, width: 2 }),
-                    selector: Some(Held { value: t, width: 2 }),
+                    base: Some(Held { value: base, width: 2 }),
+                    selector: Some(Held { value: selector, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
                 };
-                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[s, t]));
+                out.push(self.insn(
+                    Operation::Move,
+                    "mov",
+                    vec![held(d)],
+                    vec![Loc::Mem(cell)],
+                    &[d],
+                    &[base, selector],
+                ));
             }
             // A far pointer loaded whole, then read through: the segment half
             // is a selector and nothing else.
@@ -868,7 +894,7 @@ fn spilled_and_allocated(
             run: Default::default(),
         }),
         Box::new(PhiElimination::default()),
-        Box::new(TwoAddress),
+        Box::new(TwoAddress::default()),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
         Box::new(RegAlloc::new(
             None,
@@ -911,6 +937,21 @@ fn spilled_and_allocated(
 #[test]
 fn test_the_allocator_is_not_handed_the_spillers_slots() {
     for seed in [17, 28] {
+        for cpu in ["386", "486", "Core", "P5"] {
+            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+            spilled_and_allocated(seed, &shape, cpu).unwrap_or_else(|why| panic!("seed {seed} on {cpu}: {why}"));
+        }
+    }
+}
+
+/// Seeds the lane found wrong code for: the coalescer took a member out of a
+/// parallel copy to make it a move of the constant its source holds, and that
+/// move wrote before the other members read (seed 91: value#5 left as 0x45, not
+/// 0x0), or claimed the bytes its source's definition still claimed (seeds 130,
+/// 163, 233).
+#[test]
+fn test_a_copy_made_a_move_of_its_constant_keeps_its_place_and_its_bytes() {
+    for seed in [91, 130, 163, 233] {
         for cpu in ["386", "486", "Core", "P5"] {
             let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
             spilled_and_allocated(seed, &shape, cpu).unwrap_or_else(|why| panic!("seed {seed} on {cpu}: {why}"));
@@ -1208,7 +1249,7 @@ fn test_two_address_fixing_builds_no_set_of_the_live_values() {
     use crate::backend::allocate::SETS_BUILT;
     let (plain, _) = body(3, &Shape { pool: 12, ops: 14 });
     SETS_BUILT.with(|one| one.set(0));
-    let _ = crate::backend::twoaddr::tied(&plain);
+    let _ = crate::backend::twoaddr::tied(&plain, Default::default());
     let built = SETS_BUILT.with(|one| one.get());
     assert_eq!(built, 0, "{built} sets of the live values built");
 }
@@ -1595,11 +1636,7 @@ fn test_the_next_value_is_one_past_the_largest_the_body_names() {
                     seen.extend(one.defines.iter().chain(&one.uses).copied());
                 }
             }
-            assert_eq!(
-                crate::backend::splitkit::_next_value(&body),
-                seen.last().copied().expect("seeded") + 1,
-                "seed {seed}"
-            );
+            assert_eq!(body.next_value(), seen.last().copied().expect("seeded") + 1, "seed {seed}");
         }
     }
 }
