@@ -104,7 +104,7 @@ fn frame(disp: i64) -> Option<Addr> {
 }
 
 fn names(insns: &[Arc<Insn>]) -> Vec<String> {
-    insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+    insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
 }
 
 fn code(what: &Semantics) -> Vec<u8> {
@@ -1861,7 +1861,7 @@ fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "jne", "jmp"]);
 }
@@ -1900,7 +1900,7 @@ fn test_a_zero_test_after_a_step_with_a_memory_source_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["sub", "", "je"]);
 }
@@ -1937,7 +1937,7 @@ fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -2479,7 +2479,7 @@ fn test_transitive_extension_preserves_nonlocal_machine_state() {
         );
         let mut tail = vec![];
         match guard {
-            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".to_owned()),
+            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".into()),
             "register" => wide.what.as_mut().unwrap().dests = vec![rl(RegId::EAX, 4)],
             "shared" => {
                 tail.push(Arc::new(insn(
@@ -4210,7 +4210,7 @@ fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -4574,7 +4574,7 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
     let rows: Vec<_> = llrm_x86_m16::instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
     assert_eq!(rows.len(), 16);
     for form in rows {
-        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let branch = Semantics { name: Some(form.name.as_str().into()), ..Semantics::new(Operation::Branch) };
         let wanted = _flag_lanes(llrm_x86_m16::instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
@@ -5032,7 +5032,7 @@ fn test_a_compare_that_a_sole_predecessor_just_made_is_not_made_again() {
         after.blocks[at]
             .insns
             .iter()
-            .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+            .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
             .collect::<Vec<_>>()
     };
     let after = compares_again(&body("search", 0, crate::model::lir::shared(blocks)));

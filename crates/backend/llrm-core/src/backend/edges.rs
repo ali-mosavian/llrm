@@ -33,7 +33,7 @@ pub fn split(
     let highest = body.blocks.iter().map(|block| block.at).max()?;
     let at = ((body.entry + 1) << 32).max(highest) + 1;
     let beside = source.insns.last()?;
-    let jump = Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) };
+    let jump = Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) };
     let mut made = Insn::new(at, Some((at, at)), Some(jump), vec![], vec![]);
     made.call = beside.call.clone();
     let made = Arc::new(made);
@@ -66,7 +66,7 @@ pub fn split(
                         last.at,
                         Some((last.at, last.at)),
                         Some(Semantics {
-                            name: Some("jmp".to_owned()),
+                            name: Some("jmp".into()),
                             target: Some(at),
                             ..Semantics::new(Operation::Jump)
                         }),

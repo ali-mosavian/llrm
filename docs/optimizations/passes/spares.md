@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spares.rs sha256:caf2c2de380dda8516c9ef1963c5a4f93d4dd7f7b0485d5ab0970dbcbb096e06 -->
+<!-- src: crates/opt/llrm-transforms/src/spares.rs sha256:0073d218fecee7de91718f5ab9626b71a49927b139bca4f67d214ed62cb7f6ac -->
 
 # spares
 
@@ -74,7 +74,7 @@ Both loads of `@_g` gain `!llrm.spares`; the dump prints the metadata as
 `!{i32 37}` on each, and does not say which instruction has that id.
 
 From `--dump` of `examples/pass-docs/spares.c` (`p[i] = g; a[i] = i; s +=
-g;` in a loop, `p` a parameter) at -O2 -m16, stages `addresssink` and
+g;` in a loop, `p` a parameter) at -O2 -m16, stages `cgpaddr` and
 `spares`.
 
 ## Runs

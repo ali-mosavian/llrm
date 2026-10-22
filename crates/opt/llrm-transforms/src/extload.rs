@@ -50,7 +50,7 @@
 //! `extload_tests.rs`.
 //!
 //! # Runs
-//! Once per body, after `addresssink`, where the other passes that make the
+//! Once per body, after `cgpaddr`, where the other passes that make the
 //! forms isel sees run (the pin has none: its DAGCombiner does it). With
 //! `wanted("extload")`.
 //!

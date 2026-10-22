@@ -184,7 +184,7 @@ mod tests {
         name: &str,
     ) -> Insn {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![Loc::Held(Held { value: 1, width: 4 })],
             sources,
             ..Semantics::new(op)

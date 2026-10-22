@@ -1,12 +1,6 @@
-//! The `i64` multiply in the type legalizer.
-
-use super::legalize_types::TypeLegalizer;
+use super::super::legalize_types::TypeLegalizer;
 use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
-
-fn dag() -> SelectionDAG {
-    SelectionDAG::new(DagConfig::default())
-}
 
 fn dword(dag: &mut SelectionDAG, slot: i32) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);

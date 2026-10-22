@@ -180,3 +180,20 @@ def test_a_changed_rust_file_that_fmt_would_change_is_named(tmp_path, monkeypatc
     monkeypatch.setattr(pc, "changed_packages", lambda root_, files: [])
     why = pc.precheck(root, "style: x", "Owner: w-8\nRows: none", "parity", subprocess.run)
     assert any("a.rs: tools/fmt.sh would change it" in line for line in why), why
+
+
+LEDGER = (
+    "d_faces qbq-llrm: 1305.5 -> 1259.9 M Ir (valgrind --tool=callgrind, dist, "
+    "llrm-c -m32 -mabi=sysv -march=i486 -O2 -Dfar= ... d_faces.c)"
+)
+
+
+def test_a_perf_pr_states_the_ledger_command_and_a_d_faces_qbq_llrm_number():
+    """#3818's first pair was taken on another program: a number for QCport's d_faces next to the board's qbq-llrm one made the totals look wrong by 50 M."""
+    head = "TL;DR: x\nOwner: w-6\nRows: fold@677\n"
+    why = pc.description_failures("perf(pipeline): fold@677 is combine's alone", head)
+    assert len(why) == 1 and "d_faces qbq-llrm" in why[0] and "docs/working/ledger-command.md" in why[0]
+    assert pc.description_failures("perf(pipeline): x", head + LEDGER) == []
+    other = head + "d_faces QCport: 979.6 M Ir (-m32 -mabi=sysv -march=i486 -O2)\n"
+    assert pc.description_failures("perf(pipeline): x", other) != []
+    assert pc.description_failures("fix(flow): x", head) == []
