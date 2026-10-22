@@ -1227,10 +1227,14 @@ mod switch_dags {
     /// The blocks of each function, ours and the pin's, as sorted dumps.
     fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
         let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
-        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        crate::backend::memsetpattern::expanded(&mut module).expect("the memset patterns expand");
         let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
         let mut all = std::collections::BTreeMap::new();
         for (id, global, function) in module.functions() {
+            if function.is_declaration() {
+                continue;
+            }
             let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
             let mut info = FunctionLoweringInfo::new(function);
             let mut dumps = Vec::new();
@@ -1274,6 +1278,18 @@ mod switch_dags {
     #[test]
     fn jump_table_and_bit_test_blocks_match_the_pins_initial_dags() {
         let (ours, pins) = (ours(include_str!("golden/jtbt.ll")), pins(include_str!("golden/jtbt.pin.txt")));
+        assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
+        for (name, dumps) in &ours {
+            assert_eq!(dumps, &pins[name], "function {name}");
+        }
+    }
+
+    /// `memset.pattern` is a store loop before selection (the pin's
+    /// `PreISelIntrinsicLowering`): the blocks of the expanded functions are
+    /// the pin's. The intrinsic was a builder refusal (shadow: scroll).
+    #[test]
+    fn memset_pattern_loops_match_the_pins_initial_dags() {
+        let (ours, pins) = (ours(include_str!("golden/memsetpat.ll")), pins(include_str!("golden/memsetpat.pin.txt")));
         assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
         for (name, dumps) in &ours {
             assert_eq!(dumps, &pins[name], "function {name}");
