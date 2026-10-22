@@ -956,6 +956,29 @@ impl Analysis for BranchProbabilityInfo {
     const READS_OUTER: bool = true;
 }
 
+/// `opt -passes='print<branch-prob>'` of every defined function of `module`
+/// (`llrm-mir --branch-prob`, for `tools/bpi/oracle.py`).
+pub fn print_module_branch_prob(module: &llrm_mir::module::Module) -> String {
+    let layout = DataLayout::default();
+    let mut out = String::new();
+    for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
+        let bpi = BranchProbabilityInfo::of(
+            Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        );
+        let name = global.name.as_deref().unwrap_or_default();
+        out += &format!("Printing analysis 'Branch Probability Analysis' for function '{name}':\n");
+        let labels = llrm_mir::print::block_labels(function);
+        out += &bpi.print(function, &|block| labels.get(&block).cloned().unwrap_or_default());
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "bpi_tests.rs"]
 mod tests;

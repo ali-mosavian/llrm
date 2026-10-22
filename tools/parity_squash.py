@@ -342,7 +342,8 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
         log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
         after["deletes"] = {problem.split(":")[0] for problem in problems}
-    new = {name: items - before.get(name, set()) for name, items in after.items() if name not in (head_failed or set())}
+    # fmt is never excused by the head's own failures: every landing is formatted (the user's order), a red head file is formatted by the PR that touches it.
+    new = {name: items - (set() if name == "fmt" else before.get(name, set())) for name, items in after.items() if name not in (head_failed or set())}
     new = {name: items for name, items in new.items() if items}
     if not new:
         return f"{number}: PASS"
@@ -495,10 +496,45 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
+def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str, str]:
+    """(sha, ""): `head` with tools/fmt.sh applied to the .rs files its PR changes, the result committed on top and pushed to `branch` as a fast-forward; `head` itself when it is already
+    formatted. (sha, why) with sha empty when fmt.sh fails with exit 2 or more (a missing toolchain, a crash: the landing is refused) or the push fails. Every landing is formatted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            files = [f for f in git("diff", "--name-only", f"{base}...{head}", cwd=work).split() if f.endswith(".rs") and (work / f).is_file()]
+            changed = []
+            for path in files:
+                text = (work / path).read_text()
+                done = subprocess.run(["tools/fmt.sh", "--stdin", path], cwd=work, input=text, capture_output=True, text=True)
+                if done.returncode >= 2:
+                    return "", f"tools/fmt.sh failed on {path} (exit {done.returncode}): {(done.stderr or done.stdout).strip()[-160:]}"
+                if done.stdout and done.stdout != text:
+                    (work / path).write_text(done.stdout)
+                    changed.append(path)
+            if not changed:
+                return head, ""
+            identity = ["-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost"]
+            subprocess.run(["git", *identity, "commit", "-q", "-am", "style: tools/fmt.sh on the files the PR changes"], cwd=work, check=True, capture_output=True)
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True)
+            return (sha, "") if pushed.returncode == 0 else ("", f"pushing the formatted head to {branch} failed: {pushed.stderr.strip()[-160:]}")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
+
+
 def build_offenders(group: list[str], merge_alone, check) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
     fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR."""
     return [number for number in group if merge_alone(number) and check()]
+
+
+def refusal_line(number: str, named: dict[str, str], failed_build: list[str], failed_units: set[str]) -> str:
+    """`#N: REFUSED: why` for a PR the batch dropped: the reason `named` holds (it failed what the batch failed alone), else the failure of the batch of one. The queue quoted the first REFUSED
+    line of the shared log for every PR: at 22:26 eight PRs read as refused for #3841's `mut` while seven of them failed units."""
+    why = named.get(number) or (failed_build[-1][:200] if failed_build else ", ".join(sorted(failed_units))[:200]) or "the batch of one does not pass"
+    return f"#{number}: REFUSED: {why}"
 
 
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
@@ -678,6 +714,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     left_out: dict[str, str] = {}
     failed_units: set[str] = set()
     failed_build: list[str] = []
+    named: dict[str, str] = {}
+
+    def refuse(number: str) -> None:
+        print(refusal_line(number, named, failed_build, failed_units))
+        refused.append(number)
 
     def passes_fast(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
@@ -732,14 +773,18 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
-            return build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
+            named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
+            return culprits
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
             by_package.setdefault(package, set()).add(test)
         if not by_package:
             return []
-        return [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
+        culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
+        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" for number in culprits})
+        return culprits
 
     def passes(group: list[str]) -> bool:
         if FAST:
@@ -776,6 +821,19 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
+        sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+        if not sha:
+            print(f"#{number}: REFUSED: {why}")
+            refused.append(number)
+            return
+        if sha != infos[number]["headRefOid"]:
+            print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
+            infos[number] = {**infos[number], "headRefOid": sha}
+            for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
+                seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True).stdout or "{}").get("headRefOid")
+                if seen == sha:
+                    break
+                time.sleep(5)
         landed_ok = squash(number, infos[number], known_red_line(known))
         (landed if landed_ok else refused).append(number)
         if landed_ok:
@@ -785,7 +843,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
-        batch(list(numbers), passes, land, lambda number: refused.append(number), offending if FAST else None)
+        batch(list(numbers), passes, land, refuse, offending if FAST else None)
     print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
     return 1 if refused else 0
 
