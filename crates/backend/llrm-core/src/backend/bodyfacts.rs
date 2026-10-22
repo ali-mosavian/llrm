@@ -81,7 +81,6 @@ pub(crate) fn _copies(
     out
 }
 
-/// Values loaded from a cell nothing changes before they are used again.
 #[cfg(test)]
 thread_local! {
     /// How many values `_stable_loads_from` has been asked about.
@@ -93,6 +92,7 @@ thread_local! {
 #[cfg(test)]
 thread_local! { pub(crate) static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+/// Values loaded from a cell nothing changes before they are used again.
 pub(crate) fn _stable_loads(
     body: &LirBody,
     values: &BTreeSet<u32>,
