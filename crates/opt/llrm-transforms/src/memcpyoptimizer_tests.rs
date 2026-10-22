@@ -126,3 +126,15 @@ fn separate_runs_cost_in_proportion() {
     let large = super::steps() - before;
     assert!(large as f64 <= 2.5 * small as f64, "{small} steps for 100 runs, {large} for 200");
 }
+
+/// The memset made keeps the alignment of the lowest access it replaces (`MemsetRange::Alignment`): lru's two `align 2` fills became one memset with
+/// no alignment, which the backend wrote as `rep stosb` of 28 bytes (+20% clocks at -Os).
+#[test]
+fn a_merged_memset_keeps_the_alignment_of_its_first_access() {
+    let text = "@a = global [64 x i8] zeroinitializer\ndeclare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\ndefine i16 @f(i16 %x) {\nb0:\n  call void @llvm.memset.p0.i16(ptr align 2 @a, i8 -1, i16 14, i1 false)\n  %p = getelementptr i8, ptr @a, i16 14\n  call void @llvm.memset.p0.i16(ptr align 2 %p, i8 -1, i16 14, i1 false)\n  %r = load i16, ptr @a\n  ret i16 %r\n}\n";
+    let after = merged(text, &[&[7]]);
+    assert!(after.contains("(ptr align 2 @a, i8 -1, i16 28, i1 false)"), "{after}");
+    let stores = "@a = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 -1, ptr @a, align 2\n  %p = getelementptr i8, ptr @a, i16 2\n  store i16 -1, ptr %p, align 2\n  %q = getelementptr i8, ptr @a, i16 4\n  store i16 -1, ptr %q, align 2\n  %s = getelementptr i8, ptr @a, i16 6\n  store i16 -1, ptr %s, align 2\n  %r = load i16, ptr @a\n  ret i16 %r\n}\n";
+    let after = merged(stores, &[&[7]]);
+    assert!(after.contains("align 2 @a, i8 -1, i16 8, i1 false"), "{after}");
+}
