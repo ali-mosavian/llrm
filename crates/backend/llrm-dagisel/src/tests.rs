@@ -1089,3 +1089,40 @@ fn a_return_glue_node_is_selected_to_ret() {
 
     assert_eq!(selected(&dag, ret), "RET");
 }
+
+mod symbol_plus_two_registers {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher, SymbolKind};
+
+    /// `@sym + x + (y << 2)`, associated either way.
+    fn address(dag: &mut TestDag, symbol_first: bool) -> (SDValue, SDValue, SDValue) {
+        let sym = dag.wrapped_global(7, 0, mvt::i32);
+        let (x, y) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[y, two]), 0);
+        let address = if symbol_first {
+            let sym_x = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym_x, scaled]), 0)
+        } else {
+            let x_scaled = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[x, scaled]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x_scaled]), 0)
+        };
+        (address, x, y)
+    }
+
+    #[test]
+    fn a_symbol_with_a_register_and_a_scaled_register_is_one_memory_operand() {
+        for symbol_first in [true, false] {
+            let mut dag = TestDag::new();
+            let (address, x, y) = address(&mut dag, symbol_first);
+            let mut am = AddressMode::default();
+
+            assert!(!Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am));
+
+            let symbol = am.symbol.expect("the symbol is the displacement");
+            assert_eq!((symbol.kind, symbol.id), (SymbolKind::Global, 7), "symbol_first={symbol_first}");
+            assert_eq!((am.base_reg, am.index_reg, am.scale), (Some(x), Some(y), 4), "[sym + x + y*4], symbol_first={symbol_first}");
+        }
+    }
+}
