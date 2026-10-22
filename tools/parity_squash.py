@@ -193,10 +193,13 @@ def conflict_markers(base: str, head: str, cwd: Path = ROOT) -> list[str]:
     return [f"{path}: an added line is a merge conflict marker; resolve the merge and push again" for path in found]
 
 
-def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
-    """Why this head may not be squashed into `base`; empty if it may."""
-    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
-        return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
+# The checks of the PR's description (the `Deletes:`/`Reverts:` paths line, the `Rows:` line of a perf PR) are WARNINGS while the backend parts land (the user's call);
+# BODY_CHECKS=refuse makes them refusals again. A build or unit failure, a conflict and any line naming the assistant stay refusals.
+BODY_CHECKS = os.environ.get("BODY_CHECKS", "warn")
+
+
+def body_checks(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
+    """What the description of the PR lacks: a deletion not named in `Deletes:`/`Reverts:`, a `Rows:` line a perf PR needs."""
     outside = set(outside_files(base, head, cwd))
     why = []
     for path, gone, tests, whole in losses(base, head, cwd):
@@ -204,10 +207,22 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
             what = "deletes the whole file" if whole else f"deletes {gone} line(s)"
             why.append(f"{path}: the squash {what}{f' and {tests} test function(s)' if tests else ''}{' (no commit of this PR touched it)' if path in outside else ''}; "
                        "name the path in a `Deletes:` or `Reverts:` line of the description if that is meant")
-    for path, page in dead_links(base, head, cwd):
-        why.append(f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR")
     changed = subprocess.run(["git", "diff", "--name-only", f"{base}...{head}"], cwd=cwd, capture_output=True, text=True).stdout.split()
-    return why + conflict_markers(base, head, cwd) + perf_needs_rows(title, description, changed) + assistant_mentions(title, description, base, head, cwd)
+    return why + perf_needs_rows(title, description, changed)
+
+
+def warnings(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
+    """The description checks that only warn (all of them unless BODY_CHECKS=refuse)."""
+    return [] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title)
+
+
+def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
+    """Why this head may not be squashed into `base`; empty if it may."""
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
+        return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
+    why = [f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR" for path, page in dead_links(base, head, cwd)]
+    soft = body_checks(head, description, base, cwd, title) if BODY_CHECKS == "refuse" else []
+    return soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
@@ -666,6 +681,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
                 return "conflicts with an earlier PR of the batch or with feat/parity: its owner merges fresh feat/parity"
+            for note in warnings(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
+                print(f"#{number}: WARNING: {note}")
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
                 git("reset", "-q", "--hard", before)
                 return "; ".join(why)
@@ -725,6 +742,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"#{number}: does not merge with the others: {merge.stdout.strip()[:120] or merge.stderr.strip()[:120]}")
                 return False
         for number in group:
+            for note in warnings(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", title=infos[number]["title"]):
+                print(f"#{number}: WARNING: {note}")
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", title=infos[number]["title"]):
                 print(f"#{number}: " + "; ".join(why))
                 return False
@@ -978,6 +997,8 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if merged is None:
         print(f"REFUSED: {why}")
         return 1
+    for note in warnings(merged, info["body"] or "", title=info.get("title", "")):
+        print(f"#{number}: WARNING: {note}")
     if why := refusals(merged, info["body"] or "", title=info.get("title", "")):
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1

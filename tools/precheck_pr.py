@@ -209,6 +209,8 @@ def precheck(
         why.append("no PR description to check (open the PR as a draft first, or pass --body-file)")
     else:
         why += description_failures(title or "", body)
+        # The runner only warns about the description checks for now; a worker fixes them all, so they are failures here.
+        why += parity_squash.body_checks("HEAD", body, base, root, title or "")
         why += parity_squash.refusals("HEAD", body, base, root, title or "")
     why += slot_without_pipeline_test(root, base)
     why += claude_paths(root, base)
