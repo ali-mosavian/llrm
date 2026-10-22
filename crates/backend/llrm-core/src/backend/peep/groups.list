@@ -14,6 +14,7 @@ restored_copies body
 fused body
 fused_calls body
 far_loads body
+lea_fixup body
 increments body
 borrows body
 stepped_after_compare body
