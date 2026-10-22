@@ -6,7 +6,8 @@ Owner: w-6. Each slot PR shows d_faces -O2 m32 Ir (dists, `-m32 -mabi=sysv -marc
 |---|--:|---|--:|---|
 | fold@677 | 1305.5 -> 1259.9 (-45.6) | 0 of 568 changed | +119 of 1,233,771 | #3818 |
 | fold@768 | 1303.3 -> 1278.8 (-24.5) | 3 of 568 (nbody m32 O3 -40 B) | -105 of 1,233,701 | #3832 |
-| fold@801 | 1202.5 -> 1089.9 (-112.6) | 0 of 568 changed | +846 of 1,233,858 (34 objects, 3 smaller) | this PR |
+| fold@801 | 1202.5 -> 1089.9 (-112.6) | 0 of 568 changed | +846 of 1,233,858 (34 objects, 3 smaller) | #3870 |
+| fold@837 | 1088.0 -> 1071.5 (-16.5) | 11 of 568 changed (+800 B net) | +553 of 1,234,704 (33 objects, 23 larger) | this PR |
 
 ## FR-1: the eight objects larger without fold@677 (owner w-6, review 2026-11-04)
 
@@ -50,3 +51,12 @@ in the input of `09/loop-load-elim@1400` (the cleanup list), not in a dumped pas
 The pin's InstCombine swaps the successors of a branch on a `xor true` ([visitCondBrInst L4347](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4347); `pin.opt('instcombine')` gives `br %c.not, %e, %t` for it)
 and so does `combine_branch.rs`, with a test, so the open question is why the xor survives `combine@1242` in this body
 (not run on the block, or made after it): to find with the stage dumps of 08/09, w-6, 2026-11-04.
+
+## FR-3: objects larger without fold@837 (owner w-6, review 2026-11-04)
+
+objsweep (rows corpus, `fold837` dists 9f2600f8fc vs 045b53cb7c): larger x_fir m16 O2/O3 +350, x_cordic m16 O3 +118, lru
+m32/m16 Os +53/+50, x_cordic m32 O3 +38; smaller x_fir m32 O2/O3 -55, floats m32 Os -20, sieve m32 Os -16, nbody m32 Os -13.
+QCport m16: ls O2/O3 +165, savegame Os +147, weapons O1 +48, mdl_ai +6..+37, mod_tex +6..+29, pl_trace Os +29;
+smaller combat O1/O2/O3 -33/-87/-83, mdl O3 -40, d_faces Os -19. qbq-llrm d_faces: object identical (8170 B).
+x_fir is w-8's attribution to GlobalOpt SRA and localize (docs/working/fold.md). The per-object rewrite is not named yet:
+stage diff of each body before and after the slot, then translate into `combine` or accept the number (w-6, 2026-11-04).
