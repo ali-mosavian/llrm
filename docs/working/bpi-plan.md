@@ -21,7 +21,7 @@ The coordinator's names (`calcLoopBranchHeuristics` and the rest) are an older L
 | switch edge probabilities (SelectionDAGBuilder, SD101) | 1/(cases+1) in `selectiondag/builder/switch.rs` | MISSING: the pin gives a switch its BPI weights (`calcMetadataWeights`, else equal) |
 
 ## Gaps to close, in order
-1. **Oracle** (blocker for trust): `print<branch-prob>` of the pinned opt against `bpi.rs` over the whole corpus (306 IRs of the SCEV counts oracle), as `tools/scev/counts.py` does for trip counts; today one golden file covers it. Fail-first = the differences it finds. By 10-30.
+1. **Oracle** (done 2026-10-22): `tools/bpi/oracle.py` compares `llrm-mir --branch-prob` with the pinned `opt -passes='print<branch-prob>'` over the 306 corpus IRs: 13,724 edges, 0 failed (96.88/3.12 loop edges, 62.5/37.5 pointer and zero, 50, 0% unreachable, 66.67/33.33 all present). The IR side needs no fix.
 2. **Machine accessor** for row 44, in `liveness/blockfrequency.rs`: `MachineBranchProbabilityInfo::of(&LirBody)`, `get_edge_probability(&self, block: usize, succ_index: usize) -> BranchProbability` (numerator over 2^31), `is_edge_hot(block, succ_index)`; `MachineBlockFrequencyInfo::get_block_freq(index) -> BlockFrequency` (`get_frequency() -> u64`) already there. Both from the body and its odds, no allocation state. By 11-06.
 3. **Switch probabilities** to the pin's (SD101): coordinate with sdag-a; the switch's weights come from `BranchProbabilityInfo::getEdgeProbability` of the IR switch. By 11-13.
 4. **Mutation API** (`setEdgeProbability`, `copyEdgeProbabilities`, `swapSuccEdgesProbabilities`, `eraseBlock`) when the first pass that updates BPI is translated; not on the consumers' path. Dated with that pass.
