@@ -66,7 +66,7 @@
 //! `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 //! Owner sdag-a. Review 2026-11-13.
 //!
-//! DEVIATE SD20: a call's `TargetGlobalAddress` carries no relocation flag
+//! DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
 //! (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 //! Exit: none. Owner sdag-a.
 //!
@@ -91,7 +91,9 @@ pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
+pub mod x86_lowering;
 pub mod schedule;
+pub mod switchcg;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};

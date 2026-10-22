@@ -5275,7 +5275,7 @@ fn sized_with(
 /// what the cheaper route costs.
 #[test]
 fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
-    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/conc9_les.ll")).unwrap();
     let (spiller, allocator) =
         (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
     assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");

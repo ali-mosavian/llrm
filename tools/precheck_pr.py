@@ -11,7 +11,8 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
-5. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
+5. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
+6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
 """
@@ -89,6 +90,28 @@ def claude_paths(
         elif line.startswith("+") and CONFIG_DIR.search(line):
             return [f"{path}: an added line names the assistant's config directory: {line[1:80].strip()}"]
     return []
+
+
+SLOT_ADDED = re.compile(r'^\+\s*(?:entry|partial)\("[\w-]+@\d+"|^\+\s*\("[A-Z]\w+", "[\w]+@\d+"\)')
+PIPELINE_TEST_FILES = re.compile(r"(?:^|/)(?:pipeline\w*_tests\.rs|tests/[^/]+\.rs)$")
+
+
+def slot_without_pipeline_test(
+    root: Path,
+    base: str = BASE,
+    head: str = "HEAD",
+) -> list[str]:
+    """A PR that adds a pass slot (a registry entry or a phase-table row) must add a test at pipeline level: a translated pass can pass every unit test and never run in a compile (#3732's JumpTableToSwitch)."""
+    added_slot = any(SLOT_ADDED.match(line) for line in git("diff", "-U0", base, head, "--", "crates", cwd=root).splitlines())
+    if not added_slot:
+        return []
+    path, tested = "", False
+    for line in git("diff", "-U0", base, head, cwd=root).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:]
+        elif line.startswith("+") and PIPELINE_TEST_FILES.search(path) and "#[test]" in line:
+            tested = True
+    return [] if tested else ["the PR adds a pass slot and no test at pipeline level (pipeline::applied or an end-to-end compile in pipeline*_tests.rs or tests/): show the pass fires on a real input"]
 
 
 def changed_packages(
@@ -186,7 +209,10 @@ def precheck(
         why.append("no PR description to check (open the PR as a draft first, or pass --body-file)")
     else:
         why += description_failures(title or "", body)
+        # The runner only warns about the description checks for now; a worker fixes them all, so they are failures here.
+        why += parity_squash.body_checks("HEAD", body, base, root, title or "")
         why += parity_squash.refusals("HEAD", body, base, root, title or "")
+    why += slot_without_pipeline_test(root, base)
     why += claude_paths(root, base)
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))

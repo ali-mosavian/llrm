@@ -47,7 +47,8 @@ def stale_merge(tmp_path: Path) -> tuple[Path, str]:
     return repo, sh(repo, "rev-parse", "HEAD")
 
 
-def test_a_stale_merge_that_reverts_a_test_is_refused(tmp_path):
+def test_a_stale_merge_that_reverts_a_test_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo, head = stale_merge(tmp_path)
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "tests.rs" in why[0] and "1 test function" in why[0], why
@@ -130,15 +131,17 @@ def squash_of_a_stale_tree(tmp_path: Path):
     return repo, sh(repo, "rev-parse", "HEAD")
 
 
-def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_description_names_it(tmp_path):
+def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_description_names_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo, head = squash_of_a_stale_tree(tmp_path)
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
 
 
-def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path, monkeypatch):
     """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo = tmp_path / "r"
     repo.mkdir()
     sh(repo, "init", "-q", "-b", "main")
@@ -551,6 +554,7 @@ def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(
     assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr
 def test_fast_mode_lets_a_refactor_delete_lines_but_not_a_file(tmp_path, monkeypatch):
     """#2855, #2856, #2881, #2942, #2958, #3010 and #3028 sat out a 02:37 batch: each deleted 21-76 lines of its own file, and nothing landed for 27 minutes."""
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo = tmp_path / "r"
     repo.mkdir()
     sh(repo, "init", "-q", "-b", "main")
@@ -833,3 +837,34 @@ def test_a_head_with_a_conflict_marker_in_an_added_line_is_left_out_by_name(tmp_
     why = ps.conflict_markers("base", "pr", tmp_path)
     assert why == ["a.rs: an added line is a merge conflict marker; resolve the merge and push again"]
     assert any("conflict marker" in line for line in ps.refusals("pr", "Owner: x", "base", tmp_path, "fix: x"))
+
+
+def test_a_missing_deletes_line_is_a_warning_by_default_and_a_refusal_when_the_switch_is_on(tmp_path, monkeypatch):
+    """The user's call (20:2x): description checks warn until the backend parts land; BODY_CHECKS=refuse turns them back into refusals."""
+    repo, head = stale_merge(tmp_path)
+    monkeypatch.setattr(ps, "BODY_CHECKS", "warn")
+    assert ps.refusals(head, "", base="main", cwd=repo) == []
+    warned = ps.warnings(head, "", base="main", cwd=repo)
+    assert warned and "tests.rs" in warned[0]
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")
+    assert ps.warnings(head, "", base="main", cwd=repo) == []
+    assert ps.refusals(head, "", base="main", cwd=repo)
+
+
+def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "warn")
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "base")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (tmp_path / "a.txt").write_text("one\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.txt").write_text("one\nwritten by " + "Clau" + "de\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))

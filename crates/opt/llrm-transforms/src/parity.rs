@@ -343,6 +343,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machine-sink",
         "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
     ),
+    entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     entry(
@@ -381,6 +382,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("prologue@13", Backend, "prologepilog", Old, ""),
     entry("latecleanup@13", Backend, "machine-latecleanup (MachineLateInstrsCleanup.cpp)", Translated, ""),
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
+    entry("fixupbw@14", Backend, "x86-fixup-bw-insts (X86FixupBWInsts.cpp)", Translated, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
     partial(

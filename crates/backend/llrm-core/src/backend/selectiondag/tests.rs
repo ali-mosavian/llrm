@@ -750,3 +750,220 @@ mod expand_node {
         assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(8), EVT::I8));
     }
 }
+
+mod x86_conditions {
+    use super::super::legalize_dag::DagLegalizer;
+    use super::super::x86_lowering::{cond, x86isd, X86Lowering};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn lowered(dag: &mut SelectionDAG, cmov: bool) {
+        let tli = TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32);
+        DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov }).run().unwrap();
+    }
+
+    fn code(dag: &SelectionDAG, value: SDValue) -> u128 {
+        dag.constant(value).expect("a condition code constant")
+    }
+
+    /// `select (a <u b), x, y` is `CMOV y, x, B, flags(a - b)`; the flags are
+    /// the second result of a `SUB`, so a real subtraction of the same
+    /// operands shares them. The same DAG with or without CMOV.
+    #[test]
+    fn a_select_on_a_compare_is_a_cmov_of_the_subtract_flags() {
+        for cmov in [false, true] {
+            let mut dag = dag();
+            let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
+            let test = dag.get_setcc(EVT::I8, a, b, CondCode::SetULt);
+            let pick = dag.get_select(EVT::I32, test, x, y);
+            dag.set_root(pick);
+            lowered(&mut dag, cmov);
+            let root = dag.get_root();
+            assert_eq!(dag.opcode(root), x86isd::CMOV, "cmov={cmov}");
+            assert_eq!((dag.operand(root, 0), dag.operand(root, 1)), (y, x), "false value first");
+            assert_eq!(code(&dag, dag.operand(root, 2)), cond::B);
+            let flags = dag.operand(root, 3);
+            assert_eq!((dag.opcode(flags), flags.res), (x86isd::SUB, 1));
+            assert_eq!((dag.operand(flags, 0), dag.operand(flags, 1)), (a, b));
+        }
+    }
+
+    /// A compare against zero tests the value (`cmp x, 0`), and `x < 0` is
+    /// the sign condition: no subtraction is built.
+    #[test]
+    fn a_branch_on_a_compare_with_zero_is_a_test() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let zero = dag.get_constant(0, EVT::I32);
+        let negative = dag.get_setcc(EVT::I8, x, zero, CondCode::SetLt);
+        let chain = dag.entry_node();
+        let dest = dag.get_register(EVT::OTHER, 9);
+        let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, negative, dest]);
+        dag.set_root(branch);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), x86isd::BRCOND);
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::S);
+        let flags = dag.operand(root, 3);
+        assert_eq!(dag.opcode(flags), x86isd::CMP);
+        assert!(dag.is_null_constant(dag.operand(flags, 1)));
+    }
+
+    /// `a > 5` becomes `a >= 6` (a smaller immediate on the comparison).
+    #[test]
+    fn greater_than_a_constant_becomes_greater_or_equal_plus_one() {
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::I32, 1);
+        let five = dag.get_constant(5, EVT::I32);
+        let test = dag.get_setcc(EVT::I8, a, five, CondCode::SetGt);
+        let (x, y) = (load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3));
+        let pick = dag.get_select(EVT::I32, test, x, y);
+        dag.set_root(pick);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::GE);
+        let flags = dag.operand(root, 3);
+        assert_eq!(dag.constant(dag.operand(flags, 1)), Some(6));
+    }
+
+    /// A select on a plain `i8` is tested against zero: `NE` on `cmp c, 0`.
+    #[test]
+    fn a_select_on_a_plain_byte_tests_it() {
+        let mut dag = dag();
+        let c = load(&mut dag, EVT::I8, 1);
+        let (x, y) = (load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3));
+        let pick = dag.get_select(EVT::I32, c, x, y);
+        dag.set_root(pick);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::NE);
+        assert_eq!(dag.opcode(dag.operand(root, 3)), x86isd::CMP);
+    }
+
+    /// `i16` selects widen to a 32-bit `cmov` and truncate; `i8` only when the
+    /// CPU has CMOV (else the `CMOV_GR8` pseudo takes the byte).
+    #[test]
+    fn narrow_selects_widen_by_cpu() {
+        for (vt, cmov, widens) in [(EVT::I16, false, true), (EVT::I8, false, false), (EVT::I8, true, true)] {
+            let mut dag = dag();
+            let c = load(&mut dag, EVT::I8, 1);
+            let (x, y) = (dag.get_register(vt, 2), dag.get_register(vt, 3));
+            let pick = dag.get_select(vt, c, x, y);
+            dag.set_root(pick);
+            lowered(&mut dag, cmov);
+            let root = dag.get_root();
+            assert_eq!(dag.opcode(root) == ISD::Truncate, widens, "{vt:?} cmov={cmov}");
+        }
+    }
+}
+
+mod setcc_result {
+    use super::super::legalize_types::TypeLegalizer;
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    /// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no register
+    /// holds. 73 of 160 functions of the shadow corpus stopped here ("SetCC:
+    /// promote result"). After: an `i8` compare (the target's result type)
+    /// zero-extended-in-register into the select's condition, and nothing
+    /// illegal reachable.
+    #[test]
+    fn an_i1_compare_feeding_a_select_is_promoted_to_i8() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
+        let pick = dag.get_select(EVT::I32, test, x, y);
+        dag.set_root(pick);
+        let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+        assert!(!legalizer.all_legal());
+        assert_eq!(legalizer.run(), Ok(true));
+        assert!(legalizer.all_legal());
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Select);
+        let cond = dag.operand(root, 0);
+        // `zext i8 (and (anyext (setcc i8)), 1)`: the `i1` was promoted to the setcc's own `i8`.
+        assert_eq!(dag.value_type(cond), EVT::I8);
+        let setcc = (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).find(|&v| dag.opcode(v) == ISD::SetCC && dag.value_type(v) == EVT::I8);
+        assert!(setcc.is_some(), "an i8 setcc exists");
+    }
+
+    /// A compare consumed as an `i1` and widened: `zext i32 (setcc i1)` is the
+    /// promoted compare masked to one bit.
+    #[test]
+    fn a_zero_extended_i1_compare_is_masked_to_one_bit() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
+        let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
+        dag.set_root(wide);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I32));
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
+    }
+}
+
+mod switches {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+
+    use super::super::switchcg::{SwitchTarget, describe, plan};
+
+    /// Each switch of `switches.ll` makes the clusters the pin prints in
+    /// `Case clusters:` (jump tables `JT:`, bit tests `BT:`, the rest as
+    /// ranges). Without the planner the line is empty.
+    #[test]
+    fn switch_clusters_match_the_pins() {
+        let text: String = include_str!("golden/switches.ll").lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let mut ours = String::new();
+        for (_, global, function) in module.functions() {
+            for &block in function.layout() {
+                let Some(terminator) = function.terminator(block) else { continue };
+                let instruction = function.instruction(terminator);
+                if instruction.opcode != Opcode::Switch {
+                    continue;
+                }
+                let Operand::Value(cond) = instruction.operands[0] else { panic!("a value condition") };
+                let width = match module.context.types.get(function.value(cond).ty) {
+                    llrm_mir::types::Type::Int(bits) => *bits,
+                    other => panic!("{other:?}"),
+                };
+                let Operand::Block(default) = instruction.operands[1] else { panic!("a default") };
+                let cases: Vec<(i128, u32)> = instruction.operands[2..]
+                    .chunks(2)
+                    .map(|pair| {
+                        let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else { panic!("a case") };
+                        let ConstantKind::Int(bits) = module.context.get(value).kind else { panic!("an integer case") };
+                        let shift = 128 - width;
+                        ((((bits << shift) as i128) >> shift), dest.0)
+                    })
+                    .collect();
+                let planned = plan(&cases, default.0, &SwitchTarget::x86(32));
+                let mut line = describe(&planned.clusters);
+                if let Some((peeled, _)) = planned.peeled {
+                    line = format!("{}{line}", describe(&[peeled]));
+                }
+                ours.push_str(&format!("{}: {line}\n", global.name.as_deref().unwrap()));
+            }
+        }
+        assert_eq!(ours, include_str!("golden/switches.pin.txt"));
+    }
+}

@@ -209,7 +209,7 @@ fn renumber_registers(line: &str, regs: &mut Vec<String>) -> String {
     out
 }
 
-/// `<(...)>` memory operands, `[TF=n]` relocation flags (SD20) and `0x...`
+/// `<(...)>` memory operands, `[TF=n]` relocation flags (SD100) and `0x...`
 /// addresses are not compared.
 fn strip_decorations(line: &str) -> String {
     let mut text = line.to_string();

@@ -68,12 +68,14 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "MachineCombiner",
     "PushFold",
     "FixupSetCC",
     "CopyPropagation",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
+    "FixupBW",
     "CmpAsSub",
 ];
 
@@ -88,6 +90,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("MachineCombiner", "combiner@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
@@ -105,6 +108,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("Prologue", "prologue@13"),
     ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
+    ("FixupBW", "fixupbw@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
@@ -162,6 +166,9 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, after sinking (the pin's addILPOpts): a chain of one integer
+        // operation rebuilt so its late operand joins last.
+        Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -234,6 +241,8 @@ pub fn machine_with<'a>(
             registers.saved.iter().map(|(whole, _)| *whole).collect(),
             Rc::clone(classes),
         )?),
+        // After the peephole, as the pin runs it late (X86FixupBWInsts).
+        Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
