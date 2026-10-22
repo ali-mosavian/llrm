@@ -41,6 +41,7 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-GEP-3 | lru m32 | Os | clocks | 315 | 374 | +59 (+18.7%); +20 (+5.6%) over base | as AM-GEP-1 (code 396 on main, 404 base, 473, +17.1% over base) | splitkit | as AM-GEP-1 | #3569 |
 | AM-GEP-4 | x_nbody_f m32 | O2 | clocks | 378197 | 381606 | +3409 (+0.9%); +5229 (+1.4%) over base | as AM-GEP-1; base is 376377, below main | splitkit | as AM-GEP-1 | #3569 |
 | AM-NB-1 | nbody m32 | O2,O3 | clocks | 355537 / 336281 | 377442 / 372067 | +21905 (+6.2%) / +35786 (+10.6%) | first bad 7761d2b672 (LoopFullUnroll cost half): x87 spill traffic, 9 live doubles against 8 slots; re-taken 2026-10-22 on parity a9a0289b53, same numbers | w-1 (with w-4) | 2026-10-31, allocation rows | |
+| AM-I1 | memcpy over 128 B or alignment under 4 (isel I1) | Os | bytes | libcall `memcpy` | inline `rep movsd` | QCport 0 modules; tests/run/c + bench: 5 programs m16, 10 m32 (scroll is a row) | the pin calls `memcpy` there; the DOS runtimes have none; translating it needs a runtime `_memcpy` per C target and a "has memcpy" target fact | w-4 | after the tuning phase | |
 
 ## To add by their owners
 
