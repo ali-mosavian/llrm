@@ -891,7 +891,10 @@ impl Outer {
             let mut callees = (*old).clone();
             for (at, one) in added.iter().enumerate() {
                 if let GlobalKind::Function(function) = &one.kind {
-                    callees.insert(GlobalId((first + at) as u32), crate::memory::global_summary(one.name.as_deref(), function));
+                    callees.insert(
+                        GlobalId((first + at) as u32),
+                        crate::memory::global_summary(one.name.as_deref(), function),
+                    );
                 }
             }
             modules.insert(key, Rc::new(callees));

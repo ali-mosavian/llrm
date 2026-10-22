@@ -23,7 +23,14 @@ coef[16] filled by a constant loop, read by an unrolled inner loop: LoopFullUnro
 2. (11-02) Delete `_numbers` (115.9 M) when 1 holds on the corpus; keep the edge fold (phi of numbers = SCCP/JT) only if an object needs it. First Ir drop.
 3. floatfold (52.4 M): the pin folds exact floats in InstSimplify/ConstantFolding inside InstCombine; name the 14 objects' pass the same way, then delete or merge into combine.
 4. `writes` (30.8 M) goes with its last caller.
-Open: attribution for qcport/lights, client, savegame needs the pinned clang with qcport flags (not run); loop_fusion is -Omax only.
+Open: loop_fusion is -Omax only.
+
+## Attribution of lights, client, savegame (2026-10-22; redone on parity 44cf50686 + the FOLD_NO_NUMBERS switch, llrm-c 44cf50686abc+dirty md5 7d53725c; the first table was taken on f8c14ca21, which still had `unroll.rs`). Re-checked 2026-10-22 on 41febda30 (llrm-c 41febda30474+dirty, md5 17fe7f72, same command both arms).
+| object | what `_numbers` folds | pin pass | gap |
+|---|---|---|---|
+| client | `_pl_death_selftest@3`: no difference on 41febda30 (asm identical, 731 lines both arms) | left the table with #3597 | none |
+| lights | no difference on 41febda30 (asm identical, 220 lines both arms) | left the table with #3596 | none |
+| savegame | `_savegame_selftest@3`: 341 vs 380 lines (341 vs 380 on 44cf50686 and on 41febda30; 3592 vs 3627 asm lines) | none: pin `default<O2>` leaves 380 lines, like ours without `_numbers` | ours-only gain; nothing to translate |
 
 ## Mechanism, to be checked on the stage dumps before the PR (2026-10-22)
 
@@ -31,6 +38,6 @@ The x_fir coefficient table is an array global of 16 elements stored by constant
 
 ## Dates
 
-- 10-28: attribution of qcport/lights, client and savegame (pinned clang with qcport flags).
+- 10-28: attribution of qcport/lights, client and savegame: done 10-22 (table above).
 - 10-30: GVN forwarding fix and GlobalOpt after the inliner, one PR each, objects of the 12 identical with `_numbers` off.
 - 11-02: delete `_numbers`.
