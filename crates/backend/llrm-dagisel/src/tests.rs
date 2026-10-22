@@ -672,3 +672,43 @@ mod far_pointer_loads {
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, node), Outcome::CannotSelect);
     }
 }
+
+mod pointer_classes {
+    use super::*;
+    use crate::instr::desc;
+    use crate::x86_addr::AddrMode;
+    use crate::x86_classes::{class_tag, memory_reference, role_of, Role};
+
+    fn opcode(name: &str) -> u16 {
+        table::MACHINE_OPCODES.iter().find(|(_, n)| n.split('|').any(|n| n == name)).unwrap_or_else(|| panic!("{name}")).0
+    }
+
+    #[test]
+    fn a_load_has_its_reference_after_the_destination() {
+        let d = desc(opcode("MOV32rm")).unwrap();
+
+        assert_eq!(memory_reference(d), Some(1));
+        assert_eq!(role_of(d, 0), None, "the destination is not part of it");
+        assert_eq!((role_of(d, 1), role_of(d, 3), role_of(d, 5)), (Some(Role::Base), Some(Role::Index), Some(Role::Segment)));
+    }
+
+    #[test]
+    fn a_read_modify_write_has_its_reference_first() {
+        let d = desc(opcode("ADD32mr")).unwrap();
+
+        assert_eq!((memory_reference(d), role_of(d, 4), role_of(d, 5)), (Some(0), Some(Role::Segment), None));
+    }
+
+    #[test]
+    fn an_instruction_with_no_memory_operand_has_no_reference() {
+        assert_eq!(memory_reference(desc(opcode("ADD32rr")).unwrap()), None);
+    }
+
+    #[test]
+    fn in_real_mode_the_base_and_the_index_have_their_own_registers() {
+        assert_eq!(class_tag(AddrMode::Real16, Role::Base), Some("base"));
+        assert_eq!(class_tag(AddrMode::Real16, Role::Index), Some("index"));
+        assert_eq!(class_tag(AddrMode::Real16, Role::Disp), None);
+        assert_eq!(class_tag(AddrMode::Flat32, Role::Base), None, "any general register at 32 bits");
+    }
+}
