@@ -469,6 +469,21 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[cond, then, other]);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::BrCond if at == 1 => {
+                // `PromoteIntOp_BRCOND`: the condition to the target's boolean
+                // type.
+                let (chain, cond, dest) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let bool_vt = self.tli.types.set_cc_result_type(EVT::OTHER);
+                let extend = match self.dag.config().boolean_contents {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                let updated = self.dag.update_node_operands(n, &[chain, cond, dest]);
+                SDValue { node: updated, res: 0 }
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

@@ -530,6 +530,13 @@ def build_offenders(group: list[str], merge_alone, check) -> list[str]:
     return [number for number in group if merge_alone(number) and check()]
 
 
+def refusal_line(number: str, named: dict[str, str], failed_build: list[str], failed_units: set[str]) -> str:
+    """`#N: REFUSED: why` for a PR the batch dropped: the reason `named` holds (it failed what the batch failed alone), else the failure of the batch of one. The queue quoted the first REFUSED
+    line of the shared log for every PR: at 22:26 eight PRs read as refused for #3841's `mut` while seven of them failed units."""
+    why = named.get(number) or (failed_build[-1][:200] if failed_build else ", ".join(sorted(failed_units))[:200]) or "the batch of one does not pass"
+    return f"#{number}: REFUSED: {why}"
+
+
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
     """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     if FAST and info["mergeable"] == "CONFLICTING":
@@ -707,6 +714,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     left_out: dict[str, str] = {}
     failed_units: set[str] = set()
     failed_build: list[str] = []
+    named: dict[str, str] = {}
+
+    def refuse(number: str) -> None:
+        print(refusal_line(number, named, failed_build, failed_units))
+        refused.append(number)
 
     def passes_fast(group: list[str]) -> bool:
         git("fetch", "-q", "origin", "feat/parity")
@@ -761,14 +773,18 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
-            return build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
+            named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
+            return culprits
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
             by_package.setdefault(package, set()).add(test)
         if not by_package:
             return []
-        return [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
+        culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
+        named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" for number in culprits})
+        return culprits
 
     def passes(group: list[str]) -> bool:
         if FAST:
@@ -827,7 +843,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
-        batch(list(numbers), passes, land, lambda number: refused.append(number), offending if FAST else None)
+        batch(list(numbers), passes, land, refuse, offending if FAST else None)
     print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
     return 1 if refused else 0
 
