@@ -146,8 +146,12 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
-        // Our target codes are named; the pin's number is looked up by that name.
-        Target(code) => llrm_dagisel::generated::ids::x86isd_id(super::x86isd::name(code).trim_start_matches("X86ISD::")).unwrap_or(u16::MAX),
+        // sdag-a's codes are private and named (`x86isd::name`), the pin's number comes from the name;
+        // sdag-b's lowering writes the pin's numbers, which `name` does not know.
+        Target(code) => match super::x86isd::name(code).strip_prefix("X86ISD::") {
+            Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
+            None => code,
+        },
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }

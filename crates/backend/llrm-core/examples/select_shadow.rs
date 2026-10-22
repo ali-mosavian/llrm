@@ -14,7 +14,9 @@ use llrm_core::backend::selectiondag::actions::{Features, TargetLowering};
 use llrm_core::backend::selectiondag::builder::{BuilderTarget, build_block};
 use llrm_core::backend::selectiondag::dagisel_adapter::DagisAdapter;
 use llrm_core::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_core::backend::selectiondag::legalize_dag::{DagLegalizer, NoHooks};
+use llrm_core::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
+use llrm_core::backend::selectiondag::legalize_dag::DagLegalizer;
+use llrm_core::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_core::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_core::backend::selectiondag::{ISD, MVT, SDValue};
 use llrm_dagisel::generated::x86_i486 as table;
@@ -72,14 +74,19 @@ fn main() {
             let dags: Vec<&mut llrm_core::backend::selectiondag::SelectionDAG> =
                 std::iter::once(&mut done.dag).chain(done.extra.iter_mut().map(|(_, b)| &mut b.dag)).collect();
             for dag in dags {
+                // The pin's order: combine, legalize types, combine, legalize the DAG, combine.
+                let mut lowering = X86Lowering { cmov: false };
+                DagCombiner::new(dag, &mut lowering, CombineLevel::BeforeLegalizeTypes).run();
                 if let Err(why) = TypeLegalizer::new(dag, &tli).run() {
                     println!("REFUSED {name}:{block_name} types: {why:?}");
                     continue;
                 }
-                if let Err(why) = DagLegalizer::new(dag, &tli, &mut NoHooks).run() {
+                DagCombiner::new(dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+                if let Err(why) = DagLegalizer::new(dag, &tli, &mut lowering).run() {
                     println!("REFUSED {name}:{block_name} legalize: {why:?}");
                     continue;
                 }
+                DagCombiner::new(dag, &mut lowering, CombineLevel::AfterLegalizeDag).run();
                 built += 1;
                 if std::env::var_os("DUMP").is_some() {
                     println!("DAG {name}:{block_name}\n{}", dag.dump());

@@ -127,3 +127,11 @@ fn a_return_node_is_selected_to_ret() {
 
     assert_eq!(machine_name(&dag, ret.node), "RET");
 }
+
+#[test]
+fn a_target_code_is_named_or_already_the_pins_number() {
+    use super::dagisel_adapter::pin_opcode;
+    use llrm_dagisel::generated::ids::x86isd as pin;
+    assert_eq!(pin_opcode(super::x86isd::CALL), pin::CALL, "sdag-a's private code, by name");
+    assert_eq!(pin_opcode(ISD::Target(pin::Wrapper)), pin::Wrapper, "sdag-b's lowering writes the pin's number");
+}
