@@ -182,6 +182,26 @@ fn bit_counts_of_constants() {
     assert_eq!(dag.constant(swapped), Some(0x3412));
 }
 
+/// Replacing a value rewrites its users; two users that become equal are one
+/// node after (the pin's `AddModifiedNodeToCSEMaps`), or a later `getNode` of
+/// the rewritten expression would build a second copy.
+#[test]
+fn replacing_a_value_rewrites_users_and_merges_equal_ones() {
+    let mut dag = dag();
+    let (x, y, z) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2), arg(&mut dag, EVT::I32, 3));
+    let xz = dag.get_node(ISD::Add, EVT::I32, &[x, z]);
+    let yz = dag.get_node(ISD::Add, EVT::I32, &[y, z]);
+    let outer_x = dag.get_node(ISD::Mul, EVT::I32, &[xz, z]);
+    let outer_y = dag.get_node(ISD::Mul, EVT::I32, &[yz, z]);
+    assert_eq!(dag.users(xz).collect::<Vec<_>>(), vec![outer_x.node]);
+    dag.replace_all_uses_with(x, y);
+    assert_eq!(dag.users(x).count(), 0);
+    assert_eq!(dag.get_node(ISD::Add, EVT::I32, &[y, z]), yz, "x+z became y+z, the existing node");
+    assert_eq!(dag.get_node(ISD::Mul, EVT::I32, &[yz, z]), outer_y, "and (x+z)*z the existing (y+z)*z");
+    assert_eq!(dag.node(outer_x).ops[0], yz);
+    assert_eq!(dag.node_ids().count(), dag.node_count());
+}
+
 mod builder {
     use std::collections::BTreeMap;
 

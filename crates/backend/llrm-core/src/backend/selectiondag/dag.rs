@@ -162,6 +162,64 @@ impl SelectionDAG {
         &self.nodes
     }
 
+    /// Every node id in creation order (`allnodes()`).
+    pub fn node_ids(&self) -> std::ops::Range<u32> {
+        0..self.nodes.len() as u32
+    }
+
+    /// The nodes that read `value` as an operand, in creation order, once
+    /// each (`SDValue::users()`).
+    pub fn users(&self, value: SDValue) -> impl Iterator<Item = u32> + '_ {
+        self.nodes.iter().enumerate().filter(move |(_, node)| node.ops.contains(&value)).map(|(at, _)| at as u32)
+    }
+
+    fn key_of(&self, node: u32) -> Option<CseKey> {
+        let data = &self.nodes[node as usize];
+        (!data.values.contains(&EVT::GLUE)).then(|| (data.opcode, data.values.clone(), data.ops.clone(), data.data))
+    }
+
+    /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
+    /// user that then equals an existing node is replaced by it in turn
+    /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
+    /// stay in it with no users. The root follows.
+    pub fn replace_all_uses_with(&mut self, from: SDValue, to: SDValue) {
+        if from == to {
+            return;
+        }
+        let mut work = vec![(from, to)];
+        while let Some((from, to)) = work.pop() {
+            if self.root == from {
+                self.root = to;
+            }
+            for user in self.users(from).collect::<Vec<_>>() {
+                if let Some(key) = self.key_of(user) {
+                    if self.cse.get(&key) == Some(&user) {
+                        self.cse.remove(&key);
+                    }
+                }
+                for op in &mut self.nodes[user as usize].ops {
+                    if *op == from {
+                        *op = to;
+                    }
+                }
+                let Some(key) = self.key_of(user) else { continue };
+                match self.cse.get(&key) {
+                    Some(&existing) if existing != user => {
+                        let flags = self.nodes[existing as usize].flags.intersect(self.nodes[user as usize].flags);
+                        self.nodes[existing as usize].flags = flags;
+                        let results = self.nodes[user as usize].values.len() as u8;
+                        for res in 0..results {
+                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }));
+                        }
+                    }
+                    _ => {
+                        self.cse.insert(key, user);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
