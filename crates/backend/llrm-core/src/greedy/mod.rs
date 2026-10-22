@@ -12,6 +12,7 @@ pub mod interferencecache;
 pub mod liverangeedit;
 pub mod matrix;
 pub mod regionsplit;
+pub mod remat;
 pub mod shadow;
 pub mod spill;
 pub mod spillplacement;

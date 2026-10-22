@@ -70,6 +70,7 @@ const UNOPTIMIZED: [&str; 11] = [
     "LateCleanup",
     "PushFold",
     "FixupSetCC",
+    "CopyPropagation",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -98,6 +99,7 @@ const SLOTS: [(&str, &str); 24] = [
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
+    ("CopyPropagation", "copyprop@18"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
@@ -172,7 +174,13 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress { native: target.dword_address_form().is_some_and(|form| !form.secondary) }),
+        Box::new(twoaddr::TwoAddress {
+            lea: match target.dword_address_form() {
+                None => crate::twoaddress::ThreeAddress::Off,
+                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSub,
+                Some(_) => crate::twoaddress::ThreeAddress::All,
+            },
+        }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
@@ -206,6 +214,8 @@ pub fn machine_with<'a>(
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
+        // The pin runs MachineCopyPropagation again after tail duplication.
+        Box::new(crate::backend::machinecp::CopyPropagation),
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
