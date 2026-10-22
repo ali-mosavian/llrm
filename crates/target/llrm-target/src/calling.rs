@@ -376,15 +376,17 @@ impl Calling {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
     }
 
-    /// The convention a MIR calling-convention number names: `ccc` and `fastcc`
-    /// the one stating `cc = "cdecl"`, any other the one whose `cc` is the
-    /// number's name without its `cc`.
+    /// The convention a MIR calling-convention number names: `ccc` the one
+    /// stating `cc = "cdecl"`, `fastcc` the one stating `cc = "fast"` or, where
+    /// there is none, C's own; any other the one whose `cc` is the number's
+    /// name without its `cc`.
     pub fn by_number(
         &self,
         number: u32,
     ) -> Option<&Convention> {
         match number {
-            0 | llrm_mir::opcode::FAST => self.by_cc("cdecl"),
+            0 => self.by_cc("cdecl"),
+            llrm_mir::opcode::FAST => self.by_cc("fast").or_else(|| self.by_cc("cdecl")),
             other => self
                 .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }
