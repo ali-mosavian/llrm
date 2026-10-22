@@ -437,6 +437,14 @@ pub(crate) fn starts_with_landing_pad(
         .is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
+/// Whether `block` begins with two phis.
+pub(crate) fn has_two_phis(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function.iter_block(block).take(2).filter(|&one| function.instruction(one).opcode == Opcode::Phi).count() == 2
+}
+
 /// `block`'s phis, in order.
 pub(crate) fn phis(
     function: &Function,

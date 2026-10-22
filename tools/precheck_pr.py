@@ -11,7 +11,8 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
-5. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
+5. the changed .rs files are formatted (tools/fmt.sh);
+6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
 6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
@@ -212,6 +213,7 @@ def precheck(
         # The runner only warns about the description checks for now; a worker fixes them all, so they are failures here.
         why += parity_squash.body_checks("HEAD", body, base, root, title or "")
         why += parity_squash.refusals("HEAD", body, base, root, title or "")
+    why += [f"{path}: tools/fmt.sh would change it; run tools/fmt.sh (the runner formats an unformatted PR with a commit on your branch, which races with your pushes)" for path in sorted(parity_squash.fmt_differs(root, files))]
     why += slot_without_pipeline_test(root, base)
     why += claude_paths(root, base)
     packages = changed_packages(root, files)
