@@ -3,6 +3,7 @@
 use crate::dag::{Dag, FpClass, Hooks, LoadExt, MemRef, SDValue};
 use crate::generated::ids::{isd, mvt};
 use crate::matcher::{Opcode, Vt};
+use crate::x86_addr::{AddrDag, Symbol, Wrapped};
 
 #[derive(Clone, Debug, Default)]
 pub struct Node {
@@ -15,6 +16,11 @@ pub struct Node {
     pub register: Option<u16>,
     pub load: Option<LoadExt>,
     pub memory_vt: Option<Vt>,
+    pub symbol: Option<Wrapped>,
+    /// A `VTSDNode`'s type.
+    pub vt_node: Option<Vt>,
+    /// The segment register the memory node addresses through.
+    pub segment: Option<u16>,
     pub dead: bool,
 }
 
@@ -36,8 +42,27 @@ impl TestDag {
     }
 
     #[allow(dead_code)]
-    pub fn constant(&mut self, value: i64, vt: Vt) -> SDValue {
+    pub fn make_constant(&mut self, value: i64, vt: Vt) -> SDValue {
         SDValue::new(self.add(Node { opcode: isd::Constant, vts: vec![vt], constant: Some(value), ..Node::default() }), 0)
+    }
+
+    /// A `VTSDNode`.
+    pub fn make_value_type_node(&mut self, vt: Vt) -> SDValue {
+        SDValue::new(self.add(Node { opcode: isd::VALUETYPE, vts: vec![mvt::Other], vt_node: Some(vt), ..Node::default() }), 0)
+    }
+
+    pub fn frame_index(&mut self, index: i32, vt: Vt) -> SDValue {
+        SDValue::new(
+            self.add(Node { opcode: isd::FrameIndex, vts: vec![vt], constant: Some(i64::from(index)), ..Node::default() }),
+            0,
+        )
+    }
+
+    /// `Wrapper (TargetGlobalAddress id + offset)`.
+    pub fn wrapped_global(&mut self, id: u32, offset: i64, vt: Vt) -> SDValue {
+        let symbol = Wrapped { symbol: Symbol { kind: crate::x86_addr::SymbolKind::Global, id }, offset, flags: 0 };
+        let global = self.add(Node { opcode: isd::TargetGlobalAddress, vts: vec![vt], symbol: Some(symbol), ..Node::default() });
+        SDValue::new(self.node(crate::generated::ids::x86isd::Wrapper, &[vt], &[SDValue::new(global, 0)]), 0)
     }
 
     /// A value held in a register: `CopyFromReg` of the entry chain.
@@ -71,6 +96,9 @@ impl Dag for TestDag {
         let n = &self.nodes[node as usize];
         n.machine.map_or(n.opcode, |m| !m)
     }
+    fn is_machine(&self, node: u32) -> bool {
+        self.nodes[node as usize].machine.is_some()
+    }
     fn num_operands(&self, node: u32) -> usize {
         self.nodes[node as usize].ops.len()
     }
@@ -95,6 +123,18 @@ impl Dag for TestDag {
     fn node_has_one_use(&self, node: u32) -> bool {
         self.uses(node).count() == 1
     }
+    fn users(&self, value: SDValue) -> Vec<(u32, usize)> {
+        self.live()
+            .flat_map(|(i, n)| n.ops.iter().enumerate().filter(move |(_, o)| **o == value).map(move |(k, _)| (i, k)))
+            .collect()
+    }
+    fn glued_user(&self, node: u32) -> Option<u32> {
+        let last = SDValue::new(node, (self.nodes[node as usize].vts.len() - 1) as u8);
+        (self.value_type(last) == mvt::Glue).then(|| self.users(last).first().map(|u| u.0)).flatten()
+    }
+    fn is_only_user_of(&self, node: u32, def: u32) -> bool {
+        self.live().all(|(i, n)| i == node || n.ops.iter().all(|o| o.node != def))
+    }
     fn has_n_uses_of_value(&self, value: SDValue, n: usize) -> bool {
         self.uses(value.node).filter(|u| u.res == value.res).count() == n
     }
@@ -104,8 +144,8 @@ impl Dag for TestDag {
     fn cond_code(&self, _: SDValue) -> Option<u8> {
         None
     }
-    fn value_type_node(&self, _: SDValue) -> Option<Vt> {
-        None
+    fn value_type_node(&self, value: SDValue) -> Option<Vt> {
+        self.nodes[value.node as usize].vt_node
     }
     fn is_undef(&self, _: SDValue) -> bool {
         false
@@ -197,6 +237,10 @@ impl Dag for TestDag {
         n.ops = operands.to_vec();
         (node, Vec::new())
     }
+    fn update_node_operands(&mut self, node: u32, operands: &[SDValue]) -> u32 {
+        self.nodes[node as usize].ops = operands.to_vec();
+        node
+    }
     fn replace_uses(&mut self, from: SDValue, to: SDValue) {
         for n in self.nodes.iter_mut().filter(|n| !n.dead) {
             for op in &mut n.ops {
@@ -228,7 +272,7 @@ impl Dag for TestDag {
             if m == node {
                 return true;
             }
-            if visited.len() >= max {
+            if max != 0 && visited.len() >= max {
                 return true;
             }
             for op in &self.nodes[m as usize].ops {
@@ -330,5 +374,50 @@ impl crate::dag::PatternContext for OptSize {
     }
     fn is_legal_to_call_immediate_addr(&self) -> bool {
         false
+    }
+}
+
+impl AddrDag for TestDag {
+    fn is_add_like(&self, value: SDValue) -> bool {
+        let n = &self.nodes[value.node as usize];
+        n.opcode == isd::OR && self.has_disjoint_flag(value.node)
+    }
+    fn frame_index(&self, value: SDValue) -> Option<i32> {
+        let n = &self.nodes[value.node as usize];
+        (n.opcode == isd::FrameIndex).then(|| n.constant.unwrap() as i32)
+    }
+    fn wrapped_symbol(&self, operand: SDValue) -> Option<Wrapped> {
+        self.nodes[operand.node as usize].symbol
+    }
+    fn has_materializing_use(&self, value: SDValue) -> bool {
+        self.users(value).iter().any(|&(user, _)| {
+            let n = &self.nodes[user as usize];
+            n.opcode == isd::CopyToReg || (n.opcode == isd::STORE && n.ops.get(1) == Some(&value))
+        })
+    }
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[SDValue]) -> SDValue {
+        SDValue::new(self.node(opcode, &[vt], ops), 0)
+    }
+    fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue {
+        self.make_constant(value, vt)
+    }
+    fn segment_override(&self, node: u32) -> Option<u16> {
+        self.nodes[node as usize].segment
+    }
+    fn is_non_temporal(&self, _: u32) -> bool {
+        false
+    }
+    fn target_frame_index(&mut self, index: i32, vt: Vt) -> SDValue {
+        SDValue::new(
+            self.add(Node { opcode: isd::TargetFrameIndex, vts: vec![vt], constant: Some(i64::from(index)), ..Node::default() }),
+            0,
+        )
+    }
+    fn target_symbol(&mut self, symbol: Symbol, disp: i32, flags: u8) -> SDValue {
+        let wrapped = Wrapped { symbol, offset: i64::from(disp), flags };
+        SDValue::new(
+            self.add(Node { opcode: isd::TargetGlobalAddress, vts: vec![mvt::i32], symbol: Some(wrapped), ..Node::default() }),
+            0,
+        )
     }
 }

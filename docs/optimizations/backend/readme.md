@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 119 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 122 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -41,6 +41,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 119 documented
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
 | fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
+| flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
 | floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
@@ -63,6 +64,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 119 documented
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | latecleanup | Removes an immediate load to a register that an identical, earlier load in every path to it already left there: LLVM's `MachineLateInstrsCleanup` ([MachineLateInstrsCleanup.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp)). | After `prologue`, before `peephole`: where rematerialization and the | [latecleanup](latecleanup.md) |
 | layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
+| leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
@@ -93,6 +95,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 119 documented
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | pressuresink | Moves a load down to just before its one reader when that raises the pressure of no register class and lowers it for some. | A machine phase after `phielim` and before `floatfold` | [pressuresink](pressuresink.md) |
 | prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
+| pushfold | A pushed value that a load made and nothing else reads is pushed from memory: `mov r, [m]; push r` is `push [m]`. | Machine phase after `floatfold`, before the register classes are decided, | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), [`crate::backend::ssaspill`](ssaspill.md), | [regalloc_input](regalloc_input.md) |
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate` and | [regclass](regclass.md) |
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |

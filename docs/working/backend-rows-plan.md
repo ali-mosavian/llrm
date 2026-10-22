@@ -22,7 +22,9 @@ PRs: (1) the late stand-alone pass over the existing `taildup.rs` functions, `re
 
 Pin: `MachineBlockPlacement` per [jumps-placement-check.md](../architecture/jumps-placement-check.md) (stages 1 to 5, `buildCFGChains` L2799, `buildChain` L1920, `selectBestSuccessor` L1665, `buildLoopChains` L2706, `rotateLoop` L2423, `optimizeBranches` L2964, `alignBlocks` L3003). Ours translates the stages with five stated deviations (D2 gcc-trace successor choice instead of `selectBestSuccessor`'s probabilities, D3 duplication by bytes, D4 loop headers after latches, D5 the merge before and after, D6 llrm's `Frequency`).
 
-Measured gap (bench, 486 model, same IR): ours has 1.5% more taken branches at -O2 and 1.1% at -O3 than the pin, 19% more executed `jmp` at -O2; the pass is worth 0.84% of the pin's clocks. PRs: retire D2 first (`selectBestSuccessor`, the largest: it decides the chains), then D4 (`findBestLoopTop`), then D3; each checked by taken branches on the seven programs listed in the tail-dup note.
+D2 is already retired in the tree (`placement.rs::best_successor` = `selectBestSuccessor` L1665; the check doc lists the rest as D3, D4, D5, D6, D22).
+
+Measured gap (bench, 486 model, same IR): ours has 1.5% more taken branches at -O2 and 1.1% at -O3 than the pin, 19% more executed `jmp` at -O2; the pass is worth 0.84% of the pin's clocks. The largest single loop, nbody_single (16012 against 12002 taken), is not placement: the pin's LSR gives the inner IV a negative bias, so its inner tests are `cmpl $-24` (50/50 edges) where ours tests `test ecx,ecx` (zero heuristic, 37.5%); MachineSink then breaks that edge as the pin's `isWorthBreakingCriticalEdge` does (probability under 40%) and the x87 constants land in an edge block that placement puts between two hot blocks. The cause is LSR's choice of IV (w-5).
 
 ## Row 84, Machine Copy Propagation run 2: land 11-06
 
