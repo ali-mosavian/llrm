@@ -135,6 +135,45 @@ impl<'a> BasicAA<'a> {
         if width >= 128 || bits >> (width - 1) & 1 == 0 { bits as i128 } else { (bits | (!0u128 << width)) as i128 }
     }
 
+    /// Whether the cast `one` is one a pointer passes through unchanged in
+    /// what it points into. A selector alone is `segment:0` when cast back to
+    /// far (DEVIATE C1): where an object is below it (`VARSEG(a)`) it is no
+    /// pointer into that object; where only an integer is (a segment word
+    /// loaded from an array's descriptor) it is the pin's pointer from
+    /// `inttoptr`, unless the module forges selectors (`forging`), when it may
+    /// name any object.
+    fn transparent(
+        &self,
+        one: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let selector = one.opcode == Opcode::Cast(CastOp::AddrSpaceCast)
+            && self
+                .unit
+                .space(one.operands[0])
+                .is_some_and(|space| self.unit.layout.has_unstable_representation(space));
+        if !selector {
+            return true;
+        }
+        let mut below = one.operands[0];
+        for _ in 0..MAX_LOOKUP {
+            match self.defining(below) {
+                Some(next) if matches!(next.opcode, Opcode::Cast(_) | Opcode::GetElementPtr { .. }) => {
+                    below = next.operands[0]
+                }
+                Some(next) if matches!(next.opcode, Opcode::Alloca { .. }) => return false,
+                Some(_) => break,
+                None => return !matches!(below, Operand::Constant(_)) && !self.forged(),
+            }
+        }
+        !self.forged()
+    }
+
+    /// Whether the module forges pointers into the data segment; without the
+    /// module's facts it may.
+    fn forged(&self) -> bool {
+        self.unit.globals_aa.is_none_or(|globals| globals.forged())
+    }
+
     /// `stripPointerCastsForAliasAnalysis`: casts only.
     fn strip(
         &self,
@@ -142,7 +181,9 @@ impl<'a> BasicAA<'a> {
     ) -> Operand {
         while let Some(one) = self.defining(operand) {
             match one.opcode {
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
+                    operand = one.operands[0]
+                }
                 _ => break,
             }
         }
@@ -157,7 +198,8 @@ impl<'a> BasicAA<'a> {
         for _ in 0..MAX_LOOKUP {
             let Some(one) = self.defining(operand) else { break };
             match one.opcode {
-                Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => {
+                Opcode::GetElementPtr { .. } => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
                 }
                 _ => break,
@@ -190,7 +232,9 @@ impl<'a> BasicAA<'a> {
         for _ in 0..MAX_LOOKUP {
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => operand = one.operands[0],
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
+                    operand = one.operands[0]
+                }
                 // A phi of one arm, as LCSSA makes.
                 Opcode::Phi if one.operands.len() == 2 => operand = one.operands[0],
                 Opcode::GetElementPtr { source } => {
@@ -1437,5 +1481,76 @@ mod tests {
         // Premise: the corpus has tagged accesses.
         assert!(tagged > 0, "no tagged access in the corpus");
         assert!(differ.is_empty(), "{} differ: {:#?}", differ.len(), &differ[..differ.len().min(8)]);
+    }
+
+    /// `DEF SEG = VARSEG(a)`: a far pointer made of `a`'s selector is
+    /// `segment:0`, a pointer into the data segment, not into `a`; stripping
+    /// the casts named `a` as its object and called it NoAlias with every
+    /// other global.
+    #[test]
+    fn a_far_pointer_made_of_a_selector_is_may_alias_with_another_global() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@pa = global [2 x i8] zeroinitializer
+@pb = global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %near = getelementptr i8, ptr @pa, i16 0
+  %far0 = addrspacecast ptr %near to ptr addrspace(1)
+  %sg = addrspacecast ptr addrspace(1) %far0 to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %sg to ptr addrspace(1)
+  %a = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %b = getelementptr i8, ptr @pb, i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(1));
+        let answer = BasicAA::new(&unit).alias(&location("a"), &location("b"), &mut AAQueryInfo::default(), None);
+        assert_eq!(answer, AliasResult::MayAlias);
+    }
+
+    /// bintree.bas: an array element's far pointer is a segment word loaded
+    /// from its descriptor, made a pointer by `inttoptr`. The pin takes it
+    /// for a pointer that cannot be a local whose address never escaped; the
+    /// first selector-cast fix stopped at the cast and lost that (a loop
+    /// variable reloaded around each call, 14 B of the object). Where the
+    /// module forges selectors it can be.
+    #[test]
+    fn a_far_pointer_from_a_segment_word_is_no_alias_with_a_local_unless_the_module_forges() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+declare void @g(ptr nocapture)
+
+define i16 @f(i16 %seg, i16 %n) {
+b0:
+  %slot = alloca i16
+  call void @g(ptr nocapture %slot)
+  %sg = inttoptr i16 %seg to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %sg to ptr addrspace(1)
+  %a = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let answer = |forged: bool| {
+            let mut globals = crate::globalsaa::Globals::default();
+            globals.set_forged(forged);
+            let unit = Unit::of(&module, &layout, function).with_globals_aa(&globals);
+            let location =
+                |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(1));
+            BasicAA::new(&unit).alias(&location("a"), &location("slot"), &mut AAQueryInfo::default(), None)
+        };
+        assert_eq!(answer(false), AliasResult::NoAlias);
+        assert_eq!(answer(true), AliasResult::MayAlias);
     }
 }
