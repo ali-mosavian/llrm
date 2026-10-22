@@ -193,6 +193,7 @@ pub mod intbits;
 mod isel_tests;
 pub mod jumps;
 pub mod lanes;
+pub mod latecleanup;
 pub mod layout;
 pub mod legalize;
 pub mod lifetimes;
@@ -204,7 +205,6 @@ pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
 pub mod machinecse;
-pub mod latecleanup;
 pub mod machinedce;
 pub mod machinesink;
 pub mod masm;
@@ -304,6 +304,7 @@ pub mod select {
 }
 pub mod regclass;
 pub mod registerinfo;
+pub mod rewriter;
 pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;
