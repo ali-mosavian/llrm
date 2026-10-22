@@ -74,6 +74,7 @@ mod dag;
 pub mod actions;
 pub mod dump;
 pub mod fold;
+pub mod function_lowering;
 pub mod isd;
 pub mod function_lowering;
 pub mod legalize_types;
@@ -84,6 +85,8 @@ pub use dag::{Rauw, BooleanContents, DagConfig, MemBase, MemInfo, NodeData, SDNo
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use isd::{CondCode, ISD};
+pub use actions::{Action, Features, LoadExt, TargetLowering};
+pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
