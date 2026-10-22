@@ -325,7 +325,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
     let cell = frame_cell(-8, 8);
     let out = Semantics {
         op: Operation::Barrier,
-        name: Some("out".to_owned()),
+        name: Some("out".into()),
         dests: vec![],
         sources: vec![],
         target: None,

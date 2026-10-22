@@ -196,7 +196,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn reg(register: RegId) -> Loc {
@@ -242,7 +242,7 @@ mod tests {
         Arc::new(Insn::new(
             at,
             Some((at, at + 2)),
-            Some(Semantics { name: Some(name.to_owned()), target: Some(10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some(name.into()), target: Some(10), ..Semantics::new(Operation::Branch) }),
             vec![],
             uses,
         ))

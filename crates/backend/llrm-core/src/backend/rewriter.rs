@@ -258,7 +258,7 @@ pub(crate) fn _placed(
     if target::far_load(regs, what) {
         if let Loc::Reg(selector) = &dests[1] {
             if let Some(spelt) = regs.load_form(selector.register) {
-                name = Some(spelt.to_owned());
+                name = Some(spelt.into());
             }
         }
     }
