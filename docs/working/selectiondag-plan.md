@@ -92,12 +92,12 @@ Pin: `DAGTypeLegalizer::run` ([L196][lt-run]) over `LegalizeTypes.h` (1.3k), `Le
 | B0a | `TargetLoweringInfo`: `ValueTypeActions`, `getTypeAction`/`getTypeToTransformTo` (what `computeRegisterProperties` and `getTypeConversion` compute), `LegalizeAction` enum, and the `X86TargetLowering` action table for m32 (`setOperationAction`, `setLoadExtAction`, `setTruncStoreAction`, `setCondCodeAction` for the i486/P5 subset), written in the ctor's order because a later call overwrites an earlier | 2026-11-12 | table is Rust data built from the target description (legal widths, CPU features); vector, SSE, AVX and 64-bit arms of the ctor are not translated and listed as N/A with their line ranges |
 | B0b | `run()` and its machinery: node ids (`enum NodeId { New, ReadyToProcess, Processed, Unanalyzed(n) }`), worklist, `AnalyzeNewNode`/`AnalyzeNewValue`, `ReplaceValueWith`, `RemapValue`, the maps `ReplacedValues`, `PromotedIntegers`, `ExpandedIntegers` (arena-indexed `Vec<Option<_>>`, not hash maps), `PerformExpensiveChecks` as a debug-only verifier | 2026-11-19 | no `NodeUpdateListener`: the arena makes replacement an index rewrite |
 | B0c | `PromoteIntegerResult`/`PromoteIntegerOperand`, in corpus order: constants, loads (`PromoteIntRes_LOAD`), binary arithmetic and logic, shifts (amount zero-extended), `SETCC` ([L1371][li-setcc]), `Select` ([L1350][li-select]), trunc/zext/sext, bitcast, div/rem (extension by signedness), stores (`PromoteIntegerOperand`), `BRCOND`/`CopyToReg` operands | 2026-11-26 | replaces `legalize.rs`'s cases one by one |
-| B0d | `ExpandIntegerResult`/`ExpandIntegerOperand`: `ExpandIntRes_Constant` ([L4116][li-const]), `ADDSUB` ([L3725][li-addsub]) to `ADDC`/`ADDE` pairs, `MUL` ([L4540][li-mul]), logic, `ExpandShiftByConstant` ([L3296][li-shiftc]) and the unknown-amount form, `LOAD`, `SETCC` ([L3589][li-esetcc]), `Select`, trunc/ext, `UDIV`/`SDIV`/`UREM`/`SREM` as helper calls | 2026-12-03 | SD10 below |
+| B0d | `ExpandIntegerResult`/`ExpandIntegerOperand`: `ExpandIntRes_Constant` ([L4116][li-const]), `ADDSUB` ([L3725][li-addsub]) to `ADDC`/`ADDE` pairs, `MUL` ([L4540][li-mul]), logic, `ExpandShiftByConstant` ([L3296][li-shiftc]) and the unknown-amount form, `LOAD`, `SETCC` ([L3589][li-esetcc]), `Select`, trunc/ext, `UDIV`/`SDIV`/`UREM`/`SREM` as helper calls | 2026-12-03 | SD19 below |
 | B0e | `far` (SD2): `MVT::Far` action `ExpandInteger`-shaped; results as (offset, selector) halves for load, store, select, `CopyToReg`/`CopyFromReg`, constants, compares, `far_cast`; operands through `BUILD_PAIR` | 2026-12-03 | m16 only; the m32 table has no `far` |
 
 Numbered DEVIATE from B0:
 
-- **SD10** Wide division and remainder of `i64` call our inline helper routines with their register contracts (`lower_int64.rs`, `llrm_x86::helpers`) where the pin emits a compiler-rt libcall. The legalizer returns a `CALL` node with the helper's convention (SD5). Reason: the helpers exist, are exact, and no runtime library is linked. Owner sdag-b; exit: when LegalizeDAG's `ExpandLibCall` path is translated in B1 and the helper contract is expressed as a `RuntimeLibcall` table (review 2026-12-17).
+- **SD19** Wide division and remainder of `i64` call our inline helper routines with their register contracts (`lower_int64.rs`, `llrm_x86::helpers`) where the pin emits a compiler-rt libcall. The legalizer returns a `CALL` node with the helper's convention (SD5). Reason: the helpers exist, are exact, and no runtime library is linked. Owner sdag-b; exit: when LegalizeDAG's `ExpandLibCall` path is translated in B1 and the helper contract is expressed as a `RuntimeLibcall` table (review 2026-12-17).
 
 Premise tests (each seen failing before its piece lands; they dump the DAG after `LegalizeTypes` as text and, where the pin shows the same IR, compare with `pin.py`'s `llc -debug-only=legalize-types` output):
 
@@ -106,9 +106,44 @@ Premise tests (each seen failing before its piece lands; they dump the DAG after
 3. B0c: `i12 add` promotes to `i16 add` with no extension; `i12 udiv` zero-extends both operands; `i12 sdiv` sign-extends them (the signedness is the symptom: wrong results for a negative `i12` quotient).
 4. B0d: `i64 add` at m32 is `ADDC` low then `ADDE` high; `i64 shl 8` is the pin's two-node funnel form (`ExpandShiftByConstant`); `i64 load` is two `i32` loads at offsets 0 and 4 with the chain joined.
 5. B0e: a `far` load is two `i16` loads (offset, then selector at +2); `far == far` is two compares combined; a `far` `select` is two `select`s.
-6. SD10: `i64 sdiv` produces a `CALL` to the helper named in `llrm_x86::helpers`, with its argument registers.
+6. SD19: `i64 sdiv` produces a `CALL` to the helper named in `llrm_x86::helpers`, with its argument registers.
 
 An end-to-end run waits for A1 (builder) and D1 (emitter); until then each test builds its DAG by hand through A0's `getNode`.
+
+### B1 in detail (sdag-b)
+
+Pin: `SelectionDAG::Legalize` ([L6301][ld-legalize]) orders the nodes topologically and calls `SelectionDAGLegalize::LegalizeOp` ([L982][ld-op]) on each. `LegalizeOp` asks the action table (B0c) and does one of: **Legal** (keep; `LegalizeLoadOps` [L669][ld-loads] / `LegalizeStoreOps` [L492][ld-stores] first for memory nodes), **Custom** (`TLI.LowerOperation`, [x-lower]; `ReplaceNodeResults` [x-replace] for results of an illegal type), **Expand** (`ExpandNode` [L3210][ld-expand], then `ConvertNodeToLibcall` [L4734][ld-lib] for what remains), **Promote** (`PromoteNode` [L5432][ld-promote]), **LibCall** (`ExpandLibCall` [L2115][ld-libcall]). Runs after types are legal (B0) and before the third combine.
+
+**Correction found while reading the pin.** The i486 `select` is not expanded to a branch in the DAG. `LowerSELECT` ([L25834][x-select2]) builds `X86ISD::CMOV` on EFLAGS from a `CMP` for every CPU; with `NoCMOV` the matcher picks the `CMOV_GR8/GR16/GR32` pseudos (`X86InstrCompiler.td` L577 to L629, `usesCustomInserter`), and `EmitLoweredSelect` ([L37564][x-lowered]) turns each into a branch and a phi at instruction emission (`EmitInstrWithCustomInserter` [L38957][x-inserter], called by `InstrEmitter`). So B1's premise test is on the DAG (`select` becomes `CMOV` of a `CMP`). Handoffs:
+
+1. sdag-c owns the `CMOV_GR8/GR16/GR32` pseudo patterns in the pruned i486/P5 table (no `CMOV32rr` there; pinned by its `neither_cpu_emits_cmov` test, descriptors in #3721).
+2. sdag-d owns the emitter calling the custom inserter, and `EmitLoweredSelect` (block split, branch, phi).
+3. sdag-b owns the DAG side: `LowerSELECT` to `CMOV` (B1c).
+
+| Id | Piece | Due | Premise test (fail first) |
+|---|---|---|---|
+| B1a | `SelectionDAGLegalize` driver: topological walk, `LegalizeOp` dispatch by action, `Promote` via `type_to_promote_to`, results through the B0 replace machinery | 2026-12-10 | a DAG with an `i8` `add` marked Promote becomes `trunc(add i32 (anyext a), (anyext b))`; a node whose action is Expand and has no `ExpandNode` case is refused by name |
+| B1b | `ExpandNode` subset: `SDIV/UDIV/SREM/UREM` to `SDIVREM/UDIVREM`, `BR_CC` to `SETCC` + `BRCOND`, `SELECT_CC` to `SETCC` + `SELECT`, `MULHS/MULHU` to `SMUL_LOHI/UMUL_LOHI`, `BSWAP` of a word, `UADDO`/`USUBO` family | 2026-12-17 | `sdiv i32` gives one `SDIVREM` and `x / y` with `x % y` share it (CSE); `br_cc` leaves no `BR_CC` node |
+| B1c | `LowerOperation` core: `EmitCmp` ([L24085][x-cmp]) to `X86ISD::CMP`, `LowerSETCC` ([L25293][x-setcc]) to `SETCC`, `LowerSELECT` to `CMOV`, `LowerBRCOND` to `BRCOND`; the `X86ISD` node enum as `ISD::Target(n)` names | 2027-01-07 | `select (icmp ult a, b), x, y` at i32 is `CMOV x, y, ULT, (CMP a, b)`; `brcond (icmp eq a, 0)` tests with `CMP a, 0` (not a materialized bool); CPU has no CMOV and the DAG is the same |
+| B1d | Shifts and FP: `LowerShiftParts` ([L20256][x-parts]) for `i64` shifts, `LowerSINT_TO_FP` ([L20628][x-sint]), `LowerUINT_TO_FP` ([L21136][x-uint]), `LowerFP_TO_INT` ([L22157][x-fpint]) for x87 | 2027-01-14 | `shl i64 x, y` is `SHL_PARTS` then `SHLD`/`SHL` with the `y & 32` select; `uitofp i32` at x87 goes through `i64` `FILD`; `fptoui` has the range check |
+| B1e | Libcalls: `ExpandLibCall` with our helper table (SD19) for `i64` division and `fmod` | 2027-01-14 | `i64 sdiv` is a `CALL` to the `llrm_x86::helpers` routine named by the contract |
+
+`ISD` lacks `SHL_PARTS`, `SDIVREM`, `SMUL_LOHI`, `BR_CC` forms and the `X86ISD` names; each piece adds the variants it needs to `isd.rs` in the pin's position, small and registered here.
+
+### B0 addendum: the m32 action table and the `far` tests
+
+**Action table (B0a2, 2026-12-03 with B0d).** The pin sets actions in `X86TargetLowering::X86TargetLowering` ([L131][x-ctor]) in one pass, and a later call overwrites an earlier one, so the Rust table is built by the same calls in the same order. Translated for i486/P5, with each arm's line range kept as a comment: scalar integer setup (L134-L178: x87 on, boolean contents `ZeroOrOne`, shift amounts and setcc results `i8`, scheduling preference RegPressure at 32 bits [L148][x-sched]); register classes (L179-L188); truncating stores and extending loads (L189-L198); `ABS`, funnel shifts, saturating ops (L205-L240, `canUseCMOV` false before P6: the CMOV arms are not taken); the `!useSoftFloat` arm for x87 (L241-L310, only the `hasX87` parts); integer divide and remainder as `SDIVREM`/`UDIVREM` and multiply-high (L327-L352); bit counts (L364-L450: `CTTZ`/`CTLZ` expand without BMI/LZCNT, `CTPOP` expands without POPCNT, so `bitcounts.rs` goes at Phase 2); `SELECT`/`SELECT_CC`/`BR_CC` custom (L469-L484, the pin expands `cmov` itself); 64-bit shifts as `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS` custom (L508-L520); atomics (L522, N/A: MIR has none); `VASTART` and friends (L559-L570); x87 FP arms (L764-L870: f32/f64 `RFP` classes when `UseX87` and no SSE, `f80` always); the common FP expansions (L935-L969); and the 32-bit-only custom lowerings at L2749-L2830. Not translated and listed as N/A with their ranges: every `hasSSE*`, `hasAVX*`, `hasAVX512`, `hasBWI`, `hasVLX`, `hasFP16`, `hasMMX`, `hasXOP`, `hasGFNI`, AMX and `is64Bit` arm (L318-L326, L437-L468 partly, L618-L1034, L1036-L2748). Premise test for the table: a line count of calls per arm against the pin's, so a dropped arm shows (the count comes from the pin's source, checked in as a list, and the test compares the table's number of set actions per category to it).
+
+**`far` tests (B0e).** Each fails first (the type has no rule before B0e):
+
+1. `far` constant `(0x1234:0x0010)` expands to two `i16` constants, offset first.
+2. `far` load from `p` is `i16` load at `p` and `i16` load at `p+2`, chain joined by a `TokenFactor`; the pin's `ExpandIntRes_LOAD` ([L4414][li-load]) is the shape.
+3. `far` store is two `i16` stores at the same offsets, one chain.
+4. `far == far` and `far != far` expand to a compare of both halves combined with `and`/`or` (not a 32-bit compare).
+5. `far` `select` is two `i16` selects on one condition.
+6. `far` through `CopyToReg`/`CopyFromReg` is two virtual registers, offset then selector (the order `les` loads them in).
+7. `far` to `i32` and back (`far_cast`) is `BUILD_PAIR`/`EXTRACT` of the halves, no arithmetic.
+8. At m32 a `far` node is refused with a message naming the target (SD2: m16 only).
 
 The ordering inside a group is the table's; groups run in parallel from 2026-10-26, so by 2026-12-03 an end-to-end function exists (A0, A1, B0, C0, D0 done; D1 joins them). Shadow means the old selector produces the output; the new one runs in `--isel=dag` and in the harness.
 
@@ -128,10 +163,43 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 
 ## 5. Risks, numbered
 
-1. **The table's size and walk cost** (§3): priced at C0 with callgrind on the interpreter; no estimate yet.
+1. **The table's size and walk cost** (§3), priced at C0 (2026-10-22, callgrind on `examples/price.rs`, eight scalar node shapes): the pin's table is 639,106 bytes, 308,885 items decoded; pruned to the i486 CPU it is 15,108 items (P5 15,116), 24 bytes each, 362 KB static. The interpreter costs 3,495 Ir per selected node with reused buffers (4,819 before; 1.7k of it the walk itself). Projection on d_faces -O2 (i486, 1.28 G compile): the pin's llc makes 3,792 `Select` calls and spends 6.65 M Ir in `SelectCodeCommon` (1,755 per node, hooks included; whole isel bucket 54.5 M); the same count at 3,495 is 13.3 M, 1.0% of the compile. Our figure is a bench of simple shapes with a stub DAG, so it is a floor until A1 gives real nodes. If the walk proves slow, the `match` fallback below stays open.
 2. **Combiner scale**: 32.5k lines of C++ plus X86's `PerformDAGCombine`; the plan lands visitors by corpus frequency and leaves the rest as numbered MISSING rows in this file's table (to be added at B2), not as a gap with no owner.
 3. **m16 patterns the pin lacks** (SD2..SD4, SD9): the largest source of DEVIATEs; each carries a pin-dump premise test that shows the pin cannot express it.
 4. **Quality regressions against the hand-tuned selector**: the shadow report is the instrument; per [pr-rules](pr-rules.md) rows above main are fixed generally or kept by a numbered DEVIATE with the row as evidence, never by a shape patch.
+
+## 6. DEVIATE registry
+
+One list of the `SD` numbers, so no two groups take one. Add a row in the PR that first uses a number; the next free number is the last row's plus one. The reason, exit and review date sit in the code or section named.
+
+| SD | Owner | What | Where |
+|---|---|---|---|
+| SD1 | plan | MIR, not LLVM IR, is the builder's input | §2 |
+| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `selectiondag/lowering.rs` |
+| SD3 | sdag-c | 16-bit real-mode address components | §2 |
+| SD4 | sdag-c | BX/SI/DI/BP address classes on virtual registers | §2 |
+| SD5 | sdag-a | calling conventions from `Convention::place` | §2 |
+| SD6 | sdag-c | x87 as `RFP` pseudo-forms until `fpstack.rs` | §2 |
+| SD7 | plan | `i64` is two dwords at both sizes (no change) | §2 |
+| SD8 | sdag-c | our cycle tables break ties inside a `group` | §2 |
+| SD9 | sdag-c | `.td`-syntax additions for patterns the pin lacks (block) | §3 |
+| SD10 | sdag-a | no `SDLoc` | `selectiondag.rs` |
+| SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
+| SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
+| SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
+| SD14 | sdag-b | floating types always legal (no soften/expand) | `selectiondag/lowering.rs` |
+| SD15 | sdag-a | `FindMergedConditions` not ported | builder |
+| SD16 | sdag-a | no `LiveOutRegInfo` | builder |
+| SD17 | sdag-a | vreg numbers differ from the pin's | builder |
+| SD18 | sdag-a | select patterns (abs, min, max) | builder |
+| SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
+| SD20 | sdag-c | matcher jumps count items; `ByHwMode` resolved at generation | `llrm-dagisel/src/interp.rs` |
+| SD21 | sdag-c | no `mayRaiseFPException`/`NoFPExcept` in the interpreter | `llrm-dagisel/src/interp.rs` |
+| SD22 | sdag-c | no `MatchStateUpdater` around complex patterns | `llrm-dagisel/src/interp.rs` |
+| SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
+| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+
+Next free: **SD33**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
@@ -190,3 +258,16 @@ One PR per deleted unit, each naming its path in `Deletes:`, each after the DAG 
 [li-mul]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4540
 [li-shiftc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3296
 [li-esetcc]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3589
+[li-load]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4414
+[ld-loads]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L669
+[ld-stores]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L492
+[ld-expand]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L3210
+[ld-lib]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L4734
+[ld-promote]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L5432
+[ld-libcall]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L2115
+[x-lowered]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L37564
+[x-inserter]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L38957
+[x-parts]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L20256
+[x-sint]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L20628
+[x-uint]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L21136
+[x-fpint]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L22157

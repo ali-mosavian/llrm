@@ -123,6 +123,16 @@ pub fn work() -> u64 {
     work_now()
 }
 
+/// `f`'s result and the work it did on this thread: instructions retired where
+/// the counter reads, else CPU time. A slope test reads this, not the wall
+/// clock, which other sessions' load stretch (four such tests failed under the
+/// gate and passed alone).
+pub fn work_of<R>(f: impl FnOnce() -> R) -> (R, u64) {
+    let before = work_now();
+    let result = f();
+    (result, work_now().saturating_sub(before))
+}
+
 thread_local! {
     /// The work spent in analyses, outermost first (one inside another is
     /// counted once), and how deep in them the thread is.
@@ -603,5 +613,27 @@ mod tests {
             "{row}"
         );
         assert!(row.contains("12075 timed spans"), "{row}");
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::work_of;
+
+    /// A quadratic loop and a linear one over `n` items, to see what a slope
+    /// test makes of them: the ratio of the work at 4x the size.
+    fn ratio(step: impl Fn(usize) -> usize) -> f64 {
+        let least = |n: usize| (0..3).map(|_| work_of(|| std::hint::black_box(step(n))).1).min().unwrap() as f64;
+        least(4000) / least(1000)
+    }
+
+    /// Work is a count, not a duration: a linear loop's 4x size costs about 4x
+    /// and a quadratic one's about 16x, whatever else runs on the machine.
+    #[test]
+    fn work_of_tells_a_quadratic_loop_from_a_linear_one() {
+        let linear = ratio(|n| (0..n * 50).fold(0, |sum, one| sum ^ one));
+        let quadratic = ratio(|n| (0..n).map(|a| (0..n).fold(a, |sum, one| sum ^ one)).sum::<usize>());
+        assert!(linear < 6.0, "linear {linear:.1}");
+        assert!(quadratic > 10.0, "quadratic {quadratic:.1}");
     }
 }

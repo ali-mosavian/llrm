@@ -100,6 +100,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
+use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
@@ -155,7 +156,7 @@ pub fn assembled(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
 ) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::m16(), &llrm_x86_m16::M16)
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16)
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
@@ -166,6 +167,7 @@ pub fn assembled_by(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
     selection: &'static isel::Compiled,
+    selector: Selector,
     arch: &dyn llrm_target::Target,
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
@@ -184,6 +186,7 @@ pub fn assembled_by(
         cpu,
         segments,
         selection,
+        selector,
         arch,
         classes: &classes,
         runtime: "",
@@ -494,6 +497,8 @@ pub struct Target<'t> {
     pub segments: &'t Segments,
     /// The instruction selector of the target, which its driver binds.
     pub selection: &'static isel::Compiled,
+    /// `--isel=`: which selector makes the LIR.
+    pub selector: Selector,
     /// The target the selection is for.
     pub arch: &'t dyn llrm_target::Target,
     pub runtime: &'t str,
@@ -572,6 +577,9 @@ pub fn machined(
     // cost.
     if crate::support::debug::enabled("cost") {
         llrm_support::debug!("cost", "{}", executed::summary(&kept.body, target.cpu));
+    }
+    if crate::support::debug::enabled("isel") {
+        llrm_support::debug!("isel", "{}", shadow::row(&kept.body, target.selector));
     }
     if crate::support::debug::enabled("pressure") {
         if let Some(row) = executed::pressure(&kept.body) {
@@ -1102,6 +1110,9 @@ fn staged(
 ) -> Result<Staged, String> {
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
+    if target.selector == Selector::Dag {
+        return Err(format!("@{name}: --isel=dag: the SelectionDAG selector cannot select this function yet"));
+    }
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || {
         isel::selected_with(
@@ -1157,6 +1168,15 @@ fn staged(
     } else {
         Rc::clone(target.classes)
     };
+    if llrm_support::env_flag!("ISEL_DUMP") {
+        println!(
+            "{}",
+            crate::backend::lirtext::lir_stage(
+                &format!("ISel {}", target.selector.name()),
+                &[(body.name.clone(), body.clone())],
+            )
+        );
+    }
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
