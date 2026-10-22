@@ -171,3 +171,26 @@ b0:
     let marked = dump(&text(&format!("{base}-ni:2"))).expect("parses");
     assert!(!marked.contains("addrspace(1)"), "the far middle stayed: {marked}");
 }
+
+/// A load through `segment:0` of a global's selector read the global's own
+/// initializer at the offset (`@k[3]`, 100) where the address is DS:3.
+#[test]
+fn a_load_through_a_selector_cast_is_not_folded_from_the_global_it_came_from() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@k = constant [4 x i8] c\"abcd\"
+
+define i8 @f() {{
+b0:
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) addrspacecast (ptr @k to ptr addrspace(2)) to ptr addrspace(1)), i16 3)
+  ret i8 %v
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16";
+    assert!(dump(&text(base)).expect("parses").contains("100"), "premise: an integral middle space folds");
+    assert!(!dump(&text(&format!("{base}-ni:2"))).expect("parses").contains("100"));
+}
