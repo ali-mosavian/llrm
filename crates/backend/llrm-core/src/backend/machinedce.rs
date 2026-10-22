@@ -99,7 +99,7 @@ fn _slot(where_: &Loc) -> bool {
 }
 
 /// Whether removing this occurrence can remove only registers and flags.
-fn _pure(
+pub(crate) fn pure(
     regs: Regs,
     one: &Insn,
 ) -> bool {
@@ -141,7 +141,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
                 dead.clear();
                 continue;
             };
-            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(regs, one) {
+            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && pure(regs, one) {
                 redundant.insert(id(one));
                 changed = true;
                 continue;
