@@ -161,8 +161,10 @@ pub fn selected_checking(
     wrapv: bool,
     entry_requests: bool,
 ) -> Result<masm::Module, CompileError> {
+    let mut library = Vec::new();
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let (unit, profile) = prepared(text, codegen, wrapv, entry_requests)?;
+        library = library_routines(codegen, &profile);
         let program = translate::program(&unit, module, codegen.arch.calling(), &profile)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
@@ -170,11 +172,39 @@ pub fn selected_checking(
         Ok(llrm_core::hir::model::Program { stack_check, ..program })
     })?;
     let mut options = codegen.clone();
+    options.pipeline.library = library;
     if let Some(dump) = dump {
         fs::create_dir_all(dump)?;
         options.dump = Some(dump.to_path_buf());
     }
     Ok(llrm_core::driver::compiled(&program, &options)?.pop().expect("one module"))
+}
+
+/// The library routines the program is linked with under this compile's ABI
+/// (the pin's `TargetLibraryInfo`, which reads them from the triple): `strlen`
+/// where the C convention is the System V one of the host's libc, spelled as
+/// the ABI decorates it. DEVIATE D11 (see `pipeline::Options::library`): no
+/// other ABI states it, so no pass forms a call of it there (Open Watcom's
+/// register convention and the 16-bit runtimes are not proven to link it).
+fn library_routines(
+    codegen: &llrm_core::driver::Options,
+    profile: &Profile,
+) -> Vec<llrm_mir::libfunc::Routine> {
+    let calling = codegen.arch.calling();
+    let Some(convention) = calling.named(&profile.cdecl).filter(|one| one.cc.as_deref() == Some("sysv")) else {
+        return Vec::new();
+    };
+    let (Some(number), Some(pattern)) = (
+        llrm_target::calling::Calling::number_of(convention.cc.as_deref()),
+        convention.symbol.get(codegen.object_format),
+    ) else {
+        return Vec::new();
+    };
+    vec![llrm_mir::libfunc::Routine {
+        standard: "strlen",
+        symbol: pattern.replace('*', "strlen"),
+        calling_convention: number,
+    }]
 }
 
 /// `bytes.fromhex(raw)`.

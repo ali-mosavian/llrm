@@ -292,11 +292,12 @@ exit:
 }
 ";
 
-/// Without a count the pass does not decide: `runOnNoncountableLoop` is the
-/// C++'s next step (stage L4). The exit tests a load, so there is no count.
+/// Without a count the countable half does not decide and
+/// `runOnNoncountableLoop` runs (stage L4, the string length so far): the exit
+/// tests a load, but the module has no `strlen`, so nothing changes.
 #[test]
 fn test_a_loop_without_an_invariant_count_is_left_to_the_noncountable_half() {
-    assert_eq!(run_on_loop(UNCOUNTED, "f"), None);
+    assert_eq!(run_on_loop(UNCOUNTED, "f"), Some(false));
 }
 
 /// `text` through `LoopIdiom` under the pass manager, printed.

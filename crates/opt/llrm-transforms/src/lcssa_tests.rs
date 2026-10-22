@@ -388,3 +388,16 @@ b26:
     );
     assert!(closed.contains("add i16 %s.lcssa2, 1"), "{closed}");
 }
+
+/// `closed` found each loop's exits twice (once to know which blocks are exits,
+/// once to close the loop) and a multi-exit loop built its own dominators,
+/// graph and predecessors: 2.47 M against the pin's 0.28 M on d_faces' six
+/// functions. The edges leaving a loop are found once per closing.
+#[test]
+fn test_closing_finds_the_exits_of_a_loop_once() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(LOOP_WITH_EXIT_USE);
+    let before = get(Event::LoopExitScans);
+    closed(f(&mut module)).unwrap();
+    assert_eq!(get(Event::LoopExitScans) - before, 1);
+}
