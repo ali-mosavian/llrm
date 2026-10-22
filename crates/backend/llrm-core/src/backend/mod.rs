@@ -228,6 +228,7 @@ pub mod phielim;
 pub mod pointers;
 pub mod postings;
 pub mod postrasink;
+pub mod fixupbw;
 pub mod fixupsetcc;
 pub mod flagscopy;
 pub mod precse;
