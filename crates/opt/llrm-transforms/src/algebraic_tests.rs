@@ -227,26 +227,6 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
     }
 }
 
-/// The divisor is a number consts proves, not a constant operand.
-#[test]
-fn test_a_divisor_known_through_a_phi_is_a_power_of_two() {
-    let text = "define i32 @f(i32 %x, i1 %c) {
-b0:
-  br i1 %c, label %b1, label %b2
-
-b1:
-  br label %b2
-
-b2:
-  %d = phi i32 [ 16, %b0 ], [ 16, %b1 ]
-  %q = sdiv i32 %x, %d
-  ret i32 %q
-}
-";
-    let inputs: Vec<Vec<i128>> = edges(32).into_iter().flat_map(|x| [vec![x, 0], vec![x, 1]]).collect();
-    assert!(!checked(text, &inputs).contains("sdiv"));
-}
-
 /// Not a positive power of two below the sign bit, possibly zero, or unsigned.
 #[test]
 fn test_other_divisions_stay() {

@@ -169,14 +169,7 @@ impl Builder {
                     index: Some(Held { value: index, width: 2 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
                 };
-                out.push(self.insn(
-                    Operation::Move,
-                    "mov",
-                    vec![held(d)],
-                    vec![Loc::Mem(cell)],
-                    &[d],
-                    &[base, index],
-                ));
+                out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[base, index]));
             }
             5 => {
                 let base = self.role_copy(s, out);
@@ -944,6 +937,21 @@ fn spilled_and_allocated(
 #[test]
 fn test_the_allocator_is_not_handed_the_spillers_slots() {
     for seed in [17, 28] {
+        for cpu in ["386", "486", "Core", "P5"] {
+            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+            spilled_and_allocated(seed, &shape, cpu).unwrap_or_else(|why| panic!("seed {seed} on {cpu}: {why}"));
+        }
+    }
+}
+
+/// Seeds the lane found wrong code for: the coalescer took a member out of a
+/// parallel copy to make it a move of the constant its source holds, and that
+/// move wrote before the other members read (seed 91: value#5 left as 0x45, not
+/// 0x0), or claimed the bytes its source's definition still claimed (seeds 130,
+/// 163, 233).
+#[test]
+fn test_a_copy_made_a_move_of_its_constant_keeps_its_place_and_its_bytes() {
+    for seed in [91, 130, 163, 233] {
         for cpu in ["386", "486", "Core", "P5"] {
             let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
             spilled_and_allocated(seed, &shape, cpu).unwrap_or_else(|why| panic!("seed {seed} on {cpu}: {why}"));

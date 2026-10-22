@@ -1444,6 +1444,26 @@ fn _color_slots(
     Ok(())
 }
 
+/// The colours of the homes from their `LiveStacks` ranges, the allocator's
+/// own: the ranges of what was spilled to each, not the liveness of the cell
+/// worked out again. None where a home has no range (it was not made by an
+/// inline spill).
+fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interval>)>> {
+    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
+    homes.sort_unstable();
+    let first = u32::MAX - homes.len() as u32;
+    homes
+        .iter()
+        .enumerate()
+        .map(|(index, home)| {
+            let segments = frame.stacks.get(home)?;
+            let capacity = frame.capacities.get(home).map_or(WORD, |one| *one as u32).max(WORD);
+            let segments = segments.iter().map(|(start, end)| Segment { start: *start, end: *end }).collect();
+            Some((*home, capacity, vec![Interval::new(first + index as u32, segments)]))
+        })
+        .collect()
+}
+
 /// The spill slots of `body` shared by what is never live together, once, as
 /// the allocation is kept: LLVM's `StackSlotColoring`, which runs after
 /// register allocation over the slots `InlineSpiller` gave each spilled
@@ -1469,7 +1489,21 @@ pub fn slots_colored(
     if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
         return body.clone();
     }
-    let (colors, _live) = _existing_colors(body, frame);
+    if llrm_support::env_flag!("LLRM_STACKS_DEBUG") {
+        let homes: std::collections::BTreeSet<i64> = frame.slots.values().copied().collect();
+        let covered = homes.iter().filter(|home| frame.stacks.contains_key(*home)).count();
+        eprintln!("stacks {}: {} homes, {} with a LiveStacks range", body.name, homes.len(), covered);
+    }
+    let colors = match _stacked_colors(frame) {
+        Some(colors) if !llrm_support::env_flag!("LLRM_NO_STACKS") => {
+            COLOURED.with(|one| one.set((one.get().0 + 1, one.get().1)));
+            colors
+        }
+        _ => {
+            COLOURED.with(|one| one.set((one.get().0, one.get().1 + 1)));
+            _existing_colors(body, frame).0
+        }
+    };
     let by_home: IndexMap<i64, &(i64, u32, Vec<Interval>)> = colors.iter().map(|color| (color.0, color)).collect();
     // The order the homes were made in.
     let mut order: Vec<i64> = Vec::new();
@@ -1626,7 +1660,13 @@ pub fn slots_colored(
     if body.bits >= 32 {
         ranked.reverse();
     }
-    let mut again = Frame { slots: IndexMap::default(), capacities: IndexMap::default(), ..frame.clone() };
+    // The homes move: their ranges are of the old ones.
+    let mut again = Frame {
+        slots: IndexMap::default(),
+        capacities: IndexMap::default(),
+        stacks: IndexMap::default(),
+        ..frame.clone()
+    };
     let mut first_key: Vec<Option<SlotKey>> = vec![None; shared.len()];
     for (key, home) in &frame.slots {
         if let Some(color) = into.get(home) {
@@ -1878,6 +1918,16 @@ fn _same_liveness(
 // with the homes in it is worked out at once.
 thread_local! {
     static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// (colourings from the allocator's `LiveStacks`, colourings that worked
+    /// the homes' liveness out of the body) on this thread.
+    static COLOURED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// How many colourings of homes this thread made from `LiveStacks`, and how
+/// many by working the liveness of the cells out, for a test that a spilling
+/// allocation does not do the second.
+pub fn colourings() -> (usize, usize) {
+    COLOURED.with(std::cell::Cell::get)
 }
 
 /// How many instructions this thread has made again with the homes among their
@@ -2960,6 +3010,27 @@ fn _stable_loads_from(
                                 && source.addr.is_some()
                                 && one.defines == [*value]
                                 && one.uses.is_empty()
+                                && one.clobbers.is_empty()
+                                && one.group.is_none()
+                                && one.spread.is_empty()
+                                && !one.volatile
+                                && one.symbol != Some(true)
+                            {
+                                cell = Some(source.clone());
+                            }
+                        }
+                    }
+                    // An x87 load of a fixed cell (a frame cell, a global):
+                    // made again where it is read, as the
+                    // integer load above.
+                    if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
+                        if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
+                            (what.dests.as_slice(), what.sources.as_slice())
+                        {
+                            if dest.value == *value
+                                && (_fixed_data(source).is_some() || _incoming_frame(source))
+                                && one.uses.is_empty()
+                                && one.defines == [*value]
                                 && one.clobbers.is_empty()
                                 && one.group.is_none()
                                 && one.spread.is_empty()
@@ -7611,6 +7682,19 @@ mod tests {
         let owner = insns.iter().find(|one| one.covers == Some((3, 6))).unwrap();
         assert!(owner.is_meta(), "{owner:?}");
         assert!(select::emit(owner.what.as_ref().unwrap(), 3, None, false, false, None).unwrap().code.is_empty());
+    }
+
+    /// `slots_colored` worked the liveness of every spill cell out of the body
+    /// again (11.5 M of the 15.2 M it cost on d_faces -O2) although the spills
+    /// had been written with the range of each home (`LiveStacks`). A spilling
+    /// allocation colours its homes from those ranges and works nothing out.
+    #[test]
+    fn test_a_spilling_allocation_colours_its_homes_from_the_live_stacks() {
+        let (stacked, recomputed) = super::colourings();
+        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
+        let (stacked_now, recomputed_now) = super::colourings();
+        assert!(stacked_now > stacked, "premise: some body spilled to a home and was coloured");
+        assert_eq!(recomputed_now - recomputed, 0, "colourings that worked the homes' liveness out");
     }
 
     #[test]

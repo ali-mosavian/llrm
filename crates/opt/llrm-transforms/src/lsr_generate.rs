@@ -32,10 +32,11 @@
 //! DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
 //! of the product, but for an odd factor `x == 0` and `x * c == 0` are the same
 //! compare (multiplying by it is a bijection mod 2^bits), so it ignores the
-//! significant bits there, for the counter alone compared to zero. The pin keeps a loop's exit counter beside the
-//! scaled one it is a multiple of (recsum: `dec; add -3; jne`); this exits on
-//! the scaled one (`add -3; jne`), as the stand-in LSR did. Exit: none, a
-//! proof; if LLVM does the same, delete the line.
+//! significant bits there, for the counter alone compared to zero. The pin
+//! keeps a loop's exit counter beside the scaled one it is a multiple of
+//! (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
+//! as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
+//! the line.
 
 use std::collections::BTreeMap;
 
@@ -172,6 +173,7 @@ impl Collection<'_, '_> {
             lu.min_offset,
             lu.max_offset,
             lu.kind,
+            lu.access_ty.addr_space,
             f.base_gv.is_some(),
             f.base_offset,
             f.has_base_reg,
@@ -216,12 +218,12 @@ impl Collection<'_, '_> {
             {
                 continue;
             }
-            let (min, max, kind) = {
+            let (min, max, kind, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space)
             };
             // A constant that could be folded into an immediate stays there.
-            if is_always_foldable_scev(self.tti, se, cx, min, max, kind, piece, base.num_regs() > 1) {
+            if is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, piece, base.num_regs() > 1) {
                 continue;
             }
             // All operands but this one.
@@ -229,7 +231,7 @@ impl Collection<'_, '_> {
                 add_ops.iter().enumerate().filter(|&(at, _)| at != j).map(|(_, &op)| ScevUse::of(op)).collect();
             // Not just a constant left behind in a register, if it could fold.
             if inner.len() == 1
-                && is_always_foldable_scev(self.tti, se, cx, min, max, kind, inner[0].scev, base.num_regs() > 1)
+                && is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, inner[0].scev, base.num_regs() > 1)
             {
                 continue;
             }
@@ -558,6 +560,7 @@ impl Collection<'_, '_> {
                     offset,
                     offset,
                     lu.kind,
+                    lu.access_ty.addr_space,
                     f.base_gv.is_some(),
                     f.base_offset,
                     f.has_base_reg,
@@ -570,13 +573,15 @@ impl Collection<'_, '_> {
             f.base_offset = f.base_offset.add_unsigned(offset).sub_unsigned(min_offset);
 
             let factor_s = se.get_constant_of_type(cx, int_ty, i128::from(factor));
-            // DEVIATE LG1: `x == 0` and `x * c == 0` are the same compare for an
-            // odd `c` (multiplying by it is a bijection of the integers mod
-            // 2^bits), so the product may wrap where LLVM's `getExactSDiv`
-            // wants it not to (`isMulSExtable`). Only for the counter alone
+            // DEVIATE LG1: `x == 0` and `x * c == 0` are the same compare for
+            // an odd `c` (multiplying by it is a bijection of the
+            // integers mod 2^bits), so the product may wrap where
+            // LLVM's `getExactSDiv` wants it not to
+            // (`isMulSExtable`). Only for the counter alone
             // compared to zero: with a limit besides it the scaled limit is a
             // multiply in the preheader and an add in the loop, which the cost
-            // model prices below `dec; je` (x_adler -O2: 47972 -> 50976 clocks).
+            // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
+            // clocks).
             let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
@@ -635,9 +640,9 @@ impl Collection<'_, '_> {
             base.scale = factor;
             base.has_base_reg = base.base_regs.len() > 1;
             // Whether this scale will be legal.
-            let (min, max, kind, outside) = {
+            let (min, max, kind, outside, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty.addr_space)
             };
             let legal = |kind| {
                 is_legal_use(
@@ -645,6 +650,7 @@ impl Collection<'_, '_> {
                     min,
                     max,
                     kind,
+                    space,
                     base.base_gv.is_some(),
                     base.base_offset,
                     base.has_base_reg,

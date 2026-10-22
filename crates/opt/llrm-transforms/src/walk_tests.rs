@@ -236,6 +236,64 @@ b0:
     );
 }
 
+/// The Simplify list runs GVN before its jump threading, and the copies of a
+/// recursion in itself join their paths only in the threading: run once, each
+/// copy repeated the calls of the ones that dominate it (fib -O2, i486 rows:
+/// 154398 clocks once, 14802 with the list run again). A body with copies runs
+/// the list twice, one without once.
+#[test]
+fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
+    use llrm_mir::program::ProgramPass;
+    let runs = |text: &str| {
+        let mut module = parsed(text);
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = std::rc::Rc::clone(&seen);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut analyses = Default::default();
+                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                walk.run(program, &mut analyses)?;
+                let mut modules = super::managers(program, &mut analyses);
+                let mut late = crate::walk::SelfInline {
+                    simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
+                    for_size: false,
+                };
+                late.apply(program, &mut modules)
+            },
+        )
+        .and_then(|done| done)
+        .expect("the late step runs");
+        seen.get()
+    };
+    let fib = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+    assert_eq!(runs(fib), 2, "fib has copies");
+    assert_eq!(runs(LINEAR), 0, "a count-down waits for nothing");
+}
+
 /// A tail-recursive function called once: tail-call elimination makes its
 /// loop, and the caller then inlines it (LLVM's CGSCC order, which the pin
 /// follows). `recursive` and the call counts were taken before the walk, so
@@ -846,4 +904,50 @@ fn test_an_os_call_whose_stack_arguments_make_the_loop_a_constant_is_inlined() {
 fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     let top = sized_top(7, 5, false);
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
+}
+
+/// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
+/// differ from a fresh listing` of 26 programs: what `post_order` stated of a
+/// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
+/// held `Declarations` was not looked at again, so the next body's callers
+/// priced the callee by the attributes it had before.
+#[test]
+fn a_callee_the_walk_states_attributes_of_is_held_with_them_for_the_next_body() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal void @w(ptr %p) {
+b0:
+  store i16 1, ptr %p
+  ret void
+}
+
+define void @c(ptr %p) {
+b0:
+  call void @w(ptr %p)
+  ret void
+}
+",
+    );
+    let stale = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = std::rc::Rc::clone(&stale);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        move |program: &mut llrm_mir::program::Program| {
+            let seen = std::rc::Rc::clone(&seen);
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { limit: 0, ..Default::default() },
+                simplify: Box::new(move |module, analyses, _, _| {
+                    let held = analyses.get::<llrm_mir::passes::Declarations>(module);
+                    if *held != module.declarations() {
+                        seen.set(true);
+                    }
+                }),
+            };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    assert!(!stale.get(), "the held declarations differ from a fresh listing");
 }

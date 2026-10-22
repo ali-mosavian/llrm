@@ -119,6 +119,7 @@ pub mod effects;
 pub mod equivalence;
 pub mod floatbounds;
 pub mod floatfacts;
+pub mod forging;
 pub mod frameescape;
 pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
@@ -128,9 +129,9 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
-pub mod ivdescriptors;
 pub mod initializes;
 pub mod interprocedural;
+pub mod ivdescriptors;
 #[cfg(test)]
 mod laa_testing;
 pub mod liveness;

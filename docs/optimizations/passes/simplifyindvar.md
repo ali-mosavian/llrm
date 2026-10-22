@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifyindvar.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifyindvar.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:d84f8206ef8df01d2369348f64fa5da71b4a89ecc8edb90f02094793c3cbd4b5 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifyindvar.rs sha256:02f7f15e323b76e35a3b9286a90a2ea6edd0265060b2b0f9490c90015aacf314 -->
 
 # simplifyindvar
 
@@ -17,10 +17,9 @@ is walked through in turn. A comparison with an answer has every use
 replaced by it; `decide` and `dead` then do the rest.
 
 Not translated, each its own step: `foldIVUser`,
-`replaceIVUserWithLoopInvariant`, `makeIVComparisonInvariant` (needs the
-expander), the `samesign` canonicalisation, `eliminateSDiv`,
-`simplifyIVRemainder`, `strengthenBinaryOp`, `eliminateTrunc` and the
-float-induction replacement.
+`replaceIVUserWithLoopInvariant`, the `samesign` canonicalisation,
+`eliminateSDiv`, `simplifyIVRemainder`, `strengthenBinaryOp`,
+`eliminateTrunc` and the float-induction replacement.
 
 ```text
  loop (n <= 100):  %i = phi [0, ...], [%i.next, ...]

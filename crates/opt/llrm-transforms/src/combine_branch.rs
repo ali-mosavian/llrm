@@ -40,7 +40,8 @@ impl Combiner<'_> {
         if branch.opcode != Opcode::Br || matches!(cond, Operand::Constant(_)) {
             return Visit::None;
         }
-        // Change br (not X), label True, label False to: br X, label False, True
+        // Change br (not X), label True, label False to: br X, label False,
+        // True
         if let Some(x) = pattern::not(&query(self, Some(inst)), cond)
             && !matches!(x, Operand::Constant(_))
         {

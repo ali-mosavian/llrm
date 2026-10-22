@@ -356,10 +356,12 @@ fn numeric(
         });
         Ok(TokenKind::Real(text.trim_end_matches(['!', '#']).replace(['D', 'd'], "E"), suffix))
     } else {
-        let number = text
-            .trim_end_matches(['%', '&'])
-            .parse()
-            .map_err(|_| error(span(*at), "integer literal is out of range"))?;
+        let parsed = text.trim_end_matches(['%', '&']).parse::<i64>();
+        // BC: digits beyond a LONG make a double (`DATA 123456789012345`).
+        if explicit_suffix.is_none() && parsed.as_ref().map_or(true, |number| *number > i64::from(i32::MAX)) {
+            return Ok(TokenKind::Real(text.to_owned(), Some('#')));
+        }
+        let number = parsed.map_err(|_| error(span(*at), "integer literal is out of range"))?;
         if number > i64::from(i32::MAX) || (explicit_suffix == Some('%') && number > i64::from(i16::MAX)) {
             return Err(error(span(*at), "integer literal is out of range"));
         }

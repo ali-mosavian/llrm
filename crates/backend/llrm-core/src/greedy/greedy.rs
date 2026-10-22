@@ -363,6 +363,10 @@ pub trait Spiller {
     fn failed(&self) -> bool {
         false
     }
+
+    /// The ranges of the homes the spills went to (`LiveStacks`), left where
+    /// the allocator's caller reads them, once the allocation is done.
+    fn stacked(&mut self) {}
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -435,6 +439,11 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// `LiveStacks` left for the caller (the spiller's homes' ranges).
+    pub fn stacked_spills(&mut self) {
+        self.spiller.stacked();
     }
 
     /// Whether the spiller failed to write a spill.
@@ -806,14 +815,46 @@ impl<'a> RAGreedy<'a> {
                 // If !MaxCost.isMax(), then we're just looking for a cheap
                 // register. Evicting another local live range
                 // in this case could lead to suboptimal
-                // coloring. (Local reassignment is off by default.)
-                if !max_cost.is_max() && is_local && self.lis.interval_is_in_one_mbb(&intf).is_some() {
+                // coloring, unless it can move (`EnableLocalReassign`, on: the
+                // subtarget answers true, TargetSubtargetInfo.cpp#L59).
+                if !max_cost.is_max()
+                    && is_local
+                    && self.lis.interval_is_in_one_mbb(&intf).is_some()
+                    && !self.can_reassign(&intf, phys)
+                {
                     return false;
                 }
             }
         }
         *max_cost = cost;
         true
+    }
+
+    /// `canReassign` (RegAllocGreedy.cpp#L590): `virt` could take a register
+    /// other than `from` that nothing assigned interferes with.
+    fn can_reassign(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        from: RegId,
+    ) -> bool {
+        let order = self.order_of(virt.reg());
+        for (reg, _) in order.iter() {
+            if reg == from {
+                continue;
+            }
+            // If no units have interference, reassignment is possible.
+            let mut clash = false;
+            for unit in self.matrix.tri().regunits(reg) {
+                if !self.matrix.query_vregs(virt.reg(), &virt.range, unit, 1).is_empty() {
+                    clash = true;
+                    break;
+                }
+            }
+            if !clash {
+                return true;
+            }
+        }
+        false
     }
 
     /// `tryFindEvictionCandidate` (RegAllocEvictionAdvisor.cpp#L323).

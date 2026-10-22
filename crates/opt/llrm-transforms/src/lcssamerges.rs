@@ -122,7 +122,7 @@ use llrm_analysis::{cfg, ssa};
 use llrm_mir::module::{Function, Operand, ValueId};
 
 use crate::edges;
-use crate::lcssa::{arms, definitions, exit_phi, from_arms, operations, place_phi};
+use crate::lcssa::{arms, exit_phi, from_arms, operations, outside_reads, place_phi};
 
 /// Whether anything changed.
 pub fn closed(
@@ -141,37 +141,26 @@ pub fn closed(
     }) {
         return Ok(false);
     }
-    let definitions = definitions(function, &loop_.body);
-    let mut sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        for inst in operations(function, cfg::block(block.at)) {
-            for operand in &function.instruction(inst).operands {
-                if let Operand::Value(value) = operand
-                    && definitions.contains_key(value)
-                {
-                    sites.entry(*value).or_default().insert(block.at);
-                }
-            }
-        }
-        for phi in edges::phis(function, cfg::block(block.at)) {
-            for (value, parent) in arms(function, phi) {
-                if let Operand::Value(value) = value
-                    && !loop_.body.contains(&cfg::id(parent))
-                    && definitions.contains_key(&value)
-                {
-                    sites.entry(value).or_default().insert(cfg::id(parent));
-                }
+    let reachable = graph.iter().map(|block| block.at).collect::<BTreeSet<_>>();
+    let mut sites: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
+    for (value, home, reads) in outside_reads(function, &loop_.body) {
+        for read in reads {
+            let site = match read.from {
+                Some(from) if loop_.body.contains(&from) => continue,
+                Some(from) => from,
+                None => read.home,
+            };
+            if reachable.contains(&read.home) {
+                sites.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
             }
         }
     }
     let mut changed = false;
-    for (&value, value_sites) in &sites {
+    for (&value, (home, value_sites)) in &sites {
         let available = exits
             .iter()
             .copied()
-            .filter(|at| {
-                predecessors[at].iter().all(|&parent| dominance.dominates(function, definitions[&value], parent))
-            })
+            .filter(|at| predecessors[at].iter().all(|&parent| dominance.dominates(function, *home, parent)))
             .collect::<BTreeSet<_>>();
         let mut needed = BTreeSet::new();
         let mut pending = value_sites.iter().copied().collect::<Vec<_>>();

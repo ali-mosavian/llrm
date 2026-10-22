@@ -385,6 +385,7 @@ impl ProgramPass for Walk {
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
                 if !members.is_empty() {
+                    let mut stated = false;
                     for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
@@ -392,6 +393,11 @@ impl ProgramPass for Walk {
                         &members,
                     ) {
                         modules[at].changed(id);
+                        stated = true;
+                    }
+                    // What it stated reaches the next body's callees.
+                    if stated {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }
@@ -488,6 +494,7 @@ impl SelfInline {
             let marked: Vec<GlobalId> =
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
+                let mut copies = 0;
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
@@ -507,7 +514,7 @@ impl SelfInline {
                         self_inlining: Some(&frequencies),
                         peeling: false,
                     };
-                    crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    copies = crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
                     if declared.place(module)? > 0 {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
@@ -524,6 +531,21 @@ impl SelfInline {
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
+                // DEVIATE (recursion, D10 third part, docs/architecture/
+                // recursion-rows.md): the pin runs its function pipeline once
+                // (`NoRerun`, PassBuilderPipelines.cpp:1047) and has no
+                // self-copies; gcc's FRE and PRE run again after the inliner.
+                // The list runs GVN before jump threading and the copies' paths
+                // join in the threading, so once, each copy repeats the calls
+                // of the ones that dominate it (fib -O2: 154398 clocks once,
+                // 14802 twice). Owner: w-6. Exit: this run goes when the
+                // cleanup can run in
+                // the pin's inline-then-cleanup order, or when that order gives
+                // fib and x_fib at or below main (227171) without it; review
+                // 2026-11-30, else a permanent numbered DEVIATE.
+                if copies > 0 {
+                    (self.simplify)(module, &mut modules[at], id, "self-inline-again.");
+                }
             }
         }
         Ok(())

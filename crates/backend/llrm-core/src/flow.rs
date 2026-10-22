@@ -58,12 +58,13 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 7] =
-    ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE"];
+const UNOPTIMIZED: [&str; 8] =
+    ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE", "OptimizePHIs"];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 20] = [
+const SLOTS: [(&str, &str); 21] = [
     ("FarIndirectCalls", "farcall@1"),
+    ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
@@ -112,6 +113,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // On SSA, first: a phi cycle that carries one value is that value (the
+        // pin: OptimizePHIs, ahead of MachineCSE).
+        Box::new(crate::backend::optimizephis::OptimizePhis),
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),

@@ -26,9 +26,12 @@
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
 //! once over the edited function. Costs memory operands where a home held.
 //!
-//! DEVIATE D-C: a spill slot is a `Frame` cell per original register, shared
-//! afterwards by `slots_colored`; LLVM shares through `LiveStacks` as it goes.
-//! Exit: `LiveStacks` translated with SplitKit.
+//! DEVIATE D-C: a spill slot is a `Frame` cell per spilled register, shared
+//! afterwards by `slots_colored`, over the homes' ranges this spiller merges
+//! as it spills (`LiveStacks`, `Frame::stacks`). LLVM's `StackSlotColoring`
+//! gives a slot its weight and order from the same ranges; ours keeps the
+//! colouring `slots_colored` has (copy partners, loop widths, four orders).
+//! Exit: those rules rewritten as `StackSlotColoring`'s `ColorSlot`.
 //!
 //! # Example
 //! `%7` read at 48 and written at 64 becomes two registers, `[reload, 48r)` and
@@ -47,8 +50,9 @@ use super::greedy::{SpillContext, Spiller};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
 use super::tii::fold_memory_operand;
 use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::Frame;
+use crate::backend::frame::{Frame, SlotKey};
 use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::liverange::LiveRange;
 use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -74,6 +78,18 @@ pub struct Tables {
 // proves the same per live range (`_stable_loads_by`), which covers the m16
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
 // with an invariant-load flag set from those facts.
+//
+// DEVIATE D-RFP4 (w-4, 2026-10-30): an x87 load (`fld`) of a global or of an
+// incoming argument's cell, which nothing writes while the value lives, is made
+// again where it is read. The fact: X86InstrInfo takes a load only when it is
+// invariant (an immutable stack argument is; the integer loads of D-I are the
+// same proof, `_stable_loads_from`), but the x87 loads were never offered to
+// it, so the RFP route stored and reloaded them: QCport d_alias -Os 520 fld,
+// 461 fstp, 161 fxch against 462, 392, 144 with it. A local cell is left out
+// (the cell `fild` reads is written again between two loads). Exit: retire
+// when the pin's foldMemoryOperand/rematerialisation for x87 reaches the same
+// bytes, or with D-I.
+
 /// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
 /// register written by a plain move or address, nothing pinned or destroyed.
 pub fn remat_shape(one: &Insn) -> bool {
@@ -85,7 +101,10 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.clobbers_high.is_empty()
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
-            matches!(w.op, Operation::Move | Operation::Address)
+            matches!(
+                w.op,
+                Operation::Move | Operation::Address | Operation::FloatLoad
+            )
                 && matches!(
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
@@ -106,6 +125,9 @@ pub struct InlineSpiller<'a> {
     folded: usize,
     failed: bool,
     spilled: Vec<u32>,
+    /// `LiveStacks`: the range of each home, the segments of what was spilled
+    /// to it merged as one value.
+    stacks: crate::support::hash::HashMap<i64, LiveRange>,
 }
 
 impl<'a> InlineSpiller<'a> {
@@ -127,7 +149,28 @@ impl<'a> InlineSpiller<'a> {
             folded: 0,
             failed: false,
             spilled: Vec::new(),
+            stacks: Default::default(),
         }
+    }
+
+    /// `StackInt->MergeSegmentsInAsValue(OrigLI, ...)` (InlineSpiller.cpp
+    /// `spillAll`): `range`, the range of the register spilled, joins the
+    /// range of its home.
+    fn merged(
+        &mut self,
+        reg: u32,
+        range: &LiveRange,
+    ) {
+        let Some(&home) = self.frame.slots.get(&SlotKey::from(reg)) else { return };
+        let stack = self.stacks.entry(home).or_insert_with(LiveRange::new);
+        let value = if stack.get_num_val_nums() > 0 {
+            stack.get_val_num_info(0)
+        } else if let Some(first) = range.segments.first() {
+            stack.get_next_value(first.start.clone())
+        } else {
+            return;
+        };
+        stack.merge_segments_in_as_value(range, &value);
     }
 
     /// The units of `reg`'s instructions: a parallel copy is one, listed by its
@@ -292,6 +335,10 @@ impl<'a> InlineSpiller<'a> {
             self.tables.orders.borrow_mut().insert(value, order);
             let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
             self.tables.widths.borrow_mut().insert(value, width);
+            let bytes = self.tables.float_bytes.borrow().get(&reg).copied();
+            if let Some(bytes) = bytes {
+                self.tables.float_bytes.borrow_mut().insert(value, bytes);
+            }
             self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
@@ -455,8 +502,9 @@ impl InlineSpiller<'_> {
     /// writes it. DEVIATE D-RFP1: the cell is the value's float type
     /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
     /// spill rounds, not one class width, where the language follows the pin
-    /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
-    /// as only a store the program writes rounds there (stft_single). Exit: the
+    /// (`Profile::rounds_float_spills`, llrm-c); Nib keeps the qword,
+    /// as only a store the program writes rounds there (stft_single); BASIC
+    /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
     /// OPEN D-RFP3 (RFP-5, owner w-1, 2026-10-31): where the qword is kept (Nib
@@ -719,6 +767,7 @@ impl Spiller for InlineSpiller<'_> {
         // made by the first would be written whole by a wider one.
         let mut delegate = NoDelegate;
         let mut edit = LiveRangeEdit::new(reg, &mut delegate);
+        let range = lis.has_interval(reg).then(|| lis.get_interval(reg).range.clone());
         if let Some(made) = self.rematerialize_all(lis, reg, vrai) {
             for value in made {
                 edit.create_from(lis, vrm, value, reg);
@@ -750,6 +799,9 @@ impl Spiller for InlineSpiller<'_> {
             }
         }
         edit.erase_virt_reg(lis, reg);
+        if let Some(range) = &range {
+            self.merged(reg, range);
+        }
         #[cfg(test)]
         {
             let made = &new_vregs[first_new..];
@@ -765,6 +817,26 @@ impl Spiller for InlineSpiller<'_> {
 
     fn failed(&self) -> bool {
         self.failed
+    }
+
+    fn stacked(&mut self) {
+        // Read now, while the numbers are the entries' own.
+        let mut found: Vec<(i64, Vec<(i64, i64)>)> = self
+            .stacks
+            .iter()
+            .map(|(home, range)| {
+                (
+                    *home,
+                    range
+                        .segments
+                        .iter()
+                        .map(|s| (i64::from(s.start.get_index()), i64::from(s.end.get_index())))
+                        .collect(),
+                )
+            })
+            .collect();
+        found.sort_by_key(|one| one.0);
+        self.frame.stacks = found.into_iter().collect();
     }
 
     fn recorded(&self) -> Vec<u32> {

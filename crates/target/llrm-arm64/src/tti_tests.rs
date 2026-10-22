@@ -403,6 +403,8 @@ fn unrolling_sets_the_upper_bound_and_no_partial_unroll_at_os() {
         force: false,
         upper_bound: false,
         max_iterations_count_to_analyze: 10,
+        unroll_and_jam: false,
+        unroll_and_jam_inner_loop_threshold: 60,
     };
     for cpu in ["generic", "apple-m1"] {
         let mut up = defaults.clone();

@@ -155,7 +155,11 @@ impl<T: Clone + Eq + Hash> EquivalenceClasses<T> {
 
     /// `getNumClasses`.
     pub fn classes(&self) -> usize {
-        self.nodes.iter().enumerate().filter(|(at, node)| node.is_leader && self.mapping.get(&node.data) == Some(at)).count()
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(at, node)| node.is_leader && self.mapping.get(&node.data) == Some(at))
+            .count()
     }
 
     /// `empty`.

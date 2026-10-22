@@ -40,6 +40,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::Declared;
@@ -85,33 +86,15 @@ pub(crate) fn defining(
     function.parent(inst).map(|_| inst)
 }
 
-/// `isInstructionTriviallyDead`: nothing reads it and running it does nothing
-/// else.
+/// `isInstructionTriviallyDead` (Local.cpp:402): nothing reads it and running
+/// it does nothing else, a call with no side effects included.
 fn is_trivially_dead(
+    env: &Env,
+    context: &Context,
     function: &Function,
     inst: InstId,
 ) -> bool {
-    let instruction = function.instruction(inst);
-    let Some(result) = instruction.result else { return false };
-    if !function.users(result).is_empty() {
-        return false;
-    }
-    matches!(
-        instruction.opcode,
-        Opcode::Binary(_)
-            | Opcode::Cast(_)
-            | Opcode::ICmp(_)
-            | Opcode::FCmp(_)
-            | Opcode::Select
-            | Opcode::Phi
-            | Opcode::GetElementPtr { .. }
-            | Opcode::Alloca { .. }
-            | Opcode::FNeg
-            | Opcode::Freeze
-            | Opcode::ExtractValue(_)
-            | Opcode::InsertValue(_)
-            | Opcode::Load { volatile: false, .. }
-    )
+    crate::local::is_instruction_trivially_dead(context, env.callees, env.globals, function, inst)
 }
 
 /// `eraseInstFromFunction`: nothing reads `inst`; its operands are looked at
@@ -206,7 +189,7 @@ fn prepare(
                     simplify_instruction_in(context, env.globals, env.layout, Some(&env.analyses), function, inst)
             {
                 function.replace_value(result, Operand::Constant(found));
-                if is_trivially_dead(function, inst) {
+                if is_trivially_dead(env, context, function, inst) {
                     let _ = function.erase(inst);
                 }
                 changed = true;
@@ -231,7 +214,7 @@ fn prepare(
         if function.parent(inst).is_none() {
             continue;
         }
-        if is_trivially_dead(function, inst) {
+        if is_trivially_dead(env, context, function, inst) {
             let _ = function.erase(inst);
             changed = true;
             continue;
@@ -307,6 +290,8 @@ pub enum Visit {
 /// What `visit` reads besides the function.
 pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
+    /// What each callee does to memory, for `isInstructionTriviallyDead`.
+    pub callees: &'a Callees,
     pub layout: &'a DataLayout,
     pub analyses: FunctionAnalyses,
     /// `instcombine-code-sinking` (default true): the driver sinks an
@@ -440,6 +425,20 @@ pub fn visit(
     {
         return Visit::Replace(found);
     }
+    // A flags result is read by a comparison and nothing else: neither the
+    // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
+    // a user of `v` that is not a comparison.
+    let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
+    if compares_flags(inst)
+        || c.function.instruction(inst).operands.iter().any(|operand| {
+            matches!(
+                operand,
+                Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
+            )
+        })
+    {
+        return Visit::None;
+    }
     let opcode = c.function.instruction(inst).opcode.clone();
     visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }
@@ -458,7 +457,7 @@ fn drain(
             if c.function.parent(inst).is_none() {
                 continue;
             }
-            if is_trivially_dead(c.function, inst) {
+            if is_trivially_dead(c.env, c.context, c.function, inst) {
                 c.erase(inst);
                 changed = true;
                 continue;
@@ -470,7 +469,7 @@ fn drain(
             continue;
         }
         // Check to see if we can DCE the instruction.
-        if is_trivially_dead(c.function, inst) {
+        if is_trivially_dead(c.env, c.context, c.function, inst) {
             c.erase(inst);
             changed = true;
             continue;
@@ -490,7 +489,7 @@ fn drain(
                         c.worklist.push(user);
                     }
                 }
-                if is_trivially_dead(c.function, inst) {
+                if is_trivially_dead(c.env, c.context, c.function, inst) {
                     c.erase(inst);
                 } else {
                     c.worklist.push(inst);
@@ -512,12 +511,13 @@ fn drain(
 pub fn combine(
     context: &mut Context,
     globals: &[GlobalValue],
+    callees: &Callees,
     metadata: &[MetadataNode],
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
 ) -> bool {
-    combine_with_sinking(context, globals, metadata, layout, function, visit, true, declared)
+    combine_with_sinking(context, globals, callees, metadata, layout, function, visit, true, declared)
 }
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
@@ -547,12 +547,13 @@ pub(crate) fn combine_with_declared(
     visit: fn(&mut Combiner, InstId) -> Visit,
     declared: &mut Declared,
 ) -> bool {
-    combine_with_sinking(context, globals, metadata, layout, function, visit, false, declared)
+    combine_with_sinking(context, globals, &Callees::default(), metadata, layout, function, visit, false, declared)
 }
 
 pub(crate) fn combine_with_sinking(
     context: &mut Context,
     globals: &[GlobalValue],
+    callees: &Callees,
     metadata: &[MetadataNode],
     layout: &DataLayout,
     function: &mut Function,
@@ -563,7 +564,7 @@ pub(crate) fn combine_with_sinking(
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
         .with_dom_conditions_of(context, globals, metadata, function);
-    let env = Env { globals, layout, analyses, sinking, back_edges: Default::default() };
+    let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

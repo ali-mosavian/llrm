@@ -1,6 +1,7 @@
 //! The value-comparison steps of `simplifySwitch`
-//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)): a `switch` on a value its predecessors compare with
-//! constants too, folded with them, and a `switch` on a `select`. LLVM's
+//! ([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)):
+//! a `switch` on a value its predecessors compare with constants too, folded
+//! with them, and a `switch` on a `select`. LLVM's
 //! [`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973),
 //! [`foldValueComparisonIntoPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1475)
 //! with
@@ -14,8 +15,10 @@
 //! with the helpers
 //! [`isValueEqualityComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L866),
 //! [`getValueEqualityComparisonCases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L899),
-//! `eliminateBlockCases` ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
-//! and `valuesOverlap` ([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
+//! `eliminateBlockCases`
+//! ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
+//! and `valuesOverlap`
+//! ([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
 //!
 //! # How it works
 //! A block with one predecessor that compares the same value (a `switch`, or
@@ -341,10 +344,10 @@ impl NewSuccessors {
     }
 }
 
-/// `performValueComparisonIntoPredecessorFolding`: the terminator `pred_terminator`
-/// of a predecessor rebuilt as a `switch` that does what it and the `switch`
-/// of `block` did together. A compared pointer is cast to an integer first,
-/// and `value` becomes the cast.
+/// `performValueComparisonIntoPredecessorFolding`: the terminator
+/// `pred_terminator` of a predecessor rebuilt as a `switch` that does what it
+/// and the `switch` of `block` did together. A compared pointer is cast to an
+/// integer first, and `value` becomes the cast.
 fn folded_into_predecessor(
     context: &Context,
     spec: &Speculation,
@@ -491,7 +494,8 @@ fn folded_into_predecessors(
         }
         for successor in incompatible_successors(function, block, pred) {
             let split = edges::split_block_predecessors(function, successor, &[block]);
-            // `SplitBlockPredecessors(.., ".fold.split")` places it before `successor`.
+            // `SplitBlockPredecessors(.., ".fold.split")` places it before
+            // `successor`.
             let name = format!("{}.fold.split", function.block(successor).name.as_deref().unwrap_or(""));
             function.set_block_name(split, &name);
             let before = function.layout().iter().position(|&one| one == successor).and_then(|at| at.checked_sub(1));
@@ -516,8 +520,9 @@ fn destination_of(
 }
 
 /// `simplifySwitchOnSelectRemap`
-/// ([L5083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)): `switch (select (icmp eq %x, C), K, %x)`
-/// switches on `%x`, `C` going where `K` did. `negate` is for `icmp ne`.
+/// ([L5083](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5083)):
+/// `switch (select (icmp eq %x, C), K, %x)` switches on `%x`, `C` going
+/// where `K` did. `negate` is for `icmp ne`.
 #[allow(clippy::too_many_arguments)]
 fn select_remapped(
     context: &Context,

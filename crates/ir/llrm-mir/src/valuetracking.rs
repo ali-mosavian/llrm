@@ -8,9 +8,9 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+pub mod bittest;
 #[cfg(test)]
 mod boundary_tests;
-pub mod bittest;
 pub mod bytewise;
 #[cfg(test)]
 mod bytewise_tests;

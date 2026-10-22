@@ -177,6 +177,12 @@ pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
         )
 }
 
+thread_local! {
+    /// The steps taken to keep what reads a value naming the instruction that
+    /// moved: one for each move. Counted, for the test that fixes it linear.
+    static IDENTITY_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where a value is read.
 #[derive(Clone, Copy)]
 enum Use {
@@ -196,8 +202,12 @@ struct Sinker {
     cfg: Cfg,
     dom: DomTree,
     post: DomTree,
-    /// The block of each instruction, by identity.
+    /// The block of each instruction, by the identity it had when the walk
+    /// began (`canonical`): a moved instruction is a copy with a new identity,
+    /// and what reads its values still names the old one.
     owner: HashMap<u64, usize>,
+    /// The first identity of an instruction that was moved, by its present one.
+    canon: HashMap<u64, u64>,
     uses: HashMap<u32, Vec<Use>>,
     depth: Vec<u32>,
     /// The innermost loop of each block, as its header.
@@ -271,6 +281,7 @@ impl Sinker {
             return Self {
                 insns,
                 owner,
+                canon: HashMap::default(),
                 uses,
                 considered: HashSet::default(),
                 merged: HashMap::default(),
@@ -311,6 +322,7 @@ impl Sinker {
             dom,
             post,
             owner,
+            canon: HashMap::default(),
             uses,
             cycle,
             considered: HashSet::default(),
@@ -330,6 +342,14 @@ impl Sinker {
 
     /// The block a use reads its value in: a phi reads it at the end of the
     /// predecessor it names.
+    /// The identity the walk began with of the instruction now called `id`.
+    fn canonical(
+        &self,
+        id: u64,
+    ) -> u64 {
+        self.canon.get(&id).copied().unwrap_or(id)
+    }
+
     fn use_block(
         &self,
         used: Use,
@@ -641,7 +661,7 @@ impl Sinker {
             .any(
                 |operand| {
                     let users = self.uses.get(operand).map_or(0, Vec::len);
-                    users == 1 && self.defined_in(*operand) == Some(self.owner[&one.id()])
+                    users == 1 && self.defined_in(*operand) == Some(self.owner[&self.canonical(one.id())])
                 },
             )
     }
@@ -759,15 +779,12 @@ impl Sinker {
             moved.at = first.at;
         }
         let moved = Arc::new(moved);
-        self.owner.insert(one.id(), sink_to);
-        self.owner.insert(moved.id(), sink_to);
-        // Identity follows the instruction: its values' uses name `one`, and
-        // `moved` is `one` in its new block.
-        for used in self.uses.values_mut().flatten() {
-            if matches!(*used, Use::Insn(id) if id == one.id()) {
-                *used = Use::Insn(moved.id());
-            }
-        }
+        // Identity follows the instruction: its values' uses name the first
+        // identity, and `moved` is `one` in its new block.
+        let first = self.canonical(one.id());
+        self.canon.insert(moved.id(), first);
+        IDENTITY_STEPS.with(|steps| steps.set(steps.get() + 1));
+        self.owner.insert(first, sink_to);
         self.insns[sink_to].insert(0, moved);
         self.changed = true;
         true
@@ -905,6 +922,88 @@ mod tests {
         let names: Vec<_> =
             sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
+    }
+
+    /// An instruction sunk into a block that itself sinks it on is one
+    /// instruction: what defines the values it reads sees it in its last block
+    /// and follows it there. Sinking renamed every use of every value in the
+    /// body on each move; the identity the uses name is now kept instead.
+    #[test]
+    fn test_what_a_sunk_instruction_reads_follows_it_to_its_last_block() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let mov = |at: i64, to: u32, from: u32| {
+            insn(at, Operation::Move, "mov", vec![held(to)], vec![held(from)], vec![to], vec![from])
+        };
+        let mut body = LirBody::new(
+            "twice",
+            0,
+            vec![
+                block(0, vec![1, 2], vec![mov(0, 1, 5), mov(1, 8, 1), jump(2)]).into(),
+                block(1, vec![3, 4], vec![jump(3)]).into(),
+                block(2, vec![], vec![ret(4)]).into(),
+                block(3, vec![], vec![mov(5, 20, 8), ret(6)]).into(),
+                block(4, vec![], vec![ret(7)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [5].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let after = sunk(&body, false);
+        let defines =
+            |at: usize| -> Vec<u32> { after.blocks[at].insns.iter().flat_map(|one| one.defines.clone()).collect() };
+        assert!(defines(0).is_empty() && defines(1).is_empty(), "both movs left blocks 0 and 1");
+        assert!(defines(3).contains(&8) && defines(3).contains(&1), "and both are in block 3, where v8 is read");
+    }
+
+    /// Sinking renamed every use of every value in the body on each move, so n
+    /// sinks over n instructions took n times n steps (d_faces -O2: 122,898
+    /// map steps in 9 bodies). Counted, not timed: the steps are one a move.
+    #[test]
+    fn test_sinking_n_instructions_takes_a_number_of_steps_linear_in_n() {
+        let steps_for = |n: u32| -> (usize, usize) {
+            let block = |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock {
+                succ: succ.into(),
+                ..LirBlock::new(at, insns)
+            };
+            let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+            let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+            let mov = |at: i64, to: u32, from: u32| {
+                insn(at, Operation::Move, "mov", vec![held(to)], vec![held(from)], vec![to], vec![from])
+            };
+            let movs: Vec<_> = (0..n).map(|i| mov(i64::from(i), 100 + i, 5)).collect();
+            let reads: Vec<_> = (0..n).map(|i| mov(1000 + i64::from(i), 200 + i, 100 + i)).collect();
+            let mut first = movs;
+            first.push(jump(500));
+            let mut last = reads;
+            last.push(ret(2000));
+            let mut body = LirBody::new(
+                "many",
+                0,
+                vec![
+                    block(0, vec![1, 2], first).into(),
+                    block(1, vec![3, 4], vec![jump(501)]).into(),
+                    block(2, vec![], vec![ret(502)]).into(),
+                    block(3, vec![], last).into(),
+                    block(4, vec![], vec![ret(503)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [5].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            IDENTITY_STEPS.with(|steps| steps.set(0));
+            let after = sunk(&body, false);
+            let moved = after.blocks[3].insns.len() - 1 - n as usize;
+            (IDENTITY_STEPS.with(std::cell::Cell::get), moved)
+        };
+        let (small, _) = steps_for(10);
+        let (large, _) = steps_for(40);
+        assert!(small > 0, "the instructions sink");
+        assert!(large <= 4 * small + 8, "4 times the instructions took {large} steps, 10 took {small}");
     }
 
     /// The flags a `cmp` sets may be read by a branch in the next block (one

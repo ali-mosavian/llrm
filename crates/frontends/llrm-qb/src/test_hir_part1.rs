@@ -345,13 +345,18 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
     let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
 
     // The OK arm falls through (`jne` to the other): same size, laid out so.
-    assert!(main.contains("cmp dword ptr $QB$FRAME, 42\n    jne L"), "{main}");
-    assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
-    // Each arm ends in its own exit: the jump to the shared `ret` is replaced
-    // by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`), and
-    // `driver::basic::ends_program` then spells every `ret` of the module as a
-    // call of B$CENP. Both arms must reach it.
-    assert_eq!(main.matches("call far ptr B$CENP").count(), 2, "{main}");
+    assert!(main.contains("$QB$FRAME, 42\n    jne L"), "{main}");
+    // Both arms reach one exit: the OK arm jumps to the label the false arm
+    // falls into, and that block ends the program (B$PESD, then B$CENP, which
+    // `driver::basic::ends_program` spells for every `ret`). SimplifyCFG
+    // shares the tail (ea15230ed1); the old test counted two copies.
+    let ok_arm = between(&main, "offset EDGE$D5", "offset EDGE$D7");
+    let exit = ok_arm.split("jmp ").nth(1).and_then(|jump| jump.split_whitespace().next());
+    let exit = exit.unwrap_or_else(|| panic!("the OK arm does not jump to the exit: {main}"));
+    let label = format!("{exit}:");
+    let tail = main.split_once(&label).unwrap_or_else(|| panic!("no {label}: {main}")).1;
+    assert!(main.find("offset EDGE$D7").unwrap() < main.find(&label).unwrap(), "{main}");
+    assert!(tail.contains("call far ptr B$PESD") && tail.contains("call far ptr B$CENP"), "{main}");
 }
 
 /// SUBTRACTPAIR read 8-50: calls pushed left-to-right but formals used
@@ -483,4 +488,64 @@ fn test_module_globals_keep_bcs_effective_type_suffixes() {
         assert!(listing.contains(&format!("{name} label byte")), "{name}");
     }
     assert!(listing.contains("mov dword ptr IMPLICIT!, 1065353216"));
+}
+
+/// A SUB under a module-wide ON ERROR GOTO reloaded the bounds of a static
+/// array from frame cells nothing wrote (`cmp word ptr [bp-18], 0` and two
+/// more loads for each LBOUND/UBOUND; qb/bounds.bas +261 B at -Os): every local
+/// was handed to the handler, so the zero a cell was made with could not
+/// fold. Cells nothing writes hold zero, and a SUB's bounds are constants.
+#[test]
+fn test_a_cell_nothing_writes_in_a_handled_sub_folds() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "UNWRIT.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Show ()\r\nDIM SHARED s(3 TO 4)\r\nON ERROR GOTO h\r\nShow\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Show\r\n    PRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND SUB\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let show = between(&listing, "SHOW proc far", "SHOW endp");
+    assert!(show.contains("pushw 3\n    call far ptr B$PSI2"), "{show}");
+    assert!(show.contains("pushw 4\n    call far ptr B$PEI2"), "{show}");
+    assert!(!show.contains("cmp word ptr [bp-"), "{show}");
+}
+
+/// What the handler can read is not narrowed past what RESUME NEXT reads: `x`
+/// is written before the statement that raises and read after it, so it stays
+/// in the frame.
+#[test]
+fn test_a_variable_read_after_a_raising_statement_stays_in_the_frame() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "KEPT.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Keep ()\r\nON ERROR GOTO h\r\nKeep\r\nEND\r\nh:\r\nRESUME NEXT\r\nSUB Keep\r\n    x = 12345\r\n    ERROR 5\r\n    PRINT x\r\nEND SUB\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let keep = between(&listing, "KEEP proc far", "KEEP endp");
+    let cell = regex::Regex::new(r"mov word ptr \[bp-(\d+)\], 12345")
+        .unwrap()
+        .captures(&keep)
+        .map(|found| found[1].to_owned());
+    let cell = cell.unwrap_or_else(|| panic!("x is not stored in the frame: {keep}"));
+    assert!(keep.contains(&format!("push word ptr [bp-{cell}]\n    call far ptr B$PEI2")), "{keep}");
+}
+
+/// The module body, which owns the module-wide handler, was given every local
+/// (`$held` and the bounds' cells) although the handler runs as a function of
+/// its own and reads none of them: UBOUND of a static array was tested against
+/// a frame cell nothing wrote (`cmp word ptr ss:$QB$FRAME+2, 0`) and its cells
+/// were set again before each statement (qb/bounds.bas +181 B at -Os).
+#[test]
+fn test_the_module_body_is_given_the_locals_resume_reads_only() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &tmp,
+        "OWNER.BAS",
+        b"DEFINT A-Z\r\nDIM s(3 TO 4)\r\nON ERROR GOTO h\r\nPRINT LBOUND(s, 1); UBOUND(s, 1)\r\nEND\r\nh:\r\nRESUME NEXT\r\n",
+    );
+    let listing = listing(&parsed(&source));
+    let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
+    assert!(main.contains("pushw 4\n    call far ptr B$PEI2"), "{main}");
+    assert!(!main.contains("cmp word ptr ss:$QB$FRAME+"), "{main}");
 }
