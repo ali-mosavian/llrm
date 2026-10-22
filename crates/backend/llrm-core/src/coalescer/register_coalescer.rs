@@ -45,6 +45,7 @@ use std::sync::Arc;
 use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::liverange::Segment;
 use crate::liveness::slotindex::InstrKey;
 use crate::support::hash::{HashMap, HashSet};
 
@@ -159,6 +160,11 @@ pub fn join_copy(
         // Coalescing failed. Try rematerializing the definition of the source
         // if it is cheap.
         if re_materialize_def(lis, env, state, copy) {
+            return JoinResult::Joined;
+        }
+        // If we can eliminate the copy without merging the live segments, do
+        // so now.
+        if adjust_copies_back_from(lis, state, &cp, copy) {
             return JoinResult::Joined;
         }
         return result;
@@ -319,6 +325,89 @@ fn re_materialize_def(
             lis.rewrite_instr(block, made_id, anchor);
             state.moved.insert(made_id, new);
         }
+    }
+    true
+}
+
+/// `adjustCopiesBackFrom`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L628>):
+/// the copy `B1 = A3` whose source `A3` is itself a copy `A3 = B0` of the
+/// destination's register, with `B` not live between the two, is the same
+/// value as `B0`: extend `B0` to the copy, merge the value numbers and delete
+/// the copy. Whether it did.
+///
+/// DEVIATE C12 (no number): a member of a parallel copy stays one, on either
+/// side, as in `re_materialize_def` (C11): a member reads before any member
+/// writes, so the value the second copy reads is not the one the first wrote.
+/// Exit: parallel copies sequenced before the coalescer (D-F).
+fn adjust_copies_back_from(
+    lis: &mut LiveIntervals,
+    state: &mut State,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+) -> bool {
+    if lis.instr(copy).group.is_some() {
+        return false;
+    }
+    let (a_reg, b_reg) = if cp.is_flipped() { (cp.dst_reg(), cp.src_reg()) } else { (cp.src_reg(), cp.dst_reg()) };
+    let copy_idx = lis.indexes.get_instruction_index(copy).get_reg_slot(false);
+    let int_a = lis.interval_rc(a_reg);
+    let mut int_b = (*lis.interval_rc(b_reg)).clone();
+    // BValNo is a value number in B that is defined by a copy from A: `B1`.
+    let bs = int_b.find_segment_containing(&copy_idx);
+    let Some(b_val) = int_b.segments.get(bs).and_then(|segment| segment.valno.clone()) else { return false };
+    // Either this value has an unknown definition point or it is defined at
+    // CopyIdx; if unknown, it cannot be processed.
+    if b_val.def() != copy_idx {
+        return false;
+    }
+    // AValNo is the value number in A that defines the copy: `A3`.
+    let copy_use_idx = copy_idx.get_reg_slot(true);
+    let a_s = int_a.find_segment_containing(&copy_use_idx);
+    let Some(a_segment) = int_a.segments.get(a_s) else { return false };
+    let Some(a_val) = a_segment.valno.clone() else { return false };
+    // AValNo must be defined as a copy from B (no partial copies).
+    let Some(a_copy) = lis.indexes.get_instruction_from_index(&a_val.def()) else { return false };
+    let a_copy_insn = lis.instr(a_copy);
+    if a_copy_insn.group.is_some() || !cp.is_coalescable(a_copy_insn) {
+        return false;
+    }
+    // The segment in B that this value number starts with.
+    let val_s = int_b.find_segment_containing(&a_val.def().get_prev_slot());
+    let Some(val_segment) = int_b.segments.get(val_s) else { return false };
+    // The end of that live segment is inside the same block as the copy.
+    let Some(val_s_end_inst) = lis.indexes.get_instruction_from_index(&val_segment.end.get_prev_slot()) else {
+        return false;
+    };
+    if lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(val_s_end_inst))
+        != lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy))
+    {
+        return false;
+    }
+    // ValS ends in the same block that the copy's live range starts: with no
+    // intervening live segments between them in B, they merge.
+    if val_s + 1 != bs {
+        return false;
+    }
+    let (filler_start, filler_end) = (val_segment.end.clone(), int_b.segments[bs].start.clone());
+    let val_s_val = val_segment.valno.clone().expect("a segment has a value");
+    // The copy is about to go, so the value is defined where B0 ended.
+    b_val.set_def(filler_start.clone());
+    // A new live range [ValS.end, BS.begin) of either value number, then the
+    // two value numbers merge: "B1" into "B0".
+    int_b.add_segment(Segment::new(filler_start, filler_end, Some(b_val.clone())));
+    if !std::rc::Rc::ptr_eq(&b_val, &val_s_val) {
+        int_b.merge_value_number_into(b_val, val_s_val);
+    }
+    // If the copy was killing its source before the merge, A's range is
+    // trimmed once the copy is gone.
+    let recompute_a = a_segment.end == copy_idx;
+    lis.insert_interval(int_b);
+    let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    if recompute_a {
+        lis.shrink_to_uses(a_reg);
     }
     true
 }

@@ -531,3 +531,38 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     let index = state.current(index.id());
     assert_eq!(join_copy(&mut lis, &env, &mut state, &mut Default::default(), index), JoinResult::Rejected);
 }
+
+/// `v1 := load; v2 := mov v1; v1 := mov v2; v2 := load; read v1; read v2`: the
+/// second copy cannot join (`v2` is redefined while its copy `v1` is live),
+/// but `v2` holds what `v1` held and `v1` is dead between:
+/// `adjustCopiesBackFrom` extends the first `v1` to the copy, and the copy
+/// goes. The loop-carried segment of a far pointer in `_dl_muzzle@3` kept two
+/// such copies a trip (`mov ax, es` at the latch).
+#[test]
+fn test_a_copy_back_of_a_copy_goes_by_extending_the_first_value() {
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let (r1, r2) = (read(1), read(2));
+    let was = body(&[(
+        &[
+            Arc::clone(&first),
+            Arc::clone(&to),
+            Arc::clone(&back),
+            Arc::clone(&redefined),
+            Arc::clone(&r1),
+            Arc::clone(&r2),
+        ],
+        &[],
+    )]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), back.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(
+        names(&lis),
+        vec![(vec![1], vec![]), (vec![2], vec![1]), (vec![2], vec![]), (vec![], vec![1]), (vec![], vec![2])],
+        "only the copy back is gone"
+    );
+    assert_eq!(lis.interval(1).valnos.iter().filter(|vn| !vn.is_unused()).count(), 1, "one value of v1 is left");
+    assert_consistent(&lis, &was, 2);
+}
