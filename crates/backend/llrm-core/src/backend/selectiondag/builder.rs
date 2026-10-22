@@ -418,7 +418,9 @@ impl Builder<'_> {
             _ => None,
         };
         if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
-            return self.visit_intrinsic(instruction, info, &intrinsic);
+            let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
+            // the refusal names the intrinsic; the few that are never built are leaked once each
+            return self.visit_intrinsic(instruction, info, &intrinsic).map_err(|why| if why.0 == "intrinsic call" { Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())) } else { why });
         }
         let mut arg_types = Vec::new();
         for argument in arguments {
@@ -743,7 +745,7 @@ impl Builder<'_> {
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
             Opcode::Invoke(_) => return Err(Refused("invoke")),
-            _ => return Err(Refused("instruction not in the scalar subset")),
+            other => return Err(Refused(Box::leak(format!("instruction {}", other.mnemonic()).into_boxed_str()))),
         }
         if !instruction.opcode.is_terminator() {
             if let Some(result) = instruction.result {
