@@ -131,3 +131,29 @@ b0:
     );
     assert!(volatile.contains("store volatile i8 %x, ptr @t"), "{volatile}");
 }
+
+/// tests/run/c/local_initializers.c: a local aggregate's initializer is a
+/// `memcpy` from an internal global (the C front end's `.X`), which no load
+/// took until SROA split the copy; GlobalOpt had run by then, so the global
+/// stayed a variable and `main` kept its 100 instructions (58 -> 354 B at -O2)
+/// where it was 12 before #3621. A `memcpy` from it is a read
+/// (`AnalyzeGlobal`).
+#[test]
+fn a_global_only_copied_from_is_constant_and_its_copy_folds() {
+    let after = piped(
+        "@x = internal global [4 x i8] c\"\\05\\00\\0c\\00\"
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f() {
+b0:
+  %s = alloca [4 x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr @x, i16 4, i1 false)
+  %p = getelementptr i8, ptr %s, i16 2
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("ret i16 12") && !after.contains("call void @llvm.memcpy"), "{after}");
+}
