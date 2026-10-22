@@ -386,10 +386,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Early Machine Loop Invariant Code Motion",
-        Missing,
+        Deviate,
         "licm (mid-end), loopslots.rs for reloads",
         "-disable-machine-licm",
-        "funcattrs-port; 2026-11-13: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ",
+        "CG2: the mid-end `licm` hoists, `loopslots.rs` hoists reloads, and no machine pass with a register-pressure gate follows; reason: the premise test (docs/working/early-machinelicm.md) shows the pin's pass worth 7 of 4190 (m32 -O2) and 12 of 2675 (m32 -Os) in-loop instructions, 754 of 47619 (1.6%) at m16 -O2 and 204 of 36905 at m16 -Os; cost: that m16 -O2 residual; exit: attribute the 754 by kind on mdl_ai, cmd, sc, ent and weapons, then a mid-end fix or the pass; owner w-3; review 2026-11-13. Pin: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ",
     ),
     row(
         "Machine Common Subexpression Elimination",

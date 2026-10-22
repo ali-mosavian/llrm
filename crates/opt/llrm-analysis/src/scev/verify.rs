@@ -140,6 +140,39 @@ impl ScalarEvolution {
         }
         Ok(())
     }
+
+    /// Whether each expression `self` holds prints, flags aside, as a new
+    /// `ScalarEvolution` prints the value's: a held expression of a value whose
+    /// operands changed since is stale, though `verify` lets a difference that
+    /// is not a constant pass (the pin's check). The oracle of a kept SE
+    /// (`Scevs::consistent`), not a translation of anything.
+    pub fn verify_same(
+        &self,
+        cx: &Cx,
+    ) -> Result<(), String> {
+        let labels = Labels::of(cx.function);
+        let mut fresh = ScalarEvolution::new();
+        let bare =
+            |text: String| ["<nuw>", "<nsw>", "<nusw>", "<nw>"].iter().fold(text, |text, flag| text.replace(flag, ""));
+        let mut cached: Vec<(ValueId, Scev)> = self.value_expr_map.iter().map(|(value, s)| (value, *s)).collect();
+        cached.sort_by_key(|(value, _)| value.0);
+        for (value, kept) in cached {
+            let ValueDef::Instruction(inst) = cx.function.value(value).def else { continue };
+            if cx.function.parent(inst).is_none() {
+                continue;
+            }
+            let was = bare(self.print(cx, &labels, kept));
+            let new = fresh.get_scev(cx, Operand::Value(value));
+            let now = bare(fresh.print(cx, &labels, new));
+            if was != now {
+                return Err(format!(
+                    "{}: kept {was}, now {now}",
+                    self.print_value_name(&labels, Operand::Value(value))
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

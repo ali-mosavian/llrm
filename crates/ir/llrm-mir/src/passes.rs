@@ -433,6 +433,22 @@ pub trait Analysis: 'static {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
     }
 
+    /// Whether a held `old`, the result for the function as it stands, still
+    /// holds beyond `==` with a fresh one: for a result that compares equal to
+    /// any other (a cache of what was asked) the check of its entries.
+    /// `LLRM_CHECK_PRESERVED` and `verify_invalidation` ask it of every entry
+    /// a pass kept.
+    #[allow(unused_variables)]
+    fn consistent(
+        old: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        true
+    }
+
     /// Whether `audit` runs on every result this analysis hands out, kept or
     /// derived (`LLRM_CHECK_CAPTURES`): a fact is judged where a pass reads it.
     const AUDITED: bool = false;
@@ -1091,7 +1107,9 @@ impl<A: Analysis> Cached for Entry<A> {
         function: &Function,
         outer: &Rc<Outer>,
     ) -> bool {
-        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        let mut fresh = Analyses::new(Rc::clone(outer));
+        *self.result == A::run(context, layout, function, &mut fresh)
+            && A::consistent(&self.result, context, layout, function, &mut fresh)
     }
 
     fn preserved(
