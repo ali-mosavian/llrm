@@ -304,6 +304,27 @@ rule zero_compare_before_a_jump
     rewrite @0: test r, r ; @1 ; @2
 
 
+// A mask only a branch reads is a `test`, as X86 selects `(brcond (and x, m))`: the
+// `and` sets the flags `test` does and writes a register nothing reads, and the copy
+// that kept its source is not needed (x_collatz: `mov dl, cl; and dl, 1; jne` is
+// `test cl, 1; jne`).
+group tested_masks
+    walk gap skip nothing resume past
+
+rule test_of_masked_copy
+    match   mov d:reg, s:reg ; ... delays(@0, *) ; and d, d, m:any
+    when    free(@0, dropped), free(@1, settled), same_width(d, s), operand(m, d), dead(@1, lanes(d)), encodable($1)
+    rewrite anchor @0 ; @1: test s, m
+
+group tested_lone_masks
+    walk each
+
+rule test_of_mask
+    match   and d:reg, d, m:any
+    when    free(@0, settled), dead(@0, lanes(d)), encodable($0)
+    rewrite @0: test d, m
+
+
 // Selection across instructions before allocation (isel::combined), on
 // held values: `def v: ...` matches the nearest instruction before the
 // window that defines v, and `drop` of it takes it out of the block once
