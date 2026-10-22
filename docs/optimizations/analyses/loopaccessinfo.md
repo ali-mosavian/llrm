@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopaccessinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopaccessinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:b12111b58a61f051d77fb04b5c25db078a48196a27641f9d2c92213926c98fe5 -->
+<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:039a663bc8f47ec831d59aabdc050465e4fcac2c4e5d24eb68cedbb80cdf61ef -->
 
 # loopaccessinfo
 
@@ -14,9 +14,9 @@ loads and stores are collected in reverse postorder (a call or any other
 memory instruction that is not a simple load or store makes the loop
 unanalysable); the pointers they use are given to an `AccessAnalysis` that
 partitions them by what they may alias, builds the dependence classes and
-finds the bounds for runtime checks; the `MemoryDepChecker` then
-classifies the dependences within the classes, and if those are not provably
-safe but may be with checks, the bounds are found again for every pointer.
+finds the bounds for runtime checks; the `MemoryDepChecker` then classifies
+the dependences within the classes, and if those are not provably safe but
+may be with checks, the bounds are found again for every pointer.
 
 ## Example
 `a[i + 1] = a[i] + x` over a loop with a known trip count: "Memory

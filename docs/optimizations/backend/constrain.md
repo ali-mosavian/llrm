@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:e7740c2e8d40e4e838b5ee3a0e83939e8a353793f8ba6806b8f2d37e7e9bb779 -->
+<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:4a3431306364e13d04de528817b6f21b4b3bd8d2f0aa3b4b8b797fc5f0a57a31 -->
 
 # constrain
 
@@ -42,18 +42,6 @@ before it places values:
   a frame array (SI, DI) has no register that fits all reads. The reads that
   fit the most others keep the value; each remaining read takes a copy, live
   across that instruction alone.
-- `hoisted`: a copy into a required register that a loop makes of a value
-  defined before it, the same each trip, is made once in the loop's
-  preheader. The register is then the value's for the whole loop, which
-  nothing else in it may use: no other instruction requires, delivers,
-  clobbers or defines a value pinned to its root, calls included. A loop
-  with several preheaders is left alone.
-
-  DEVIATE C1 (no number): the pin has no such step. Its x86 states a
-  segment as a prefix, never a register copy, and `MachineLICM` does not
-  move a copy into a physical register. Owner laa-runtime-checks-loadelim;
-  exit: a pin-shaped segment class, or `MachineLICM` learning copies to a
-  physical register; review 2026-11-30.
 - `required`, `required_in` and `required_added`: the pin map of a
   body, of some blocks, or of only the instructions added since a previous
   body.

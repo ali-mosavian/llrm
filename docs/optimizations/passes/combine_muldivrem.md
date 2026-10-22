@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_muldivrem.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_muldivrem.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:2c778352631da91b06416f37b062797dde34572440a145233b9ac92e73106d7e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:02a247f20732f098b74d8cf9cbb29398fd91f42dea151b214618d2755c5957dc -->
 
 # combine_muldivrem
 
@@ -25,7 +25,7 @@ operations, so no `ConstantVector` case either.
 
 DEVIATE 2 (temporary): steps that call a helper another family owns are
 left out and named where they stood: `foldBinopWithPhiOperands` (phi
-family),
+family), `foldUsingDistributiveLaws` (shared helpers),
 `foldBinOpIntoSelectOrPhi`, `foldBinOpSelectBinOp`,
 `foldBinOpOfSelectAndCastOfSelectCondition` and `FoldOpIntoSelect` (select
 family). Each is a

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ehprepare.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:95c4305dd771374c132f6ef3336029932ac6abba107c034423532aa125acd767 -->
+<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:55755def3feb283b427c2b54399c193a1f6d79fca523e30ca9cea1cf3744b56f -->
 
 # ehprepare
 
@@ -31,13 +31,13 @@ loads and stores: the handler reads the variables whenever a call raises, as
 an SEH funclet reads its parent's frame (`llvm.localescape`). A statement's
 own argument boxes (`$arg`) are not passed, nor is a variable
 nothing writes (it holds the zero it was made with) or one dead at every
-statement RESUME continues at, a handler's first block, and the statement
-after each that may raise (`resumable_groups`): qb/bounds.bas -261 B at -Os.
-Without it GVN forwarded the variables into 2,638 phis in GORILLA's
-MAKECITYSCAPE and the demotion below stored them all back: 189,936 bytes at
-m32 -Os where main's is 47,769. D-EH1 (DEVIATE): MIR has no variadic
-intrinsic, so one call per variable stands for `localescape`; exit: the
-intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
+statement RESUME continues at, a handler's first block, and the statement after
+each that may raise (`resumable_groups`): qb/bounds.bas -261 B at -Os. Without it GVN forwarded the
+variables into 2,638 phis in GORILLA's MAKECITYSCAPE and the demotion below
+stored them all back: 189,936 bytes at m32 -Os where main's is 47,769.
+D-EH1 (DEVIATE): MIR has no variadic intrinsic, so one call per variable
+stands for `localescape`; exit: the intrinsic in `llrm-mir` (owner
+splitkit-port, 2026-11-06).
 
 Row D-EH2 (open): GORILLA m32 is 3.5%, 4.6%, 5.4% and 4.4% over main at
 -O1, -O2, -O3 and -Os (50,709 against 48,994; 51,219 against 48,976; 51,609
