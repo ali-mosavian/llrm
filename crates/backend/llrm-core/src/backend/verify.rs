@@ -505,7 +505,8 @@ fn _values(
     for block in &body.blocks {
         for one in &block.insns {
             read.extend(one.uses.iter().copied());
-            read.extend(one.requires.iter().map(|(held, _)| held.value));
+            // A value an operand reads as undef needs no definition.
+            read.extend(one.requires.iter().map(|(held, _)| held.value).filter(|value| !one.undefs.contains(value)));
         }
         for phi in &block.phis {
             read.extend(phi.incoming.iter().map(|(_, value)| *value));
@@ -526,8 +527,10 @@ fn _values(
             }
         }
     }
+    let undef: BTreeSet<u32> =
+        body.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.undefs.iter().copied()).collect();
     for value in &named {
-        if !read.contains(value) && !written.contains_key(value) {
+        if !read.contains(value) && !written.contains_key(value) && !undef.contains(value) {
             out.push(format!("value#{value} is named by an operand and neither defined nor used anywhere"));
         }
     }

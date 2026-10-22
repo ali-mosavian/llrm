@@ -1,38 +1,46 @@
-//! `ProcessImplicitDefs`: the uses of an undefined value are flagged undef and the
-//! definition goes. Translated from llvm/lib/CodeGen/ProcessImplicitDefs.cpp at
-//! d1106deb71cc (`processImplicitDef`, `canTurnIntoImplicitDef`).
+//! `ProcessImplicitDefs`: the uses of an undefined value are flagged undef and
+//! the definition goes. Translated from
+//! llvm/lib/CodeGen/ProcessImplicitDefs.cpp at d1106deb71cc
+//! (`processImplicitDef`, `canTurnIntoImplicitDef`).
 //!
 //! # How it works
 //! An `implicit_def` defines one value and reads nothing. Each instruction that
-//! reads that value has it moved from `uses` to `undefs` (`MO.setIsUndef()`): no
-//! live range reaches the read and the allocator gives the operand any register. A
-//! copy left reading nothing else is an `implicit_def` of its own destination and is
-//! worked in turn. A definition nothing reads any more is erased; one a phi still
-//! reads stays.
+//! reads that value has it moved from `uses` to `undefs` (`MO.setIsUndef()`):
+//! no live range reaches the read and the allocator gives the operand any
+//! register. A copy left reading nothing else is an `implicit_def` of its own
+//! destination and is worked in turn. A definition nothing reads any more is
+//! erased; one a phi still reads stays.
 //!
-//! DEVIATE PI-1 (no number): no physical-register implicit defs; the target has none
-//! before allocation.
+//! DEVIATE PI-1 (no number): no physical-register implicit defs; the target has
+//! none before allocation.
 //!
-//! DEVIATE PI-2 (exit: PHIElimination's undef operands, P2 in `phielimination.rs`): a
-//! phi that reads the value is left alone, where the pin turns a phi of undefs into an
-//! `IMPLICIT_DEF` too.
+//! DEVIATE PI-2 (exit: PHIElimination's undef operands, P2 in
+//! `phielimination.rs`): a phi that reads the value is left alone, where the
+//! pin turns a phi of undefs into an `IMPLICIT_DEF` too.
 //!
-//! DEVIATE PI-3 (exit: none): only a full copy is turned into an `implicit_def`; the
-//! pin also turns `INSERT_SUBREG` and `REG_SEQUENCE`, which LIR has not.
+//! DEVIATE PI-3 (exit: none): only a full copy is turned into an
+//! `implicit_def`; the pin also turns `INSERT_SUBREG` and `REG_SEQUENCE`, which
+//! LIR has not.
 //!
 //! # Example
-//! `v1 := implicit_def; v2 := mov v1; v3 := add v4, v2`: `v2` is an `implicit_def`
-//! too, and `v3 := add v4, v2` reads `v2` as undef; both definitions go.
+//! `v1 := implicit_def; v2 := mov v1; v3 := add v4, v2`: `v2` is an
+//! `implicit_def` too, and `v3 := add v4, v2` reads `v2` as undef; both
+//! definitions go.
+//!
+//! A definition a phi still reads is left as `mov v, 0` (`left_as_zero`): the
+//! copy a phi makes of it reads a register, as before.
 //!
 //! # Used by
-//! Nothing yet: `isel` makes `implicit_def`s in the next piece of the translation
-//! (docs/working/process-implicit-defs-plan.md).
+//! `flow::machine_with`, after `SharedConstants`; `isel`'s `held` makes the
+//! `implicit_def`s of a poison or undef value a register holds.
 
 use std::sync::Arc;
 
 use crate::coalescer::pair::full_copy;
+use crate::model::ir::Imm;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
+use crate::model::passes::LIRTransform;
 use crate::support::hash::HashSet;
 
 pub const IMPLICIT_DEF: &str = "implicit_def";
@@ -63,6 +71,62 @@ fn made_implicit(
     made.uses = Vec::new();
     made.undefs = Vec::new();
     Arc::new(made)
+}
+
+/// `body` with each `implicit_def` that is left a `mov v, 0` (DEVIATE PI-2).
+pub fn left_as_zero(body: &LirBody) -> LirBody {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .map(|one| {
+                    let Some(value) = implicit_def_of(one) else { return Arc::clone(one) };
+                    let width = match one.what.as_ref().map(|what| &what.dests[0]) {
+                        Some(crate::model::ir::Loc::Held(held)) => held.width,
+                        _ => return Arc::clone(one),
+                    };
+                    let mut made = (**one).clone();
+                    made.what = Some(Semantics {
+                        op: Operation::Move,
+                        name: Some("mov".to_owned()),
+                        dests: one.what.as_ref().expect("semantics").dests.clone(),
+                        sources: vec![crate::model::ir::Loc::Imm(Imm { value: 0, width, address: None })],
+                        ..Semantics::new(Operation::Move)
+                    });
+                    made.defines = vec![value];
+                    Arc::new(made)
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
+/// The pass as a phase: processed, the rest left as zero.
+pub struct ProcessImplicitDefs;
+
+impl LIRTransform for ProcessImplicitDefs {
+    fn class_name(&self) -> &'static str {
+        "ProcessImplicitDefs"
+    }
+
+    fn name(&self) -> &str {
+        "processimpdefs"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| implicit_def_of(one).is_some()) {
+            return Ok(body);
+        }
+        Ok(left_as_zero(&processed(&body)))
+    }
 }
 
 /// `body` with every `implicit_def` processed.
@@ -96,8 +160,12 @@ pub fn processed(body: &LirBody) -> LirBody {
                         changed = true;
                         let mut made = (**one).clone();
                         made.uses.retain(|value| !flagged.contains(value));
+                        // The register it was to arrive in is no longer asked
+                        // for: the value is any.
+                        made.requires.retain(|(held, _)| !flagged.contains(&held.value));
                         made.undefs.extend(flagged.iter().copied());
-                        // A copy that now reads nothing is an implicit def itself.
+                        // A copy that now reads nothing is an implicit def
+                        // itself.
                         if made.uses.is_empty()
                             && let Some((dst, _)) = full_copy(one)
                         {
@@ -109,7 +177,8 @@ pub fn processed(body: &LirBody) -> LirBody {
                 block.with_insns(insns)
             })
             .collect();
-        // A definition nothing but undef reads reads it goes, one a phi reads stays.
+        // A definition nothing but undef reads reads it goes, one a phi reads
+        // stays.
         let before: usize = blocks.iter().map(|block| block.insns.len()).sum();
         let blocks: Vec<_> = blocks
             .into_iter()
@@ -117,7 +186,9 @@ pub fn processed(body: &LirBody) -> LirBody {
                 let insns: Vec<Arc<Insn>> = block
                     .insns
                     .iter()
-                    .filter(|one| implicit_def_of(one).is_none_or(|value| phi_read.contains(&value) || !defined.contains(&value)))
+                    .filter(|one| {
+                        implicit_def_of(one).is_none_or(|value| phi_read.contains(&value) || !defined.contains(&value))
+                    })
                     .cloned()
                     .collect();
                 block.with_insns(insns)
@@ -151,7 +222,10 @@ mod tests {
         Arc::new(Insn::new(0, None, Some(what), vec![value], Vec::new()))
     }
 
-    fn copy(into: u32, from: u32) -> Arc<Insn> {
+    fn copy(
+        into: u32,
+        from: u32,
+    ) -> Arc<Insn> {
         let what = Semantics {
             name: Some("mov".to_owned()),
             dests: vec![held(into)],
@@ -161,7 +235,11 @@ mod tests {
         Arc::new(Insn::new(0, None, Some(what), vec![into], vec![from]))
     }
 
-    fn add(into: u32, first: u32, second: u32) -> Arc<Insn> {
+    fn add(
+        into: u32,
+        first: u32,
+        second: u32,
+    ) -> Arc<Insn> {
         let what = Semantics {
             name: Some("add".to_owned()),
             dests: vec![held(into)],
@@ -171,7 +249,10 @@ mod tests {
         Arc::new(Insn::new(0, None, Some(what), vec![into], vec![first, second]))
     }
 
-    fn body(insns: Vec<Arc<Insn>>, phis: Vec<Phi>) -> LirBody {
+    fn body(
+        insns: Vec<Arc<Insn>>,
+        phis: Vec<Phi>,
+    ) -> LirBody {
         let block = LirBlock { phis: phis.into(), ..LirBlock::new(0, insns) };
         LirBody::new("t", 0, vec![block.into()], IndexMap::default(), IndexMap::default())
     }
@@ -189,7 +270,8 @@ mod tests {
         assert_eq!((add.uses.clone(), add.undefs.clone()), (vec![4], vec![1]));
     }
 
-    /// A copy that reads only undef is an implicit def, worked in turn: `v2 := mov v1` then `v3 := add v4, v2`.
+    /// A copy that reads only undef is an implicit def, worked in turn: `v2 :=
+    /// mov v1` then `v3 := add v4, v2`.
     #[test]
     fn test_a_copy_of_an_implicit_def_is_an_implicit_def_and_its_users_read_undef() {
         let got = processed(&body(vec![def(1), copy(2, 1), add(3, 4, 2)], Vec::new()));
@@ -197,7 +279,8 @@ mod tests {
         assert_eq!(got.insns()[0].undefs, vec![2]);
     }
 
-    /// An instruction that reads something else too keeps reading it, and is no implicit def.
+    /// An instruction that reads something else too keeps reading it, and is no
+    /// implicit def.
     #[test]
     fn test_an_instruction_with_another_read_is_not_an_implicit_def() {
         let got = processed(&body(vec![def(1), add(3, 4, 1)], Vec::new()));
