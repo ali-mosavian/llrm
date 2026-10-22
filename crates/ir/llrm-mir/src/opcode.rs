@@ -593,6 +593,8 @@ pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
         .find_map(
             |one| match one {
                 Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
+                // LLVM's own marker for a struct result's address
+                Attribute::Type(name, _) if name == "sret" => Some(RESULT_POINTER),
                 _ => None,
             },
         )

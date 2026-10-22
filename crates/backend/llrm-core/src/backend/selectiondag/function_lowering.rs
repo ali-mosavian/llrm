@@ -12,6 +12,8 @@ pub struct FunctionLoweringInfo {
     pub value_regs: IdMap<ValueId, u32>,
     /// `StaticAllocaMap`.
     pub static_allocas: IdMap<ValueId, i32>,
+    /// The register the `sret` parameter is copied to, read back to return it.
+    pub sret_reg: Option<u32>,
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
@@ -37,7 +39,7 @@ impl FunctionLoweringInfo {
                 }
             }
         }
-        let mut info = FunctionLoweringInfo { value_regs: IdMap::new(), static_allocas: IdMap::new(), next_reg: 0, second: Default::default(), next_jump_table: 0, next_frame_index: 0 };
+        let mut info = FunctionLoweringInfo { value_regs: IdMap::new(), static_allocas: IdMap::new(), sret_reg: None, next_reg: 0, second: Default::default(), next_jump_table: 0, next_frame_index: 0 };
         let entry = function.entry();
         for &block in function.layout() {
             for inst in function.iter_block(block) {
