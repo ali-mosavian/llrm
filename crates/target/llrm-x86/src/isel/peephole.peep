@@ -361,11 +361,20 @@ rule immediate_argument
     rewrite @0: =@1 i {defines: [], uses: []} ; drop @1
 
 
-// X86FixupBWInsts (X86FixupBWInsts.cpp L165): after allocation, a byte or word load, copy or
-// extension whose register's other bytes are dead after it is the dword form. A zero
-// extending load needs no merge with the old upper bytes, and a dword copy has no
-// partial-register write. `mov al,[m]` is not widened for size (it takes a byte more);
-// `ah` is never the destination (the pin's `sub_8bit_hi`); `movsx ax,al` stays `cbw`.
+// X86FixupBWInsts: after allocation, a byte or word load, copy or extension whose
+// register's other bytes are dead after it is the dword form. `mov al,[m]` is not
+// widened for size; `ah` is never the destination; `movsx ax,al` stays `cbw`.
+// One rule per pin function, in the pin's order:
+//   https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L190 getSuperRegDestIfDead -> the `low_view` and `dead` guards (the peephole's
+//     liveness, `dead_after`, is the pin's LiveRegUnits stepped backward by processBasicBlock, L434);
+//   https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L285 tryReplaceLoad  -> loaded_byte, loaded_word (the `OptForSize` gate, L455: `for_size`);
+//   https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L316 tryReplaceCopy  -> copied_byte, copied_word;
+//   https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L353 tryReplaceExtend -> sign_extended_byte, zero_extended_byte (and _cell);
+//   tryReplaceInstr (L388) is the choice of rule by opcode.
+// DEVIATE W2 (no number yet): a peephole group, not a pass of its own. The liveness and the
+//   encoding facts (`dead_after`, `short_in_real_mode`) live in the peephole's `Facts`, which a
+//   LIRTransform cannot reach. Exit: those facts offered to LIRTransforms; then this becomes the
+//   pass above. Owner w-5, review 2026-11-19.
 // DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66 prefix, so the pin's claim
 // that code size is the same is false there; the rewrite is made only if it is no longer. Exit: none
 // (a fact of the encoding); cost: the real-mode words the pin would widen stay words.
