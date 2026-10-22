@@ -147,6 +147,11 @@ impl TargetLowering {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `isOperationLegal`.
+    pub fn is_operation_legal(&self, op: ISD, vt: EVT) -> bool {
+        self.types.is_type_legal(vt) && self.operation_action(op, vt) == Action::Legal
+    }
+
     pub fn is_operation_legal_or_custom(&self, op: ISD, vt: EVT) -> bool {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
     }
@@ -209,6 +214,8 @@ impl TargetLowering {
         let shld = if features.shld_slow { Custom } else { Legal };
         t.set_ops(&[FShl, FShr], &[MVT::I8, MVT::I16], Custom);
         t.set_ops(&[FShl, FShr], &[MVT::I32], shld);
+        // L508: the double-width shifts (i64 at 32 bits)
+        t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Custom);
         // L241..L300: the x87 conversions
         t.set_ops(&[UIntToFp], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[UIntToFp], &[MVT::I32, MVT::I64], Custom);
