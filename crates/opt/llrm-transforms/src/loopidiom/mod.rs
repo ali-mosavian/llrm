@@ -93,6 +93,8 @@ pub type StoreListMap = Vec<(Operand, Vec<InstId>)>;
 pub struct LoopIdiomRecognize {
     pub options: Options,
     library: Library,
+    /// The routines the compile states the program links (`strlen`).
+    pub routines: Vec<llrm_mir::libfunc::Routine>,
     apply_code_size_heuristics: bool,
     has_memset: bool,
     has_memset_pattern: bool,
@@ -159,6 +161,7 @@ impl LoopIdiomRecognize {
         Self {
             options,
             library,
+            routines: Vec::new(),
             apply_code_size_heuristics: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
@@ -494,6 +497,7 @@ pub mod build;
 pub mod driver;
 pub mod pass;
 pub mod process;
+pub mod strlen;
 
 #[cfg(test)]
 mod tests;
