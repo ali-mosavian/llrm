@@ -604,6 +604,12 @@ impl Function {
         self.instructions.len()
     }
 
+    /// The instructions in the layout (`Function::getInstructionCount`): the
+    /// erased and unplaced are not counted.
+    pub fn live_instructions(&self) -> usize {
+        self.layout.iter().map(|&block| self.iter_block(block).count()).sum()
+    }
+
     /// Each instruction's index in its block, by id; erased and unplaced ones
     /// are zero.
     pub fn positions(&self) -> Vec<u32> {
