@@ -3322,6 +3322,43 @@ define i16 @f() addrspace(1) {{
     assert!(assembled_on("486", &text(22)).contains("rep stosd"));
 }
 
+/// Tuned for size a constant memcpy is inline moves up to four pairs
+/// (`MaxStoresPerMemcpyOptSize`, X86ISelLowering.cpp#L2939), else `rep movs`;
+/// not tuned, eight (#L2938). A 24-byte copy (six dword pairs) was moves at
+/// -Os too.
+#[test]
+fn test_a_memcpy_tuned_for_size_is_moves_only_up_to_four_pairs() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  %b = alloca [{size} x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 {size}, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}}
+"
+        )
+    };
+    let sized = |size: u32, tuned: bool| {
+        let cpu = crate::backend::cpu::tuned("486", tuned).expect("a target");
+        let module = assemble::assembled(
+            &parsed(&text(size)),
+            &qb(),
+            "T_TEXT",
+            ProfileOrName::Profile(cpu),
+            &crate::backend::target::BASIC,
+        )
+        .expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(sized(24, true).contains("rep movs dword"), "{}", sized(24, true));
+    assert!(!sized(16, true).contains("movs"), "{}", sized(16, true));
+    assert!(!sized(24, false).contains("movs"), "{}", sized(24, false));
+    assert!(sized(36, false).contains("rep movs dword"), "{}", sized(36, false));
+}
+
 /// A far global is `seg name:offset name`, and a memset of a variable
 /// length `rep stosd` then `rep stosb` through it, as the old route made
 /// C's `fill_far`; isel refused "a far global", then the variable length.
