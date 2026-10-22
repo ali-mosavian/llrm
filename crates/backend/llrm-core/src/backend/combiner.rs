@@ -346,6 +346,24 @@ fn combine_block(
     next: &mut u32,
     like: &mut Vec<(u32, u32)>,
 ) -> Option<Vec<Arc<Insn>>> {
+    // `hasReassociableSibling` looks for the operand's definition in the
+    // block: one with no associative operation reading another's result has
+    // nothing to rebuild, and its instructions are not copied.
+    let mut produced: HashSet<u32> = HashSet::default();
+    let chain = block
+        .insns
+        .iter()
+        .any(
+            |one| {
+                let Some((_, left, right)) = operands(one) else { return false };
+                let reads = produced.contains(&left.value) || produced.contains(&right.value);
+                produced.extend(one.defines.iter().copied());
+                reads
+            },
+        );
+    if !chain {
+        return None;
+    }
     let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
     let mut here: HashSet<u32> = block.phis.iter().map(|phi| phi.result).collect();
     // Depth of the instruction defining each value of the block made so far.
