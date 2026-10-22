@@ -1285,5 +1285,8 @@ fn test_the_stamp_solves_a_calling_body_again_only_when_it_or_the_facts_moved() 
     assert!(text.contains("range(i16 "), "premise: something was stamped: {text}");
     assert!(solves[0] >= 2, "the first call solves its callers: {solves:?}");
     assert_eq!(solves[1], 1, "only the edited @f is solved again; @place stands: {solves:?}");
-    assert_eq!(solves[2], 2, "a moved module fact solves both callers again, the cache must not return the stale solve: {solves:?}");
+    assert_eq!(
+        solves[2], 2,
+        "a moved module fact solves both callers again, the cache must not return the stale solve: {solves:?}"
+    );
 }

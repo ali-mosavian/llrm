@@ -88,8 +88,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
-use llrm_mir::facts::{Bounds, Fact};
 use llrm_mir::context::ConstantId;
+use llrm_mir::facts::{Bounds, Fact};
 use llrm_mir::module::{GlobalKind, Mark, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::program::Program;
@@ -335,16 +335,18 @@ pub fn stamp_with(
                         ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default()
                     };
                     cache.solves += 1;
-                    cache.solved.insert(
-                        key,
-                        Solved {
-                            mark: function.mark(),
-                            parameters: function.parameter_attrs.clone(),
-                            facts: facts[at].clone(),
-                            registers,
-                            scoped,
-                        },
-                    );
+                    cache
+                        .solved
+                        .insert(
+                            key,
+                            Solved {
+                                mark: function.mark(),
+                                parameters: function.parameter_attrs.clone(),
+                                facts: facts[at].clone(),
+                                registers,
+                                scoped,
+                            },
+                        );
                 }
                 let solved = &cache.solved[&key];
                 let (registers, scoped) = (&solved.registers, &solved.scoped);
