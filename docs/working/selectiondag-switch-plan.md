@@ -22,7 +22,7 @@ The first column's single cause, the i1 branch condition, hid the layer under it
 
 | Group | Remaining | Dates (owner's) |
 |---|---|---|
-| builder (sdag-a) | `va_*`, dynamic alloca, atomics, EH, aggregates and freeze, intrinsics beyond `mem*`, switch with phi successors, float call results, `i64` at m16 | byval/sret #3848 open; `va_*` 11-10; alloca 11-12; atomics 11-20; EH 11-27; sweep 12-04; **refuses nothing on the corpus 12-10** (corpus shadow from 11-02) |
+| builder (sdag-a) | `va_*`, dynamic alloca, atomics, EH, aggregates and freeze, intrinsics beyond `mem*`, switch with phi successors, float call results, `i64` at m16 | byval/sret #3848 open; `va_*` 11-10; alloca 11-12; atomics 11-20; EH 11-27; sweep 12-04; **refuses nothing on the corpus 2026-11-24** (corpus table below; tool `tools/dagisel/builder_corpus.py`, #3851) |
 | legalizer, lowering (sdag-b) | i1 branch promote (the 82), i64 div/rem, remaining promote/expand, far ops beyond load, x87 and FP conversions (SD6), bit counts, bswap, abs, funnel shifts | div/rem 11-05; promote/expand 11-14; x87 11-18; bit counts 11-25; **types complete 12-05, lowering incl. x87 12-19** (stated; the pieces end 11-25) |
 | combiner (sdag-b) | eight visitors 12-12; known bits and SimplifyDemandedBits | complete for the scalar corpus 2027-02-12; **not a gate**: a row above main is fixed by landing a visitor |
 | matcher (sdag-c) | hand matchers (FrameIndex to LEA, MUL_LOHI, DIVREM, logic-immediate shrink); x87 goldens; DAG segment overrides; m16 shadow against the old selector | matchers 11-05; x87 11-08; segments 11-10; m16 shadow 11-14; **no CannotSelect: m32 11-12, m16 11-20** (its buckets are now visible, 14 + 2 + 2 of them sdag-c's own) |
@@ -34,13 +34,13 @@ m32 and m16 run in parallel. The weekly shadow run (every Monday from 11-09) is 
 
 | | m32 | m16 |
 |---|---|---|
-| groups done | builder 12-10, matcher 11-12, emitter 11-20 | the same, plus `i64` at m16 (builder, undated), far ops beyond load (sdag-b, undated), matcher 11-20 |
-| two clean weekly runs | 12-07 and 12-14 | same dates if the undated items are dated by 11-14 |
-| **default** | **2026-12-14** | **2026-12-18** if those are dated by 11-14, else **2027-01-08** |
+| groups done | builder 11-24, matcher 11-12, emitter 11-20 | the same, plus `i64` at m16 (builder, undated), far ops beyond load (sdag-b, undated), matcher 11-20 |
+| two clean weekly runs | 11-30 and 12-07 | same dates if `i64`-at-m16 and far ops beyond load are dated by 11-14 |
+| **default** | **2026-12-07** | **2026-12-14** if those are dated by 11-14, else **2027-01-08** |
 
-Why not 2026-12-04: the builder is done 12-10 and the corpus runs that say what it still refuses start 11-02; the first of the two clean runs needs a builder that refuses nothing. If the 11-02 run shows the 12-04 sweep items (aggregates, freeze, intrinsics) do not occur in the corpus, the builder date moves to 12-07 and a switch on 2026-12-04 becomes possible; the plan is updated that day.
+Why not earlier: the first of the two clean runs needs a builder that refuses nothing (11-24), and the legalizer's last pieces end 11-25 (sdag-b now 11-18 for the scalar corpus); the Monday runs are 11-30 and 12-07. A November switch (see below) is possible only if both end by 11-16.
 
-sdag-b's signed 12-19 for the whole lowering is after 12-14, but the switch needs only the pieces the corpus hits. If the shadow shows x87 or bit counts in the corpus (QCport has float code), those gate the switch and m32 becomes **2026-12-21**. The pieces themselves are dated 11-18 and 11-25.
+sdag-b's signed 12-19 for the whole lowering (now 11-18 for the scalar corpus) is after the weekly runs, but the switch needs only the pieces the corpus hits. If the shadow shows x87 or bit counts in the corpus (QCport has float code), those gate the switch and m32 becomes **2026-12-14**. The pieces themselves are dated 11-18 and 11-25.
 
 ## What moves these dates
 
@@ -52,9 +52,9 @@ sdag-b's signed 12-19 for the whole lowering is after 12-14, but the switch need
 
 ## Row 23 (CGP)
 
-The seven functions blocked on "the DAG switch, earliest 2027-02-04" are blocked until 2026-12-14 (m32) and 2026-12-18 (m16; 2027-01-08 at worst).
+The seven functions blocked on "the DAG switch, earliest 2027-02-04" are blocked until 2026-12-07 (m32) and 2026-12-14 (m16; 2027-01-08 at worst).
 
-## Critical path to 2026-12-14 (m32)
+## Critical path to 2026-12-07 (m32)
 
 | Step | Owner | Deliverable | Date | Depends on |
 |---|---|---|---|---|
@@ -64,10 +64,10 @@ The seven functions blocked on "the DAG switch, earliest 2027-02-04" are blocked
 | 4 | sdag-b | remaining promote/expand 11-14, x87 and FP conversions 11-18, bit counts 11-25 | 11-25 | sdag-a's FP builder |
 | 5 | sdag-c | no CannotSelect, m32 | 11-12 (11-20 with x87) | 1, 4 |
 | 6 | sdag-d | emitter: locals, globals, `CALLSEQ`, jump tables, call clobbers | 11-20 | sdag-a calls |
-| 7 | sdag-a | builder refuses nothing on the corpus: EH 11-27, sweep 12-04 | **12-10** | 2 |
-| 8 | sdag-d | two clean weekly runs | 12-07, 12-14 | 7 |
+| 7 | sdag-a | builder refuses nothing on the corpus (far pointers, invoke/landingpad, m16 multi-register arguments, intrinsics) | **11-24** | 2 |
+| 8 | sdag-d | two clean weekly runs | 11-30, 12-07 | 7 |
 
-The step that costs the slip against 11-02 is **7**: the builder's refusal list is unknown until step 2 (11-02) and sdag-a's dates for EH, atomics and aggregates (11-20 to 12-04) are sequential. Everything else finishes by 11-25. If step 2 shows EH, atomics, `va_*` and aggregates absent from the corpus, step 7 collapses to 11-14.
+The step that costs the slip against 11-02 is **7**, now measured: the corpus holds far/segment pointers (7829 uses in 465 programs), `invoke` 841 and `landingpad` 75 (QB), m16 multi-register arguments 128 and results 61, `i64` at m16 47, intrinsics (`llrm.ia16.window/code/asm` 23, libm about 45, min/max 15, `cttz`/`ctpop` 9, `va_start` 8), casts 28, float call results 12, `freeze` 6; atomics, dynamic alloca and aggregates are absent. sdag-a's date for refusing nothing is 11-24; everything else finishes by 11-25.
 
 ## File collisions
 
@@ -79,11 +79,11 @@ It needs the weekly runs on 11-16 and 11-23 and the switch on **11-30**. What mo
 
 | Step | Now | Needed | Days | Who needs help |
 |---|---|---|---|---|
-| 7 builder clean | 12-10 | 11-14, only if the 11-02 shadow shows EH/atomics/`va_*`/aggregates absent; else those four are deferred behind a refusal that falls back (not allowed by the gate) | -26 | sdag-a: `va_*` and atomics pulled to 11-10 by dropping the intrinsic sweep |
+| 7 builder clean | 11-24 | 11-14, by dropping the intrinsic and cast tail from the gate list only if the shadow cannot reach it (not allowed: the gate is no refusal) | -10 | sdag-a: far pointers and `invoke`/`landingpad` first; libm and `window`/`asm` intrinsics to sdag-c |
 | 4 legalizer | 11-25 | 11-18 (types 11-14, x87 11-14, bit counts 11-18) | -7 | sdag-b: ConstantFP libcall and bit counts to sdag-c, who is idle until the shadow shows new buckets |
 | 5 matcher | 11-12 / 11-20 | 11-12 | 0 | sdag-c |
 | 6 emitter | 11-20 | 11-13 | -7 | sdag-d: calls half to sdag-a (the builder already knows the call sequence) |
 | 3 `LirBody` | 11-06 | 11-06 | 0 | sdag-d |
 | combiner | not a gate | div/rem and extend-of-load (sdag-d, 11-03) are needed for the corpus equality, not the switch | 0 | sdag-d |
 
-Two limits are not about people: the build slots (two shared; one test cycle of one crate is 10 to 20 minutes behind other sessions' builds, so each owner gets about 30 cycles a day), and a refusal found in the last run week resets the clean-run count. A November switch is possible only if the 11-02 shadow shows the builder's tail is not in the corpus; decide on 11-02, not before.
+Two limits are not about people: the build slots (two shared; one test cycle of one crate is 10 to 20 minutes behind other sessions' builds, so each owner gets about 30 cycles a day), and a refusal found in the last run week resets the clean-run count. The builder's tail is now measured and is in the corpus (far pointers 7829 uses, `invoke` 841): a November switch needs the builder at 11-14, not 11-24, and the oversight decision on 10-25 is whether sdag-c takes the intrinsics.
