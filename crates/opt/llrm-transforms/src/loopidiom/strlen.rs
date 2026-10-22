@@ -46,45 +46,12 @@ use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::Use;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
-use llrm_mir::module::{GlobalKind, InstId, Operand};
+use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{CallInfo, Flags, IntPredicate, Opcode};
-use llrm_mir::types::{Type, TypeId};
+use llrm_mir::types::Type;
 
 use super::LoopIdiomRecognize;
 use super::process::{Run, cx};
-
-/// What the module says `strlen` is: the callee, its function type and its
-/// calling convention.
-struct Declared {
-    callee: llrm_mir::context::GlobalId,
-    ty: TypeId,
-    calling_convention: u32,
-}
-
-/// The module's `strlen` (D11): named `strlen` or `_strlen`, one `ptr`
-/// parameter in address space 0 and an integer result, not variadic.
-fn declared_strlen(run: &Run) -> Option<Declared> {
-    for (at, global) in run.env.globals.iter().enumerate() {
-        let name = global.name.as_deref()?;
-        let GlobalKind::Function(function) = &global.kind else { continue };
-        if name != "strlen" && name != "_strlen" {
-            continue;
-        }
-        let Type::Function { returns, parameters, variadic: false } = run.context.types.get(function.ty).clone() else {
-            continue;
-        };
-        let ptr = run.context.types.ptr(0);
-        if parameters.as_slice() != [ptr] || run.context.types.int_bits(returns).is_none() {
-            continue;
-        }
-        return Some(Declared {
-            callee: llrm_mir::context::GlobalId(at as u32),
-            ty: function.ty,
-            calling_convention: function.calling_convention,
-        });
-    }
-    None
-}
 
 /// `matchCondition`: the value the loop's branch tests against zero, when the
 /// branch stays in the loop on a non-zero value.
@@ -135,8 +102,8 @@ impl LoopIdiomRecognize {
             return false;
         }
         let Some(verified) = self.verify_strlen_idiom(run) else { return false };
-        // D11: `strlen` as the module declares it.
-        let Some(strlen) = declared_strlen(run) else { return false };
+        // D11: the compile says the program links `strlen`.
+        let Some(routine) = self.routines.iter().find(|one| one.standard == "strlen").cloned() else { return false };
 
         let preheader = run.cur_loop.get_loop_preheader(run.function).expect("verified to have one");
         let loop_body = run.cur_loop.get_blocks()[0];
@@ -156,18 +123,29 @@ impl LoopIdiomRecognize {
             None,
         );
 
-        // `emitStrLen`: the call, placed before the preheader's terminator.
-        let returns = match run.context.types.get(strlen.ty).clone() {
-            Type::Function { returns, .. } => returns,
-            _ => unreachable!("a function type"),
-        };
+        // `emitStrLen`: `getOrInsertFunction` of `size_t strlen(const char *)`
+        // and the call, placed before the preheader's terminator.
         let pointer = run.context.types.ptr(0);
-        let callee = Operand::Constant(
-            run.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(strlen.callee) }),
-        );
+        let returns = run.context.types.int(run.env.layout.pointer(0).index_bits);
+        let ty = run.context.types.intern(Type::Function { returns, parameters: vec![pointer], variadic: false });
+        let callee_id = run
+            .declared
+            .routine(
+                &routine.symbol,
+                ty,
+                routine.calling_convention,
+                vec![
+                    llrm_mir::opcode::Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]),
+                    llrm_mir::facts::Fact::NoUnwind.carrier(),
+                    llrm_mir::facts::Fact::WillReturn.carrier(),
+                ],
+                vec![llrm_mir::facts::Fact::NoCapture.carrier()],
+            );
+        let callee =
+            Operand::Constant(run.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee_id) }));
         let info = CallInfo {
-            function_type: strlen.ty,
-            calling_convention: strlen.calling_convention,
+            function_type: ty,
+            calling_convention: routine.calling_convention,
             return_attrs: Vec::new(),
             argument_attrs: vec![Vec::new()],
             attrs: Vec::new(),
@@ -366,31 +344,53 @@ exit:
 ";
 
     fn run(text: &str) -> String {
+        run_with(text, true)
+    }
+
+    fn run_with(
+        text: &str,
+        stated: bool,
+    ) -> String {
         let mut module = parsed(text);
         let mut passes = llrm_mir::passes::PassManager::default();
         (passes.verify_each, passes.verify_invalidation) = (true, true);
-        passes.add(LoopIdiom::new());
+        let routine =
+            llrm_mir::libfunc::Routine { standard: "strlen", symbol: "_strlen".to_owned(), calling_convention: 1003 };
+        passes.add(LoopIdiom::with_routines(if stated { vec![routine] } else { Vec::new() }));
         passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
         printed(&module)
     }
 
     #[test]
-    fn a_loop_to_the_terminator_is_a_strlen_where_the_module_declares_one() {
-        let with = format!("declare i32 @strlen(ptr)\n\n{MESSAGE}");
-        let after = run(&with);
-        assert!(after.contains("call i32 @strlen(ptr %s)"), "{after}");
+    fn a_loop_to_the_terminator_is_a_strlen_where_the_compile_states_the_library() {
+        let after = run(MESSAGE);
+        assert!(after.contains("call cc 1003 i64 @_strlen(ptr %s)"), "{after}");
+        assert!(
+            after.contains("declare cc 1003 i64 @_strlen(ptr nocapture) memory(argmem: read) nounwind willreturn"),
+            "{after}"
+        );
+    }
+
+    /// tests/run c/builtins_table.c at -m32 -mabi=sysv: the program's own
+    /// `strlen` (symbol `_strlen`) was a call of itself, and ran forever. The
+    /// pin skips a function named for the idiom; the name here is decorated.
+    #[test]
+    fn the_loop_of_the_functions_own_strlen_stays_a_loop() {
+        let own = MESSAGE.replace("@len", "@_strlen");
+        let after = run(&own);
+        assert!(!after.contains("call cc 1003"), "{after}");
     }
 
     #[test]
-    fn a_module_with_no_strlen_keeps_its_loop() {
-        let after = run(MESSAGE);
+    fn a_compile_that_states_no_strlen_keeps_its_loop() {
+        let after = run_with(MESSAGE, false);
         assert!(!after.contains("strlen"), "{after}");
     }
 
     #[test]
     fn a_loop_over_wider_characters_is_left() {
         let wide = MESSAGE.replace("i8", "i16").replace("i32 %i\n  %c", "i32 %i\n  %c");
-        let after = run(&format!("declare i32 @strlen(ptr)\n\n{wide}"));
+        let after = run(&wide);
         assert!(!after.contains("call i32 @strlen"), "{after}");
     }
 }
