@@ -76,6 +76,7 @@ pub mod dump;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
+pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
