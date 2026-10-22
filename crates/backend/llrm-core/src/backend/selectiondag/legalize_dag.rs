@@ -18,7 +18,7 @@
 //! no `Expand` or library cases; a node that needs one is refused by name
 //! ([`LegalizeError::Unsupported`]) until B1b and B1e.
 //!
-//! DEVIATE SD34: no `DAGNodeDeletedListener` and no dead-node deletion
+//! DEVIATE SD41: no `DAGNodeDeletedListener` and no dead-node deletion
 //! (`DeleteNode`, `RemoveDeadNodes`): the arena keeps replaced nodes, and the
 //! walk skips a node nothing reads. Exit: none. Owner sdag-b. Review
 //! 2026-11-13.

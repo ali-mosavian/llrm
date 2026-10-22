@@ -57,6 +57,23 @@ pub fn root_upper(
     _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| lane.1 >= 2).collect()
 }
 
+/// The lanes of a register's root that the register itself does not cover.
+pub fn rest_of_root(
+    regs: Regs,
+    one: Reg,
+) -> Lanes {
+    let own = _lanes(regs, one.register);
+    _lanes(regs, crate::model::ir::root(one.register)).into_iter().filter(|lane| !own.contains(lane)).collect()
+}
+
+/// The dword register a byte or word view belongs to (`eax` for `al` and `ax`).
+pub fn dword_of(
+    regs: Regs,
+    one: Reg,
+) -> Loc {
+    Loc::Reg(Reg { register: regs.named(regs.root(one.register), 4), width: 4 })
+}
+
 /// The whole register a view belongs to, as a dword operand.
 pub fn widen(
     _regs: Regs,
