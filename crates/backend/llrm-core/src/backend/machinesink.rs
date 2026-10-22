@@ -699,11 +699,11 @@ impl Sinker {
         false
     }
 
-    /// Whether `value` stays live below `one` once it is the first instruction of
-    /// `sink_to`: another instruction of the block reads it, or it is live out of
-    /// the block (a phi below, a loop's back edge). The two-address form then
-    /// needs a copy (DEVIATE M4: in a build for size an instruction moves only
-    /// where it is the last reader on its path).
+    /// Whether `value` stays live below `one` once it is the first instruction
+    /// of `sink_to`: another instruction of the block reads it, or it is
+    /// live out of the block (a phi below, a loop's back edge). The
+    /// two-address form then needs a copy (DEVIATE M4: in a build for size
+    /// an instruction moves only where it is the last reader on its path).
     fn read_below(
         &self,
         value: u32,
@@ -1040,10 +1040,10 @@ mod tests {
     }
 
     /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed
-    /// above the branch and copied in the arm (`lea; cmp; jbe; mov`, x_adler -Os
-    /// 13 to 17 instructions a trip), because only an instruction that read
-    /// nothing moved. Its operand is read by the phi on the other edge, so
-    /// moving it into the arm extends nothing.
+    /// above the branch and copied in the arm (`lea; cmp; jbe; mov`, x_adler
+    /// -Os 13 to 17 instructions a trip), because only an instruction that
+    /// read nothing moved. Its operand is read by the phi on the other
+    /// edge, so moving it into the arm extends nothing.
     #[test]
     fn test_in_a_size_build_an_instruction_whose_operand_lives_on_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
