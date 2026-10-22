@@ -85,6 +85,7 @@ pub mod actions;
 pub mod builder;
 mod dag;
 pub mod dag_combiner;
+pub mod dag_function;
 pub mod dag_select;
 pub mod dagisel_adapter;
 pub mod dump;
@@ -111,6 +112,8 @@ pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod dag_function_tests;
 #[cfg(test)]
 mod dag_select_tests;
 #[cfg(test)]

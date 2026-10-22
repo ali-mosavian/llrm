@@ -1110,11 +1110,11 @@ fn staged(
 ) -> Result<Staged, String> {
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
-    if target.selector == Selector::Dag {
-        return Err(format!("@{name}: --isel=dag: the SelectionDAG selector cannot select this function yet"));
-    }
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = timed("isel", || {
+    let selected = if target.selector == Selector::Dag {
+        timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch))
+    } else {
+        timed("isel", || {
         isel::selected_with(
             module,
             name,
@@ -1128,7 +1128,8 @@ fn staged(
             hole,
             target.facts,
         )
-    });
+        })
+    };
     let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =
         selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
