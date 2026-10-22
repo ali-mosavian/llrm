@@ -49,6 +49,23 @@ impl std::fmt::Debug for ScevCache {
     }
 }
 
+impl ScevCache {
+    /// The expressions out of the entry, which is left empty: a pass that
+    /// keeps them current while it edits holds them for its run and `put`s
+    /// them back before it says it kept `Scevs`.
+    pub fn take(&self) -> ScalarEvolution {
+        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::new())
+    }
+
+    /// `scev` as the entry's expressions again.
+    pub fn put(
+        &self,
+        scev: ScalarEvolution,
+    ) {
+        *self.0.borrow_mut() = scev;
+    }
+}
+
 /// LLVM's `ScalarEvolutionAnalysis`.
 pub struct Scevs;
 
@@ -217,6 +234,20 @@ impl ScevSession {
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::of(context, globals, metadata, function);
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
+    }
+
+    /// `scev` as the session's expressions, for a session that carries on the
+    /// work of an earlier pass (`Scevs`).
+    pub fn adopt(
+        &mut self,
+        scev: ScalarEvolution,
+    ) {
+        self.scev = scev;
+    }
+
+    /// The expressions, to hand back to the manager.
+    pub fn into_scev(self) -> ScalarEvolution {
+        self.scev
     }
 
     /// The expressions dropped: after the function changed in ways that leave
