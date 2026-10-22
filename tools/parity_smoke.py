@@ -476,6 +476,10 @@ def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
     return out
 
 
+# The last `dependants_lib_failures` run: crates, tests passed, a hash of the test names, seconds.
+LAST_LIB: dict = {}
+
+
 def dependants_lib_failures(
     packages: set[str],
     root: Path = ROOT,
@@ -486,13 +490,25 @@ def dependants_lib_failures(
     import xfail  # noqa: PLC0415
 
     failed = set()
+    started = time.monotonic()
+    passed, names = 0, []
     for package in sorted(packages):
-        done = run(slotted(["cargo", "test", "-q", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
+        done = run(slotted(["cargo", "test", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
         output = done.stdout + done.stderr
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:
             found = {f"unit {package}::did-not-run"}
         failed |= found
+        passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
+        names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
+    # What ran, kept for the line the gate prints: a pass that says nothing cannot be told from a gate that never ran.
+    LAST_LIB.clear()
+    LAST_LIB.update(
+        crates=len(packages),
+        passed=passed,
+        names=hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:8],
+        seconds=time.monotonic() - started,
+    )
     return failed - xfail.load().keys()
 
 

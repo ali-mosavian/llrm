@@ -150,7 +150,7 @@ fn select_on_a_constant_condition_and_equal_arms() {
 
 #[test]
 fn a_global_plus_a_constant_folds_into_the_symbol() {
-    let mut dag = dag();
+    let mut dag = SelectionDAG::new(DagConfig { offset_folding: true, ..DagConfig::default() });
     let global = dag.get_global_address(EVT::I32, 7, 4);
     let eight = dag.get_constant(8, EVT::I32);
     let sum = dag.get_node(ISD::Add, EVT::I32, &[global, eight]);
@@ -343,5 +343,81 @@ mod action_table {
         t.set_operation_action(ISD::Select, MVT::I32, Action::Expand);
         t.set_operation_action(ISD::Select, MVT::I32, Action::Custom);
         assert_eq!(act(&t, ISD::Select, MVT::I32), Action::Custom);
+    }
+}
+
+mod builder {
+    use std::collections::BTreeMap;
+
+    use llrm_mir::datalayout::DataLayout;
+
+    use super::super::builder::{BuilderTarget, build_block};
+    use super::super::dump::normalized;
+    use super::super::function_lowering::FunctionLoweringInfo;
+
+    /// The pin's "Initial selection DAG" dumps by block name (`f:b1`).
+    fn pin_blocks(text: &str) -> BTreeMap<String, String> {
+        let mut blocks = BTreeMap::new();
+        let mut current: Option<(String, String)> = None;
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("Initial selection DAG: ") {
+                if let Some((name, body)) = current.take() {
+                    blocks.insert(name, body);
+                }
+                let name = rest.split('\'').nth(1).expect("quoted name").to_string();
+                current = Some((name, String::new()));
+            } else if let Some((_, body)) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
+        blocks.extend(current);
+        blocks.into_iter().map(|(name, body)| (name, normalized(&body))).collect()
+    }
+
+    /// Our dump of every block the builder takes, by the pin's block name.
+    fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
+        let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
+        let target = BuilderTarget::m32();
+        let mut built = BTreeMap::new();
+        let mut refused = Vec::new();
+        for (_, global, function) in module.functions() {
+            let mut info = FunctionLoweringInfo::new(function);
+            for &block in function.layout() {
+                let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap());
+                match build_block(&module, function, &layout, &target, &mut info, block) {
+                    Ok(done) => {
+                        built.insert(name, normalized(&done.dag.dump()));
+                    }
+                    Err(why) => refused.push(format!("{name}: {}", why.0)),
+                }
+            }
+        }
+        (built, refused)
+    }
+
+    /// A `ret` is refused with its reason, not built wrongly.
+    #[test]
+    fn a_return_is_refused_until_calls_and_returns_land() {
+        let (built, refused) = our_blocks("define void @f() {\nb0:\n  ret void\n}\n");
+        assert!(built.is_empty());
+        assert_eq!(refused, vec!["f:b0: ret (A2)".to_string()]);
+    }
+
+    /// Every block of the scalar function the builder takes has the DAG the
+    /// pin builds for the same IR (ids, register numbers, memory operand text
+    /// and block addresses aside). Without the builder, nothing is built.
+    #[test]
+    fn scalar_blocks_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/scalar.ll");
+        let pin = pin_blocks(include_str!("golden/scalar.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 4, "all four blocks are built");
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
     }
 }

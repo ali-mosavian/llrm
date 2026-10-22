@@ -236,6 +236,47 @@ impl BodySplitEnv {
     }
 }
 
+/// `MachineRegisterInfo::recomputeRegClass` for the registers an edit made: the
+/// order each takes from the instructions that name it, which can be wider
+/// than its parent's. A pinned value, one with a class of its own kind (the
+/// x87 stack) and one an address pair confines (its side is its parent's)
+/// keep theirs.
+fn reclass_orders(
+    tables: &Tables,
+    pinned: &crate::support::hash::HashSet<u32>,
+    sets: Option<&crate::backend::regclass::Sets>,
+    registers: Regs,
+    lis: &LiveIntervals,
+    regs: &[u32],
+) {
+    use crate::backend::regclass::{Confinement, confinement_of};
+    let Some(sets) = sets else { return };
+    for &reg in regs {
+        let Some(current) = tables.orders.borrow().get(&reg).cloned() else { continue };
+        if pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
+            continue;
+        }
+        let mut seen = crate::support::hash::HashSet::default();
+        let insns: Vec<Arc<Insn>> = lis
+            .operands(reg)
+            .iter()
+            .filter(|op| seen.insert(op.instr))
+            .map(|op| Arc::clone(lis.instr(op.instr)))
+            .collect();
+        let order: Vec<RegId> = match confinement_of(registers, insns.iter().map(|one| &**one), reg, sets) {
+            Confinement::Unknown => continue,
+            Confinement::Free => sets.available.clone(),
+            Confinement::Only(allowed) => {
+                let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
+                sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
+            }
+        };
+        if !order.is_empty() {
+            tables.orders.borrow_mut().insert(reg, order);
+        }
+    }
+}
+
 impl super::splitkit::SplitEnv for BodySplitEnv {
     fn is_terminator(
         &self,
@@ -287,34 +328,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         lis: &LiveIntervals,
         regs: &[u32],
     ) {
-        use crate::backend::regclass::{Confinement, confinement_of};
-        let Some(sets) = &self.sets else { return };
-        for &reg in regs {
-            let Some(current) = self.tables.orders.borrow().get(&reg).cloned() else { continue };
-            // A pinned value, and one with a class of its own kind (the x87
-            // stack), keep theirs.
-            if self.pinned.borrow().contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
-                continue;
-            }
-            let mut seen = crate::support::hash::HashSet::default();
-            let insns: Vec<Arc<Insn>> = lis
-                .operands(reg)
-                .iter()
-                .filter(|op| seen.insert(op.instr))
-                .map(|op| Arc::clone(lis.instr(op.instr)))
-                .collect();
-            let order: Vec<RegId> = match confinement_of(self.registers, insns.iter().map(|one| &**one), reg, sets) {
-                Confinement::Unknown => continue,
-                Confinement::Free => sets.available.clone(),
-                Confinement::Only(allowed) => {
-                    let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
-                    sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
-                }
-            };
-            if !order.is_empty() {
-                self.tables.orders.borrow_mut().insert(reg, order);
-            }
-        }
+        reclass_orders(&self.tables, &self.pinned.borrow(), self.sets.as_deref(), self.registers, lis, regs);
     }
 
     fn is_rematerializable(
@@ -761,7 +775,19 @@ pub fn decide_with_split(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
-    tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
+    let invariant = crate::backend::postings::following(body, |postings| {
+        let defined: std::collections::BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        crate::backend::spiller::_stable_loads_by(body, &defined, &Default::default(), postings)
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<u32>>()
+    });
+    tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
     let pins = inputs
         .pins
         .iter()
@@ -825,7 +851,15 @@ pub fn decide_with_split(
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
         Mode::Simple => Box::new(SimpleSpiller::default()),
         Mode::Inline { frame, classes } => {
-            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)))
+            let (made, sets, pins, registers) = (
+                Rc::clone(&tables),
+                inputs.sets.map(|sets| Rc::new(sets.clone())),
+                inputs.pins.keys().copied().collect::<crate::support::hash::HashSet<u32>>(),
+                inputs.registers,
+            );
+            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)).with_reclass(Box::new(
+                move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs),
+            )))
         }
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
@@ -1506,5 +1540,53 @@ mod tests {
         };
         let load = Insn::new(0, None, Some(load), vec![1], vec![]);
         assert!(env.rematerialize(&load, 8, 1, None).is_none());
+    }
+
+    /// A reload made for a stored word got its parent's order, {BX}
+    /// (ls.c `_ls_animate@3`: `[abs+516 + %53 + v16] := mov %51`), and with the
+    /// base holding {BX} too the two had one register between them: the
+    /// function fell back to the rounds. Its own instructions only store
+    /// it, so the order widens to every register; the base, which an
+    /// address confines, stays among BX, SI and DI.
+    #[test]
+    fn test_a_spilled_values_stored_word_takes_the_class_its_instructions_give() {
+        use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
+        let (base, word) = (1u32, 2u32);
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Semantics {
+            name: Some(name.to_owned()),
+            dests,
+            sources,
+            ..Semantics::new(op)
+        };
+        let imm = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let make = |at, defines: Vec<u32>, uses: Vec<u32>, w| Arc::new(Insn::new(at, None, Some(w), defines, uses));
+        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let insns = vec![
+            make(1, vec![base], vec![], what(Operation::Move, "mov", vec![held(base)], vec![imm(2)])),
+            make(2, vec![word], vec![], what(Operation::Move, "mov", vec![held(word)], vec![imm(3)])),
+            make(3, vec![], vec![base, word], what(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(word)])),
+            make(4, vec![], vec![], what(Operation::Return, "ret", vec![], vec![])),
+        ];
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let lis = LiveIntervals::new(&body);
+        let classes = RegisterClasses::m16();
+        let sets = crate::backend::regclass::Sets::of(&classes);
+        let tables = Tables::default();
+        tables.orders.borrow_mut().insert(word, vec![RegId::EBX]);
+        tables.orders.borrow_mut().insert(base, vec![RegId::EBX]);
+        reclass_orders(&tables, &Default::default(), Some(&sets), classes.registers, &lis, &[word, base]);
+        assert_eq!(tables.orders.borrow()[&word], sets.available, "the stored word may take any register");
+        assert_eq!(
+            tables.orders.borrow()[&base],
+            vec![RegId::EBX, RegId::ESI, RegId::EDI],
+            "an address base stays among the address registers"
+        );
     }
 }

@@ -1249,7 +1249,7 @@ fn test_two_address_fixing_builds_no_set_of_the_live_values() {
     use crate::backend::allocate::SETS_BUILT;
     let (plain, _) = body(3, &Shape { pool: 12, ops: 14 });
     SETS_BUILT.with(|one| one.set(0));
-    let _ = crate::backend::twoaddr::tied(&plain, false);
+    let _ = crate::backend::twoaddr::tied(&plain, Default::default());
     let built = SETS_BUILT.with(|one| one.get());
     assert_eq!(built, 0, "{built} sets of the live values built");
 }
