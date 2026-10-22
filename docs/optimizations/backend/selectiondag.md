@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:30586070456b7c0e53b0da79a980595c52a0b9c276adfb0e9b95328b905062a8 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:0606f2fe04cf03b53da316fed5af148729439b3e4a4700f953cae34cea1f6b09 -->
 
 # selectiondag
 
@@ -71,7 +71,7 @@ DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
 `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 Owner sdag-a. Review 2026-11-13.
 
-DEVIATE SD44: a call's `TargetGlobalAddress` carries no relocation flag
+DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
 (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 Exit: none. Owner sdag-a.
 

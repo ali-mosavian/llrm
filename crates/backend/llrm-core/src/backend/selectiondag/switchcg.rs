@@ -15,7 +15,7 @@
 //! # Runs
 //! Called by the builder's `switch` (A2c, next piece) at -O1 and above.
 //!
-//! DEVIATE SD45: every case has probability `1/(cases+1)`, as the pin's
+//! DEVIATE SD101: every case has probability `1/(cases+1)`, as the pin's
 //! `BranchProbabilityInfo` gives a switch with no unreachable, cold-call or
 //! loop successors; those heuristics are not ported. Exit: with a BPI port
 //! (outside this group). Owner sdag-a. Review 2026-11-13.
