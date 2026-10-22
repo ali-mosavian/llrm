@@ -137,6 +137,9 @@ pub struct Insn {
     pub rematerialized: bool,
     /// Its memory access must happen exactly as written.
     pub volatile: bool,
+    /// A load of memory that never changes (a constant global:
+    /// `isDereferenceableInvariantLoad`).
+    pub invariant: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
@@ -540,6 +543,7 @@ impl Insn {
             frame_adjust: false,
             rematerialized: false,
             volatile: false,
+            invariant: false,
             reads_complete: false,
             line: None,
             debug: DebugTags::default(),
@@ -573,6 +577,12 @@ impl Insn {
     #[must_use]
     pub fn volatile(&self) -> bool {
         self.volatile
+    }
+
+    /// Whether it loads memory that never changes.
+    #[must_use]
+    pub fn invariant(&self) -> bool {
+        self.invariant
     }
 
     /// Whether it reads no register beyond its `requires` and the epilogue's.

@@ -393,10 +393,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine Common Subexpression Elimination",
-        Missing,
+        Executed,
         "precse.rs (before phi elimination), machinecse.rs (after allocation)",
         "-disable-machine-cse",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry machinecse@4 is partial; untranslated PerformSimplePRE and invariant-load CSE. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 897 instr 2780 B, pin-with 811 instr 2652 B, pin-without 832 instr 2716 B (4 programs)",
+        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE4, #3734); machinecse.rs (after allocation) is ours alone, DEVIATE CSE5: removed, 10 of 568 objects grow (+15..+187 B), none shrinks. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 897 instr 2780 B, pin-with 811 instr 2652 B, pin-without 832 instr 2716 B (4 programs)",
     ),
     row(
         "Machine code sinking",
@@ -436,17 +436,17 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Optimize",
-        Missing,
-        "",
+        Match,
+        "leaopt.rs",
         "-disable-x86-lea-opt",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -Os: ours 92 instr 244 B, pin-with 92 instr 250 B, pin-without 92 instr 251 B (1 programs)",
+        "translated (slot leaopt@5, before phi elimination); DEVIATE LO-1: only register-and-number addresses (no symbol or frame displacement), LO-2: 32-bit addresses only (exit w-6, 2026-11-09). Pin: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ",
     ),
     row(
         "X86 Optimize Call Frame",
-        Missing,
+        Deviate,
+        "pushfold.rs",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",

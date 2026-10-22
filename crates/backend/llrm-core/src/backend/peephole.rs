@@ -377,6 +377,7 @@ impl Peephole {
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         ));
+        let body = tested_lone_masks(self.rules, &tested_masks(self.rules, &body));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -2686,6 +2687,22 @@ static _FLAG_READERS: LazyLock<HashSet<String>> = LazyLock::new(|| {
 
 pub(crate) fn _reads_flags(name: &str) -> bool {
     _FLAG_READERS.contains(name)
+}
+
+/// An `and` whose register is dead is a `test` (`peephole.peep`).
+pub fn tested_lone_masks(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.tested_lone_masks, body, &Facts::new(body, None))
+}
+
+/// `mov d,s; and d,m; jcc` with `d` dead is `test s,m; jcc` (`peephole.peep`).
+pub fn tested_masks(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.tested_masks, body, &Facts::new(body, None))
 }
 
 /// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter (`peephole.peep`).
