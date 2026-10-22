@@ -12,7 +12,7 @@ Every layer prints its failures as names and the gate compares them with the hea
 | tests/run groups | #3522 | llrm-qb, qbfront, llrm-qbruntime, runtime/qb, llrm-x86, llrm-core | the printed output of every BASIC, C and Nib program | 75 s alone, 252 s at load |
 | tests/qbrt differential | #3539 | the same | the QB runtime against the MS runtime, 218 results | 67 s at load 7 |
 | QCport 65 modules x 4 levels | #3526 | crates/ | a compile failure of valid C | 3 s |
-| lib tests of the dependants | #3542 | a crate (closure from `cargo metadata`) | a red lib test in a crate that depends on the changed one | 135 s build + 7 s run (release, a change in llrm-transforms, load 28) |
+| lib tests of the dependants | #3542 | a crate (closure from `cargo metadata`) | a red lib test in a crate that depends on the changed one | debug profile as the gate builds it: 18 s build after a change in llrm-transforms (76 s cold) + 28 s run, load 18 |
 | mapped root integration targets | #3542 | a crate (targets whose imports and compilers include it) | pinned asm and tool tests; a new unmapped target fails its test | 40-47 s run; 109 of 116 targets for a transforms or core change, 22 for llrm-nib |
 | fixed steps, 11 ratchets, builds, fmt, docs | | any | | about 7 s of CPU |
 | nightly integration (not per PR) | #3542 | all 126 binaries, `tools/gate/nightly_integration.py` | turbo (138 s), cv4 (30 s), run (70 s) and every target, names to the board | 275 s |
@@ -22,7 +22,6 @@ Every layer prints its failures as names and the gate compares them with the hea
 
 - Lib tests of crates that do not depend on the changed one.
 - turbo, cv4 and run integration targets per PR (nightly only).
-- The debug-profile build time of the lib tests the unit step uses is not measured.
 
 | crate | lib tests | integration targets | integration tests |
 |---|---|---|---|
