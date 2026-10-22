@@ -437,7 +437,38 @@ pub fn _executable_successors(
 /// back, round after round.
 pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
+    // The answer reads the graph alone, and a function met again after passes
+    // that left its blocks and edges as they were is asked again (d_faces -O2:
+    // 34 asks, 188 K Ir each, 6.4 M of the 34 M of SimplifyCfg).
+    let shape: Vec<(i64, Vec<i64>)> = graph.iter().map(|block| (block.at, block.succ.to_vec())).collect();
+    if let Some(found) =
+        FORMS.with(|kept| kept.borrow().iter().find(|(seen, _)| *seen == shape).map(|(_, found)| found.clone()))
+    {
+        return found;
+    }
+    let found = loop_form_blocks_of(function, &graph);
+    FORMS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if kept.len() >= FORMS_KEPT {
+            kept.remove(0);
+        }
+        kept.push((shape, found.clone()));
+    });
+    found
+}
+
+/// How many graphs `loop_form_blocks` remembers the answer for.
+const FORMS_KEPT: usize = 16;
+
+thread_local! {
+    static FORMS: std::cell::RefCell<Vec<(Vec<(i64, Vec<i64>)>, BTreeSet<i64>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn loop_form_blocks_of(
+    function: &Function,
+    graph: &[cfg::Block],
+) -> BTreeSet<i64> {
+    let predecessors = loops::predecessors(graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
     let none: &[i64] = &[];
     let mut loop_edges = BTreeSet::new();

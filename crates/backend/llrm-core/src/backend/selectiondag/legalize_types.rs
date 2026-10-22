@@ -35,7 +35,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::actions::TargetLowering;
-use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
+use super::dag::{BooleanContents, NodeData, Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::lowering::TypeAction;
 use super::mvt::EVT;
@@ -340,6 +340,21 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::SetCC => {
+                // Compare into the target's own result type, then sign extend or
+                // truncate to the promoted type.
+                let ops = self.dag.node(value).ops.clone();
+                let in_vt = self.dag.value_type(ops[0]);
+                let wide = self.tli.types.set_cc_result_type(in_vt);
+                let setcc = self.dag.get_node(ISD::SetCC, wide, &ops);
+                if to.size_in_bits() > wide.size_in_bits() {
+                    self.dag.get_node(ISD::SignExtend, to, &[setcc])
+                } else if to.size_in_bits() < wide.size_in_bits() {
+                    self.dag.get_node(ISD::Truncate, to, &[setcc])
+                } else {
+                    setcc
+                }
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -364,6 +379,30 @@ impl<'a> TypeLegalizer<'a> {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[operand])
+            }
+            ISD::ZeroExtend => {
+                // Extend the promoted source to the result type, then clear
+                // what the source did not have (`getZeroExtendInReg`).
+                let src = self.dag.operand(node, 0);
+                let promoted = self.promoted_integer(src);
+                let vt = self.dag.value_type(node);
+                let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
+                let mask = super::fold::mask(self.dag.value_type(src).size_in_bits());
+                let mask = self.dag.get_constant(mask, vt);
+                self.dag.get_node(ISD::And, vt, &[wide, mask])
+            }
+            ISD::Select if at == 0 => {
+                // The condition becomes the target's boolean type (`PromoteTargetBoolean`).
+                let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
+                let extend = match self.dag.config().boolean_contents {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                let updated = self.dag.update_node_operands(n, &[cond, then, other]);
+                SDValue { node: updated, res: 0 }
             }
             op => return Err(LegalizeError::Unsupported { op, ty: self.dag.value_type(self.dag.operand(node, at)), what: "promote operand" }),
         };

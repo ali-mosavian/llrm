@@ -98,6 +98,14 @@ pub fn free(
     one: &Insn,
     fields: u32,
 ) -> bool {
+    free_fields(one, fields)
+}
+
+/// `free`, for a caller with no context (`fixupbw.rs`).
+pub fn free_fields(
+    one: &Insn,
+    fields: u32,
+) -> bool {
     let has = |bit: u32| fields & bit != 0;
     !(has(field::CLOBBERS) && !one.clobbers.is_empty()
         || has(field::CLOBBERS_HIGH) && !one.clobbers_high.is_empty()
@@ -217,7 +225,23 @@ pub fn short_in_real_mode(
     before: &Arc<Insn>,
     after: &Arc<Insn>,
 ) -> bool {
-    if cx.bits() == 16 { no_longer(cx, before, after) } else { encodable(cx, after) }
+    short_in_real_mode_at(cx.bits(), before, after)
+}
+
+/// `short_in_real_mode` at `bits`, for a caller with no context.
+pub fn short_in_real_mode_at(
+    bits: u32,
+    before: &Insn,
+    after: &Insn,
+) -> bool {
+    if bits == 16 {
+        matches!(
+            (emitted(bits, before), emitted(bits, after)),
+            (Some(before), Some(after)) if after.code.len() <= before.code.len()
+        )
+    } else {
+        emitted(bits, after).is_some()
+    }
 }
 
 /// Both encode, in as many bytes.
