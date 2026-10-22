@@ -136,6 +136,17 @@ fn test_a_gep_off_a_global_base_is_not_invented_when_no_block_has_it() {
 }
 
 #[test]
+fn test_a_gep_off_a_global_base_in_a_sibling_block_is_not_available() {
+    // %a is in b1, which does not dominate b0: a scan of the whole function would find it.
+    let text = diamond(
+        "",
+        "  %a = getelementptr i32, ptr @g, i16 %n",
+        "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = getelementptr i32, ptr @g, i16 %p",
+    );
+    assert_eq!(translated(&text, "q", "b0", true), "none");
+}
+
+#[test]
 fn test_a_select_on_the_condition_resolves_to_each_side() {
     let module = parsed(&diamond("  %s = select i1 %c, ptr %x, ptr %y", "", "  %p = phi ptr [ %s, %b0 ], [ %y, %b1 ]"));
     let (layout, function) = (layout(&module), function(&module, "f"));

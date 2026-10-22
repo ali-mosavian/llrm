@@ -28,7 +28,8 @@
 //! 3. A constant has no use list, so the scan of a base's users for an equal
 //!    GEP is a scan of the blocks that dominate the predecessor (the users
 //!    the C++ keeps are those in this function in such a block): the same
-//!    GEPs, found by walking the dominator chain, the newest returned. The
+//!    GEPs, found by walking the dominator chain, the newest (the highest
+//!    instruction id, a stand-in for use-list order) returned. The
 //!    scan of a cast's users ends at once for a constant (it folds first).
 //!    Exit: a use-list model for constants.
 //!    `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
