@@ -41,7 +41,7 @@ const COVERAGE: &[(&str, Shown)] = &[
         "noretain",
         By(&[
             "a_noretain_argument_publishes_nothing_it_points_to",
-            "a_global_held_only_by_a_noretain_argument_stays_tracked",
+            "a_noretain_call_clobbers_a_global_its_argument_holds",
             "noretain_is_a_parameter_attribute_that_round_trips",
         ]),
     ),

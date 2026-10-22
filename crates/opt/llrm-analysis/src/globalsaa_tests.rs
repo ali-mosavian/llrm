@@ -149,32 +149,36 @@ b0:
     assert_eq!(kept(&constant, call), None);
 }
 
-/// QB's `REDIM` descriptor held every array's address in a private constant
-/// nothing read: the array was untracked, and a runtime call that writes
-/// through a pointer it loaded then reloaded it (deedlines, +128 memory
-/// operands).
+/// A private constant nothing names holds a global's address: GlobalsModRef,
+/// as the pin's, takes an address stored in any initializer as escaped (the
+/// pin's pipeline has globaldce remove a dead one first, so QB's `REDIM`
+/// descriptors never reach this in a compile). `CallEffects`, deleted with
+/// #3436, kept the global tracked (deedlines +128 memory operands then); row
+/// AM-CA-5.
 #[test]
-fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
+fn a_private_initializer_nothing_names_leaks_the_address_it_holds_as_the_pin_has_it() {
     let dead = format!("{PRIVATE}@held = internal constant ptr @g\n");
-    assert_eq!(kept(&dead, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&dead, "call void @outside(ptr null)"), None);
     let chained = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
-    assert_eq!(kept(&chained, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&chained, "call void @outside(ptr null)"), None);
     let named = format!("{PRIVATE}@held = internal constant ptr @g\n");
     assert_eq!(kept(&named, "%h = load ptr, ptr @held\n  call void @outside(ptr null)"), None);
     let behind = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
     assert_eq!(kept(&behind, "%h = load ptr, ptr @outer\n  call void @outside(ptr null)"), None);
 }
 
-/// A descriptor holding a global's address, handed only to a routine that
-/// `noretain`s it, leaves the global tracked; `nocapture` alone does not.
+/// A descriptor holding a global's address, handed to a routine that
+/// `noretain`s it: GlobalsModRef does not read `noretain` (ours, not the
+/// pin's), so the global is untracked either way; `CallEffects` kept it. Row
+/// AM-CA-5.
 #[test]
-fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
+fn a_global_held_by_a_noretain_argument_is_untracked_until_globalsmodref_reads_noretain() {
     let held = |attrs: &str| {
         let globals =
             format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
         kept(&globals, "call void @erase(ptr @desc)\n  store i16 7, ptr @g\n  call void @outside(ptr null)")
     };
-    assert_eq!(held("nocapture noretain"), seven());
+    assert_eq!(held("nocapture noretain"), None);
     assert_eq!(held("nocapture"), None);
 }
 
