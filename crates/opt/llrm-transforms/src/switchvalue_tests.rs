@@ -1328,3 +1328,72 @@ t:
         &[&[0], &[3], &[7]],
     );
 }
+
+/// QCport `_pl_trace_box`: a chain `v == 0`, `v == 1`, `v == 2` on one value,
+/// each arm a store joining one block. The pin makes one `switch`; ours kept
+/// three `br i1` (5 more branches in the function, +73 B at -Os).
+#[test]
+fn test_a_chain_of_equality_branches_on_one_value_is_one_switch() {
+    check(
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  %c0 = icmp eq i16 %x, 0
+  br i1 %c0, label %a, label %b
+
+b:
+  %c1 = icmp eq i16 %x, 1
+  br i1 %c1, label %c, label %d
+
+d:
+  %c2 = icmp eq i16 %x, 2
+  br i1 %c2, label %e, label %join
+
+a:
+  store i16 10, ptr @g
+  br label %join
+
+c:
+  store i16 11, ptr @g
+  br label %join
+
+e:
+  store i16 12, ptr @g
+  br label %join
+
+join:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+",
+        "@g = global i16 0
+
+define i16 @f(i16 %x) {
+b0:
+  switch i16 %x, label %join [
+    i16 0, label %a
+    i16 1, label %c
+    i16 2, label %e
+  ]
+
+a:
+  store i16 10, ptr @g
+  br label %join
+
+c:
+  store i16 11, ptr @g
+  br label %join
+
+e:
+  store i16 12, ptr @g
+  br label %join
+
+join:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+",
+        &[&[0], &[1], &[2], &[3]],
+    );
+}
