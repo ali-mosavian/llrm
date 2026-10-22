@@ -371,6 +371,20 @@ impl<'a> Commuter<'a> {
         }
     }
 
+    /// Whether `reg` is defined in this block by one load (`mov r, [m]`, not volatile).
+    fn is_load_def(
+        &self,
+        reg: u32,
+    ) -> bool {
+        let Some(key) = self.single_def(reg) else { return false };
+        let one = &self.facts.insn[&key];
+        !one.volatile
+            && one.what.as_ref().is_some_and(|what| {
+                what.op == crate::model::ir::Operation::Move
+                    && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(_)], [Loc::Mem(_)]))
+            })
+    }
+
     /// `isRevCopyChain`: a reversed copy chain from `from` to `to`:
     /// `tmp1 = copy tmp2; from = copy tmp1; to = add from ...; tmp2 = copy to`.
     /// The walk goes up through copies and, as `AnalyzeRevCopyTied` (on by
@@ -477,6 +491,16 @@ impl<'a> Commuter<'a> {
     ) -> bool {
         if !self.is_plainly_killed(key, c) {
             return false;
+        }
+        // DEVIATE TA-8 (exit: loads folded into their reader before this pass, as isel does in the
+        // pin): a value a load defines is no operand to tie, the peephole folds it into the
+        // instruction (`add eax, [esp+16]`). Tying the other one keeps that form; tying the load
+        // gave `mov eax, [a]; add eax, ecx` and an extra register (by_value in c32/regs.c: 5
+        // instructions with `push ecx` against the pin's 3).
+        match (self.is_load_def(b), self.is_load_def(c)) {
+            (false, true) => return false,
+            (true, false) => return true,
+            _ => {}
         }
         if let Some(&to_a) = self.fixed.to.get(&a) {
             let from_b = self.fixed.from.get(&b).copied();

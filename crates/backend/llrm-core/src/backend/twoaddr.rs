@@ -1025,6 +1025,26 @@ mod tests {
         assert!(position(&got, "add") < position(&got, "lea"), "{:?}", names_of(&got));
     }
 
+    /// `s.a + s.c + a`: the sum `t1` then `t1 + a` with `a` loaded just before. The pin folds the load into
+    /// the add (`addl 16(%esp), %eax`); tying the loaded value instead gave `mov eax, [a]; add eax, ecx`
+    /// and `push ecx` (c32/regs.c `by_value`: 5 instructions against 3).
+    #[test]
+    fn test_a_value_a_load_defines_is_not_the_operand_that_is_tied() {
+        use crate::model::ir::Mem;
+        let load = {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![held(3, 4)],
+                sources: vec![Loc::Mem(Mem::new(None, 4))],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![3], vec![]))
+        };
+        // v1, v2 defined; t1 = v1 + v2 (v8 here: `sum_into` into 8); v3 loaded after it; v9 = t1 + v3.
+        let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 8, 1, 2), load, sum_into(4, 9, 8, 3), read(5, 9)];
+        assert!(commuted(insns, 4, &Fixed::default()).is_none());
+    }
+
     #[test]
     fn test_an_add_stays_two_address_where_its_source_dies_its_flags_live_or_the_target_is_not_native() {
         // not native
