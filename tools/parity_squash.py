@@ -20,6 +20,7 @@ import contextlib
 import datetime
 import fcntl
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -609,6 +610,9 @@ def new_lib_failures(
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
     if touched and any(f.startswith("crates/") and f.endswith(".rs") for f in files):
         touched = touched | {SCAN_CRATE}
+    # llrm-c's toolchain-feature tests compile C through llrm-hir's lowering: a change to it runs them too (12 s on a warm target; #2936 broke them unseen).
+    if any(f.startswith(("crates/ir/llrm-hir/", "crates/frontends/llrm-c/")) for f in files):
+        touched = touched | {"llrm-c"}
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))
@@ -838,7 +842,8 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     import parity_smoke
     from buildslot import slotted  # noqa: PLC0415
 
-    done = subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", crate, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    command = parity_smoke.lib_command(crate)
+    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
@@ -1055,9 +1060,21 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     return 0
 
 
+TOOL_MODULES = ("parity_smoke", "xfail", "buildslot")  # what the landing imports lazily, after PRs are merged into the checkout
+
+
+def preload_tools(names: tuple[str, ...] = TOOL_MODULES) -> None:
+    """Import the tool modules before the first PR is merged into the checkout, so a landing that changes them (tools/parity_*.py) takes effect at the next batch, a new process,
+    and never half-way through this one: #3817 changed `parity_smoke.lib_command` in the batch that held the old `parity_squash`, the merged-tree run used the feature, the head baseline did not,
+    and the 15 known reds were refused as new."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    for name in names:
+        importlib.import_module(name)
+
+
 def main() -> int:
     """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    preload_tools()
     from buildslot import landing  # noqa: PLC0415
 
     with landing():

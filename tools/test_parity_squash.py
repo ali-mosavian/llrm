@@ -896,3 +896,29 @@ def test_a_batch_that_does_not_build_drops_the_pr_that_breaks_the_build_alone_an
 def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved():
     group = ["1", "2", "3", "4"]
     assert ps.build_offenders(group, lambda number: True, lambda: "") == []
+
+def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
+    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+    asked = []
+
+    def on_merged(packages):
+        asked.append(set(packages))
+        return set()
+
+    ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-c" not in asked[1]
+
+
+def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
+    """#3817 changed parity_smoke while the batch that held the old parity_squash was running: half old, half new tools refused the 15 known llrm-c reds as new."""
+    (tmp_path / "fake_tool.py").write_text("VERSION = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("fake_tool", None)
+    ps.preload_tools(("fake_tool",))
+    (tmp_path / "fake_tool.py").write_text("VERSION = 2\n")  # a landing merged into the checkout
+    import importlib
+
+    assert importlib.import_module("fake_tool").VERSION == 1
+    assert {"parity_smoke", "xfail", "buildslot"} <= set(ps.TOOL_MODULES)
