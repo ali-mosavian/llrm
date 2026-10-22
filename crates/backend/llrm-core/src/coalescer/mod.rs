@@ -31,10 +31,14 @@
 //! `removeImplicitDefs` and `eliminateUndefCopy` are not translated. Fact:
 //! phi elimination here leaves no `IMPLICIT_DEF`.
 //!
-//! DEVIATE C4 (exit: the next coalescer PR): `adjustCopiesBackFrom`,
-//! `removeCopyByCommutingDef` and `removePartialRedundancy` are not translated
-//! yet; a copy whose intervals cannot join and whose source is no constant is
-//! left.
+//! DEVIATE C4 (exit: the next coalescer PR): `removeCopyByCommutingDef` is
+//! not translated yet (`adjustCopiesBackFrom` and `removePartialRedundancy`
+//! are); a copy whose intervals cannot join and that none of the three moves
+//! or removes is left.
+//!
+//! DEVIATE C12 (no number): a member of a parallel copy is not touched by
+//! `adjustCopiesBackFrom` or `removePartialRedundancy`, as `reMaterializeDef`
+//! leaves it (C11). Exit: parallel copies sequenced before the coalescer (D-F).
 //!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a

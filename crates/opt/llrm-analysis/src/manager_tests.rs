@@ -1256,3 +1256,75 @@ fn test_the_memory_graph_is_made_once_per_body_state() {
     assert!(Rc::ptr_eq(graph(0), graph(1)), "two asks of one body state made two graphs");
     assert!(!Rc::ptr_eq(graph(1), graph(2)), "an edit left the old graph");
 }
+
+/// `ScevCache` compares equal to every other, so `verify_invalidation` could
+/// not see a held `ScalarEvolution` gone stale: a pass that changed `%j = i +
+/// 1` to `i + n` and said it kept `Scevs` passed. `Scevs::consistent` checks
+/// the held expressions against the function.
+#[test]
+fn a_pass_that_changes_an_expression_and_claims_scevs_is_caught() {
+    use crate::scev::analysis::{ScevView, Scevs};
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let asks = || {
+        step(
+            |unit, analyses| {
+                let view = ScevView::of(unit.context, unit.layout, unit.function, analyses);
+                let function: &llrm_mir::module::Function = unit.function;
+                let values: Vec<_> = function
+                    .walk()
+                    .filter_map(|(_, inst)| function.instruction(inst).result)
+                    .map(Operand::Value)
+                    .collect();
+                view.ask(unit.context, unit.layout, function, |se, cx| {
+                    for value in values {
+                        if se.is_value_scevable(cx, value) {
+                            se.get_scev(cx, value);
+                        }
+                    }
+                });
+            },
+            PreservedAnalyses::all(),
+        )
+    };
+    // `%j = %i + %n`: the same shape, another meaning.
+    let edits = |preserved: PreservedAnalyses| {
+        step(
+            |unit, _| {
+                let function = &mut *unit.function;
+                let add = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
+                    .unwrap();
+                let n = Operand::Value(function.parameters()[0]);
+                let first = function.instruction(add).operands[0];
+                function.set_operands(add, vec![first, n]);
+            },
+            preserved,
+        )
+    };
+    let run = |preserved: PreservedAnalyses| {
+        let mut module = parsed(text);
+        let mut passes = PassManager::default();
+        passes.verify_invalidation = true;
+        passes.add(asks());
+        passes.add(edits(preserved));
+        passes.run_module(&mut module, Rc::new(llrm_mir::target::Neutral))
+    };
+    let error = run(PreservedAnalyses::none().preserve::<Scevs>()).unwrap_err();
+    assert!(error.contains("scev"), "{error}");
+    run(PreservedAnalyses::none()).expect("an edit that drops Scevs is fine");
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/addresssink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/addresssink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:1f2818a7303d2b787e87974bd7e575d1fe2ac68c5941de73890b623372701774 -->
+<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:18ac0a28fab72f51e9ea51bb9e1bd3035504dd489700a35f7691584ef995d66f -->
 
 # addresssink
 
@@ -38,6 +38,18 @@ value; this is how a closing phi left by `lcssa` goes. Each phi is visited
 once, and the phis that read it are queued again.
 
 A phi read as a value, or whose arms differ in kind, stays.
+
+DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
+rebuilds an address expression in the block that uses it, and by the select
+and switch lowering; this file is the compare and address-phi part.
+Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
+with and without the pass (`docs/working/codegenprepare.md`): at m32 the
+pass changes 16-17 of about 160 functions in the pin and ours is at its
+level (at -Os 1287 instructions against 1271 with and 1343 without), and
+the `lea` count equals the pin's with the pass (2092 against 2139, 3983
+without, QCport -Os). Owner w-4, review 2026-12-01. At m16 the same
+comparison leaves up to 1544 of 4132 instructions of excess in functions
+the pin's address sinking helps: row AM-C2.
 
 ## Example
 Before:
