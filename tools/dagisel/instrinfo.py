@@ -3,7 +3,9 @@
 
     instrinfo.py X86GenInstrInfo.inc OUT.txt SYMBOLS.txt
 
-Line: `opcode numops numdefs size flags uses defs op...` where flags is the MCID names joined by
+The opcode column of the pin's rows is not used: m16.td adds instructions and shifts every number
+after them, so a row is named, and the name is looked up in the pin's headers or `own_ids.txt`.
+Line: `name numops numdefs size flags uses defs op...` where flags is the MCID names joined by
 `,` (or `-`), uses and defs are `X86::REG` names joined by `,` (or `-`), and an op is
 `regclass|type|tied[/flags]` (regclass an `X86::` name or -1, type an MCOI operand type number or
 an `X86::` target type, tied the operand it is tied to, `E` for an early clobber or `-`, flags `L` for
@@ -50,7 +52,7 @@ with open(out, "w") as f:
         m = row.match(line)
         if not m:
             continue
-        opcode, numops, numdefs, size, nuses, ndefs, opoff, impoff, flags, _name = m.groups()
+        _opcode, numops, numdefs, size, nuses, ndefs, opoff, impoff, flags, name = m.groups()
         flag_names = re.findall(r"MCID::(\w+)", flags)
         regs = implicit[int(impoff):int(impoff) + int(nuses) + int(ndefs)]
         uses, defs = regs[: int(nuses)], regs[int(nuses):]
@@ -59,7 +61,7 @@ with open(out, "w") as f:
         for cls, kind, _ in ops:
             names.update(n for n in (cls, kind) if n.startswith("X86::"))
         op_text = " ".join(f"{c}|{k}|{t}" for c, k, t in ops)
-        f.write(f"{opcode} {numops} {numdefs} {size} {','.join(flag_names) or '-'} "
+        f.write(f"{name} {numops} {numdefs} {size} {','.join(flag_names) or '-'} "
                 f"{','.join(uses) or '-'} {','.join(defs) or '-'} {op_text}\n")
 with open(symbols_out, "w") as f:
     f.write("\n".join(sorted(n for n in names if n.startswith("X86::"))) + "\n")

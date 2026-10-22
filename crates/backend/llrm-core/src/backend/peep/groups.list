@@ -25,6 +25,7 @@ zero_extensions body
 zero_compares body
 tested_masks body
 tested_lone_masks body
+byte_word_fixup body
 memory_arguments insns
 paired_pushes insns
 immediate_arguments insns
