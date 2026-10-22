@@ -948,7 +948,16 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(ordered(op, left.cmp(&right)))]
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fln | Op::Fexp | Op::Fround => {
+            Op::Fabs
+            | Op::Fsqrt
+            | Op::Fsin
+            | Op::Fcos
+            | Op::Fatan
+            | Op::Flog2
+            | Op::Fexp2
+            | Op::Fln
+            | Op::Fexp
+            | Op::Fround => {
                 let value = args[0].float()?;
                 let result = match op {
                     Op::Fabs => value.abs(),

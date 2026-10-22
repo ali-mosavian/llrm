@@ -38,14 +38,25 @@
 //! instruction inside a cycle; no instruction here sinks on that ground.
 //! Exit: the target description's pressure limits.
 //!
-//! DEVIATE M4 (#2903): in a build for size only an instruction that reads no
-//! value moves (a constant). LLVM moves any, and its allocator splits the
-//! operands' ranges around the stretch. Rows with every instruction movable
-//! at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
-//! +29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
-//! Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
-//! -O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
-//! greedy allocator with SplitKit as the default allocator (target 2026-11-05).
+//! DEVIATE M4 (#2903): in a build for size an instruction with operands moves
+//! only if each operand is live out of its block already (nothing is
+//! lengthened over the edge: an `fsub` whose operands died there made the x87
+//! stackifier hold them in memory, qcport `pl_trace` +125 bytes) and is read
+//! by nothing below in the arm (the two-address form needs no copy: `x > C ?
+//! x - C : x`, the `add` in the arm is in place). The pin's MachineSink has no
+//! optsize rule; it moves any and its allocator splits the ranges around the
+//! stretch. The gain and the loss come from one shape: a `lea` sunk into an
+//! arm whose result a phi takes becomes `add; mov` plus a copy block on the
+//! join edge. Rows (head 9e3c893585, base 47978c1a46; tools/rows/qcport.py, no
+//! flags): QCport -Os 265956 -> 265871 (-85 bytes, 13 modules; larger: `sc` +2
+//! of 11041, 0.018%, `d_alias` +1 of 12363, 0.008%); objects -Os m16 5 changed
+//! -327 bytes, larger `bench/jpeg_fixed` +3 of 2958 (0.10%) and `jpeg_single`
+//! +3 of 2826 (0.11%), m32 8 changed -244, none larger; x_adler -10.8%,
+//! x_crc32 -6.7%, x_fixmul -6.1% clocks. Otherwise (-O1 to -O3) every safe
+//! instruction moves; `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a
+//! reload more per trip). Exit: a test of the sink that prices the phi copy
+//! from the target description (general, not a shape rule), 2026-11-04;
+//! review 2026-11-05 with the greedy allocator and SplitKit as the default.
 //!
 //! DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
@@ -226,6 +237,9 @@ struct Sinker {
     /// Whether the flags are read before they are written from each block's
     /// entry on (live in, as `isLiveIn` says of EFLAGS).
     flags_live_in: Vec<bool>,
+    /// Where each value is live at a block's end; in a build for size only
+    /// (`read_below`).
+    live: Option<crate::backend::allocate::LiveRows>,
 }
 
 /// The post-dominator tree: the dominator tree of the reversed graph with a
@@ -282,6 +296,7 @@ impl Sinker {
                 merged: HashMap::default(),
                 to_split: Vec::new(),
                 changed: false,
+                live: size.then(|| crate::backend::allocate::live_rows(body)),
                 ..before
             };
         }
@@ -327,6 +342,7 @@ impl Sinker {
             regs: body.regs(),
             bits: body.bits,
             flags_live_in: Vec::new(),
+            live: size.then(|| crate::backend::allocate::live_rows(body)),
         };
         sinker.flags_live_in = sinker.solve_flags();
         sinker.sort_successors();
@@ -692,6 +708,33 @@ impl Sinker {
         false
     }
 
+    /// Whether `value` stays live below `one` once it is the first instruction
+    /// of `sink_to`: another instruction of the block reads it, or it is
+    /// live out of the block (a phi below, a loop's back edge). The
+    /// two-address form then needs a copy (DEVIATE M4: in a build for size
+    /// an instruction moves only where it is the last reader on its path).
+    fn read_below(
+        &self,
+        value: u32,
+        one: &Insn,
+        sink_to: usize,
+    ) -> bool {
+        use crate::backend::allocate::LiveAt;
+        self.insns[sink_to].iter().any(|other| other.id() != one.id() && other.uses.contains(&value))
+            || self.live.as_ref().is_none_or(|live| live.live_out(self.at[sink_to], value))
+    }
+
+    /// Whether `value` is live out of `block` whatever `one` does: moving a
+    /// reader of it then lengthens nothing. None known is no.
+    fn crosses_already(
+        &self,
+        value: u32,
+        block: usize,
+    ) -> bool {
+        use crate::backend::allocate::LiveAt;
+        self.live.as_ref().is_some_and(|live| live.live_out(self.at[block], value))
+    }
+
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
     /// successor or its edge marked for splitting. Whether it moved.
     fn sink_instruction(
@@ -714,7 +757,12 @@ impl Sinker {
         if self.flags_live_in[sink_to] && self.writes_flags(&one) {
             return false;
         }
-        if self.size && !one.uses.is_empty() {
+        if self.size && one.uses.iter().any(|&value| self.read_below(value, &one, sink_to)) {
+            return false;
+        }
+        // An operand that dies in this block would live over the edge it now
+        // crosses (pl_trace -Os +125 bytes: x87 operands held in memory).
+        if self.size && one.uses.iter().any(|&value| !self.crosses_already(value, block)) {
             return false;
         }
         // A successor with other predecessors: sink along the edge, or break
@@ -998,5 +1046,179 @@ mod tests {
         let names: Vec<_> =
             sunk(&body, false).blocks[0].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["or", "jcxz"], "the or stays: its flags are read in the next block");
+    }
+
+    /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed
+    /// above the branch and copied in the arm (`lea; cmp; jbe; mov`, x_adler
+    /// -Os 13 to 17 instructions a trip), because only an instruction that
+    /// read nothing moved. Its operand is read by the phi on the other
+    /// edge, so moving it into the arm extends nothing.
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_lives_on_moves() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "add", vec![held(3)], vec![held(1), imm(-65521)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(65520)], vec![], vec![1]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(2)], vec![5], vec![2])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 1)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![held(6)], vec![held(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "adler",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        // The premise: no block reads the flags the add sets.
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the add left the block");
+        assert_eq!(names(&moved, 1), ["add", "mov"], "and went into the arm");
+    }
+
+    /// qcport pl_trace -Os +125 bytes: an `fsub` moved into an arm took its two
+    /// operands, loaded in the entry, across the edge, and the stackifier
+    /// held them in memory (`fld; fstp` pairs for what were `fsub m` folds).
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_stays() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::FloatArith, "fsub", vec![wide(3)], vec![wide(7), wide(8)], vec![3], vec![7, 8]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(65520)], vec![], vec![1]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![wide(5)], vec![wide(3)], vec![5], vec![3])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 7)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![wide(6)], vec![wide(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "trace",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 7, 8].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["fsub", "cmp", "jbe"], "the fsub stayed");
+    }
+
+    /// The same, with the operand read again in the arm: the `add` then needs
+    /// a copy there (`mov; add` for the `lea` it was: bench/control -Os +2
+    /// bytes), so it stays.
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_is_read_below_stays() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "add", vec![held(3)], vec![held(1), imm(7)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(2), imm(0)], vec![], vec![2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(1)], vec![5], vec![1])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 2)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![held(6)], vec![held(4)], vec![6], vec![4])])
+        };
+        let mut body = LirBody::new(
+            "stays",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
+        let moved = sunk(&body, true);
+        assert_eq!(names(&moved, 0), ["add", "cmp", "je"], "the add stays");
+        // Outside a build for size it moves, so the premise is the rule's.
+        assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
+    }
+
+    /// The operand is read below the arm, in the join (a loop's next trip reads
+    /// it as well): the `add` would need a copy in the arm, so it stays
+    /// (bench/parity/control -Os, `lea esi, [ebx+7]` made `mov; add`).
+    #[test]
+    fn test_in_a_size_build_an_instruction_whose_operand_is_live_out_of_the_arm_stays() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "add", vec![held(3)], vec![held(1), imm(7)], vec![3], vec![1]),
+                    insn(1, Operation::Compare, "cmp", vec![], vec![held(2), imm(0)], vec![], vec![2]),
+                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(2)], vec![5], vec![2])])
+        };
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 4, incoming: vec![(1, 3), (0, 2)] }].into(),
+            ..LirBlock::new(2, vec![insn(4, Operation::Move, "mov", vec![held(6)], vec![held(1)], vec![6], vec![1])])
+        };
+        let mut body = LirBody::new(
+            "live_out",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let names = |body: &LirBody, block: usize| -> Vec<String> {
+            body.blocks[block].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        };
+        assert_eq!(names(&sunk(&body, true), 0), ["add", "cmp", "je"], "the add stays");
+        assert_eq!(names(&sunk(&body, false), 0), ["cmp", "je"], "the premise: it can move");
     }
 }
