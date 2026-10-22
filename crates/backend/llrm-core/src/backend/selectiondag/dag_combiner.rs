@@ -17,11 +17,11 @@
 //! `visitMUL`'s first half is translated here; the other visitors are added
 //! in the order the corpus counts them.
 //!
-//! DEVIATE SD45: no `HandleSDNode` for the root, no `DAGUpdateListener`: the
+//! DEVIATE SD201: no `HandleSDNode` for the root, no `DAGUpdateListener`: the
 //! arena keeps replaced nodes, `run` reads [`Rauw`] events and the node count
 //! to find what changed. Exit: none. Owner sdag-b. Review 2026-11-13.
 //!
-//! DEVIATE SD46: no `computeKnownBits`/`MaskedValueIsZero` (SD12): a fold that
+//! DEVIATE SD202: no `computeKnownBits`/`MaskedValueIsZero` (SD12): a fold that
 //! asks for known bits sees only constants. Exit: a known-bits port. Owner
 //! sdag-b. Review 2026-11-13.
 //!

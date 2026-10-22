@@ -17,7 +17,7 @@
 //! target address); the GOT, PIC, DLL-import and TLS forms are not here, and
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
-//! DEVIATE SD44: not translated yet, so the nodes are the plain forms: the
+//! DEVIATE SD200: not translated yet, so the nodes are the plain forms: the
 //! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
 //! `ADD`/`AND` as flags, the `SUB 0, x` and `XOR` forms of `EmitCmp`), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow

@@ -209,14 +209,12 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD39 | sdag-d | emitter: no frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
-| SD42 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
-| SD44 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
-| SD45 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
-| SD46 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
+| SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
+| SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 
-Next free: **SD47**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | switch case probabilities are `1/(cases+1)`, no BPI heuristics | `selectiondag/switchcg.rs` |
 
