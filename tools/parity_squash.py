@@ -603,6 +603,9 @@ def new_lib_failures(
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
     if touched and any(f.startswith("crates/") and f.endswith(".rs") for f in files):
         touched = touched | {SCAN_CRATE}
+    # llrm-c's toolchain-feature tests compile C through llrm-hir's lowering: a change to it runs them too (12 s on a warm target; #2936 broke them unseen).
+    if any(f.startswith(("crates/ir/llrm-hir/", "crates/frontends/llrm-c/")) for f in files):
+        touched = touched | {"llrm-c"}
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))
@@ -827,7 +830,8 @@ def failing_on_checkout(crate: str, tests: set[str], cwd: Path = ROOT) -> set[st
     import parity_smoke
     from buildslot import slotted  # noqa: PLC0415
 
-    done = subprocess.run(slotted(["cargo", "test", "-q", "--lib", "-p", crate, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
+    command = parity_smoke.lib_command(crate)
+    done = subprocess.run(slotted([*command, "--", "--exact", *sorted(tests)]), cwd=cwd, capture_output=True, text=True)
     return {name for name in tests if name in set(parity_smoke.failed_tests(done.stdout + done.stderr))}
 
 
