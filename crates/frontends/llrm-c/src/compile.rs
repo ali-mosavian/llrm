@@ -396,6 +396,21 @@ const HEADERS: &[(&str, &str)] = &[
     ("owkeywords.h", include_str!("owkeywords.h")),
 ];
 
+/// `run`, again while the image just written is held open for writing by a
+/// forked child of another thread (ETXTBSY, until that child execs).
+fn exec_busy(run: impl Fn() -> std::io::Result<std::process::Output>) -> std::io::Result<std::process::Output> {
+    let mut tries = 0;
+    loop {
+        match run() {
+            Err(error) if error.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
 fn write_executable(
     path: &Path,
     image: &[u8],
@@ -448,19 +463,22 @@ pub fn recorded_for(
         .collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
+    let searched: Vec<String> =
+        includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display())).collect();
     // In the scratch directory, where wccq also leaves its .err file.
-    let done = std::process::Command::new(&wccq)
-        .args(flags)
-        .args(debug.then_some("-d2"))
-        .args(watcom)
-        .args(searched)
-        .arg(format!("-fo={}/unit.obj", scratch.path().display()))
-        .arg(absolute(source))
-        .env("QBOPT_CG_STREAM", &out)
-        .current_dir(scratch.path())
-        .output()
-        .map_err(|error| failed(error.to_string()))?;
+    let run = || {
+        std::process::Command::new(&wccq)
+            .args(&flags)
+            .args(debug.then_some("-d2"))
+            .args(&watcom)
+            .args(&searched)
+            .arg(format!("-fo={}/unit.obj", scratch.path().display()))
+            .arg(absolute(source))
+            .env("QBOPT_CG_STREAM", &out)
+            .current_dir(scratch.path())
+            .output()
+    };
+    let done = exec_busy(run).map_err(|error| failed(error.to_string()))?;
     if !done.status.success() || !out.exists() {
         let text = String::from_utf8_lossy(&done.stdout).into_owned() + &String::from_utf8_lossy(&done.stderr);
         return Err(failed(text));
@@ -695,6 +713,24 @@ mod tests {
     /// `stack.toml` names, and the C start-up the tests link defines both:
     /// a description naming a word start-up never fills would compare with
     /// zero. The default build checks nothing.
+    /// Embedding wccq made 13 parallel compiles fail with "Text file busy": a
+    /// thread forked while another held the image open for writing. The run is
+    /// asked again.
+    #[test]
+    fn test_a_run_refused_as_text_file_busy_is_asked_again() {
+        let calls = std::cell::Cell::new(0);
+        let run = || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err(std::io::Error::from_raw_os_error(26))
+            } else {
+                std::process::Command::new("true").output()
+            }
+        };
+        assert!(super::exec_busy(run).unwrap().status.success());
+        assert_eq!(calls.get(), 3);
+    }
+
     #[test]
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
