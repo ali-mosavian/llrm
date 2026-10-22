@@ -1,9 +1,11 @@
+use super::super::legalize_dag::DagLegalizer;
+use super::super::x86_lowering::{X86Lowering, x86isd};
 use super::*;
 
-use super::super::legalize_dag::DagLegalizer;
-use super::super::x86_lowering::{x86isd, X86Lowering};
-
-fn legalized(bits: u128, vt: EVT) -> (SelectionDAG, SDValue) {
+fn legalized(
+    bits: u128,
+    vt: EVT,
+) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let constant = dag.get_constant_fp(bits, vt);

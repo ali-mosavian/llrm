@@ -48,14 +48,22 @@ use super::mvt::{EVT, MVT};
 pub trait Hooks {
     /// The legal replacement of `node` (its first result), or `None` to have
     /// the node expanded instead.
-    fn lower_operation(&mut self, dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue>;
+    fn lower_operation(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue>;
 }
 
 /// A target with no custom lowering.
 pub struct NoHooks;
 
 impl Hooks for NoHooks {
-    fn lower_operation(&mut self, _dag: &mut SelectionDAG, _node: SDValue) -> Option<SDValue> {
+    fn lower_operation(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _node: SDValue,
+    ) -> Option<SDValue> {
         None
     }
 }
@@ -68,7 +76,11 @@ pub struct DagLegalizer<'a, H: Hooks> {
 }
 
 impl<'a, H: Hooks> DagLegalizer<'a, H> {
-    pub fn new(dag: &'a mut SelectionDAG, tli: &'a TargetLowering, hooks: &'a mut H) -> DagLegalizer<'a, H> {
+    pub fn new(
+        dag: &'a mut SelectionDAG,
+        tli: &'a TargetLowering,
+        hooks: &'a mut H,
+    ) -> DagLegalizer<'a, H> {
         DagLegalizer { dag, tli, hooks, legalized: HashSet::new() }
     }
 
@@ -112,7 +124,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     }
 
     /// A node nothing reads that is not the root.
-    fn is_dead(&self, n: u32) -> bool {
+    fn is_dead(
+        &self,
+        n: u32,
+    ) -> bool {
         if n == self.dag.get_root().node {
             return false;
         }
@@ -122,16 +137,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// The type the action table is asked about for `value`'s node (the
     /// switch at the top of `LegalizeOp`).
-    fn action_type(&self, node: SDValue) -> EVT {
+    fn action_type(
+        &self,
+        node: SDValue,
+    ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SetCC | ISD::Store => self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 })),
+            ISD::SetCC | ISD::Store => {
+                self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
+            }
             _ => self.dag.value_type(node),
         }
     }
 
     /// `LegalizeOp`.
-    fn legalize_op(&mut self, n: u32) -> Result<(), LegalizeError> {
+    fn legalize_op(
+        &mut self,
+        n: u32,
+    ) -> Result<(), LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         if matches!(self.dag.opcode(node), ISD::TargetConstant | ISD::Register) {
             return Ok(());
@@ -172,15 +195,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     }
                     Ok(())
                 }
-                None => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "convert node to libcall" }),
+                None => Err(LegalizeError::Unsupported {
+                    op: self.dag.opcode(node),
+                    ty: vt,
+                    what: "convert node to libcall",
+                }),
             },
-            Action::LibCall | Action::Custom => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" }),
+            Action::LibCall | Action::Custom => {
+                Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" })
+            }
         }
     }
 
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
-    fn expand_node(&mut self, node: SDValue) -> Option<Vec<SDValue>> {
+    fn expand_node(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
@@ -221,7 +253,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// `TargetLowering::expandBSWAP`, for `i16` (a rotate by 8). Other widths
     /// are legal on the targets here or not yet translated.
-    fn expand_bswap(&mut self, node: SDValue) -> Option<SDValue> {
+    fn expand_bswap(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
         if vt != EVT::I16 {
             return None;
@@ -233,14 +268,20 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// `LegalizeOp` for a float constant: left if the target makes it
     /// (`isFPImmLegal`), else loaded from the constant pool
     /// (`ExpandConstantFP`), through a narrower pool entry when that is exact.
-    fn legalize_constant_fp(&mut self, node: SDValue) -> Result<(), LegalizeError> {
+    fn legalize_constant_fp(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
         let vt = self.dag.value_type(node);
-        let NodeData::ConstFp { bits } = self.dag.node(node).data else { unreachable!("a float constant has its bits") };
+        let NodeData::ConstFp { bits } = self.dag.node(node).data else {
+            unreachable!("a float constant has its bits")
+        };
         let EVT::Simple(mvt) = vt else { unreachable!("floats are simple types") };
         if self.tli.is_fp_imm_legal(mvt, bits) {
             return Ok(());
         }
-        // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float is stored as one.
+        // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
+        // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
             MVT::F64 => {
                 let value = f64::from_bits(bits as u64);
@@ -268,13 +309,20 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     }
 
     /// `ReplaceNode(Old, New)` for a node with one value result.
-    fn replace_node(&mut self, old: SDValue, new: SDValue) {
+    fn replace_node(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
         self.dag.replace_all_uses_with(old, new);
     }
 
     /// `PromoteNode`, for the simple integer operations: make the node in the
     /// wider type from any-extended operands and truncate the result.
-    fn promote_node(&mut self, node: SDValue) -> Result<(), LegalizeError> {
+    fn promote_node(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let EVT::Simple(from) = self.dag.value_type(node) else { unreachable!("promotion applies to simple types") };
         let to: EVT = self.tli.type_to_promote_to(op, from).into();

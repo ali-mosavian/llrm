@@ -374,7 +374,10 @@ fn lower_global_address(
 }
 
 /// `LowerConstantPool`: `Wrapper (TargetConstantPool)`.
-fn lower_constant_pool(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+fn lower_constant_pool(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
     let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
