@@ -838,3 +838,37 @@ fn test_without_constants_decide_keeps_the_implied_branches_only() {
     managed(&mut implied, Decide { constants: false });
     assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
 }
+
+/// SimplifyCfg asked for a function's loop-form blocks at each run, and each
+/// ask derived the loops again (d_faces -O2: 34 asks, 6.4 M Ir) though the
+/// blocks and edges were as the last ask found them. A second ask of the same
+/// graph derives nothing.
+#[test]
+fn test_the_loop_form_blocks_of_a_graph_met_again_are_not_derived_again() {
+    let module = parsed(
+        "define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %c = icmp slt i16 %n, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    let mut module = module;
+    let (_, function) = module.function_mut("f").expect("@f");
+    let function = &*function;
+    let before = llrm_analysis::cfg::shapes_derived();
+    let first = super::loop_form_blocks(function);
+    let once = llrm_analysis::cfg::shapes_derived() - before;
+    let second = super::loop_form_blocks(function);
+    assert_eq!(first, second);
+    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, once, "the second ask derived the loops again");
+}

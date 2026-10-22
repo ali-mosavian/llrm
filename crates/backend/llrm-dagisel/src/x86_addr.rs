@@ -9,12 +9,15 @@
 //! The matchers never change the DAG here, so the pin's `HandleSDNode` guards are not needed.
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD33** Not translated: the mask-and-shift folds (`foldMaskAndShiftToExtract`,
-//!   `foldMaskAndShiftToScale`, `foldMaskedShiftToBEXTR`, `foldMaskedShiftToScaledMask`) and the
-//!   `SIGN_EXTEND`/`ZERO_EXTEND` re-association of `matchIndexRecursively`, `SRL`, `AND` and
-//!   `ZERO_EXTEND` cases of `matchAddressRecursively`: they rewrite the DAG and need the DAG API's
-//!   `RepositionNode`. Owner sdag-c. Exit: C1b. Review 2026-12-10.
-//! - **SD34** The 64-bit, x32 and 16-bit branches, RIP-relative modes, large code model, the
+//! - **SD34** Not translated: `foldMaskedShiftToBEXTR` (no TBM or BMI here), the `any_extend`
+//!   look-through of `foldMaskedShiftToScaledMask` (x32), and the `SIGN_EXTEND`/`ZERO_EXTEND`
+//!   re-association of `matchIndexRecursively` and the `ZERO_EXTEND` case of
+//!   `matchAddressRecursively`. `insertDAGNode` is nothing: the arena has no order to keep, and
+//!   the pin's `HandleSDNode` guards are not modelled. Owner sdag-c. Exit: C3. Review 2026-12-10.
+//! - **SD40** `MaskedValueIsZero` is [`known_zero`], a structural subset of `computeKnownBits`
+//!   (constants, `AND` with a constant, zero-extension, constant shifts); the folds decline what
+//!   it cannot prove. Owner sdag-c. Exit: when the DAG API has known bits. Review 2026-12-10.
+//! - **SD35** The 64-bit and x32 branches, RIP-relative modes, large code model, the
 //!   TLS segment loads (`matchLoadInAddress`) and the vector forms (`matchVectorAddress`) are
 //!   left out: no such target here. m16 has its own matcher (C2). Owner sdag-c. Exit: none.
 //!   Review 2026-12-10.
@@ -31,6 +34,63 @@ use crate::matcher::Vt;
 
 /// `SelectionDAG::MaxRecursionDepth`.
 const MAX_RECURSION_DEPTH: u32 = 6;
+
+/// The bits of an integer value type; 64 for any other.
+pub fn vt_bits(vt: Vt) -> u32 {
+    if vt == mvt::i1 {
+        1
+    } else if vt == mvt::i8 {
+        8
+    } else if vt == mvt::i16 {
+        16
+    } else if vt == mvt::i32 {
+        32
+    } else {
+        64
+    }
+}
+
+fn low_mask(bits: u32) -> u64 {
+    if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 }
+}
+
+/// The bits of `v` known to be zero, within its width (a structural subset of
+/// `computeKnownBits`: constants, `AND` with a constant, zero-extensions, constant shifts; SD40).
+pub fn known_zero<D: AddrDag>(dag: &D, v: SDValue, depth: u32) -> u64 {
+    let width = vt_bits(dag.value_type(v));
+    let all = low_mask(width);
+    if depth >= 6 {
+        return 0;
+    }
+    let constant = |x: SDValue| (dag.opcode(x.node) == isd::Constant).then(|| dag.constant(x)).flatten();
+    let zero = match dag.opcode(v.node) {
+        isd::Constant => !(constant(v).unwrap() as u64),
+        isd::AND => {
+            let rhs = constant(dag.operand(v.node, 1)).map_or(0, |c| !(c as u64));
+            known_zero(dag, dag.operand(v.node, 0), depth + 1) | known_zero(dag, dag.operand(v.node, 1), depth + 1) | rhs
+        }
+        isd::ZERO_EXTEND => {
+            let src = dag.operand(v.node, 0);
+            let src_bits = vt_bits(dag.value_type(src));
+            known_zero(dag, src, depth + 1) | (all & !low_mask(src_bits))
+        }
+        isd::SRL => match constant(dag.operand(v.node, 1)) {
+            Some(k) if (0..64).contains(&k) => {
+                let k = k as u32;
+                (known_zero(dag, dag.operand(v.node, 0), depth + 1) >> k) | (all & !low_mask(width.saturating_sub(k)))
+            }
+            _ => 0,
+        },
+        isd::SHL => match constant(dag.operand(v.node, 1)) {
+            Some(k) if (0..64).contains(&k) => {
+                (known_zero(dag, dag.operand(v.node, 0), depth + 1) << k) | low_mask(k as u32)
+            }
+            _ => 0,
+        },
+        _ => 0,
+    };
+    zero & all
+}
 
 /// What a `Wrapper` wraps, as the pin's `GlobalAddressSDNode` and kin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +128,17 @@ pub trait AddrDag: Dag {
     fn wrapped_symbol(&self, operand: SDValue) -> Option<Wrapped>;
     /// `hasMaterializingUse`: a use that puts `value` in a register as a value.
     fn has_materializing_use(&self, value: SDValue) -> bool;
+    /// `getNode(opcode, vt, ops)` for the opcodes the address folds make: `ADD`, `AND`, `SHL`, `SRL`,
+    /// `ZERO_EXTEND`, `ANY_EXTEND`, `TRUNCATE`.
+    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[SDValue]) -> SDValue;
+    /// `getConstant(value, vt)` (not a target constant).
+    fn get_constant(&mut self, value: i64, vt: Vt) -> SDValue;
+    /// The segment register a memory node addresses through (`X86::ES`, ...), the pin's address
+    /// space 256..258 for GS, FS and SS; `None` for the default segment.
+    fn segment_override(&self, node: u32) -> Option<u16> {
+        let _ = node;
+        None
+    }
     /// `StoreSDNode::isNonTemporal`.
     fn is_non_temporal(&self, node: u32) -> bool;
     fn target_frame_index(&mut self, index: i32, vt: Vt) -> SDValue;
@@ -140,10 +211,21 @@ fn is_disp_safe_for_frame_index_or_reg_base(value: i64) -> bool {
     (-(1 << 30)..(1 << 30)).contains(&value)
 }
 
+/// Which address forms exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddrMode {
+    /// 32-bit flat: `[base + index*scale + disp32]`.
+    Flat32,
+    /// Real mode (SD3): `[bx|bp] + [si|di] + disp16`, no scale. Which register is which is the
+    /// register class's business (SD4); the matcher only keeps one base and one index.
+    Real16,
+}
+
 /// The matchers over one DAG. `true` from a `match_*` means it cannot be done, as in the pin.
 pub struct Matcher<'a, D: AddrDag> {
     pub dag: &'a mut D,
     pub pointer_type: Vt,
+    pub mode: AddrMode,
 }
 
 impl<D: AddrDag> Matcher<'_, D> {
@@ -160,21 +242,150 @@ impl<D: AddrDag> Matcher<'_, D> {
         (self.opcode(v) == isd::Constant).then(|| self.dag.constant(v)).flatten()
     }
 
-    fn is_base_with_constant_offset(&self, v: SDValue) -> bool {
+    fn is_base_with_constant_offset(&mut self, v: SDValue) -> bool {
         self.dag.num_operands(v.node) == 2
             && self.constant(self.operand(v, 1)).is_some()
             && (self.opcode(v) == isd::ADD || self.dag.is_add_like(v))
     }
 
+    fn zext_or_trunc(&mut self, v: SDValue, vt: Vt) -> SDValue {
+        let from = vt_bits(self.dag.value_type(v));
+        if self.dag.value_type(v) == vt {
+            v
+        } else if from > vt_bits(vt) {
+            self.dag.get_node(isd::TRUNCATE, vt, &[v])
+        } else {
+            self.dag.get_node(isd::ZERO_EXTEND, vt, &[v])
+        }
+    }
+
+    /// `foldMaskAndShiftToExtract` ([L2234][ext]): `(x >> (8-c)) & (0xff << c)` as
+    /// `((x >> 8) & 0xff) << c`, so the shift becomes the scale. `true` when it does not apply.
+    ///
+    /// [ext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2234
+    fn fold_mask_and_shift_to_extract(&mut self, n: SDValue, mask: u64, shift: SDValue, x: SDValue, am: &mut AddressMode) -> bool {
+        let Some(amount) = self.constant(self.operand(shift, 1)) else { return true };
+        if self.opcode(shift) != isd::SRL || !self.dag.has_one_use(shift) {
+            return true;
+        }
+        let scale_log = 8 - amount;
+        if scale_log <= 0 || scale_log >= 4 || mask != 0xffu64 << scale_log {
+            return true;
+        }
+        let (xvt, vt) = (self.dag.value_type(x), self.dag.value_type(n));
+        let eight = self.dag.get_constant(8, mvt::i8);
+        let new_mask = self.dag.get_constant(0xff, xvt);
+        let srl = self.dag.get_node(isd::SRL, xvt, &[x, eight]);
+        let and = self.dag.get_node(isd::AND, xvt, &[srl, new_mask]);
+        let ext = self.zext_or_trunc(and, vt);
+        let count = self.dag.get_constant(scale_log, mvt::i8);
+        let shl = self.dag.get_node(isd::SHL, vt, &[ext, count]);
+        self.dag.replace_uses(n, shl);
+        self.dag.remove_dead_node(n.node);
+        am.index_reg = Some(ext);
+        am.scale = 1 << scale_log;
+        false
+    }
+
+    /// `foldMaskedShiftToScaledMask` ([L2300][scaled]): `(x << c) & m` as `(x & (m >> c)) << c`.
+    /// `true` when it does not apply.
+    ///
+    /// [scaled]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2300
+    fn fold_masked_shift_to_scaled_mask(&mut self, n: SDValue, am: &mut AddressMode) -> bool {
+        let shift = self.operand(n, 0);
+        let mask = self.constant(self.operand(n, 1)).expect("an AND with a constant");
+        // The pin also looks through an `any_extend` of i32 to i64: not at 32 bits (SD35).
+        let Some(amount) = self.constant(self.operand(shift, 1)) else { return true };
+        if self.opcode(shift) != isd::SHL || !self.dag.has_one_use(n) || !self.dag.has_one_use(shift) {
+            return true;
+        }
+        if !(1..=3).contains(&amount) {
+            return true;
+        }
+        let x = self.operand(shift, 0);
+        let vt = self.dag.value_type(n);
+        let new_mask = self.dag.get_constant(mask >> amount, vt);
+        let new_and = self.dag.get_node(isd::AND, vt, &[x, new_mask]);
+        let new_shift = self.dag.get_node(isd::SHL, vt, &[new_and, self.operand(shift, 1)]);
+        self.dag.replace_uses(n, new_shift);
+        self.dag.remove_dead_node(n.node);
+        am.scale = 1 << amount;
+        am.index_reg = Some(new_and);
+        false
+    }
+
+    /// `foldMaskAndShiftToScale` ([L2379][scale]): `(x >> s) & (m << a)` as `((x >> (s+a)) << a)`
+    /// when the bits the mask drops are known zero. `true` when it does not apply.
+    ///
+    /// [scale]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2379
+    fn fold_mask_and_shift_to_scale(&mut self, n: SDValue, mask: u64, shift: SDValue, x: SDValue, am: &mut AddressMode) -> bool {
+        if self.opcode(shift) != isd::SRL || !self.dag.has_one_use(shift) {
+            return true;
+        }
+        let Some(shift_amt) = self.constant(self.operand(shift, 1)) else { return true };
+        // `isShiftedMask_64`: one run of ones.
+        if mask == 0 {
+            return true;
+        }
+        let (mask_idx, mask_len) = (mask.trailing_zeros(), (mask >> mask.trailing_zeros()).trailing_ones());
+        if mask_idx + mask_len < 64 && mask >> (mask_idx + mask_len) != 0 {
+            return true;
+        }
+        let mut mask_lz = 64 - (mask_idx + mask_len);
+        let am_shift = mask_idx;
+        if am_shift == 0 || am_shift > 3 {
+            return true;
+        }
+        let mut x = x;
+        let scale_down = (64 - vt_bits(self.dag.value_type(x))) + shift_amt as u32;
+        if mask_lz < scale_down {
+            return true;
+        }
+        mask_lz -= scale_down;
+        let mut replacing_any_extend = false;
+        if self.opcode(x) == isd::ANY_EXTEND {
+            let src = self.operand(x, 0);
+            let ext_bits = vt_bits(self.dag.value_type(x)) - vt_bits(self.dag.value_type(src));
+            x = src;
+            mask_lz = mask_lz.saturating_sub(ext_bits);
+            replacing_any_extend = true;
+        }
+        let x_bits = vt_bits(self.dag.value_type(x));
+        let high_bits = low_mask(x_bits) & !low_mask(x_bits.saturating_sub(mask_lz));
+        if known_zero(self.dag, x, 0) & high_bits != high_bits {
+            return true;
+        }
+        let vt = self.dag.value_type(n);
+        if replacing_any_extend {
+            x = self.dag.get_node(isd::ZERO_EXTEND, vt, &[x]);
+        }
+        let xvt = self.dag.value_type(x);
+        let new_srl_amt = self.dag.get_constant(shift_amt + i64::from(am_shift), mvt::i8);
+        let new_srl = self.dag.get_node(isd::SRL, xvt, &[x, new_srl_amt]);
+        let new_ext = self.zext_or_trunc(new_srl, vt);
+        let new_shl_amt = self.dag.get_constant(i64::from(am_shift), mvt::i8);
+        let new_shl = self.dag.get_node(isd::SHL, vt, &[new_ext, new_shl_amt]);
+        self.dag.replace_uses(n, new_shl);
+        self.dag.remove_dead_node(n.node);
+        am.scale = 1 << am_shift;
+        am.index_reg = Some(new_ext);
+        false
+    }
+
     /// `foldOffsetIntoAddress` ([L1883][fold]), 32-bit flat.
     ///
     /// [fold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L1883
-    pub fn fold_offset_into_address(&self, offset: u64, am: &mut AddressMode) -> bool {
+    pub fn fold_offset_into_address(&mut self, offset: u64, am: &mut AddressMode) -> bool {
         let val = i64::from(am.disp).wrapping_add(offset as i64);
         if val != 0 && matches!(am.symbol, Some(Symbol { kind: SymbolKind::External | SymbolKind::McSymbol, .. })) {
             return true;
         }
-        if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
+        if self.mode == AddrMode::Real16 {
+            // `X86AsmBackend::applyFixup` cannot tell the sign of a 16-bit fixup.
+            if !(-i64::from(u16::MAX)..=i64::from(u16::MAX)).contains(&val) {
+                return true;
+            }
+        } else if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
             return true;
         }
         am.disp = val as i32;
@@ -184,7 +395,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     /// `matchWrapper` ([L1976][wrap]).
     ///
     /// [wrap]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L1976
-    fn match_wrapper(&self, n: SDValue, am: &mut AddressMode) -> bool {
+    fn match_wrapper(&mut self, n: SDValue, am: &mut AddressMode) -> bool {
         if am.has_symbolic_displacement() {
             return true;
         }
@@ -210,7 +421,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     /// `matchAddress` ([L2053][addr]).
     ///
     /// [addr]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2053
-    pub fn match_address(&self, n: SDValue, am: &mut AddressMode) -> bool {
+    pub fn match_address(&mut self, n: SDValue, am: &mut AddressMode) -> bool {
         if self.match_address_recursively(n, am, 0) {
             return true;
         }
@@ -225,36 +436,14 @@ impl<D: AddrDag> Matcher<'_, D> {
     /// `matchAdd` ([L2158][add]).
     ///
     /// [add]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2158
-    fn match_add(&self, n: SDValue, am: &mut AddressMode, depth: u32) -> bool {
-        let is_add_or_add_like = |v: SDValue| self.opcode(v) == isd::ADD || self.dag.is_add_like(v);
-        // Splitting an add that is a register already for another user adds an instruction.
-        let splits_materialized_value = |am: &AddressMode, op: SDValue| {
-            if !am.is_for_lea || !self.dag.has_materializing_use(op) {
-                return false;
-            }
-            if is_add_or_add_like(op) {
-                return is_add_or_add_like(self.operand(op, 0)) || is_add_or_add_like(self.operand(op, 1));
-            }
-            if self.opcode(op) == isd::SHL {
-                if let Some(c) = self.constant(self.operand(op, 1)) {
-                    return (1..=3).contains(&(c as u64)) && is_add_or_add_like(self.operand(op, 0));
-                }
-            }
-            false
-        };
-        let match_operand = |am: &mut AddressMode, op: SDValue| {
-            if splits_materialized_value(am, op) {
-                return self.match_address_base(op, am);
-            }
-            self.match_address_recursively(op, am, depth + 1)
-        };
-
+    fn match_add(&mut self, n: SDValue, am: &mut AddressMode, depth: u32) -> bool {
         let backup = *am;
-        if !match_operand(am, self.operand(n, 0)) && !match_operand(am, self.operand(n, 1)) {
+        // The operands are read again each time: a fold may have rewritten one.
+        if !self.match_add_operand(am, self.operand(n, 0), depth) && !self.match_add_operand(am, self.operand(n, 1), depth) {
             return false;
         }
         *am = backup;
-        if !match_operand(am, self.operand(n, 1)) && !match_operand(am, self.operand(n, 0)) {
+        if !self.match_add_operand(am, self.operand(n, 1), depth) && !self.match_add_operand(am, self.operand(n, 0), depth) {
             return false;
         }
         *am = backup;
@@ -269,10 +458,37 @@ impl<D: AddrDag> Matcher<'_, D> {
         true
     }
 
-    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD33.
+    fn is_add_or_add_like(&self, v: SDValue) -> bool {
+        self.opcode(v) == isd::ADD || self.dag.is_add_like(v)
+    }
+
+    /// Splitting an add that is a register already for another user adds an instruction.
+    fn splits_materialized_value(&self, am: &AddressMode, op: SDValue) -> bool {
+        if !am.is_for_lea || !self.dag.has_materializing_use(op) {
+            return false;
+        }
+        if self.is_add_or_add_like(op) {
+            return self.is_add_or_add_like(self.operand(op, 0)) || self.is_add_or_add_like(self.operand(op, 1));
+        }
+        if self.opcode(op) == isd::SHL {
+            if let Some(c) = self.constant(self.operand(op, 1)) {
+                return (1..=3).contains(&(c as u64)) && self.is_add_or_add_like(self.operand(op, 0));
+            }
+        }
+        false
+    }
+
+    fn match_add_operand(&mut self, am: &mut AddressMode, op: SDValue, depth: u32) -> bool {
+        if self.splits_materialized_value(am, op) {
+            return self.match_address_base(op, am);
+        }
+        self.match_address_recursively(op, am, depth + 1)
+    }
+
+    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD34.
     ///
     /// [idx]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2557
-    fn match_index_recursively(&self, n: SDValue, am: &mut AddressMode, depth: u32) -> SDValue {
+    fn match_index_recursively(&mut self, n: SDValue, am: &mut AddressMode, depth: u32) -> SDValue {
         debug_assert!(am.index_reg.is_none(), "IndexReg already matched");
         if depth >= MAX_RECURSION_DEPTH {
             return n;
@@ -285,7 +501,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
         }
         // x + x is x * 2.
-        if self.opcode(n) == isd::ADD && self.operand(n, 0) == self.operand(n, 1) && am.scale <= 4 {
+        if self.mode == AddrMode::Flat32 && self.opcode(n) == isd::ADD && self.operand(n, 0) == self.operand(n, 1) && am.scale <= 4 {
             am.scale *= 2;
             return self.match_index_recursively(self.operand(n, 0), am, depth + 1);
         }
@@ -295,7 +511,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     /// `matchAddressRecursively` ([L2677][rec]).
     ///
     /// [rec]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2677
-    fn match_address_recursively(&self, n: SDValue, am: &mut AddressMode, depth: u32) -> bool {
+    fn match_address_recursively(&mut self, n: SDValue, am: &mut AddressMode, depth: u32) -> bool {
         if depth >= MAX_RECURSION_DEPTH {
             return self.match_address_base(n, am);
         }
@@ -320,7 +536,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SHL => {
-                if am.index_reg.is_none() && am.scale == 1 {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(shift) = self.constant(self.operand(n, 1)) {
                         if (1..=3).contains(&(shift as u64)) {
                             let sh_val = self.operand(n, 0);
@@ -331,8 +547,43 @@ impl<D: AddrDag> Matcher<'_, D> {
                     }
                 }
             }
+            isd::SRL => {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                    let and = self.operand(n, 0);
+                    if self.opcode(and) == isd::AND {
+                        let x = self.operand(and, 0);
+                        if let (Some(amount), Some(and_mask)) =
+                            (self.constant(self.operand(n, 1)), self.constant(self.operand(and, 1)))
+                        {
+                            let mask = (and_mask as u64) >> amount;
+                            if !self.fold_mask_and_shift_to_scale(n, mask, n, x, am) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            isd::AND => {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
+                    if let Some(mask) = self.constant(self.operand(n, 1)) {
+                        let shift = self.operand(n, 0);
+                        if self.opcode(shift) == isd::SRL {
+                            let x = self.operand(shift, 0);
+                            if !self.fold_mask_and_shift_to_extract(n, mask as u64, shift, x, am)
+                                || !self.fold_mask_and_shift_to_scale(n, mask as u64, shift, x, am)
+                            {
+                                return false;
+                            }
+                        }
+                        // BEXTR needs TBM or fast BMI: neither exists on these CPUs.
+                        if !self.fold_masked_shift_to_scaled_mask(n, am) {
+                            return false;
+                        }
+                    }
+                }
+            }
             isd::MUL | x86isd::MUL_IMM => {
-                if am.base_type == BaseType::Reg && am.base_reg.is_none() && am.index_reg.is_none() {
+                if self.mode == AddrMode::Flat32 && am.base_type == BaseType::Reg && am.base_reg.is_none() && am.index_reg.is_none() {
                     if let Some(c) = self.constant(self.operand(n, 1)) {
                         if matches!(c as u64, 3 | 5 | 9) {
                             am.scale = c as u32 - 1;
@@ -371,7 +622,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     }
 
     /// The right operand of a `SUB` as a negated index, when that pays; `true` if it did not.
-    fn fold_sub_rhs(&self, n: SDValue, am: &mut AddressMode, backup: &AddressMode) -> bool {
+    fn fold_sub_rhs(&mut self, n: SDValue, am: &mut AddressMode, backup: &AddressMode) -> bool {
         // Folding `-rhs` costs a NEG unless it merges with something else.
         let mut cost = 0i32;
         let mut rhs = self.operand(n, 1);
@@ -420,7 +671,7 @@ impl<D: AddrDag> Matcher<'_, D> {
     /// `matchAddressBase` ([L3083][base]).
     ///
     /// [base]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3083
-    fn match_address_base(&self, n: SDValue, am: &mut AddressMode) -> bool {
+    fn match_address_base(&mut self, n: SDValue, am: &mut AddressMode) -> bool {
         if am.base_type != BaseType::Reg || am.base_reg.is_some() {
             if am.index_reg.is_none() {
                 am.index_reg = Some(n);
@@ -477,7 +728,16 @@ impl<D: AddrDag> Matcher<'_, D> {
     ///
     /// [sel]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3202
     pub fn select_addr(&mut self, n: SDValue) -> Option<AddressOperands> {
+        self.select_addr_of(None, n)
+    }
+
+    /// `selectAddr(Parent, N)`: `parent` is the memory node whose address `n` is; its segment
+    /// override becomes the segment operand.
+    pub fn select_addr_of(&mut self, parent: Option<u32>, n: SDValue) -> Option<AddressOperands> {
         let mut am = AddressMode::default();
+        if let Some(reg) = parent.and_then(|p| self.dag.segment_override(p)) {
+            am.segment = Some(self.dag.register(reg, mvt::i16));
+        }
         if self.match_address(n, &mut am) {
             return None;
         }

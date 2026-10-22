@@ -123,7 +123,7 @@ fn plan(
     let mut compares = Vec::new();
     let mut same = Vec::new();
     let mut others = Vec::new();
-    for used in function.users(result).snapshot() {
+    for used in function.users(result) {
         if used.user == extension {
             continue;
         }
@@ -232,7 +232,7 @@ fn widened(
             operands[constant as usize] = Operand::Constant(context.int(wide, value));
             function.set_operands(compare, operands);
         }
-        debug_assert!(function.users(result).snapshot().iter().all(|used| used.user == plan.extension));
+        debug_assert!(function.users(result).iter().all(|used| used.user == plan.extension));
         changed = true;
     }
     changed

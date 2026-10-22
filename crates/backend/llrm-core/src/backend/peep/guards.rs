@@ -98,6 +98,14 @@ pub fn free(
     one: &Insn,
     fields: u32,
 ) -> bool {
+    free_fields(one, fields)
+}
+
+/// `free`, for a caller with no context (`fixupbw.rs`).
+pub fn free_fields(
+    one: &Insn,
+    fields: u32,
+) -> bool {
     let has = |bit: u32| fields & bit != 0;
     !(has(field::CLOBBERS) && !one.clobbers.is_empty()
         || has(field::CLOBBERS_HIGH) && !one.clobbers_high.is_empty()
@@ -209,6 +217,33 @@ pub fn no_longer(
     )
 }
 
+/// `after` encodes, and in real mode in no more bytes than `before`: the
+/// dword form takes the operand-size prefix there. DEVIATE W1 of the byte/word
+/// fixup (`peephole.peep`).
+pub fn short_in_real_mode(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    after: &Arc<Insn>,
+) -> bool {
+    short_in_real_mode_at(cx.bits(), before, after)
+}
+
+/// `short_in_real_mode` at `bits`, for a caller with no context.
+pub fn short_in_real_mode_at(
+    bits: u32,
+    before: &Insn,
+    after: &Insn,
+) -> bool {
+    if bits == 16 {
+        matches!(
+            (emitted(bits, before), emitted(bits, after)),
+            (Some(before), Some(after)) if after.code.len() <= before.code.len()
+        )
+    } else {
+        emitted(bits, after).is_some()
+    }
+}
+
 /// Both encode, in as many bytes.
 pub fn same_length(
     cx: &Cx,
@@ -283,6 +318,21 @@ pub fn byte_loadable(
     d.width == 4
         && regs.named(d.register, 1) != d.register
         && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
+}
+
+/// `d` is the low part of its root (not `ah`): the byte or word starts the
+/// dword, so a dword access to the root keeps its place.
+pub fn low_view(
+    cx: &Cx,
+    d: Reg,
+) -> bool {
+    let regs = cx.regs();
+    _lanes(regs, d.register).iter().all(|lane| lane.1 < d.width as u32)
+}
+
+/// The code is for size (`shouldOptimizeForSize`).
+pub fn for_size(cx: &Cx) -> bool {
+    cx.cpu().size
 }
 
 /// The target prices `add r,r` below `shl r,1`.
