@@ -8,7 +8,7 @@ When a tied instruction's source lives on only for one later local reader, move 
 
 ## Ours
 
-`tied()` walks a block once and builds the output list. The pieces need: a working list the walk can reorder, the kill table kept up when an instruction moves (the pin's `LV->removeVirtualRegisterKilled`/`addVirtualRegisterKilled`), `isSafeToMove` (no store, no volatile, no call; loads do not cross a store), and the pin's latency test (`getInstrLatency > 1`), which is always false without itineraries (`TargetInstrInfo::getInstrLatency` returns 1), so it is not translated: DEVIATE TA-7 (exit: a scheduling model, none for x86 here).
+`tied()` walks a block once and builds the output list. The pieces need: a working list the walk can reorder, the kill table kept up when an instruction moves (the pin's `LV->removeVirtualRegisterKilled`/`addVirtualRegisterKilled`), `isSafeToMove` (no store, no volatile, no call; loads do not cross a store), and the pin's latency test (`getInstrLatency > 1`): without itineraries `TargetInstrInfo::getInstrLatency` is 2 for an instruction that may load and 1 otherwise ([TargetInstrInfo.cpp#L1832](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L1832)), so the test refuses a load; translated as `may_load` (DEVIATE TA-7: no scheduling model, exit: one). Whether x86 hands the pass itineraries at all is not checked.
 
 ## Order
 
