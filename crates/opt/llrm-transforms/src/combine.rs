@@ -425,6 +425,20 @@ pub fn visit(
     {
         return Visit::Replace(found);
     }
+    // A flags result is read by a comparison and nothing else: neither the
+    // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
+    // a user of `v` that is not a comparison.
+    let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
+    if compares_flags(inst)
+        || c.function.instruction(inst).operands.iter().any(|operand| {
+            matches!(
+                operand,
+                Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
+            )
+        })
+    {
+        return Visit::None;
+    }
     let opcode = c.function.instruction(inst).opcode.clone();
     visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }

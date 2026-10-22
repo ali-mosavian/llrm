@@ -211,6 +211,7 @@ pub mod nearcode;
 pub mod needs;
 pub mod neighbours;
 pub mod objbuild;
+pub mod optimizephis;
 pub mod overlap;
 pub mod parcopy;
 pub mod peep;

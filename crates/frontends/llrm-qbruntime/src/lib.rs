@@ -1748,6 +1748,11 @@ pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
 
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
+/// The routines whose result is the flags.
+pub fn flags_results() -> Vec<&'static str> {
+    FLAGS_RESULTS.iter().map(|&(name, _)| name).collect()
+}
+
 pub fn captures_nothing() -> Vec<&'static str> {
     ROWS.iter().filter(|row| row.captures == Some("NONE")).map(|row| row.name).collect()
 }

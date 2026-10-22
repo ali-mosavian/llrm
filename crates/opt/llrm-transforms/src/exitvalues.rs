@@ -96,6 +96,7 @@ pub fn rewritten_in(
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
+        crate::loopfilter::retain(&mut headers);
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));

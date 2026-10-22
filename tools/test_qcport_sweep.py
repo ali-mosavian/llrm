@@ -94,3 +94,51 @@ def test_a_64_bit_machine_is_never_swept(tmp_path):
     (tmp_path / "tests/run/qb").mkdir(parents=True)
     (tmp_path / "tests/run/qb/flat.bas").write_text("PRINT 1\n")
     assert {m for _, _, m, _ in q.extra_jobs(tmp_path)} == {"-m16", "-m32"}
+
+
+def test_a_program_is_swept_with_its_own_header_flags_and_a_by_design_refusal_is_not_a_failure(tmp_path):
+    """hugelp and hugerg (`--huge-arrays`, pds71) were swept bare and failed with a backend selection error, and the m16-only far_* programs failed at -m32 with the policy
+    refusal: both read as new compile failures. Seven kinds, none a finding, two of them stop-the-line rows."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "hugelp.bas").write_text("' dialect: pds71\n' flags: -O2 --huge-arrays\nPRINT 1\n")
+    (corpus / "far_poke.bas").write_text("PRINT 2\n")
+    (corpus / "broken.bas").write_text("PRINT 3\n")
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    fake = bins / "llrm-qb"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  *hugelp*) case "$*" in *--huge-arrays*) exit 0;; *) echo "Semantics(op=MOVE) failed to select" >&2; exit 1;; esac;;\n'
+        '  *far_poke*) case "$*" in *-m32*) echo "DEF SEG with a non-constant segment is not supported at one address space" >&2; exit 1;; *) exit 0;; esac;;\n'
+        '  *broken*) echo "internal error" >&2; exit 1;;\n'
+        "esac\nexit 0\n"
+    )
+    fake.chmod(0o755)
+    (bins / "llrm-nib").write_text("#!/bin/sh\nexit 0\n")
+    (bins / "llrm-nib").chmod(0o755)
+    failed = q.sweep_extra(bins, root=tmp_path)
+    assert sorted({program for program, _, _ in failed}) == ["broken.bas"], failed
+
+
+def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(tmp_path):
+    """farchk, hugelp, intrinsics_vbdos, stackdeep and their kin failed at -m32 with three messages (relocation overlaps, a far call in flat code) that were policy, not findings."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    corpus = tmp_path / "tests/run/qb"
+    corpus.mkdir(parents=True)
+    (corpus / "flat.bas").write_text("PRINT 1\n")
+    (corpus / "far.bas").write_text("' dialect: pds71\nPRINT 2\n")
+    (corpus / "huge.bas").write_text("' flags: -O2 --huge-arrays\nPRINT 3\n")
+    (corpus / "frames.bas").write_text("' flags: -O2 --own-frames -fsanitize=stack\nPRINT 4\n")
+    (corpus / "vb.bas").write_text("' dialect: qb45 vbdos\nPRINT 5\n")
+    machines = {}
+    for tool, source, machine, level in q.extra_jobs(tmp_path):
+        if source.parent == corpus:
+            machines.setdefault(source.name, set()).add(machine)
+    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}}, machines

@@ -647,7 +647,11 @@ impl<'a> Analyzer<'a> {
         // it is a global), else the generic one: no global, no offset,
         // scale 0 or 1.
         let legal = |scale: i64| match self.site.tti {
-            Some(tti) => tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale),
+            // A scaled index with instructions of its own is not free.
+            Some(tti) => {
+                (scale <= 1 || tti.scaled_index_insns() == 0)
+                    && tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale)
+            }
             None => !global_base && offset == 0 && scale <= 1,
         };
         match variable[..] {

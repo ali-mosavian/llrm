@@ -1544,6 +1544,7 @@ impl FunctionPass for LoopUnrollAndJam {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            created: Vec::new(),
             options: UnrollOptions {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,

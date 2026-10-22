@@ -464,6 +464,14 @@ fn self_calls(
 /// prices the callee whole (copies first made recchop -O3 decline its clones:
 /// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
 /// clocks, 294986 copied after tail-call elimination made it a loop).
+///
+/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w-6, review
+/// 2026-11-30. The rule is cost-based: the target's `gcc_insns` (150 here,
+/// 450 for peeling), the call frequency over the entry's (10%), depth 3; no
+/// shape of a program. Depth 3 and cap 450 kept. The priced row is recpow -O1:
+/// compile 49 to 461 M, bytes 5547 against main's 293, clocks 454246 against
+/// main's 504509. The rows still above main are open rows with owners
+/// (docs/architecture/recursion-rows.md).
 pub struct SelfInline {
     /// The Simplify list over one body.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,

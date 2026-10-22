@@ -346,6 +346,7 @@ struct Compiler {
     next_data: u32,
     next_module_data: u32,
     def_segment_symbol: Option<u32>,
+    def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
     // The table each DEFtype leaves, by source position. BC reads the file
@@ -1704,6 +1705,7 @@ impl Compiler {
             // measured ordinals while globals use BASIC's typed spelling.
             next_module_data: 1_000_000,
             def_segment_symbol: None,
+            def_segment_base_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
             default_changes: Vec::new(),
@@ -3502,7 +3504,30 @@ impl Compiler {
                 },
                 Statement::DefSeg { value, .. } => {
                     if self.options.one_space() {
-                        self.warn_def_seg_ignored();
+                        // One address space: the segment is its linear base,
+                        // paragraph * 16, added to every PEEK, POKE, BLOAD
+                        // and BSAVE address.  Only a constant has one the
+                        // compiler can name; VARSEG and variables are refused.
+                        let base = match value {
+                            None => 0,
+                            Some(value) => match self.expression(value)? {
+                                (Operand::Constant(_, Number::Integer(paragraph)), _) => (paragraph & 0xFFFF) * 16,
+                                _ => {
+                                    return self.fail(
+                                        "DEF SEG with a non-constant segment is not supported at one address space (-m32): VARSEG is 0 \
+                                         and PEEK, POKE, BLOAD and BSAVE take the whole address, so name the segment as a constant, \
+                                         DEF SEG = &HB800 (docs/frontends/qb/memory-model.md)",
+                                    );
+                                }
+                            },
+                        };
+                        let place = self.def_segment_base_place();
+                        let near = integer_type(self.options.near(), true);
+                        self.emit(
+                            "store",
+                            Vec::new(),
+                            vec![Operand::Place(place), Operand::Constant(near, Number::Integer(base))],
+                        );
                     } else if let Some(value) = value {
                         let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
@@ -3771,6 +3796,14 @@ impl Compiler {
                 Statement::Data { values, .. } => {
                     let row = self.next_read_data_row;
                     self.next_read_data_row += 1;
+                    // READ enters at the DATA statement: a block of its own, so
+                    // that no value of the statement before it crosses into an
+                    // entry.
+                    if !self.blocks[self.current_block].instructions.is_empty() {
+                        let block = self.new_block();
+                        self.jump_if_open(block);
+                        self.select_block(block);
+                    }
                     self.data_entries.push(self.blocks[self.current_block].id);
                     self.emit_runtime_call(&format!("$QB$DATA:{row}"), Vec::new(), Vec::new());
                     self.append_read_data(values)?;
@@ -4597,6 +4630,9 @@ impl Compiler {
             self.select_block(step_block);
         }
         if self.block_open() {
+            // NEXT is a statement: RESUME NEXT after the last of the body
+            // continues here, not after the loop.
+            self.end_statement();
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(step_type);
             self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
@@ -4716,6 +4752,10 @@ impl Compiler {
         self.loops.push((done_block, Some(test_block)));
         self.statement_list(body)?;
         self.loops.pop();
+        // WEND is a statement RESUME NEXT can reach.
+        if self.block_open() {
+            self.end_statement();
+        }
         self.jump_if_open(test_block);
         self.select_block(done_block);
         Ok(())
@@ -4744,6 +4784,10 @@ impl Compiler {
         self.statement_list(body)?;
         self.loops.pop();
         self.exits.pop();
+        // LOOP is a statement RESUME NEXT can reach.
+        if self.block_open() {
+            self.end_statement();
+        }
         self.jump_if_open(next);
         if let Some((while_true, condition)) = post {
             self.select_block(test_block);
@@ -5962,6 +6006,13 @@ impl Compiler {
                 _ => None,
             }) {
                 let (operand, type_id) = self.expression(&arguments[0])?;
+                // BC hands the routine a LONG whose high word is zero for an
+                // INTEGER: HEX$(-1%) is FFFF, not FFFFFFFF.
+                let (operand, type_id) = if type_id == INTEGER {
+                    (self.convert(operand, INTEGER, UNSIGNED_INTEGER)?, UNSIGNED_INTEGER)
+                } else {
+                    (operand, type_id)
+                };
                 let operand = self.convert(operand, type_id, LONG)?;
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
@@ -7228,6 +7279,7 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
+            let operand = self.argument_checked("fsin", operand, type_id)?;
             let result = self.value(type_id);
             if intrinsic.lowering == Lowering::Tan {
                 let sine = self.value(type_id);
@@ -7266,18 +7318,14 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
+            let operand = self.argument_checked(
+                if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" },
+                operand,
+                type_id,
+            )?;
             let result = self.value(type_id);
-            if intrinsic.lowering == Lowering::Log {
-                let logarithm = self.value(type_id);
-                self.emit("flog2", vec![logarithm], vec![operand]);
-                let ln2 = self.floating_literal("0.69314718055994530942", type_id)?;
-                self.emit("fmul", vec![result], vec![Operand::Value(logarithm), ln2]);
-            } else {
-                let log2e = self.floating_literal("1.4426950408889634074", type_id)?;
-                let scaled = self.value(type_id);
-                self.emit("fmul", vec![scaled], vec![operand, log2e]);
-                self.emit("fexp2", vec![result], vec![Operand::Value(scaled)]);
-            }
+            let op = if intrinsic.lowering == Lowering::Log { "fln" } else { "fexp" };
+            self.emit(op, vec![result], vec![operand]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Floor {
@@ -7654,19 +7702,6 @@ impl Compiler {
         self.convert(value, type_id, integer_type(self.options.near(), true))
     }
 
-    /// One address space has no segments: DEF SEG does nothing, VARSEG is 0,
-    /// and PEEK, POKE, BLOAD and BSAVE take the whole address.  An absolute
-    /// address (video memory) is held in a variable by the program: `vram& =
-    /// &HB8000`.
-    fn warn_def_seg_ignored(&mut self) {
-        self.warnings.push(format!(
-            "line {}: warning: DEF SEG is ignored at one address space: VARSEG is 0 and PEEK, POKE, BLOAD and BSAVE take the whole \
-             address, so an absolute address (video memory) is held in a variable, as vram& = &HB8000 \
-             (docs/frontends/qb/memory-model.md)",
-            self.current_source_line
-        ));
-    }
-
     /// The byte pointer an address names: the offset from DEF SEG's paragraph.
     fn segment_pointer(
         &mut self,
@@ -7674,14 +7709,20 @@ impl Compiler {
     ) -> u32 {
         // One address space: the address is the offset whole, no segment is
         // read.
-        let segment = if self.options.one_space() {
-            Operand::Constant(INTEGER, Number::Integer(0))
+        let (segment, offset) = if self.options.one_space() {
+            let near = integer_type(self.options.near(), true);
+            let place = self.def_segment_base_place();
+            let base = self.value(near);
+            self.emit("load", vec![base], vec![Operand::Place(place)]);
+            let linear = self.value(near);
+            self.emit("add", vec![linear], vec![Operand::Value(base), offset]);
+            (Operand::Constant(INTEGER, Number::Integer(0)), Operand::Value(linear))
         } else {
             let segment_place = self.def_segment_place();
             let segment = self.value(INTEGER);
             self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
             self.tag_last(Tag::ReadSegment);
-            Operand::Value(segment)
+            (Operand::Value(segment), offset)
         };
         let pointer_type = self.far_pointer_type(BYTE);
         let pointer = self.value(pointer_type);
@@ -8174,6 +8215,34 @@ impl Compiler {
         }
     }
 
+    /// `operand` as BC's routine for `routine` takes it: ERROR where it is out
+    /// of the range `intrinsics::ARGUMENT_CHECKS` gives. A float value does
+    /// not cross a block, so it is kept in a cell and read again.
+    fn argument_checked(
+        &mut self,
+        routine: &str,
+        operand: Operand,
+        type_id: u32,
+    ) -> Result<Operand, SemanticError> {
+        let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
+        // The operand is compared where it is and read again after the branch:
+        // a cell would round it to the variable's width (D-RFP5).
+        let mut tested = operand.clone();
+        if check.range == intrinsics::Range::AbsAbove {
+            tested = self.computed("fabs", type_id, vec![tested]);
+        }
+        let bound = self.floating_literal(check.bound, type_id)?;
+        let op = match check.range {
+            intrinsics::Range::AtMost => "le",
+            intrinsics::Range::AtLeast => "ge",
+            intrinsics::Range::AbsAbove => "gt",
+        };
+        let truth = self.value(BOOLEAN);
+        self.emit(op, vec![truth], vec![tested, bound]);
+        self.raise_if(Operand::Value(truth), check.error)?;
+        Ok(operand)
+    }
+
     /// ERROR `number` where `condition` holds, raised as ERROR raises it.
     fn raise_if(
         &mut self,
@@ -8492,8 +8561,9 @@ impl Compiler {
         };
         let product = self.value(common);
         self.emit("fmul", vec![product], vec![logarithm, exponent]);
+        let product = self.argument_checked("fexp2", Operand::Value(product), common)?;
         let result = self.value(common);
-        self.emit("fexp2", vec![result], vec![Operand::Value(product)]);
+        self.emit("fexp2", vec![result], vec![product]);
         Ok((Operand::Value(result), common))
     }
 
@@ -8527,7 +8597,7 @@ impl Compiler {
             Ok::<_, SemanticError>(Operand::Value(truth))
         };
         // exp2(y * log2(magnitude)) into `result`.
-        let exponential = |this: &mut Self, negate_base: bool| {
+        let exponential = |this: &mut Self, negate_base: bool| -> Result<(), SemanticError> {
             let mut magnitude = load(this, x);
             if negate_base {
                 let negated = this.value(common);
@@ -8539,9 +8609,11 @@ impl Compiler {
             let exponent = load(this, y);
             let product = this.value(common);
             this.emit("fmul", vec![product], vec![Operand::Value(logarithm), exponent]);
+            let product = this.argument_checked("fexp2", Operand::Value(product), common)?;
             let power = this.value(common);
-            this.emit("fexp2", vec![power], vec![Operand::Value(product)]);
+            this.emit("fexp2", vec![power], vec![product]);
             this.emit("store", Vec::new(), vec![Operand::Place(result), Operand::Value(power)]);
+            Ok(())
         };
         let positive = self.new_block();
         let not_positive = self.new_block();
@@ -8561,7 +8633,7 @@ impl Compiler {
         let truth = compare(self, "gt", x, "0")?;
         self.terminate("branch", vec![truth], vec![positive, not_positive])?;
         self.select_block(positive);
-        exponential(self, false);
+        exponential(self, false)?;
         self.terminate("jump", Vec::new(), vec![join])?;
 
         self.select_block(not_positive);
@@ -8594,7 +8666,7 @@ impl Compiler {
         self.emit("eq", vec![truth], vec![back, exponent]);
         self.terminate("branch", vec![Operand::Value(truth)], vec![negative_integral, illegal])?;
         self.select_block(negative_integral);
-        exponential(self, true);
+        exponential(self, true)?;
         let whole = self.value(LONG);
         self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
         let parity = self.value(LONG);
@@ -8927,6 +8999,47 @@ impl Compiler {
         self.data_offset += extent;
         self.reserve_module_data(storage);
         Ok(id)
+    }
+
+    /// The linear base DEF SEG names at one address space: a program-owned
+    /// cell, zero until a DEF SEG stores to it.
+    fn def_segment_base_place(&mut self) -> u32 {
+        let near = integer_type(self.options.near(), true);
+        let extent = self.options.near();
+        let symbol = if let Some(symbol) = self.def_segment_base_symbol {
+            symbol
+        } else {
+            let symbol = self.next_data;
+            self.next_data += 1;
+            self.data.push(DataObject {
+                align: extent as u32,
+                id: symbol,
+                name: "$defSegBase".into(),
+                bytes: vec![0; extent],
+                readonly: false,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+            });
+            self.def_segment_base_symbol = Some(symbol);
+            symbol
+        };
+        if let Some(place) = self.places.iter().find(|place| place.storage == "static" && place.symbol == symbol) {
+            return place.id;
+        }
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: "$defSegBase".into(),
+            type_id: near,
+            offset: 0,
+            extent,
+            storage: "static",
+            symbol,
+        });
+        place
     }
 
     fn def_segment_place(&mut self) -> u32 {

@@ -23,18 +23,22 @@ fn real() -> Options {
 
 /// qbdemo's fracline did `DEF SEG = VARSEG(array(i))` and POKEd the interrupt
 /// table at -m32: it died with no message, and a DEF SEG = &HB800 program wrote
-/// the first kilobytes of memory instead of the screen. Every DEF SEG says it
-/// is ignored, at the line.
+/// the first kilobytes of memory instead of the screen; far3.bas (a string
+/// flipped in case through DEF SEG = VARSEG(a) and SADD) printed it unchanged
+/// with n = 0. A DEF SEG whose segment is not a constant is refused, at the
+/// line; a constant is its linear base (NIBBLES and GORILLA, `DEF SEG = 0`,
+/// stopped building when every segment was refused).
 #[test]
-fn every_def_seg_warns_where_there_is_one_address_space_and_real_mode_does_not() {
-    let source = "DIM a(100) AS INTEGER\nDEF SEG = VARSEG(a(0))\nDEF SEG = &HB800\nDEF SEG\nPOKE 5, 1\n";
-    let found = compiled(source, &flat()).expect("compiles");
-    assert_eq!(found.len(), 3, "{found:?}");
-    for (at, line) in found.iter().zip([2, 3, 4]) {
-        assert!(at.starts_with(&format!("line {line}: warning: DEF SEG is ignored at one address space")), "{at}");
-        assert!(at.contains("vram& = &HB8000") && at.contains("docs/frontends/qb/memory-model.md"), "{at}");
+fn a_non_constant_def_seg_is_refused_where_there_is_one_address_space_and_a_constant_is_its_linear_base() {
+    for source in ["DIM a(100) AS INTEGER\nDEF SEG = VARSEG(a(0))\n", "s% = 5\nDEF SEG = s%\nPOKE 5, 1\n"] {
+        let error = compiled(source, &flat()).expect_err("refused");
+        assert!(error.contains("DEF SEG with a non-constant segment is not supported at one address space"), "{error}");
+        assert!(compiled(source, &real()).expect("compiles").is_empty());
     }
-    assert!(compiled(source, &real()).expect("compiles").is_empty());
+    for source in ["DEF SEG = 0\nPRINT PEEK(1047)\n", "DEF SEG = &HB800\nPOKE 5, 1\n", "DEF SEG\nPOKE 5, 1\n"] {
+        assert!(compiled(source, &flat()).expect("compiles").is_empty(), "{source}");
+        assert!(compiled(source, &real()).expect("compiles").is_empty());
+    }
 }
 
 /// The image's segment and offset are 16-bit words: a flat program names the

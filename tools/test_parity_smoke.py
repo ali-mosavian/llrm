@@ -155,9 +155,9 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
     seen = fake_qcport(tmp_path, fail_level="-O2")
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    verdict, detail = ps.qc_d_faces(tmp_path)
+    verdict, detail, names = ps.qc_d_faces(tmp_path)
     assert verdict == "fail" and "-O2" in detail and "no instruction choosing" in detail, detail
-    assert seen.read_text().split() == ["-O1", "-O2"]
+    assert names == ["qc_d_faces -O2"] and seen.read_text().split() == ["-O1", "-O2", "-O3", "-Os"]
     seen.unlink()
     monkeypatch.setattr(ps, "compile_ok", ps.compile_ok)
     seen2 = fake_qcport(tmp_path / "ok")
@@ -204,7 +204,7 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    verdict, detail = ps.qc_modules(tmp_path)
+    verdict, detail, *_ = ps.qc_modules(tmp_path)
     assert verdict == "fail" and "sound/snd.c" in detail and "BitCast of a float" in detail, detail
     compiler.write_text("#!/bin/sh\nexit 0\n")
     assert ps.qc_modules(tmp_path)[0] == "ok"
@@ -359,3 +359,119 @@ def test_the_ratchets_run_side_by_side_and_report_in_command_order(monkeypatch):
 def test_the_ratchets_run_one_at_a_time_by_default():
     """Four at a time cost 600-750 s a PR at load 70 against ~57 s in a row (cargo's lock serializes the compiles; the links collide): serial is the default, RATCHET_WORKERS overrides."""
     assert ps.RATCHET_WORKERS == 1
+
+
+FAILURES_BLOCK = "running 3 tests\n\nfailures:\n\nfailures:\n    first_red\n    second_red\n\ntest result: FAILED. 1 passed; 2 failed\n"
+
+
+def test_a_red_ratchet_is_listed_by_its_failing_tests_not_whole():
+    """A ratchet is a test binary: listed as `ratchet:x`, a second test going red inside it was 'the same step failing' and no merge was refused for it."""
+
+    class Done:
+        returncode, stdout, stderr = 1, FAILURES_BLOCK, ""
+
+    failed = ps.ratchet_failures(run=lambda command: Done() if "block_list_ratchet" in " ".join(command) else type("Ok", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    assert set(failed) == {"ratchet:block_list_ratchet::first_red", "ratchet:block_list_ratchet::second_red"}, failed
+
+
+def test_a_red_run_step_is_listed_by_its_failing_programs():
+    out = "FAIL  qb/log_exp_digits.bas [-O2]: line 1: want x\nFAIL  qb/log_exp_digits.bas [-Os]: line 1\nFAIL  c/x.c [-O1]: y\n4 programs: 1 pass"
+    assert ps.failing_programs(out) == ["run qb/log_exp_digits.bas [-O2]", "run qb/log_exp_digits.bas [-Os]", "run c/x.c [-O1]"]
+    assert ps.failing_programs("no failures named") == []
+
+
+def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypatch):
+    for sub in ("host", "render", "game", "sound", "ui", "model", "qgl"):
+        (tmp_path / "src" / sub).mkdir(parents=True)
+    for module in ps.QC_MODULES:
+        (tmp_path / "src" / module).write_text("int x;")
+    (tmp_path / "inc").mkdir()
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/bin/sh\ncase \"$*\" in *combat.c*|*snd.c*) echo broken >&2; exit 1;; esac\nexit 0\n")
+    compiler.chmod(0o755)
+    verdict, _, names = ps.qc_modules(tmp_path)
+    assert verdict == "fail" and names == ["qc_modules game/combat.c", "qc_modules sound/snd.c"], names
+
+
+def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
+    for path in ("crates/frontends/llrm-qb/src/compile.rs", "crates/frontends/qbfront/src/semantic.rs", "crates/frontends/llrm-qbruntime/src/runtime.toml", "runtime/qb/strconv.c",
+                 "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
+        assert ps.runs_whole_groups([path]), path
+    for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
+        assert not ps.runs_whole_groups([path]), path
+    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qbfront/src/lexer.rs"])
+
+
+def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():
+    """The gate ran a dozen programs, so three tests/run qb programs (12 results) went red on parity unseen. A group's FAIL line is a failing name; the merged tree failing it, the head not, refuses."""
+    import parity_squash as sq
+
+    class Done:
+        returncode = 1
+        stdout = "[qb] 170 programs: 169 pass, 0 known, 1 fail\nFAIL  qb/log_exp_digits.bas [-O2]: line 1: want ' 2.30', got ' 2.31'\n"
+        stderr = ""
+
+    failed = ps.group_failures("/bins", run=lambda *a, **k: Done())
+    assert failed == {"run qb/log_exp_digits.bas [-O2]"}, failed
+    why = sq.subset_refusals(set(), failed, fixes=False)
+    assert why and "qb/log_exp_digits.bas [-O2]" in why[0], why
+    assert sq.subset_refusals(failed, failed, fixes=False) == []
+
+    class Clean:
+        returncode = 0
+        stdout = "[qb] 170 programs: 170 pass, 0 known, 0 fail\n"
+        stderr = ""
+
+    assert ps.group_failures("/bins", run=lambda *a, **k: Clean()) == set()
+
+    class Silent:
+        returncode = 2
+        stdout = ""
+        stderr = "boom"
+
+    assert ps.group_failures("/bins", run=lambda *a, **k: Silent()) == {"run-groups-did-not-finish"}
+
+
+def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path):
+    """#3422 broke QCport `item` at four levels and passed the gate: qc_modules compiled four modules at -O2. A crate PR now compiles all 65 at four levels, and a failing one is a name."""
+    assert ps.touches_the_compiler(["crates/opt/llrm-transforms/src/simplifycfg.rs"]) and not ps.touches_the_compiler(["docs/arch.md", "tools/gate/gate.py"])
+    (tmp_path / "src").mkdir()
+    (tmp_path / "inc").mkdir()
+    import os
+
+    os.environ["QCPORT"], os.environ["QCPORT_INC"] = str(tmp_path / "src"), str(tmp_path / "inc")
+    try:
+        seen = {}
+
+        def sweep(compiler, qcport, include):
+            seen["compiler"] = compiler
+            return [("item", "-O1", "a poison initializer"), ("item", "-Os", "a poison initializer")]
+
+        assert ps.qcport_failures("/bins", sweep=sweep) == {"qc item -O1", "qc item -Os"}
+        assert str(seen["compiler"]) == "/bins/llrm-c"
+        assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
+    finally:
+        del os.environ["QCPORT"], os.environ["QCPORT_INC"]
+
+
+def test_a_planted_qbrt_difference_is_a_failing_name_and_a_program_that_did_not_compile_is_one():
+    """tests/qbrt (218 results) is the QB product's differential and the gate did not run it: #3422 broke dgroup_nearly_full at m16 (byte 11 want 104 got 13) unseen."""
+    import parity_squash as sq
+
+    class Done:
+        returncode = 1
+        stdout = "PROGRAMS 2 a b\nCOMPILE-FAIL b -O2: x\nNOTPASS dgroup_nearly_full x86-m16 ok ok byte 11: want 104 got 13\nRESULT 1 of 4 pass\n"
+        stderr = ""
+
+    got = ps.qbrt_failures("/bins", run=lambda *a, **k: Done())
+    assert got == {"qbrt dgroup_nearly_full x86-m16", "qbrt b did-not-compile"}, got
+    assert sq.subset_refusals(set(), got, fixes=False) and sq.subset_refusals(got, got, fixes=False) == []
+
+    class Silent:
+        returncode = 2
+        stdout = ""
+        stderr = "boom"
+
+    assert ps.qbrt_failures("/bins", run=lambda *a, **k: Silent()) == {"qbrt-did-not-finish"}

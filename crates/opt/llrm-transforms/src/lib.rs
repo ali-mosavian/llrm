@@ -106,6 +106,8 @@ pub mod combine_demanded;
 #[cfg(test)]
 mod combine_dispatch_tests;
 pub mod combine_distribute;
+#[cfg(test)]
+mod combine_flags_result_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_index;
@@ -129,6 +131,7 @@ pub mod combine_select_op_op;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
+pub mod combine_shift_binop;
 pub mod combine_shifts;
 pub mod combine_sink;
 #[cfg(test)]
@@ -212,6 +215,7 @@ pub mod local;
 mod local_tests;
 pub mod loopclone;
 pub mod loopdeletion;
+pub mod loopfilter;
 pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
@@ -255,6 +259,8 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

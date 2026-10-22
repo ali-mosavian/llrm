@@ -19,6 +19,39 @@
 //! [`crate::lsr_pass`] is the pass that runs them).
 //!
 //! # Limits
+//! DEVIATE LU1: `Cost::rate_formula` adds the target's `scaled_index_insns`
+//! (m16: the `lea` that forms the scaled register, and the prefixed form's
+//! own cost) to `Insns` once for each scaled register (an `Address` formula
+//! with scale above 1), beyond the pin. The pin has no real-mode model: its x86
+//! prices a scaled address as part of the address form, and `ScaleCost` is the
+//! last key of the comparison, so a scaled index always beat a pointer
+//! induction variable (m16 listed `lea bx,[ecx+ecx]` for one array) or lost to
+//! six of them (particle's six far arrays, which the narrowing then left only
+//! the pointer forms of). 0 elsewhere, so the pin's rule. Owner
+//! laa-runtime-checks-loadelim; exit: when the target description prices the
+//! prefixed `lea` itself or the pin gains a real-mode model; reviewed
+//! 2026-11-30.
+//!
+//! Known row of LU1: QCport `d_faces.c` -Os, `_clip_w` (six near float arrays
+//! on one index, an x87 loop) is 6262 B against main's 6208. The model rates
+//! the scaled solution at 10 instructions (9 registers, 2 recurrences) and the
+//! pointer recurrences at 13 (9 registers, 9 recurrences), so it keeps the
+//! scaled index, whose bases then reload from the frame; particle's `ADVANCE`
+//! (six far arrays) wins by 3 more instructions at the same charge. Neither a
+//! segment register class (the bases are near), an address-register budget
+//! (both forms need the same) nor sparing each use's cheapest formula in the
+//! narrowing (tried: the pointer form was kept and still lost) separates the
+//! two; only a tuned charge (7 to 8) does, which is not derived. Owner
+//! laa-runtime-checks-loadelim; exit: a fill cost for near pointer bases past
+//! the four addressing registers; reviewed 2026-11-30.
+//!
+//! Its -O2 cost is measured, not counted statically (static counts said
+//! smaller): QCport's 61-frame BENCH run in the dosrun emulator, every object
+//! main's but `d_faces.obj` (~/scratch/dfdyn: build.py, run.py). Executed
+//! instructions: main 485,835,518; parity +2,383,382 (+0.49%); head +2,816,018
+//! (+0.58%), so this charge adds +432,636 (+0.09%). The parity loss is row
+//! DFACES-DYN-1, not LU1's.
+//!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 //! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
@@ -237,13 +270,14 @@ impl Use {
 pub fn is_am_completely_folded_at(
     tti: &dyn Tti,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode(base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_in(addr_space, base_gv, base_offset.0, has_base_reg, scale),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -279,6 +313,7 @@ pub fn is_am_completely_folded_between(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -294,8 +329,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(low), has_base_reg, scale)
+        && is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(high), has_base_reg, scale)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -305,6 +340,7 @@ pub fn is_am_completely_folded_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     f: &Formula,
     l: BlockId,
 ) -> bool {
@@ -316,6 +352,7 @@ pub fn is_am_completely_folded_formula(
         min_offset,
         max_offset,
         kind,
+        addr_space,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -336,6 +373,7 @@ pub fn is_am_completely_folded(
         lu.min_offset,
         lu.max_offset,
         lu.kind,
+        lu.access_ty.addr_space,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -351,14 +389,34 @@ pub fn is_legal_use(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
-    is_am_completely_folded_between(tti, min_offset, max_offset, kind, base_gv, base_offset, has_base_reg, scale)
-        || (scale == 1
-            && is_am_completely_folded_between(tti, min_offset, max_offset, kind, base_gv, base_offset, true, 0))
+    is_am_completely_folded_between(
+        tti,
+        min_offset,
+        max_offset,
+        kind,
+        addr_space,
+        base_gv,
+        base_offset,
+        has_base_reg,
+        scale,
+    ) || (scale == 1
+        && is_am_completely_folded_between(
+            tti,
+            min_offset,
+            max_offset,
+            kind,
+            addr_space,
+            base_gv,
+            base_offset,
+            true,
+            0,
+        ))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
@@ -367,9 +425,20 @@ pub fn is_legal_use_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     f: &Formula,
 ) -> bool {
-    is_legal_use(tti, min_offset, max_offset, kind, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
+    is_legal_use(
+        tti,
+        min_offset,
+        max_offset,
+        kind,
+        addr_space,
+        f.base_gv.is_some(),
+        f.base_offset,
+        f.has_base_reg,
+        f.scale,
+    )
 }
 
 /// `isLegalAddImmediate`.
@@ -393,7 +462,7 @@ pub fn scaling_factor_cost(
         return TtiCost::FREE;
     }
     // Not completely folded: an extra cost only for a scale other than 1.
-    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, f, l) {
+    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f, l) {
         return TtiCost::of(i64::from(f.scale != 1));
     }
     match lu.kind {
@@ -432,9 +501,12 @@ pub struct Rating<'a, 'b> {
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
 /// Measures and compares candidate formulae.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Cost {
     pub c: LsrCost,
+    /// The registers rated scaled so far, with their scale: the target's
+    /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
+    scaled: Vec<(Scev, i64)>,
 }
 
 impl Cost {
@@ -513,6 +585,17 @@ impl Cost {
 
         // Scaling amounts that are not free.
         self.c.scale_cost += scaling_factor_cost(r.tti, r.se, lu, f, r.l).value as u32;
+        // DEVIATE LU1: a scaled index is an instruction the backend forms once
+        // and every use of the register shares.
+        let scaled_insns = r.tti.scaled_index_insns();
+        if scaled_insns > 0 && lu.kind == Kind::Address && f.scale > 1 {
+            if let Some(reg) = f.scaled_reg {
+                if !self.scaled.contains(&(reg, f.scale)) {
+                    self.scaled.push((reg, f.scale));
+                    self.c.insns += scaled_insns;
+                }
+            }
+        }
 
         // The non-zero immediates.
         for fixup in &lu.fixups {
@@ -529,6 +612,7 @@ impl Cost {
                 && !is_am_completely_folded_at(
                     r.tti,
                     Kind::Address,
+                    lu.access_ty.addr_space,
                     f.base_gv.is_some(),
                     offset,
                     f.has_base_reg,

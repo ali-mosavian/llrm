@@ -321,11 +321,12 @@ impl Options {
         Self { optimize: false, ..Self::default() }
     }
 
-    /// -O1: the scalar passes, a loop copied out completely only where the
-    /// code does not grow, the pin's inliner (`getInlineParamsFromOptLevel`:
-    /// 225 as -O2, PassBuilderPipelines.cpp L968), no allocation search or
-    /// second route (compile -34% on d_faces), value numbering that inserts
-    /// nothing, and no sibling calls, peeling or unswitching. Pattern fill is
+    /// -O1: the scalar passes, a loop copied out completely only where it
+    /// asks (`loop_unrolling` off, as clang's `UnrollLoops` is), the pin's
+    /// inliner (`getInlineParamsFromOptLevel`: 225 as -O2,
+    /// PassBuilderPipelines.cpp L968), no allocation search or second route
+    /// (compile -34% on d_faces), value numbering that inserts nothing, and
+    /// no sibling calls, peeling or unswitching. Pattern fill is
     /// on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562), the user's decision of 2026-10-10
     /// (docs/reference/levels.md).
@@ -339,7 +340,6 @@ impl Options {
             ipa_ranges: false,
             loop_intervals: false,
             pre: false,
-            sibcalls: false,
             peel: false,
             loop_unrolling: false,
             unswitch: false,
@@ -729,10 +729,13 @@ pub(crate) fn llvm_order(
             // `simplifySwitch`, not translated yet, so these are the defaults.
             simplify_cfg("decide@1244"),
         ],
-        // The Late stage follows the Simplify list: L1438, Float2IntPass
-        // (L1594), InstSimplifyPass (PassBuilderPipelines.cpp#L1662, the last
-        // function pass of `OptimizePM`, after LoopSink) and L2376.
+        // The Late stage follows the Simplify list, in `OptimizePM`'s order
+        // (the pin's printed pipeline): Float2IntPass (L1594) first, then the
+        // loop passes, L1438, LICM (L1508), InstSimplifyPass
+        // (PassBuilderPipelines.cpp#L1662, the last function pass, after
+        // LoopSink), L1682 and L2376.
         Phase::Late => vec![
+            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
@@ -752,10 +755,20 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
-            slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
+            // LICMPass again (l.1508,
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
+            // `AllowSpeculation=true`), in a loop pass manager of its own after
+            // the unroll and the combine that follow it: "helps to clean up
+            // some loop-invariant code created by the loop unroll pass".
+            licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
-            // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
+            // TailCallElim (l.1677, the module optimization pipeline's
+            // "calls created during optimization"), at every level: at -O1 it
+            // is the only one, so a self-recursive tail call is a loop there
+            // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
+            // runs in one). DivRemPairs and ExpandMemCmp, between the two at
             // the pin, are not slots.
+            slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
             simplify_cfg_with("simplifycfg@2376", simplifycfg::Options::L2376),
         ],
@@ -819,6 +832,8 @@ pub(crate) fn llvm_order(
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
+            // What the unroll makes, for the slot after it.
+            let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
                 slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
@@ -830,8 +845,12 @@ pub(crate) fn llvm_order(
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        created: std::rc::Rc::clone(&created),
                     }),
                 ),
+                // The loops the unroll made go on to LPM2's passes: indvars on
+                // them.
+                slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at

@@ -101,6 +101,9 @@ pub struct Globals {
     /// a body that follows a pointer through its joins. `covers` takes one for
     /// what it was.
     joined: BTreeSet<GlobalId>,
+    /// The module forges a pointer into the data segment (`forging`): the
+    /// selector casts of its far pointers may name any object.
+    forged: bool,
     /// The `!llrm.named` globals.
     named: BTreeSet<GlobalId>,
     /// Each routine's `!llrm.writes` list.
@@ -120,10 +123,24 @@ impl Globals {
         fresh: &Globals,
     ) -> bool {
         self.tracked.iter().all(|one| fresh.tracked.contains(one) || fresh.joined.contains(one))
+            && (self.forged || !fresh.forged)
             && self.named == fresh.named
             && self.writes == fresh.writes
             && self.bodies == fresh.bodies
             && self.entries == fresh.entries
+    }
+
+    /// Whether the module forges a pointer into the data segment.
+    pub fn forged(&self) -> bool {
+        self.forged
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_forged(
+        &mut self,
+        forged: bool,
+    ) {
+        self.forged = forged;
     }
 
     pub fn tracked(
@@ -364,7 +381,8 @@ pub fn analysis(
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found = found_with(module, &program, &elsewhere, Some(&mut memo.per));
+    let forged = *analyses.get::<crate::manager::ForgedSelectors>(module);
+    let found = found_with(module, &program, &elsewhere, forged, Some(&mut memo.per));
     *analyses.memo::<Bodies>() = memo;
     found
 }
@@ -376,13 +394,14 @@ pub fn found(
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
 ) -> Result<Globals, String> {
-    found_with(module, program, elsewhere, None)
+    found_with(module, program, elsewhere, crate::forging::forges_selector(module, program.spaces), None)
 }
 
 fn found_with(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
+    forged: bool,
     mut kept: Option<&mut IndexMap<GlobalId, (Mark, Rc<Contribution>)>>,
 ) -> Result<Globals, String> {
     let (named, writes) = promised(module, &program.runtime);
@@ -446,6 +465,12 @@ fn found_with(
     let held = held_from(module, retained);
     tracked.retain(|one| !held.contains(one));
     joined.retain(|one| !held.contains(one));
+    // A pointer forged into the data segment reaches any global, one whose
+    // address nobody computed among them (`forging`).
+    if forged {
+        tracked.clear();
+        joined.clear();
+    }
     let mut taken = referenced_from(module, plain);
     taken.extend(&elsewhere.taken);
     let entries = bodies
@@ -458,7 +483,7 @@ fn found_with(
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, joined, named, writes, bodies, entries })
+    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer

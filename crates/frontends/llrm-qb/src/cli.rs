@@ -123,7 +123,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
-    let codegen = bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?);
+    let codegen = llrm_core::driver::Options {
+        spills_extended: true,
+        ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
+    };
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
 }
 
