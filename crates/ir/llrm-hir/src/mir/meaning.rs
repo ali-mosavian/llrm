@@ -120,6 +120,12 @@ fn define(
     for &one in &meaning.releases {
         module.builder(global).function.parameter_attrs[one].push(Fact::Releases.carrier());
     }
+    // The language's own expansion of a routine, not a function the program
+    // chose to call: `-fno-inline-functions` (the pin's OnlyAlwaysInlining)
+    // keeps it inlined, as the QB runtime's `MID$` was (jpeg_single bq32:
+    // B$FMID in the per-byte loop of `ASC(MID$(s, i, 1))` made a temporary
+    // string, +38% clocks).
+    module.builder(global).function.attrs.push(llrm_mir::Attribute::Flag("alwaysinline".to_owned()));
     module.globals[global.0 as usize].linkage = Linkage::AvailableExternally;
 }
 
@@ -226,5 +232,66 @@ impl Body<'_, '_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meaning::{Arithmetic, Meaning};
+
+    /// jpeg_single bq32 under `-fno-inline-functions`: the runtime's `MID$`
+    /// body was a plain `available_externally` function, so only the
+    /// always-inliner of that flag left it a call and `ASC(MID$(s, i, 1))`
+    /// made a temporary string per byte (parity 93.2 M instructions against
+    /// main's 61.6 M).
+    #[test]
+    fn a_runtime_routines_body_is_always_inlined() {
+        let mut module = llrm_mir::parse::module("declare cc 1000 ptr @llrm.qb.B$FMID(ptr, i32, i32)\n").unwrap();
+        let param = |at| Box::new(Expr::Param(at));
+        let mid = Meaning {
+            routine: "B$FMID".to_owned(),
+            parameters: vec![Parameter::String, Parameter::Int, Parameter::Int],
+            result: Returns::View {
+                length: Expr::Binary(
+                    Arithmetic::Min,
+                    param(2),
+                    Box::new(Expr::Binary(
+                        Arithmetic::Max,
+                        Box::new(Expr::Int(0)),
+                        Box::new(Expr::Binary(
+                            Arithmetic::Add,
+                            Box::new(Expr::Binary(Arithmetic::Sub, Box::new(Expr::Length(0)), param(1))),
+                            Box::new(Expr::Int(1)),
+                        )),
+                    )),
+                ),
+                data: Expr::Binary(
+                    Arithmetic::Add,
+                    Box::new(Expr::Data(0)),
+                    Box::new(Expr::Binary(Arithmetic::Sub, param(1), Box::new(Expr::Int(1)))),
+                ),
+            },
+            releases: vec![0],
+            check: None,
+        };
+        let promises = model::RuntimePromises {
+            descriptor: Some(crate::meaning::Descriptor { length: 0, word: 4, data: 4, size: 8 }),
+            routines: vec![mid],
+            ..Default::default()
+        };
+        let layout = llrm_target::layout::Layout::parse(include_str!(
+            "../../../../target/llrm-x86-m32/src/machines/datalayout.toml"
+        ))
+        .unwrap();
+        defined(&mut module, &layout.spaces, &promises);
+        let global = module.named("llrm.qb.B$FMID").expect("the routine");
+        let function = module.global(global).function().expect("a function");
+        assert!(!function.is_declaration(), "{}", llrm_mir::print::module(&module));
+        assert!(
+            function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "alwaysinline")),
+            "{}",
+            llrm_mir::print::module(&module)
+        );
     }
 }
