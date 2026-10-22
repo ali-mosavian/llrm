@@ -87,6 +87,11 @@ def show(nodes) -> str:
     return ",".join(node if children is None else f"{node}({show(children)})" for node, children in nodes)
 
 
+def pin_text_of(text: str) -> str:
+    """`text` as the pin parses it."""
+    return re.sub(r" (threeway|flagsresult)\b", "", text)
+
+
 def pin_text(path: Path) -> str:
     """The IR as the pin parses it: llrm's own attributes (`threeway`, `flagsresult`) are not LLVM's."""
     return re.sub(r" (threeway|flagsresult)\b", "", path.read_text())

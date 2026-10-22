@@ -167,6 +167,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod extload;
 pub mod fixednarrow;
 pub mod float2int;
 pub mod floatfold;
@@ -260,6 +261,8 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod codegen_slots_tests;
 #[cfg(test)]
 mod pin_slots_tests;
 pub mod pipeline;

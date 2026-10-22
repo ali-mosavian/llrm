@@ -293,7 +293,8 @@ fn adjacent_stores_of_one_byte_are_one_memset() {
     let mut module = before.clone();
     let text = managed(&mut module, Merge { size: false });
     assert!(
-        text.contains("call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 8, i1 false)") && !text.contains("store"),
+        text.contains("call void @llvm.memset.p0.i16(ptr align 2 %a, i8 0, i16 8, i1 false)")
+            && !text.contains("store"),
         "{text}"
     );
     assert_eq!(results(&module, BYTES), results(&before, BYTES));

@@ -740,3 +740,20 @@ def test_a_new_failing_test_inside_an_already_red_step_is_refused_and_a_fixed_on
 def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     """A failure set cached before steps named their tests holds `ratchet:x`: the tests inside it are not new for that head."""
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
+
+
+def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """#3578 landed with four red llrm-transforms lib tests: the fast path ran no test. With LAND_FAST_TESTS the changed crates' lib tests run on the merged tree and a failing one the head
+    passes refuses the batch. Control on the real functions (a planted `assert!(false)` in llrm-transforms): refused naming it in 88 s; none on the clean head."""
+    files = ["crates/opt/llrm-transforms/src/memcpyoptimizer.rs", "docs/x.md"]
+    red = {"unit llrm-transforms::memcpyoptimizer::tests::four_byte_stores_are_one_memset"}
+    asked = {}
+
+    def on_merged(packages):
+        asked["packages"] = set(packages)
+        return set(red)
+
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: set()) == red
+    assert asked["packages"] == {"llrm-transforms"}
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
