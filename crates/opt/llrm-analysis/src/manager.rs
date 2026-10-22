@@ -1138,8 +1138,14 @@ impl Analysis for CallFootprints {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
+        // The unit `Accesses` made them under: without the shape and the exposed
+        // frames each argument's object was worked out from the body again (3x
+        // the Ir a walk).
         let values = analyses.get::<PointerValues>(context, layout, function);
-        let mut unit = Unit::within(context, layout, function, analyses.outer());
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
         if let Ok(values) = &*values {
             unit = unit.with_point_values(values);
         }
