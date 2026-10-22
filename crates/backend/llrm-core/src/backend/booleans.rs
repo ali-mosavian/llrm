@@ -3,23 +3,25 @@
 //!
 //! # How it works
 //! Without a conditional move a comparison used as a value is `cmp; setcc` and
-//! its combiners are more instructions: `x + zext(c)` is `setcc; movzx; add`,
-//! `a & b` of two compares is two `setcc` and an `and`. A branch does the same
-//! in a jump and the work only one arm needs. Each such chain is priced both
-//! ways from the target's cost table (`setcc`, `movzx`, `alu_rr`, `jcc`,
-//! `jcc_not_taken`, the description's `timings.times`) and rewritten as a
-//! `select` where the branch is cheaper; the arm's instruction (the `add 1`,
-//! the second compare) moves into the taken block with the diamond.
+//! its combiners are more instructions: `x + zext(c)` is `setcc; movzx; add`.
+//! A branch does the same in a jump and the work only one arm needs. That
+//! chain is priced both ways from the target's cost table (`setcc`, `movzx`,
+//! `alu_rr`, `jcc`, `jcc_not_taken`, the description's `timings.times`) and
+//! rewritten as a `select` where the branch is cheaper; the arm's instruction
+//! (the `add 1`) moves into the taken block with the diamond.
+//!
+//! An `and` of two compares used as a value is not branched: the pin keeps two
+//! `setcc` and an `and` (`FindMergedConditions` short-circuits only a branch's
+//! condition). Main branched it by price; that was STRISTMP-1.
 //!
 //! ```text
 //!  %z = zext i1 %c to i32           %y = add %x, 1        ; moved into taken
 //!  %r = add i32 %x, %z       ==>    %r = select %c, %y, %x    -> br %c, taken, join
 //! ```
 //!
-//! DEVIATE B2 (no number yet): the pin lowers these as `setcc` chains too
-//! (`pin.py llc -m 32` on x_mergesort's merge loop: 21 instructions with the
-//! flags spilled; `is_tmp(p){return p>=temps && p<temps+240;}`: `cmp; setae;
-//! cmp; setb; and; movzx`), where main branches. The price is the one cost
+//! DEVIATE B2 (no number yet), the `add` chain: the pin lowers it as a `setcc`
+//! chain too (`pin.py llc -m 32` on x_mergesort's merge loop: 21 instructions
+//! with the flags spilled), where main branches. The price is the one cost
 //! table, not the shape of a loop. Exit: the pin's lowering equals or beats
 //! main on the rows (x_mergesort, stft bq32, nhstutil). Plan: docs/working/
 //! setcc-chain-plan.md.
@@ -70,19 +72,12 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 struct Prices {
     chain_add: i64,
     branch_add: i64,
-    chain_and: i64,
-    branch_and: i64,
 }
 
 fn prices(price: &dyn Fn(&str) -> Option<i64>) -> Option<Prices> {
     let (set, ext, alu) = (price("setcc")?, price("movzx")?, price("alu_rr")?);
     let branch = (price("jcc")? + price("jcc_not_taken")? + 1) / 2;
-    Some(Prices {
-        chain_add: set + ext + alu,
-        branch_add: branch + alu,
-        chain_and: 2 * set + alu + ext,
-        branch_and: branch + set + ext,
-    })
+    Some(Prices { chain_add: set + ext + alu, branch_add: branch + alu })
 }
 
 /// The instruction defining `operand`, when it has `only` this user.
@@ -126,8 +121,8 @@ pub fn branched(
     word_bits: u32,
 ) -> Result<usize, String> {
     let Some(costs) = prices(price) else { return Ok(0) };
-    let (add_wins, and_wins) = (costs.chain_add > costs.branch_add, costs.chain_and > costs.branch_and);
-    if !add_wins && !and_wins {
+    let add_wins = costs.chain_add > costs.branch_add;
+    if !add_wins {
         return Ok(0);
     }
     let candidates: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
@@ -210,52 +205,6 @@ pub fn branched(
                 let Operand::Value(plus_value) = plus else { unreachable!("an add's value") };
                 let ValueDef::Instruction(plus_inst) = function.value(plus_value).def else { unreachable!() };
                 chains.push((select_inst, plus_inst, yes_plain));
-                break;
-            }
-        }
-        // a & b of two compares used as a value: b only when a.
-        if and_wins && one.opcode == Opcode::Binary(BinaryOp::And) && bits == Some(1) {
-            // A branch reads its condition from flags, and a user that is
-            // logic of bools is a longer chain whose root a branch reads
-            // (qcport console -Os: `c > 96 && c < 123 && d`).
-            let feeds_a_branch = function
-                .users(result)
-                .iter()
-                .any(
-                    |used| matches!(
-                        function.instruction(used.user).opcode,
-                        Opcode::Br | Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
-                    ),
-                );
-            if feeds_a_branch {
-                continue;
-            }
-            let [left, right] = one.operands[..] else { continue };
-            for (first, second) in [(left, right), (right, left)] {
-                // Both sides compares: a longer `&&` chain is branches already
-                // where a branch reads it, and a bool made of one and tested
-                // again is worse than the setcc chain (qcport menu -Os).
-                if !word_compare(context, function, first, word_bits) {
-                    continue;
-                }
-                let Some(compare) = defined_for(function, second, inst) else { continue };
-                let Some(Operand::Value(second_value)) = Some(second) else { continue };
-                if !word_compare(context, function, Operand::Value(second_value), word_bits) {
-                    continue;
-                }
-                let no = Operand::Constant(context.int(ty, 0));
-                let select = crate::backend::selectconstants::before(
-                    function,
-                    inst,
-                    Opcode::Select,
-                    ty,
-                    vec![first, second, no],
-                )?;
-                function.replace_all_uses_with(result, select);
-                function.erase(inst)?;
-                let Operand::Value(select_value) = select else { unreachable!("a select's value") };
-                let ValueDef::Instruction(select_inst) = function.value(select_value).def else { unreachable!() };
-                chains.push((select_inst, compare, false));
                 break;
             }
         }
