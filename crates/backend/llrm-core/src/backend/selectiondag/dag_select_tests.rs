@@ -88,7 +88,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let mut info = FunctionLoweringInfo::new(function);
     let mut out = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(&module, function, &layout, &target, &convention, &mut info, block)
+        let mut built = build_block(&module, function, &layout, &target, &machine, &convention, &mut info, block)
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
         let blocks = select_block(&mut built.dag, &tli, &selector, &mut hooks(), &Info, &ctx)
