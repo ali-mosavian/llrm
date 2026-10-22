@@ -106,6 +106,7 @@ impl Hooks for X86Lowering {
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             _ => None,
         }
@@ -295,6 +296,14 @@ fn lower_global_address(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue
         let delta = dag.get_constant(rest as u128, vt);
         dag.get_node(ISD::Add, vt, &[wrapped, delta])
     })
+}
+
+/// `LowerConstantPool`: `Wrapper (TargetConstantPool)`.
+fn lower_constant_pool(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+    let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
 }
 
 fn is_pow2(value: u128) -> bool {
