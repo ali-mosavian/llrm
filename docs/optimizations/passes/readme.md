@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 173 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 174 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -71,6 +71,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr_pass`](lsr_pass.md), while it rewrites a loop, and | [expand](expand.md) |
+| extload | One extending load for a narrow load and its extension: LLVM's DAGCombiner [`ExtendUsesToFormExtLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15365) and [`ExtendSetCCUses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15421), as the rewrite of MIR before isel. | Once per body, after `addresssink`, where the other passes that make the | [extload](extload.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
 | float2int | Floating-point arithmetic that only ever meets integers is done on integers, as LLVM's `Float2Int`. | As `float2int@1594`, in the late list after the second `simplifycfg` slot | [float2int](float2int.md) |
 | floatfold | Replaces floating values [`llrm_analysis::floatfacts`] proves exact by their constants, and applies the algebraic freedoms an operation's fast-math flags give. | Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's | [floatfold](floatfold.md) |
