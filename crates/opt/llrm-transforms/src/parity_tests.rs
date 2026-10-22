@@ -118,6 +118,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "fixupsetcc@5",
             "machinelicm@4",
             "flagscopy@5",
+            "fixupbw@14",
             "machinecse@4",
             "machinesink@4",
             "combiner@4",

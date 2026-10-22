@@ -1,6 +1,6 @@
 # LSR callees against the pin, same IR — w-3, 2026-10-22
 
-d_faces -O2, the module before LSR (`30-lcssa`); ours by callgrind of the whole compile on parity 209933e85, the pin's by `opt -passes=loop-reduce` on the same file (cold ScalarEvolution on both sides). Inclusive Ir.
+d_faces -O2 compiled WITHOUT `-fno-inline-functions` (the bench flag set has it: with it LSR is 19.2 M ours on the same tip and 12.84 M for the pin, 1.50x; w-5 on tip 911a555d8 measures 16.79 against 12.84, 1.31x, `--toggle-collect` on the pass in both). The table below is the no-flag input: ours by callgrind of the whole compile on parity 209933e85, the pin's by `opt -passes=loop-reduce` on the same module. Inclusive Ir. The ratios of the buckets stand; the totals depend on the input and the tip.
 
 | bucket | ours | pin | note |
 |---|--:|--:|---|
