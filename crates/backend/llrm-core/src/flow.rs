@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 9] = [
+const UNOPTIMIZED: [&str; 10] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -68,10 +68,11 @@ const UNOPTIMIZED: [&str; 9] = [
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "FixupSetCC",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 22] = [
+const SLOTS: [(&str, &str); 23] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -80,6 +81,7 @@ const SLOTS: [(&str, &str); 22] = [
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
+    ("FixupSetCC", "fixupsetcc@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
@@ -147,6 +149,9 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
+        // After the shrinking of live ranges: a `setcc` zero-extended is a
+        // zero made before the compare (the pin: X86FixupSetCC).
+        Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
