@@ -217,6 +217,7 @@ pub mod machinecp;
 pub mod machinecse;
 pub mod machinedce;
 pub mod machinelicm;
+pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
 pub mod nativeframe;
