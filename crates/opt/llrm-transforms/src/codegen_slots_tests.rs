@@ -481,7 +481,7 @@ const ROWS: &[Row] = &[
         Na,
         "",
         "",
-        "the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: for `alloca i8, i32 %n` on i486-linux its llc emits the rounded `sub esp` with no pseudo and no probe (a `probe-stack` function gets an inline probe loop, no frontend sets it); `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin",
+        "the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: exact check: `/opt/llrm-pin/bin/llc -mtriple=i486-unknown-linux-gnu -mcpu=i486 -mattr=-sse,-sse2,-mmx -O2 -filetype=asm -o - f.ll` (pin d1106deb71cc) on `define void @f(i32 %n) {%p = alloca i8, i32 %n, align 4  call void @use(ptr %p)  ret void}`: `addl $15; andl $-16; subl %eax, %ecx; movl %ecx, %esp`, no pseudo, no probe; `-print-after=x86-dyn-alloca-expander` shows no DYN_ALLOCA (a `probe-stack` function gets an inline probe loop, no frontend sets it); `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin",
     ),
     row(
         "Tile Register Pre-configure",
