@@ -829,7 +829,7 @@ fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
 /// The x87 operation on st(0) each float function is. One no x87
 /// instruction is -- `fatan`, `flog2`, `fexp2` -- a frontend's finalizer
 /// spells as the sequence that computes it.
-pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
+pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 10] = [
     (FloatFunction::Fabs, "fabs"),
     (FloatFunction::Sqrt, "fsqrt"),
     (FloatFunction::Rint, "frndint"),
@@ -838,6 +838,8 @@ pub(crate) const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
     (FloatFunction::Atan, "fatan"),
     (FloatFunction::Log2, "flog2"),
     (FloatFunction::Exp2, "fexp2"),
+    (FloatFunction::Log, "fln"),
+    (FloatFunction::Exp, "fexp"),
 ];
 
 /// The width of a float value in LIR: x87's extended precision.

@@ -276,13 +276,15 @@ pub struct ArgumentCheck {
     pub error: i64,
 }
 
-pub const ARGUMENT_CHECKS: [ArgumentCheck; 4] = [
+pub const ARGUMENT_CHECKS: [ArgumentCheck; 5] = [
     // exp2 of what EXP(x) and x ^ y feed it: the integer part of the
     // argument is a 16-bit INTEGER, so 32767.5 and up is Overflow
     // (EXP(22712.6) is INF, EXP(22712.8) is error 6; negative gives 0).
     ArgumentCheck { routine: "fexp2", range: Range::AtLeast, bound: "32767.5", error: 6 },
     // LOG(0), LOG(-0) and LOG of a negative: Illegal function call.
-    ArgumentCheck { routine: "flog2", range: Range::AtMost, bound: "0", error: 5 },
+    ArgumentCheck { routine: "fln", range: Range::AtMost, bound: "0", error: 5 },
+    // EXP(x) is exp2(x * log2(e)): the same 32767.5, as x.
+    ArgumentCheck { routine: "fexp", range: Range::AtLeast, bound: "22712.700238998008", error: 6 },
     // |x| above 2^31 (2147483648 is fine, 2147483648.5 is not).
     ArgumentCheck { routine: "fsin", range: Range::AbsAbove, bound: "2147483648", error: 5 },
     ArgumentCheck { routine: "fcos", range: Range::AbsAbove, bound: "2147483648", error: 5 },

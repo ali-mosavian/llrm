@@ -60,7 +60,7 @@ const _PLACES: [model::Op; 6] = [
     model::Op::LifetimeStart,
     model::Op::LifetimeEnd,
 ];
-const _FLOAT: [model::Op; 13] = [
+const _FLOAT: [model::Op; 15] = [
     model::Op::Fadd,
     model::Op::Fsub,
     model::Op::Fmul,
@@ -73,6 +73,8 @@ const _FLOAT: [model::Op; 13] = [
     model::Op::Fatan,
     model::Op::Flog2,
     model::Op::Fexp2,
+    model::Op::Fln,
+    model::Op::Fexp,
     model::Op::Fround,
 ];
 const _INTEGER: [model::Op; 19] = [
