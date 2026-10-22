@@ -94,7 +94,8 @@ def instructions(ir: str) -> int:
 def main(passes: list[str]) -> int:
     root = Path(os.environ.get("LLRM_ABLATE_IRS", Path.home() / "scratch/fa/pinir")).expanduser()
     irs = sorted(root.glob("*/01-globalopt.ll"))
-    of = pin.target("m32")
+    # LLRM_ABLATE_TARGET=m16 for the m16 stage IRs (QCport), LLRM_ABLATE_OPTSIZE=1 for -Os (the O2 list on optsize IR)
+    of = pin.target(os.environ.get("LLRM_ABLATE_TARGET", "m32"), optsize=bool(os.environ.get("LLRM_ABLATE_OPTSIZE")))
     full = show(tree([l for l in FIXTURE.read_text().splitlines() if not l.startswith(";")][-1]))
     base = {}
     for ir in irs:

@@ -59,8 +59,8 @@ built in my own worktree, HEAD == sha checked), objects identical (`tools/pairs/
 | C | Homes/Spares fetch accesses per candidate function (4), with w-6 | homes.rs, spares.rs | 11-09 |
 | D | shared solve (3), only if #3436 has not landed | alias.rs, manager.rs | after #3436 |
 
-Not in this plan: w-1's lever B (EarlyCSE, DSE and MemCpyOpt preserve MemorySSA, 11-04, their files); the Annotated cost of
-`ThroughMemory` while w-8's #3 deletes its caller.
+Not in this plan: w-1's lever B (EarlyCSE, DSE and MemCpyOpt preserve MemorySSA, 11-04, their files); `ThroughMemory`'s calls from
+Fold, which w-8's `_numbers` deletion (11-02) removes first.
 
 ## Risks
 
