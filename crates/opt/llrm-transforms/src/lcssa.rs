@@ -153,27 +153,33 @@ pub fn closed_in(
     function: &mut Function,
     shape: &cfg::Shape,
 ) -> Result<bool, String> {
-    let opened = _opened(function, shape)?;
-    Ok(formed_in(function, shape)? | opened)
+    // The edges leaving each loop, found once: closing adds phis, never edges.
+    let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
+    let opened = opened_with(function, shape, false, Some(&exits))?;
+    Ok(formed_with(function, shape, &exits)? | opened)
 }
 
 /// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
 /// is taken away, as `closed` does first for the phis no loop closes at.
 pub fn formed(function: &mut Function) -> Result<bool, String> {
-    formed_in(function, &cfg::Shape::of(function))
+    let shape = cfg::Shape::of(function);
+    let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
+    formed_with(function, &shape, &exits)
 }
 
-fn formed_in(
+fn formed_with(
     function: &mut Function,
     shape: &cfg::Shape,
+    exits: &[Vec<(i64, i64)>],
 ) -> Result<bool, String> {
     let mut changed = false;
     // Loops come inner first. Closing an inner loop first makes its exit
     // value an ordinary definition in an enclosing loop.
-    // The dominators of the body, found once for as long as no exit is merged.
-    let mut dominance = None;
-    for loop_ in &shape.loops {
-        changed |= _closed_loop(function, loop_, &mut dominance)?;
+    // The dominators and the graph, found once: closing adds phis, no block or
+    // edge.
+    let mut flow = lcssamerges::Flow::default();
+    for (loop_, exiting) in shape.loops.iter().zip(exits) {
+        changed |= _closed_loop(function, loop_, exiting, &mut flow)?;
     }
     Ok(changed)
 }
@@ -271,13 +277,6 @@ pub(crate) fn place_phi(
 
 /// Without the phis outside any loop exit that name one value: no loop
 /// closes there any longer (unrolled or peeled away), and each is a copy.
-fn _opened(
-    function: &mut Function,
-    shape: &cfg::Shape,
-) -> Result<bool, String> {
-    opened_in(function, shape, false)
-}
-
 /// Without the phis that name one value, those at loop exits too if
 /// `exits_too`.
 fn opened_in(
@@ -285,11 +284,26 @@ fn opened_in(
     shape: &cfg::Shape,
     exits_too: bool,
 ) -> Result<bool, String> {
+    opened_with(function, shape, exits_too, None)
+}
+
+/// [`opened_in`], the edges leaving each loop given where the caller has them.
+fn opened_with(
+    function: &mut Function,
+    shape: &cfg::Shape,
+    exits_too: bool,
+    leaving: Option<&[Vec<(i64, i64)>]>,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
     if !exits_too {
-        for loop_ in &shape.loops {
-            exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
+        match leaving {
+            Some(leaving) => exits.extend(leaving.iter().flatten().map(|&(_, to)| to)),
+            None => {
+                for loop_ in &shape.loops {
+                    exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
+                }
+            }
         }
     }
     let one = |function: &Function, phi: InstId| {
@@ -316,14 +330,14 @@ fn opened_in(
 pub fn _closed_loop(
     function: &mut Function,
     loop_: &Loop,
-    dominance: &mut Option<cfg::Dominance>,
+    exiting: &[(i64, i64)],
+    flow: &mut lcssamerges::Flow,
 ) -> Result<bool, String> {
-    let exiting = loop_.exits(function);
     let exits = exiting.iter().map(|&(_, target)| target).collect::<BTreeSet<_>>();
     if exits.len() > 1 {
-        *dominance = None;
-        return lcssamerges::closed(function, loop_);
+        return lcssamerges::closed(function, loop_, flow);
     }
+    let dominance = &mut flow.dominance;
     let Some(&exit_at) = exits.first() else {
         return Ok(false);
     };

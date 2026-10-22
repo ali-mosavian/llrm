@@ -564,6 +564,33 @@ pub fn operand(
         )
 }
 
+/// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
+/// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
+pub fn sums_into(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none()
+        && a.scale == 1
+        && a.offset == 0
+        && a.through != RegId::None
+        && a.index_through != RegId::None
+        && (a.through == d.register || a.index_through == d.register)
+}
+
+/// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
+/// (`optTwoAddrLEA`, case 2).
+pub fn steps_in_place(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none() && a.through == d.register && a.index_through == RegId::None
+}
+
 /// `r` is how the cell is reached.
 pub fn addresses(
     _cx: &Cx,

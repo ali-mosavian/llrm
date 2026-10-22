@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 9] = [
+const UNOPTIMIZED: [&str; 11] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -67,11 +67,13 @@ const UNOPTIMIZED: [&str; 9] = [
     "MachineSink",
     "MachineCSE",
     "OptimizePHIs",
+    "LateCleanup",
+    "FixupSetCC",
     "LiveRangeShrink",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 22] = [
+const SLOTS: [(&str, &str); 24] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -81,6 +83,7 @@ const SLOTS: [(&str, &str); 22] = [
     ("MachineSink", "machinesink@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
+    ("FixupSetCC", "fixupsetcc@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
@@ -90,6 +93,7 @@ const SLOTS: [(&str, &str); 22] = [
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
     ("Prologue", "prologue@13"),
+    ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
@@ -153,6 +157,9 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
+        // After the shrinking of live ranges: a `setcc` zero-extended is a
+        // zero made before the compare (the pin: X86FixupSetCC).
+        Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
@@ -168,7 +175,7 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress),
+        Box::new(twoaddr::TwoAddress { native: target.dword_address_form().is_some_and(|form| !form.secondary) }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
@@ -185,6 +192,9 @@ pub fn machine_with<'a>(
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
+        // After frame finalization, as the pin: a constant loaded again where
+        // the allocator or rematerialization left it.
+        Box::new(crate::backend::latecleanup::LateCleanup),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),
             target,
@@ -300,7 +310,7 @@ pub fn checked(
             &body,
             segments,
             classes,
-            &crate::backend::ssaspill::untouchable(&body),
+            &crate::backend::regclass::untouchable(&body),
         );
         let peak = found
             .iter()

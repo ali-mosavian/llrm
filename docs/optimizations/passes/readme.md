@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 179 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 181 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -18,6 +18,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | branchtocommon | A block that is only a comparison (and a few instructions that can run early) and a branch is folded into a predecessor that branches to it and to one of its successors: SimplifyCFG's `foldBranchToCommonDest`. |  | [branchtocommon](branchtocommon.md) |
 | calleepop | Callee-pops calling convention (LLVM's GlobalOpt giving an internal function a `fastcc`): an internal function all of whose callers are seen pops its own stack arguments. | A module pass, once, after the interprocedural step, `globaldce` and | [calleepop](calleepop.md) |
 | canonexit | A loop's exit compare of a zero-extended counter is made unsigned, and the extension is moved off the counter onto the invariant side. | Not wired in: [`crate::indvars`](indvars.md) will run `canonicalized` after the | [canonexit](canonexit.md) |
+| canonfreeze | LLVM's `CanonicalizeFreezeInLoops` (`canon-freeze`; CanonicalizeFreezeInLoops.cpp at `d1106deb71cc`): a freeze of an induction variable or of its step is pushed out of the loop, to the preheader. | In the strength slot, before `lsr` (the pin runs it with loop-reduce). | [canonfreeze](canonfreeze.md) |
 | canonical | Canonical forms, as LLVM's InstCombine puts them: compares with the constant on the right, no neutral terms, and a zero test at the width of what it tests, so that every later pass matches one shape of each. | Not a step of the fixed point on its own: `fold` runs `compares` and | [canonical](canonical.md) |
 | cfg | Control-flow cleanup: a block that jumps unconditionally to a block only it reaches takes that block's instructions (LLVM's SimplifyCFG `MergeBlockIntoPredecessor`). | A library function, called by `decide` after it decides branches and by | [cfg](cfg.md) |
 | combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `combine_pass::Combine`, the `combine@N` slots of LLVM's order. | [combine](combine.md) |
@@ -84,6 +85,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | gepoffset | Moves the constant an index adds into a `gep` of its own, where address modes take it as a displacement: `a[i + 8]` then needs no add, and no register for the sum, to reach its element. | Once, after the body fixed point and after `hoist`: a hoisted constant `gep` | [gepoffset](gepoffset.md) |
 | globaldce | Delete the module's own bodies and variables that nothing live names. | Once, as a program pass after the interprocedural step, so the bodies that | [globaldce](globaldce.md) |
 | globalopt | Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
+| globalsra | Split an internal variable into the pieces its loads read, then give a piece one function writes before it reads to that function as a stack slot: LLVM's `SRAGlobal` and the localizing branch of `processInternalGlobal` (GlobalOpt.cpp, d1106deb71cc). | A stage of the interprocedural step, `globalsra.`, after the bodies are | [globalsra](globalsra.md) |
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. |  | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |

@@ -314,6 +314,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // interprocedural step):
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
+    // Runs in the strength slot, before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
+    entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
@@ -346,6 +348,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Old,
         "lir-cleanup-poc",
     ),
+    entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
@@ -364,6 +367,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     ),
     entry("parcopy@12", Backend, "phi-node-elimination copies, virtregrewriter", Old, ""),
     entry("prologue@13", Backend, "prologepilog", Old, ""),
+    entry("latecleanup@13", Backend, "machine-latecleanup (MachineLateInstrsCleanup.cpp)", Translated, ""),
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),

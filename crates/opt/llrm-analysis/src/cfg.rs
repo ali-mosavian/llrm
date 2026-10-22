@@ -251,6 +251,7 @@ impl Around for Loop {
         &self,
         function: &Function,
     ) -> Vec<(i64, i64)> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LoopExitScans);
         self.body
             .iter()
             .flat_map(|&from| successors_of(function, from).into_iter().map(move |to| (from, to)))

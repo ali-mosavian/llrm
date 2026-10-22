@@ -102,7 +102,7 @@
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
-//! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -466,7 +466,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -1093,7 +1093,10 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
-                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                // The stage that only retargets loads and stores of globals
+                // keeps GlobalsAA past its bodies, as the walk's runs do.
+                rerun(module, analyses, id, &mut again, stage == "globalsra.")
+                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1204,6 +1207,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
         passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin runs canon-freeze with loop-reduce, before it.
+        passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
