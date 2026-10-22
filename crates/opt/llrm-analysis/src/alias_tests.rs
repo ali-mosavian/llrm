@@ -1689,6 +1689,55 @@ fn an_effect_of_the_unknown_covers_a_fresh_slice_of_an_escaped_object_and_not_th
     );
 }
 
+/// A fresh run of a call states a slice of a global the program took the
+/// address of where the kept effect has what a callee may reach (`Nonlocal`),
+/// whole: that reaches every escaped object, a frame one aside, as
+/// `objects_may_alias` says. `covers` took the global for a new read, and
+/// `LLRM_CHECK_REPLAY` stopped arrprm.bas at -O1 and -O2 (m16) once -O1 inlined:
+/// 'call-effects: the result kept past 4 sound edits contradicts what deriving
+/// it afresh gives' (no object changed: the kept effect was the less precise,
+/// both sound).
+#[test]
+fn an_effect_of_what_a_callee_reaches_covers_a_fresh_slice_of_an_escaped_global() {
+    let escaped = MemoryObject {
+        identity: Some(Identity::Global(4)),
+        extent: Some(8),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let private = MemoryObject {
+        identity: Some(Identity::Global(5)),
+        extent: Some(8),
+        captured: false,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let frame = MemoryObject {
+        identity: Some(Identity::Value(9)),
+        extent: Some(4),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Frame)
+    };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let nonlocal = reference(Provenance::one(ObjectRef::NONLOCAL));
+    assert!(
+        effect(vec![nonlocal.clone()]).covers(&effect(vec![nonlocal.clone(), reference(one(&escaped, 0, 8))])),
+        "a callee's reach includes an escaped global"
+    );
+    assert!(
+        !effect(vec![nonlocal.clone()]).covers(&effect(vec![reference(one(&private, 0, 8))])),
+        "not a global whose address never escaped"
+    );
+    assert!(
+        !effect(vec![nonlocal]).covers(&effect(vec![reference(one(&frame, 0, 4))])),
+        "not a frame object, escaped or not"
+    );
+}
+
 /// A summary stands for the bytes its slices name. A fresh read of two bytes
 /// at offset 2 of a 7-byte global lies in a kept read of its bytes [0, 7), and
 /// a two-byte read starting anywhere in [0, 7) names the object's last byte
