@@ -522,6 +522,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "globalsmodref.rs (funcattrs-port, #2636), caching on top (parity-pipeline)",
     ),
     old_analysis(
+        "forged-selectors",
+        "ForgedSelectors",
+        "none",
+        "none: DEVIATE or delete candidate (a data-segment pointer forged from an integer is a real-mode fact; globals-aa reads it)",
+    ),
+    old_analysis(
         "summaries",
         "Summaries",
         "FunctionAttrs memory effects + GlobalsModRef FunctionInfo",
