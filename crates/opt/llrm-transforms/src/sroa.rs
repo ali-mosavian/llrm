@@ -22,7 +22,13 @@
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
-//!   L6066): an alloca a `Declare` names is left alone.
+//!   L6066): an alloca a `Declare` names is processed like any other, so `-g`
+//!   does not change the code. One that SROA splits loses its `Declare` with
+//!   the alloca (the variable is reported dropped), where LLVM migrates it to
+//!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
+//!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
+//!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
+//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
@@ -1242,28 +1248,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.context
     }
 
-    /// The allocas a debug record names (DEVIATE: left alone).
-    /// DEVIATE: `findDVRDeclares` (SROA.cpp#L6160) is not migrated; the alloca
-    /// stays.
-    fn declared_allocas(&self) -> llrm_mir::dense::IdSet<InstId> {
-        self.function()
-            .debug_records()
-            .iter()
-            .filter_map(|one| match one.what {
-                llrm_mir::DebugWhat::Declare(Operand::Value(value)) => Some(value),
-                _ => None,
-            })
-            .filter_map(|value| match self.function().value(value).def {
-                llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// `SROA::runSROA`. SROA.cpp#L6430
     fn run_sroa(&mut self) -> bool {
         let Some(entry) = self.function().entry() else { return false };
-        let declared = self.declared_allocas();
         let allocas: Vec<InstId> = self
             .function()
             .iter_block(entry)
@@ -1271,7 +1258,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(inst).opcode,
                 Opcode::Alloca { .. }
             ))
-            .filter(|inst| !declared.contains(inst))
             .collect();
         for inst in allocas {
             self.worklist.push(inst);
