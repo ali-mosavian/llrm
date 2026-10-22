@@ -48,7 +48,8 @@ impl Spiller for SimpleSpiller {
         reg: u32,
         new_vregs: &mut Vec<u32>,
     ) {
-        let SpillContext { lis, vrm, vrai } = ctx;
+        let SpillContext { lis, matrix, vrai, .. } = ctx;
+        let vrm = &mut matrix.vrm;
         // The instructions that name the register, once each.
         let mut instrs: Vec<(InstrKey, bool, bool)> = Vec::new();
         for operand in lis.operands(reg).to_vec() {

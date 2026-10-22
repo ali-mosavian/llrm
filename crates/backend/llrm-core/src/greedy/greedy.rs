@@ -333,8 +333,11 @@ pub trait GreedyEnv: SpillWeightEnv {
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
 pub struct SpillContext<'a, 'b> {
     pub lis: &'a mut LiveIntervals,
-    pub vrm: &'a mut VirtRegMap,
+    pub matrix: &'a mut LiveRegMatrix,
     pub vrai: &'a mut VirtRegAuxInfo<'b>,
+    /// Assigned registers whose range the spill shrank
+    /// (`LRE_WillShrinkVirtReg`): unassigned, to be queued again.
+    pub shrunk: &'a mut Vec<u32>,
 }
 
 /// `Spiller` (Spiller.h): rewrites the uses and defs of a virtual register
@@ -1005,9 +1008,11 @@ impl<'a> RAGreedy<'a> {
         }
         // Finally spill VirtReg itself.
         let mut spilled: Vec<u32> = Vec::new();
+        let mut shrunk: Vec<u32> = Vec::new();
         {
             let mut vrai = VirtRegAuxInfo::new(self.env, &self.original);
-            let ctx = SpillContext { lis: &mut self.lis, vrm: &mut self.matrix.vrm, vrai: &mut vrai };
+            let ctx =
+                SpillContext { lis: &mut self.lis, matrix: &mut self.matrix, vrai: &mut vrai, shrunk: &mut shrunk };
             self.spiller.spill(ctx, virt.reg(), &mut spilled);
             for (reg, hints) in vrai.hints {
                 self.hints.insert(reg, hints);
@@ -1016,6 +1021,7 @@ impl<'a> RAGreedy<'a> {
         self.stats.spilled_ranges += 1;
         self.extra.set_stage_all(&spilled, LiveRangeStage::Done);
         new_vregs.extend(spilled);
+        new_vregs.extend(shrunk);
         // The live virtual register requesting allocation was spilled, so tell
         // the caller not to allocate anything during this round.
         Select::None
