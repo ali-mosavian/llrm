@@ -20,13 +20,9 @@
 //!   `BinomialCoefficient` computes at `W + T` bits (`T` the factors of two in
 //!   `K!`, plus one), and `Ap` holds 128: past that the coefficient is
 //!   CouldNotCompute.
-//! - D-T2 (temporary,
-//!   [#2326](https://github.com/ali-mosavian/llrm/issues/2326)): quadratic
-//!   recurrences. `SolveQuadraticAddRecExact` and
-//!   `SolveQuadraticAddRecRange` need `SolveQuadraticEquationWrap` over
-//!   integers three times as wide as the coefficients, which `Ap` does not
-//!   hold. A quadratic recurrence's count is CouldNotCompute, as LLVM's is
-//!   where its solver finds no root.
+//! - Quadratic recurrences (`quadratic.rs`, DEVIATE Q1): coefficients up to 41
+//!   bits; wider, the count is CouldNotCompute, as LLVM's is where its solver
+//!   finds no root.
 //!
 //! # Example
 //! `{0,+,1} < %n` is taken `(-1 + %n)` times.
@@ -334,8 +330,15 @@ impl ScalarEvolution {
         }
 
         // If this is a quadratic (3-term) AddRec {L,+,M,+,N}, find the roots
-        // of the quadratic equation to solve it (D-T2: not translated).
+        // of the quadratic equation to solve it.
         if self.is_quadratic(add_rec) && self.type_of(add_rec).is_integer() {
+            // We can only use this value if the chrec ends up with an exact
+            // zero value at this index. When solving for "X*X != 5", for
+            // example, we should not accept a root of 2.
+            if let Some((root, width)) = self.solve_quadratic_add_rec_exact(cx, add_rec) {
+                let r = self.get_constant(Ap::new(width, root as u128));
+                return ExitLimit::new(self, r, r, r, false);
+            }
             return ExitLimit::could_not_compute(self);
         }
 
@@ -1443,7 +1446,118 @@ impl ScalarEvolution {
             return exit_value;
         }
 
-        // D-T2: a quadratic recurrence's iterations in range are not solved.
+        if operands.len() == 3
+            && let Some((x, width)) = self.solve_quadratic_add_rec_range(cx, add_rec, range)
+        {
+            return self.get_constant(Ap::new(width, x as u128));
+        }
+
         self.get_could_not_compute()
+    }
+
+    /// `evaluateAtIteration` of `add_rec` at the constant `x` (of `width`
+    /// bits), as a number, if it folds to one.
+    fn evaluate_chrec_at_constant(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+        x: i128,
+        width: u32,
+    ) -> Option<Ap> {
+        let it = self.get_constant(Ap::new(width, x as u128));
+        let value = self.evaluate_at_iteration(cx, add_rec, it);
+        self.as_constant(value)
+    }
+
+    /// `GetQuadraticEquation` of `{L,+,M,+,N}`: the equation, the multiplier
+    /// and the coefficients' bit width, if all are constants.
+    fn quadratic_equation_of(
+        &self,
+        cx: &Cx,
+        add_rec: Scev,
+    ) -> Option<(i128, i128, i128, i128, u32)> {
+        let operands = self.operands(add_rec);
+        let (l, m, n) = (
+            self.as_constant(operands[0].scev)?,
+            self.as_constant(operands[1].scev)?,
+            self.as_constant(operands[2].scev)?,
+        );
+        let bit_width = l.width;
+        let _ = cx;
+        let (a, b, c, t) = super::quadratic::quadratic_equation(l.sext_value(), m.sext_value(), n.sext_value(), bit_width)?;
+        Some((a, b, c, t, bit_width))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10603
+    /// `SolveQuadraticAddRecExact`: the least `n >= 0` at which the quadratic
+    /// recurrence is exactly zero, with the width of the solution.
+    fn solve_quadratic_add_rec_exact(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+    ) -> Option<(i128, u32)> {
+        let (a, b, c, _, bit_width) = self.quadratic_equation_of(cx, add_rec)?;
+        let (x, width) = super::quadratic::solve_quadratic_equation_wrap(a, b, c, bit_width + 1, bit_width + 1)?;
+        let value = self.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
+        if !value.is_zero() {
+            return None;
+        }
+        super::quadratic::trunc_if_possible(Some((x, width)), bit_width)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10636
+    /// `SolveQuadraticAddRecRange`: the least `n` at which the quadratic
+    /// recurrence `{0,+,M,+,N}` leaves `range` while `n - 1` is in it.
+    fn solve_quadratic_add_rec_range(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+        range: &ConstantRange,
+    ) -> Option<(i128, u32)> {
+        use super::quadratic::{min_optional, solve_quadratic_equation_wrap as solve, trunc_if_possible};
+        let (a, b, _, m, bit_width) = self.quadratic_equation_of(cx, add_rec)?;
+
+        // The solution is "unknown" (no answer yet) or known, possibly absent.
+        let mut solve_for_boundary = |this: &mut Self, bound: i128| -> (Option<(i128, u32)>, bool) {
+            // The quadratic equation's multiplier.
+            let Some(bound) = bound.checked_mul(m) else { return (None, false) };
+            // Signed overflow and unsigned overflow: pick the lower solution.
+            let so = if bit_width > 1 { solve(a, b, -bound, bit_width + 1, bit_width) } else { None };
+            let uo = solve(a, b, -bound, bit_width + 1, bit_width + 1);
+            let mut leaves_range = |this: &mut Self, (x, width): (i128, u32)| -> Option<bool> {
+                let v0 = this.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
+                if range.contains(v0.bits) {
+                    return Some(false);
+                }
+                // X should be at least 1, so X-1 is non-negative.
+                let v1 = this.evaluate_chrec_at_constant(cx, add_rec, x - 1, width)?;
+                Some(range.contains(v1.bits))
+            };
+            // No solution found does not mean none exists.
+            let (Some(so), Some(uo)) = (so, uo) else { return (None, false) };
+            // Check the smaller value first to see if it leaves the range.
+            let min = min_optional(Some(so), Some(uo)).expect("both exist");
+            if leaves_range(this, min) == Some(true) {
+                return (Some(min), true);
+            }
+            let max = if min == so { uo } else { so };
+            if leaves_range(this, max) == Some(true) {
+                return (Some(max), true);
+            }
+            // Solutions were found, but were eliminated.
+            (None, true)
+        };
+
+        // The lower bound is inclusive: subtract 1 to represent the exiting
+        // value.
+        let lower = Ap::new(bit_width, range.lower).sext_value() - 1;
+        let upper = Ap::new(bit_width, range.upper).sext_value();
+        let (sl, sl_known) = solve_for_boundary(self, lower);
+        let (su, su_known) = solve_for_boundary(self, upper);
+        // If any of the solutions was unknown, no meaningful conclusion.
+        if !sl_known || !su_known {
+            return None;
+        }
+        trunc_if_possible(min_optional(sl, su), bit_width)
     }
 }

@@ -61,6 +61,7 @@ pub mod lcssa_form;
 pub mod minmax;
 pub mod normalize;
 pub mod pattern;
+pub mod quadratic;
 pub mod poison;
 pub mod predicate;
 pub mod print;
