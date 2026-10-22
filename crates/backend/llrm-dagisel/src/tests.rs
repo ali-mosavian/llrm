@@ -1407,3 +1407,39 @@ mod mul_lohi {
         assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
     }
 }
+
+mod llrm_intrinsics {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES};
+    use crate::x86_select::select_node;
+
+    /// No pattern covers `X86ISD::LLRM_ASM`: it was `CannotSelect` and stopped
+    /// every function that holds an `llrm.ia16.asm` call.
+    #[test]
+    fn an_asm_node_becomes_the_pseudo_with_its_operands() {
+        for opcode in LLRM_NODES {
+            let mut dag = TestDag::new();
+            let chain = dag.entry_node();
+            let reg = dag.input(1, mvt::i16);
+            let node = dag.node(opcode, &[mvt::Other, mvt::Glue], &[chain, reg]);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::M16,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                address_mode: crate::x86_addr::AddrMode::Real16,
+            });
+
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+            let n = &dag.nodes[node as usize];
+            assert_eq!(
+                (n.machine, n.ops.clone(), n.vts.clone()),
+                (Some(LLRM_ASM_OPCODE), vec![chain, reg], vec![mvt::Other, mvt::Glue])
+            );
+        }
+    }
+}

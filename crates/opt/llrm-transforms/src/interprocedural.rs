@@ -801,8 +801,11 @@ pub fn optimized_with<E: From<String>>(
     }
     // What its callers pass bounds each parameter of a body only they call:
     // stated as a range, which the body's own proofs then read.
+    // A calling body is solved again only where it, its own parameters or the
+    // module's facts moved since: the rounds share the solves.
+    let mut solves = llrm_analysis::parameter_ranges::Cache::default();
     for round in 0..if ranges { 4 } else { 0 } {
-        let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
+        let stamped = llrm_analysis::parameter_ranges::stamp_with(program, &unexported, &mut solves);
         if stamped.is_empty() {
             break;
         }

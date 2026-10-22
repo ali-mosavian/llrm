@@ -27,7 +27,7 @@ fn copy(
     src: u32,
 ) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(dst)],
         sources: vec![held(src)],
         ..Semantics::new(Operation::Move)
@@ -38,7 +38,7 @@ fn copy(
 /// A definition of `v` from nothing: not a copy.
 fn def(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width: 4, address: None })],
         ..Semantics::new(Operation::Move)
@@ -50,7 +50,7 @@ fn def(v: u32) -> Arc<Insn> {
 /// make again.
 fn load(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
         ..Semantics::new(Operation::Move)
@@ -304,7 +304,7 @@ fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
     let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(3)],
         sources: vec![Loc::Mem(memory)],
         ..Semantics::new(Operation::Move)
@@ -364,7 +364,7 @@ fn swap_loop() -> LirBody {
     };
     let step = {
         let what = Semantics {
-            name: Some("idiv".to_owned()),
+            name: Some("idiv".into()),
             dests: vec![held(t)],
             sources: vec![held(a), held(b)],
             ..Semantics::new(Operation::Binary)
@@ -372,7 +372,7 @@ fn swap_loop() -> LirBody {
         Arc::new(Insn::new(0, None, Some(what), vec![t], vec![a, b]))
     };
     let branch = {
-        let what = Semantics { name: Some("jne".to_owned()), target: Some(1), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(1), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
     };
     body_of(vec![
@@ -417,7 +417,7 @@ fn body_of(blocks: Vec<LirBlock>) -> LirBody {
 }
 
 fn jump(target: i64) -> Arc<Insn> {
-    let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+    let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
     Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
 }
 
@@ -600,7 +600,7 @@ fn test_a_copy_at_a_loop_entry_that_the_latch_reverses_moves_to_the_preheader() 
 /// A store of a register to memory, the other half of a spill: not a copy.
 fn store(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
         sources: vec![held(v)],
         ..Semantics::new(Operation::Move)
@@ -630,7 +630,7 @@ fn test_a_store_of_a_register_is_no_left_copy() {
 fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
     let (b0, a2, tie, copy_back) = (load(2), load(3), copy(1, 3), copy(2, 1));
     let what = Semantics {
-        name: Some("add".to_owned()),
+        name: Some("add".into()),
         dests: vec![held(1)],
         sources: vec![held(1), held(2)],
         ..Semantics::new(Operation::Binary)

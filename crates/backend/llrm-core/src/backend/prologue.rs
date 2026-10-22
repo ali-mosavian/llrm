@@ -324,7 +324,7 @@ fn _adjust(
         beside.at,
         Some((at, at)),
         Some(Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![sp.clone()],
             sources: vec![sp, Loc::Imm(Imm { value: by.abs(), width: 2, address: None })],
             ..Semantics::new(Operation::Binary)
@@ -374,7 +374,7 @@ mod tests {
         Insn::new(
             at,
             Some((at, at + 1)),
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }),
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }),
             vec![],
             vec![],
         )
@@ -410,8 +410,11 @@ mod tests {
         let mut slots = Frame::new(-16);
         slots.slot(1_i64, 2).unwrap();
         let result = reserved(&body, &slots, Some(&runtime())).unwrap();
-        let names: Vec<_> =
-            result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect();
+        let names: Vec<_> = result.blocks[0]
+            .insns
+            .iter()
+            .map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap())
+            .collect();
         assert_eq!(names, ["mov", "call", "sub", "add", "call", "retf"]);
     }
 

@@ -284,7 +284,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -315,7 +315,11 @@ mod tests {
         let classes = RegisterClasses::m16();
         let done = hoisted(&body, &classes);
         let names = |at: usize| -> Vec<String> {
-            done.blocks[at].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);

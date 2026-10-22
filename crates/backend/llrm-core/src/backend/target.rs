@@ -596,7 +596,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     /// `add ax,[c]` is ax at two moments, not two places.
@@ -878,7 +878,7 @@ mod tests {
     ) -> Semantics {
         let low = Loc::Reg(ir::Reg { register: RegId::EAX, width: 4 });
         Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![low.clone()],
             sources: vec![low, Loc::Reg(ir::Reg { register: RegId::EDX, width: 4 }), count],
             ..Semantics::new(Operation::Funnel)
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn test_a_signed_word_extension_pins_no_register() {
         let what = Semantics {
-            name: Some("movsx".to_owned()),
+            name: Some("movsx".into()),
             dests: vec![rg(RegId::EBX, 4)],
             sources: vec![rg(RegId::SI, 2)],
             ..Semantics::new(Operation::Extend)

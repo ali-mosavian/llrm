@@ -362,12 +362,7 @@ fn _move(
     into: Loc,
     out_of: Loc,
 ) -> Semantics {
-    Semantics {
-        name: Some("mov".to_owned()),
-        dests: vec![into],
-        sources: vec![out_of],
-        ..Semantics::new(Operation::Move)
-    }
+    Semantics { name: Some("mov".into()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
 }
 
 /// Whether `what` writes the register of its first source: x86's two-address
@@ -505,7 +500,7 @@ mod tests {
 
     fn addition(name: &str) -> Insn {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![held(3, 4)],
             sources: vec![held(1, 4), held(2, 4)],
             ..Semantics::new(Operation::Binary)
@@ -526,7 +521,7 @@ mod tests {
         value: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(value, 4)],
             sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
@@ -560,7 +555,7 @@ mod tests {
         second: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(into, 4)],
             sources: vec![held(first, 4), held(second, 4)],
             ..Semantics::new(Operation::Binary)
@@ -605,7 +600,7 @@ mod tests {
         use llrm_lir::registers::RegId;
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
-                name: Some("add".to_owned()),
+                name: Some("add".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(first, 4), held(second, 4)],
                 ..Semantics::new(Operation::Binary)
@@ -613,7 +608,7 @@ mod tests {
             Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
         };
         let nothing = |at: i64| {
-            let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
             Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         };
         let mut arrival = nothing(0);
@@ -686,7 +681,7 @@ mod tests {
     #[test]
     fn test_funnel_shift_copies_its_low_source_into_the_destructive_destination() {
         let what = Semantics {
-            name: Some("shrd".to_owned()),
+            name: Some("shrd".into()),
             dests: vec![held(3, 4)],
             sources: vec![held(1, 4), held(2, 4), Loc::Imm(Imm { value: 9, width: 1, address: None })],
             ..Semantics::new(Operation::Funnel)
@@ -707,7 +702,7 @@ mod tests {
     #[test]
     fn test_an_update_copied_back_is_made_in_place() {
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let add = Insn::new(
             0,
@@ -754,7 +749,7 @@ mod tests {
     #[test]
     fn test_an_update_whose_old_value_is_still_copied_is_not_made_in_place() {
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let add = Insn::new(
             0,
@@ -858,7 +853,7 @@ mod tests {
         from: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(into, 4)],
             sources: vec![held(from, 4)],
             ..Semantics::new(Operation::Move)
@@ -905,7 +900,7 @@ mod tests {
         name: &str,
     ) -> Vec<Arc<Insn>> {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![held(8, 4)],
             sources: vec![held(7, 4), Loc::Imm(Imm { value: step, width: 4, address: None })],
             ..Semantics::new(Operation::Binary)
@@ -915,7 +910,7 @@ mod tests {
     }
 
     fn names_of(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     fn of(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -1010,7 +1005,7 @@ mod tests {
         use crate::model::ir::Mem;
         let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
         let what = Semantics {
-            name: Some("lea".to_owned()),
+            name: Some("lea".into()),
             dests: vec![held(into, 4)],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Address)
@@ -1048,7 +1043,7 @@ mod tests {
             position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2
         );
         let call = {
-            let what = Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) };
+            let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
             Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![], vec![]))
         };
         let blocked = vec![imm_def(0, 7), add(), call, lea_of(3, 5, 7), read(4, 8), read(5, 5)];
@@ -1088,7 +1083,7 @@ mod tests {
         flags_live[2] = Arc::new(Insn::new(
             2,
             Some((2, 2)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         ));
@@ -1115,7 +1110,7 @@ mod tests {
     fn test_two_address_materializes_a_constant_first_operand() {
         let (result, source) = (held(900, 2), held(901, 2));
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![result.clone()],
             sources: vec![imm(21, 2), source.clone()],
             ..Semantics::new(Operation::Binary)
@@ -1133,7 +1128,7 @@ mod tests {
     fn test_two_address_multiply_preserves_its_first_factor() {
         let (result, first, second) = (held(900, 2), held(901, 2), held(902, 2));
         let what = Semantics {
-            name: Some("imul".to_owned()),
+            name: Some("imul".into()),
             dests: vec![result.clone()],
             sources: vec![first.clone(), second.clone()],
             ..Semantics::new(Operation::Multiply)
@@ -1150,7 +1145,7 @@ mod tests {
     fn test_two_address_copy_ends_the_original_source_use() {
         let (result, source) = (held(900, 2), held(901, 2));
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![result],
             sources: vec![source, imm(21, 2)],
             ..Semantics::new(Operation::Binary)
@@ -1169,7 +1164,7 @@ mod tests {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
-                name: Some("add".to_owned()),
+                name: Some("add".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(first, 4), held(second, 4)],
                 ..Semantics::new(Operation::Binary)
@@ -1178,7 +1173,7 @@ mod tests {
         };
         let copy = |at: i64, into: u32, from: u32| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(from, 4)],
                 ..Semantics::new(Operation::Move)
@@ -1194,7 +1189,8 @@ mod tests {
         );
         let before = crate::backend::allocate::live_rows_walks(&input);
         let got = tied(&input, Default::default());
-        let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        let names: Vec<_> =
+            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
         // The pin shares one LiveIntervals with the coalescer; here the kills
