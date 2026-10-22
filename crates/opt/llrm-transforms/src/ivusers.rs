@@ -20,7 +20,10 @@
 //! DEVIATE IU1: users of a value are visited in descending program order, not
 //! use-list order. Use-list order is edit history; the pin's order on parsed
 //! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. Exit: use lists keep LLVM's order. Owner: w-5. Review: 2026-11-19.
+//! choice. Cost (IU1-COST): one program-order map per loop, 26 builds and 1.21 M
+//! instructions on d_faces -O2, where the pin has no map; no per-function cache
+//! (it would go stale across edits). Exit: use lists keep LLVM's order. Owner:
+//! w-5. Review: 2026-11-19.
 //!
 //! DEVIATE: whether an instruction is safe to speculate and whether it is
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
