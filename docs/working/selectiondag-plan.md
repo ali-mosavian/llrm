@@ -159,8 +159,10 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
 | SD20 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD21 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
+| SD22 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
 
-Next free: **SD21**.
+Next free: **SD23**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
