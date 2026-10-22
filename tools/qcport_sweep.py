@@ -99,7 +99,9 @@ def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
     found = {tomllib.loads(path.read_text())["mode"] for path in (root / "crates/target").glob("*/src/machines/datalayout.toml")}
     machines = [f"-m{mode}" for mode in sorted(found & set(FRONT_END_MODES))]
     benches = [(tool, root / f"bench/bintree/bintree.{ext}", machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in machines for level in LEVELS]
-    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")]
+    # Borland's call-boundary fixtures (C): an `interrupt` handler with nine register parameters was refused for four days (#2936) because nothing compiled it outside a lib test.
+    callconv = [("llrm-c", source, "-m16", level) for source in sorted((root / "tests/fixtures/callconv/c").glob("*.c")) for level in ("-O1", "-O2")]
+    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")] + callconv
 
 
 # A refusal the compiler states as policy: a program that needs a second address space is not compiled for the flat target.
