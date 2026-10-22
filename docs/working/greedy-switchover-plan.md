@@ -34,9 +34,10 @@ Source: grep of calls from outside each module (non-test), crates/backend/llrm-c
 ## Plan of record (each its own PR, fail-first test, rows pricing; switch-over first, tuning after)
 
 1. 10-26. Relocate the helpers (`_copy`, `_next_value`, `ssaspill::floating/untouchable`, `_encodable`, `remade_values`) with their callers; behaviour identical (objects identical on the objsweep and QCport). Small, mechanical.
-2. 10-29. Spill emission into greedy/tii (`_store`, `_reload`, `_in_place`): the pin's `insertSpill`/`insertReload`/`foldMemoryOperand` shape; objects identical or numbered.
-3. 10-30. Rounds -> ladder for the 7 functions.
-4. 11-02. Delete `rewritten`, the rounds loop, `spilled_from`, backend/splitkit.rs, backend/ssaspill.rs remainder, spiller.rs, coalesce.rs remainder (the last two after w-1's TwoAddress translation), in one PR with `Deletes:`.
+2. 10-28. `recompute_class` (the pin's `calculateRegClassAndHint` -> `recomputeRegClass`, InlineSpiller.cpp#L1383, LiveRangeEdit.cpp#L426, SplitKit.cpp#L628) for spill- and split-created values, over `regclass::collected`, respecting the m16 base/index two-colouring; test: the 7 functions allocate in one greedy pass, no rounds, and a unit test of the recompute on the stored-word shape.
+3. 10-30. Spill emission into greedy/tii (`_store`, `_reload`, `_in_place`): the pin's `insertSpill`/`insertReload`/`foldMemoryOperand` shape; objects identical or numbered.
+4. 10-31. Ladder for what is left of the rounds.
+5. 11-03. Delete `rewritten`, the rounds loop, `spilled_from`, backend/splitkit.rs, backend/ssaspill.rs remainder, spiller.rs, coalesce.rs remainder (the last two after w-1's TwoAddress translation), in one PR with `Deletes:`.
 
 Not measured: line counts of what is dead inside spiller.rs (its tests are most of the 7.7 K); the call-site count of `Insn::copy_of`-style relocation beyond the grep above.
 
