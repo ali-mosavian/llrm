@@ -658,7 +658,7 @@ const ROWS: &[Row] = &[
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
         Deviate,
-        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, not yet called: FO-1)",
+        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, FO-1) and framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate), not yet called: CG7",
         "",
         "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
