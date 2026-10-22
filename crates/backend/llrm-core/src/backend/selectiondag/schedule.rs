@@ -28,7 +28,7 @@
 //! Nothing runs it yet: the emitter (D1b) takes [`schedule`]'s units. The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
 //!
-//! DEVIATE SD21: not translated yet: physical-register live interference
+//! DEVIATE SD30: not translated yet: physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `BacktrackBottomUp`, `CopyAndMoveSuccessors`,
 //! the call-frame resource), `ClusterNodes`, and the virtual-register cycle
 //! check (`initVRegCycle`, only for blocks that branch to themselves).
@@ -38,7 +38,7 @@
 //! is the pin's. Exit: D1c, before the switch gate. Owner: sdag-d. Review
 //! 2026-12-03.
 //!
-//! DEVIATE SD22: no IR order (`SDNode::getIROrder`), so the call-ordering tie
+//! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
 //! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
 //! Exit: with the emitter, if line information needs them. Owner: sdag-d.
 //! Review 2026-12-03.
@@ -916,7 +916,7 @@ impl Queue {
                 continue;
             }
             // A call-frame setup among the chain predecessors keeps the unit
-            // where it is. The setup opcode is the target's (SD21).
+            // where it is. The setup opcode is the target's (SD30).
             let Some(pred) = graph.sus[su].preds.iter().find(|p| !p.is_ctrl()).map(|p| p.su) else { continue };
             if graph.sus[pred].has_phys_reg_defs || graph.sus[pred].num_succs == 1 {
                 continue;
@@ -1082,7 +1082,7 @@ impl Queue {
         if l_priority != r_priority {
             return l_priority > r_priority;
         }
-        // The call-ordering tie break reads the IR order (SD22).
+        // The call-ordering tie break reads the IR order (SD31).
         let (l_dist, r_dist) = (graph.closest_succ(left), graph.closest_succ(right));
         if l_dist != r_dist {
             return l_dist < r_dist;
@@ -1097,7 +1097,7 @@ impl Queue {
         }
         if !(graph.sus[left].is_call || graph.sus[right].is_call) {
             // BUCompareLatency(checkPref = false), without a virtual-register
-            // cycle (SD21) or a hazard recognizer.
+            // cycle (SD30) or a hazard recognizer.
             let (l_height, r_height) = (graph.height(left), graph.height(right));
             let cycle = graph.cur_cycle;
             let (l_stall, r_stall) = (cycle < l_height, cycle < r_height);
