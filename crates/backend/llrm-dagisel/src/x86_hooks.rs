@@ -23,7 +23,7 @@ use crate::dag::{Hooks, PatternContext, SDValue};
 use crate::generated::ids::{isd, mvt, x86isd};
 use crate::generated::{x86_i486, x86_p5};
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, Matcher};
+use crate::x86_addr::{AddrDag, AddrMode, Matcher};
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +43,15 @@ pub struct Options {
     pub min_size: bool,
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     pub has_frame_pointer: bool,
+    /// The address forms the target has (SD3).
+    pub address_mode: AddrMode,
+}
+
+impl Options {
+    /// `TLI->getPointerTy`: a word near pointer in real mode.
+    pub fn pointer_type(&self) -> Vt {
+        if self.address_mode == AddrMode::Real16 { mvt::i16 } else { mvt::i32 }
+    }
 }
 
 pub struct X86Hooks {
@@ -213,7 +222,7 @@ impl X86Hooks {
             return None;
         }
         let ptr = dag.operand(n.node, 1);
-        Matcher { dag, pointer_type: mvt::i32 }.select_addr(ptr)
+        Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }.select_addr(ptr)
     }
 
     /// `hasNoCarryFlagUses` ([L3650][carry]); SD36.
@@ -263,7 +272,7 @@ fn find_non_imm_use<D: AddrDag>(dag: &D, root: u32, def: u32, immediate_use: u32
 
 impl<D: AddrDag> Hooks<D> for X86Hooks {
     fn pointer_type(&self) -> Vt {
-        mvt::i32
+        self.options.pointer_type()
     }
 
     fn check_pattern_predicate(&self, predicate: u16) -> bool {
@@ -289,7 +298,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        let mut matcher = Matcher { dag, pointer_type: mvt::i32 };
+        let mut matcher = Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode };
         let operands = match complex_function(self.options.cpu, pattern) {
             "selectAddr" => matcher.select_addr(value),
             "selectLEAAddr" => matcher.select_lea_addr(value),

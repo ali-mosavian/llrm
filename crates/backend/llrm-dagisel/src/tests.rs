@@ -94,7 +94,7 @@ mod x86_addr {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true })
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
     }
 
     fn constant_of(dag: &TestDag, v: SDValue) -> Option<i64> {
@@ -114,7 +114,7 @@ mod x86_addr {
     }
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod rmw {
     use crate::x86_rmw::fold_load_store_into_mem_operand;
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true })
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
     }
 
     /// `*p += rhs` as the DAG makes it: load, X86ISD::ADD, store. Returns the store, the load and
@@ -323,7 +323,7 @@ mod fold_load {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks(opt_none: bool) -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none, opt_for_size: false, min_size: false, has_frame_pointer: true })
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
     }
 
     /// `add (load p), r` where the load has no other user.
@@ -410,7 +410,7 @@ mod address_folds {
     use crate::x86_addr::{AddressMode, Matcher};
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
     }
 
     fn masked_shift(dag: &mut TestDag, amount: i64, mask: i64) -> (SDValue, SDValue) {
@@ -514,7 +514,7 @@ mod select_without_cmov {
         let flags = SDValue::new(dag.node(x86isd::CMP, &[mvt::i32], &[a, b]), 0);
         let cc = dag.target_constant(4, mvt::i8);
         let cmov = dag.node(x86isd::CMOV, &[vt, mvt::i32], &[f, t, cc, flags]);
-        let mut hooks = X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true });
+        let mut hooks = X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
         (dag, cmov)
     }
@@ -525,5 +525,86 @@ mod select_without_cmov {
             let (dag, cmov) = select(Cpu::I486, vt);
             assert_eq!(selected(&dag, cmov), pseudo);
         }
+    }
+}
+
+mod real_mode_addresses {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
+
+    fn matcher(dag: &mut TestDag, mode: AddrMode) -> Matcher<'_, TestDag> {
+        Matcher { dag, pointer_type: mvt::i16, mode }
+    }
+
+    #[test]
+    fn a_field_of_a_struct_through_a_pointer_is_base_plus_displacement() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i16);
+        let four = dag.make_constant(4, mvt::i16);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[p, four]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!((am.base_reg, am.index_reg, am.scale, am.disp), (Some(p), None, 1, 4));
+    }
+
+    fn word_element(dag: &mut TestDag) -> (SDValue, SDValue, SDValue, SDValue) {
+        let a = dag.input(1, mvt::i16);
+        let i = dag.input(2, mvt::i16);
+        let one = dag.make_constant(1, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i16], &[i, one]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[a, scaled]), 0);
+        (address, a, i, scaled)
+    }
+
+    #[test]
+    fn a_word_array_element_has_no_scaled_index_in_real_mode() {
+        let mut dag = TestDag::new();
+        let (address, a, _, scaled) = word_element(&mut dag);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!((am.base_reg, am.index_reg, am.scale), (Some(a), Some(scaled), 1), "the shl stays a register");
+    }
+
+    #[test]
+    fn the_same_element_scales_at_32_bits() {
+        let mut dag = TestDag::new();
+        let (address, a, i, _) = word_element(&mut dag);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Flat32).match_address(address, &mut am));
+
+        assert_eq!((am.base_reg, am.index_reg, am.scale), (Some(a), Some(i), 2));
+    }
+
+    #[test]
+    fn a_displacement_beyond_sixteen_bits_stays_a_register() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i16);
+        let far = dag.make_constant(0x12345, mvt::i32);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[p, far]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!(am.disp, 0);
+        assert_eq!((am.base_reg, am.index_reg), (Some(p), Some(far)));
+    }
+
+    #[test]
+    fn a_displacement_at_the_sixteen_bit_limit_folds() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i16);
+        let max = dag.make_constant(65535, mvt::i16);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[p, max]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!((am.disp, am.index_reg), (65535, None));
     }
 }
