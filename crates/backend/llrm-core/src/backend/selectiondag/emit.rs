@@ -23,12 +23,19 @@
 //! `x = a + b` with `a`, `b` in virtual registers 1 and 2 and the result
 //! copied to register 3: `v10 := add v1, v2` then `v3 := mov v10`.
 //!
+//! DEVIATE SD43: `EmitLoweredSelect` expands one `CMOV_GR*` at a time: a run
+//! of selects on one condition (case 1) and the cascaded form (case 2) each
+//! get their own diamond, the same values with more branches. Reason: the
+//! pin looks ahead in the block it is rewriting; this emitter is a single
+//! pass. Exit: D1c, with the block-level pass. Owner: sdag-d. Review
+//! 2026-12-03.
+//!
 //! # Runs
 //! Nothing runs it yet: the shadow harness calls it once the matcher's output
 //! reaches a whole function (D1c). The old selector stays the default.
 //!
 //! DEVIATE SD39: not translated yet: frame indices, globals, segment
-//! overrides, inline assembly and the custom inserters (`CMOV_GR*`, next).
+//! overrides, inline assembly and the custom inserters but `CMOV_GR*`.
 //! Each is an [`EmitError::Unsupported`], never a skipped operand. Reason:
 //! the builder (A2) and matcher output do not produce them yet. Exit: with
 //! A2 and the custom inserter piece. Owner: sdag-d. Review 2026-12-03.
@@ -50,7 +57,7 @@ use super::opcodes::OpcodeMap;
 use super::schedule::Unit;
 use crate::backend::isel::{_read, _written};
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::Insn;
+use crate::model::lir::{Insn, Phi};
 
 /// Why a node was not emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +85,16 @@ pub struct EmitContext<'a> {
     pub regs: &'a dyn RegisterFile,
 }
 
+/// One block of the emitted code: `phis` first, then `insns`. A custom
+/// inserter (`EmitLoweredSelect`) splits the block it is in.
+#[derive(Clone, Debug, Default)]
+pub struct EmitBlock {
+    /// The block's address, as a branch names it.
+    pub at: i64,
+    pub phis: Vec<Phi>,
+    pub insns: Vec<Arc<Insn>>,
+}
+
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
     ctx: &'a EmitContext<'a>,
@@ -87,24 +104,37 @@ struct Emitter<'a, 'd> {
     vregs: HashMap<u32, u32>,
     next_value: u32,
     at: i64,
-    out: Vec<Arc<Insn>>,
+    /// The blocks so far; the last is where the next instruction goes.
+    blocks: Vec<EmitBlock>,
 }
 
-/// The LIR for `units` of `dag`, in order.
+/// The LIR blocks for `units` of `dag`, in order: one, plus the three a
+/// `select` without `cmov` makes.
 pub fn emit(
     dag: &SelectionDAG,
     units: &[Unit],
     ctx: &EmitContext<'_>,
-) -> Result<Vec<Arc<Insn>>, EmitError> {
-    let mut emitter =
-        Emitter { dag, ctx, values: HashMap::new(), vregs: HashMap::new(), next_value: 1, at: 0, out: Vec::new() };
+) -> Result<Vec<EmitBlock>, EmitError> {
+    let mut emitter = Emitter {
+        dag,
+        ctx,
+        values: HashMap::new(),
+        vregs: HashMap::new(),
+        next_value: 1,
+        at: 1,
+        blocks: vec![EmitBlock::default()],
+    };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             emitter.node(node)?;
         }
     }
-    Ok(emitter.out)
+    Ok(emitter.blocks)
 }
+
+/// `X86::CondCode` order, the jump on each.
+const CONDITIONS: [&str; 16] =
+    ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
 fn width(vt: EVT) -> u32 {
     match vt {
@@ -164,6 +194,9 @@ impl Emitter<'_, '_> {
         if name == "COPY" {
             return self.copy(n);
         }
+        if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
+            return self.lowered_select(n);
+        }
         let form = self.ctx.map.form(name).map_err(|_| EmitError::Unmapped(name.to_owned()))?;
         let form = &self.ctx.map.forms()[form];
         let node = self.dag.node(SDValue { node: n, res: 0 });
@@ -201,6 +234,50 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
         Ok(())
+    }
+
+    /// `EmitLoweredSelect` for one `CMOV_GR*` pseudo (the pin's custom
+    /// inserter): branch on the condition around a block that holds the false
+    /// value, and join with a phi.
+    ///
+    /// ```text
+    /// this:   jCC sink              this -> false, sink
+    /// false:  (falls into sink)     false -> sink
+    /// sink:   r := phi [false: src1] [this: src2]
+    /// ```
+    ///
+    /// The operands are `src1` (the value when the condition is false),
+    /// `src2`, and the condition code.
+    fn lowered_select(
+        &mut self,
+        n: u32,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let held = |loc: Loc| match loc {
+            Loc::Held(held) => Ok(held),
+            other => Err(EmitError::Unsupported(format!("a select of {other:?}"))),
+        };
+        let when_false = held(self.operand(node.ops[0])?)?;
+        let when_true = held(self.operand(node.ops[1])?)?;
+        let cc = self.constant(node.ops[2])? as usize;
+        let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+        let result = self.fresh(width(node.values[0]));
+        self.values.insert(SDValue { node: n, res: 0 }, result.value);
+        let this = self.blocks.last().expect("a block").at;
+        let (false_at, sink_at) = (self.next_address(), self.next_address());
+        let target = Some(sink_at);
+        let what = Semantics { target, name: Some(jump.to_owned()), ..Semantics::new(Operation::Branch) };
+        self.push_semantics(what);
+        let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
+        self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
+        self.blocks.push(EmitBlock { at: sink_at, phis: vec![phi], ..EmitBlock::default() });
+        Ok(())
+    }
+
+    fn next_address(&mut self) -> i64 {
+        let at = self.at;
+        self.at += 1;
+        at
     }
 
     /// `COPY dst <- src`, a register-to-register move.
@@ -352,10 +429,17 @@ impl Emitter<'_, '_> {
         sources: Vec<Loc>,
     ) {
         let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        self.push_semantics(what);
+    }
+
+    fn push_semantics(
+        &mut self,
+        what: Semantics,
+    ) {
         let (defines, uses) = (_written(&what.dests), _read(&what));
-        let at = self.at;
-        self.at += 1;
-        self.out.push(Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses)));
+        let at = self.next_address();
+        let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses));
+        self.blocks.last_mut().expect("a block").insns.push(insn);
     }
 }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:b01b0f71b72244083a976d0c6030287aaae0672991399e290e69e9a3748f0bf1 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:49125dfcf125ec76d4e11b53cd9bc5b0a134c7ad96fb44b4aabd9847f8957489 -->
 
 # selectiondag
 
@@ -23,7 +23,10 @@ lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
 block that defines it ends in `CopyToReg`, the blocks that read it start
 from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
-Calls, returns, arguments and switches are refused (`Refused`) until A2.
+Arguments and returns go through the target's `Convention` (stack
+parameters are loads of fixed objects, register ones live-in copies;
+`ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+register are refused (`Refused`) until their pieces land.
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The
