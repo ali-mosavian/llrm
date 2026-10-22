@@ -72,7 +72,7 @@ const UNOPTIMIZED: [&str; 10] = [
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 22] = [
+const SLOTS: [(&str, &str); 23] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
