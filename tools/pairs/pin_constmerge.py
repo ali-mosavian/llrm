@@ -1,7 +1,7 @@
 """The pin's constmerge and second globaldce over the QCport modules at -Os: llc object sizes with each removed (2026-10-23: constmerge +58 B of 399336 on 2 modules, globaldce 0)."""
 import subprocess, glob, os, re, sys, shutil, tempfile
 from concurrent.futures import ThreadPoolExecutor
-sys.path.insert(0, os.path.expanduser("~/work/personal/llrm/.claude/worktrees/w6-rb/tools/pairs"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pin
 H=os.path.expanduser("~"); L=f"{H}/scratch/sbp-e1dd29df450dd3161452a7fe4de399be02d384f7/dist/llrm-c"  # a dist llrm-c; CM_LLRM overrides
 L=os.environ.get("CM_LLRM", L)
