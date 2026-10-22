@@ -44,10 +44,12 @@ def test_qbrt_notpass_and_compile_fail_are_red_and_the_result_line_is_the_count(
 def test_a_new_qcport_kind_is_red_and_a_known_one_is_not():
     text = (
         "QCport sweep of abc: 65 modules x 4 levels + 466 front-end compiles (39 m16-only), 3 failed compiles, 2 kinds, 1 new\n"
-        "  KNOWN #2454: x -- menu -O2\n  NEW: llrm-c: a byte division -- vid -Os\n"
+        "  KNOWN #2454: x -- menu -O2\n  NEW: llrm-c: a byte division -- vid -Os\n  NEW: panic x.rs:N:N: lsr added a memory operation -- matrix.bas -m32 -O1, idioms.bas -m16 -O2\n"
     )
     reds, count = s.parse_qcport(text)
-    assert [one.name for one in reds] == ["qcport:llrm-c: a byte division -- vid -Os"]
+    assert [one.name for one in reds][0] == "qcport:llrm-c: a byte division -- vid -Os"
+    assert reds[0].probe == [], "a QCport C module is a file outside the tree: it cannot be asked at another build"
+    assert reds[1].probe == ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic x.rs:N:N: lsr added a memory operation"]
     assert count == "3 failed/726"
 
 
@@ -127,3 +129,21 @@ def test_the_state_is_the_previous_run_and_a_missing_file_is_an_empty_one(tmp_pa
     assert s.load_state(path) == {"tip": None, "reds": {}}
     s.save_state(path, "abc", [s.Red("run:a", s.WRONG)])
     assert s.load_state(path) == {"tip": "abc", "reds": {"run:a": s.WRONG}}
+
+
+def test_a_qcport_kind_is_asked_by_its_first_program_and_a_missing_job_is_not_called_green(tmp_path, monkeypatch):
+    """The 12 compile panics of 4548930fb named a kind and no probe: the bisect gave up with the whole range. The probe exit 3 (no such job) is `None`, not green."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return type("Done", (), {"returncode": 3 if "gone.bas" in argv else 1, "stdout": "", "stderr": ""})()
+
+    binaries = tmp_path / "sbp-abcdefghi" / "release"
+    binaries.mkdir(parents=True)
+    (binaries / "llrm-c").write_text("")
+    monkeypatch.setattr(s, "SCRATCH", tmp_path)
+    monkeypatch.setattr(s.subprocess, "run", run)
+    assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is True
+    assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "gone.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is None
+    assert calls[0][1].endswith("tools/qcport_probe.py")

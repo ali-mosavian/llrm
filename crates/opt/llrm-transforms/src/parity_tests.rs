@@ -113,12 +113,17 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
         &[
+            "cmpsub@1",
             "optimizephis@1",
             "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
             "machinecse@4",
             "machinesink@4",
             "combiner@4",
+            "liverangeshrink@4",
             "floatalloc@8",
+            "pushfold@6",
             "coalesce@10",
             "latecleanup@13",
             "leaopt@5",

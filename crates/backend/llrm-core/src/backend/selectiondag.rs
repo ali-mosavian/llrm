@@ -18,7 +18,10 @@
 //! block that defines it ends in `CopyToReg`, the blocks that read it start
 //! from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
-//! Calls, returns, arguments and switches are refused (`Refused`) until A2.
+//! Arguments and returns go through the target's `Convention` (stack
+//! parameters are loads of fixed objects, register ones live-in copies;
+//! `ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+//! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -73,21 +76,28 @@ pub mod actions;
 pub mod builder;
 mod dag;
 pub mod dump;
+pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
+pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
 pub mod schedule;
+pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
-pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
+pub use dag::{
+    BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
+};
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod emit_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]

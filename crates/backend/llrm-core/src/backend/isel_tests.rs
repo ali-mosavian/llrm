@@ -915,8 +915,8 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            "mov ax, word ptr count",
-            "push ax",
+            // `canFoldIntoRegPush`: the load nothing else reads is the push's cell.
+            "push word ptr count",
             "call far ptr helper",
             "retf",
             "MAIN endp",
