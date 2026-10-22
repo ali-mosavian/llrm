@@ -219,3 +219,143 @@ mod x86_addr {
         assert!(am.base_reg.is_some() && am.index_reg.is_some());
     }
 }
+
+mod rmw {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::generated::ids::x86isd;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_rmw::fold_load_store_into_mem_operand;
+
+    fn hooks() -> X86Hooks {
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true })
+    }
+
+    /// `*p += rhs` as the DAG makes it: load, X86ISD::ADD, store. Returns the store, the load and
+    /// the arithmetic node.
+    fn add_to_memory(dag: &mut TestDag, rhs: SDValue, p: SDValue) -> (u32, u32, u32) {
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let entry = SDValue::new(0, 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i32, mvt::Other],
+            ops: vec![entry, p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        let add = dag.node(x86isd::ADD, &[mvt::i32, mvt::i32], &[SDValue::new(load, 0), rhs]);
+        let store = dag.add(Node {
+            opcode: isd::STORE,
+            vts: vec![mvt::Other],
+            ops: vec![SDValue::new(load, 1), SDValue::new(add, 0), p, off],
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        (store, load, add)
+    }
+
+    fn machine_nodes(dag: &TestDag) -> Vec<&'static str> {
+        dag.live().filter_map(|(_, n)| n.machine.map(machine_name)).collect()
+    }
+
+    #[test]
+    fn add_a_register_to_memory_is_one_add32mr() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let r = dag.input(2, mvt::i32);
+        let (store, load, _) = add_to_memory(&mut dag, r, p);
+
+        assert!(fold_load_store_into_mem_operand(&mut dag, &hooks(), store));
+
+        assert_eq!(machine_nodes(&dag), ["ADD32mr"]);
+        let (_, node) = dag.live().find(|(_, n)| n.machine.is_some()).unwrap();
+        assert_eq!(node.ops[0], p, "base");
+        assert_eq!(node.ops[5], r, "the register operand");
+        assert_eq!(node.ops[6], SDValue::new(0, 0), "the chain the load had");
+        assert!(dag.nodes[store as usize].dead, "the store is gone");
+        let _ = load;
+    }
+
+    #[test]
+    fn adding_one_to_memory_is_inc32m() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let one = dag.make_constant(1, mvt::i32);
+        let (store, ..) = add_to_memory(&mut dag, one, p);
+
+        assert!(fold_load_store_into_mem_operand(&mut dag, &hooks(), store));
+
+        assert_eq!(machine_nodes(&dag), ["INC32m"]);
+    }
+
+    #[test]
+    fn a_load_with_another_user_is_not_fused() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let r = dag.input(2, mvt::i32);
+        let (store, load, _) = add_to_memory(&mut dag, r, p);
+        // The old value is also used elsewhere: it must stay a load.
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(load, 0), r]);
+
+        assert!(!fold_load_store_into_mem_operand(&mut dag, &hooks(), store));
+        assert!(machine_nodes(&dag).is_empty());
+    }
+
+    #[test]
+    fn a_small_immediate_adds_directly() {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let imm = dag.make_constant(300, mvt::i32);
+        let (store, ..) = add_to_memory(&mut dag, imm, p);
+
+        assert!(fold_load_store_into_mem_operand(&mut dag, &hooks(), store));
+
+        assert_eq!(machine_nodes(&dag), ["ADD32mi"]);
+    }
+}
+
+mod fold_load {
+    use super::*;
+    use crate::dag::LoadExt;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn hooks(opt_none: bool) -> X86Hooks {
+        X86Hooks::new(Options { cpu: Cpu::I486, opt_none, opt_for_size: false, min_size: false, has_frame_pointer: true })
+    }
+
+    /// `add (load p), r` where the load has no other user.
+    fn load_add(dag: &mut TestDag) -> (u32, SDValue) {
+        let p = dag.input(1, mvt::i32);
+        let r = dag.input(2, mvt::i32);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let load = dag.add(Node {
+            opcode: isd::LOAD,
+            vts: vec![mvt::i32, mvt::Other],
+            ops: vec![SDValue::new(0, 0), p, off],
+            load: Some(LoadExt::NonExt),
+            memory_vt: Some(mvt::i32),
+            ..Node::default()
+        });
+        let add = dag.node(isd::ADD, &[mvt::i32], &[r, SDValue::new(load, 0)]);
+        (add, SDValue::new(load, 0))
+    }
+
+    #[test]
+    fn a_single_use_load_folds_into_its_add() {
+        let mut dag = TestDag::new();
+        let (add, load) = load_add(&mut dag);
+
+        assert!(hooks(false).try_fold_load(&mut dag, add, add, load).is_some());
+    }
+
+    #[test]
+    fn nothing_folds_when_optimization_is_off() {
+        let mut dag = TestDag::new();
+        let (add, load) = load_add(&mut dag);
+
+        assert!(hooks(true).try_fold_load(&mut dag, add, add, load).is_none());
+    }
+}

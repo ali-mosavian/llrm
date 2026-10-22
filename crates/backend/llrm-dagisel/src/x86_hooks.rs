@@ -49,6 +49,13 @@ pub struct X86Hooks {
     pub options: Options,
 }
 
+impl X86Hooks {
+    /// `Subtarget->slowIncDec()`: only Atom and later cores.
+    pub fn slow_inc_dec(&self) -> bool {
+        false
+    }
+}
+
 impl PatternContext for X86Hooks {
     fn should_opt_for_size(&self) -> bool {
         self.options.opt_for_size
@@ -184,6 +191,29 @@ impl X86Hooks {
             ignore_chains = false;
         }
         !find_non_imm_use(dag, root, n.node, user, ignore_chains)
+    }
+
+    /// `tryFoldLoad` ([L3483][fold]): the memory operand of `n` when it is a plain load worth
+    /// folding into `parent` under `root`.
+    ///
+    /// [fold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3483
+    pub fn try_fold_load<D: AddrDag>(
+        &self,
+        dag: &mut D,
+        root: u32,
+        parent: u32,
+        n: SDValue,
+    ) -> Option<crate::x86_addr::AddressOperands> {
+        let is_non_ext_load =
+            dag.opcode(n.node) == isd::LOAD && dag.load_ext_type(n.node) == Some(crate::dag::LoadExt::NonExt);
+        if !is_non_ext_load
+            || !self.is_profitable_to_fold(dag, n, parent, root)
+            || !self.is_legal_to_fold(dag, n, parent, root)
+        {
+            return None;
+        }
+        let ptr = dag.operand(n.node, 1);
+        Matcher { dag, pointer_type: mvt::i32 }.select_addr(ptr)
     }
 
     /// `hasNoCarryFlagUses` ([L3650][carry]); SD28.

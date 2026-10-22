@@ -68,6 +68,8 @@ pub trait AddrDag: Dag {
     fn wrapped_symbol(&self, operand: SDValue) -> Option<Wrapped>;
     /// `hasMaterializingUse`: a use that puts `value` in a register as a value.
     fn has_materializing_use(&self, value: SDValue) -> bool;
+    /// `StoreSDNode::isNonTemporal`.
+    fn is_non_temporal(&self, node: u32) -> bool;
     fn target_frame_index(&mut self, index: i32, vt: Vt) -> SDValue;
     /// `getTargetGlobalAddress`, `getTargetConstantPool` and the rest, by symbol kind.
     fn target_symbol(&mut self, symbol: Symbol, disp: i32, flags: u8) -> SDValue;

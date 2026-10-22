@@ -647,9 +647,61 @@ pub mod x86isd {
 }
 
 pub mod x86 {
+    pub const ADC16mi: u16 = 465;
+    pub const ADC16mr: u16 = 471;
+    pub const ADC32mi: u16 = 490;
+    pub const ADC32mr: u16 = 496;
+    pub const ADC8mi: u16 = 540;
+    pub const ADC8mr: u16 = 544;
+    pub const ADD16mi: u16 = 573;
+    pub const ADD16mr: u16 = 583;
+    pub const ADD32mi: u16 = 614;
+    pub const ADD32mr: u16 = 624;
+    pub const ADD8mi: u16 = 696;
+    pub const ADD8mr: u16 = 702;
+    pub const AND16mi: u16 = 804;
+    pub const AND16mr: u16 = 814;
+    pub const AND32mi: u16 = 845;
+    pub const AND32mr: u16 = 855;
+    pub const AND8mi: u16 = 927;
+    pub const AND8mr: u16 = 933;
+    pub const DEC16m: u16 = 1511;
+    pub const DEC32m: u16 = 1522;
+    pub const DEC8m: u16 = 1543;
+    pub const EFLAGS: u16 = 28;
+    pub const INC16m: u16 = 1901;
+    pub const INC32m: u16 = 1912;
+    pub const INC8m: u16 = 1933;
+    pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
+    pub const NEG32m: u16 = 2859;
     pub const NEG32r: u16 = 2864;
+    pub const NEG8m: u16 = 2879;
     pub const NEG8r: u16 = 2884;
+    pub const OR16mi: u16 = 2921;
+    pub const OR16mr: u16 = 2931;
+    pub const OR32mi: u16 = 2962;
+    pub const OR32mr: u16 = 2973;
+    pub const OR8mi: u16 = 3045;
+    pub const OR8mr: u16 = 3051;
+    pub const SBB16mi: u16 = 4165;
+    pub const SBB16mr: u16 = 4171;
+    pub const SBB32mi: u16 = 4190;
+    pub const SBB32mr: u16 = 4196;
+    pub const SBB8mi: u16 = 4240;
+    pub const SBB8mr: u16 = 4244;
+    pub const SUB16mi: u16 = 4744;
+    pub const SUB16mr: u16 = 4754;
+    pub const SUB32mi: u16 = 4785;
+    pub const SUB32mr: u16 = 4795;
+    pub const SUB8mi: u16 = 4867;
+    pub const SUB8mr: u16 = 4873;
+    pub const XOR16mi: u16 = 22586;
+    pub const XOR16mr: u16 = 22596;
+    pub const XOR32mi: u16 = 22627;
+    pub const XOR32mr: u16 = 22637;
+    pub const XOR8mi: u16 = 22709;
+    pub const XOR8mr: u16 = 22715;
 }
 
 pub mod mvt {

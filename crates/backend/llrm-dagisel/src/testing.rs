@@ -382,6 +382,9 @@ impl AddrDag for TestDag {
             n.opcode == isd::CopyToReg || (n.opcode == isd::STORE && n.ops.get(1) == Some(&value))
         })
     }
+    fn is_non_temporal(&self, _: u32) -> bool {
+        false
+    }
     fn target_frame_index(&mut self, index: i32, vt: Vt) -> SDValue {
         SDValue::new(
             self.add(Node { opcode: isd::TargetFrameIndex, vts: vec![vt], constant: Some(i64::from(index)), ..Node::default() }),
