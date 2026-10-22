@@ -58,11 +58,20 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 8] =
-    ["Peephole", "LoopSlots", "Scheduler", "Coalescer", "PressureSink", "MachineSink", "MachineCSE", "OptimizePHIs"];
+const UNOPTIMIZED: [&str; 9] = [
+    "Peephole",
+    "LoopSlots",
+    "Scheduler",
+    "Coalescer",
+    "PressureSink",
+    "MachineSink",
+    "MachineCSE",
+    "OptimizePHIs",
+    "LiveRangeShrink",
+];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 21] = [
+const SLOTS: [(&str, &str); 22] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -70,6 +79,7 @@ const SLOTS: [(&str, &str); 21] = [
     ("PhiElimination", "phielim@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
@@ -131,6 +141,12 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, last: an instruction up to the last definition of what it
+        // reads (the pin: LiveRangeShrink, x86 addPreRegAlloc).
+        Box::new(crate::backend::liverangeshrink::LiveRangeShrink {
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+        }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
