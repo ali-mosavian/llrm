@@ -68,6 +68,9 @@ pub struct RealMode {
     /// What a scaled index costs in instructions, once for each scaled
     /// register: the address-size prefix and the stall it takes.
     pub scaled_index_insns: u32,
+    /// The registers a native (unprefixed) address is made of: the bases and
+    /// indices of the form that is not secondary. None where it is not stated.
+    pub address_registers: Option<u32>,
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
@@ -809,6 +812,10 @@ impl Tti for X86 {
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+    }
+
+    fn address_registers(&self) -> Option<u32> {
+        self.real_mode.as_ref().and_then(|real| real.address_registers)
     }
 
     /// Real mode forms a scaled index with an address-size prefix.

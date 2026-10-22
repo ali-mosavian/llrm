@@ -32,6 +32,18 @@
 //! prefixed `lea` itself or the pin gains a real-mode model; reviewed
 //! 2026-11-30.
 //!
+//! DEVIATE LU2: `Cost::rate_formula` charges `ADDRESS_REGISTER_IN_MEMORY`
+//! instructions to an address use naming a register past the target's native
+//! address registers (`Tti::address_registers`: m16 BX, SI, DI) less those the
+//! loop's other addresses hold anyway (`outside_address_registers`). The pin
+//! has no 8086 model: its code16 uses 32-bit registers and scaled addressing,
+//! so it never meets four address values for three registers (QCport `ls.c`
+//! `_ls_animate@3`: the greedy allocator failed at stage Done and the rounds
+//! loop placed it). None on m32 and every target that states no limit, so the
+//! pin's rule. Owner w-6; exit: SplitKit's region split makes the greedy place
+//! it, or the target description states the address classes to the allocator;
+//! reviewed 2026-11-30.
+//!
 //! Known row of LU1: QCport `d_faces.c` -Os, `_clip_w` (six near float arrays
 //! on one index, an x87 loop) is 6262 B against main's 6208. The model rates
 //! the scaled solution at 10 instructions (9 registers, 2 recurrences) and the
@@ -497,7 +509,14 @@ pub struct Rating<'a, 'b> {
     /// `TTI.isHardwareLoopProfitable`: a counted-down loop's recurrence is
     /// folded into the loop instruction.
     pub hardware_loop_profitable: bool,
+    /// DEVIATE LU2: the registers addresses may name beyond those the loop
+    /// holds anyway; None where any register addresses.
+    pub address_limit: Option<u32>,
 }
+
+/// DEVIATE LU2: what a use pays for naming an address register the target does
+/// not have: a reload before it (the store at the definition is shared).
+const ADDRESS_REGISTER_IN_MEMORY: u32 = 2;
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
 /// Measures and compares candidate formulae.
@@ -507,6 +526,8 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// DEVIATE LU2: the registers address uses name so far.
+    addressing: Vec<Scev>,
 }
 
 impl Cost {
@@ -593,6 +614,22 @@ impl Cost {
                 if !self.scaled.contains(&(reg, f.scale)) {
                     self.scaled.push((reg, f.scale));
                     self.c.insns += scaled_insns;
+                }
+            }
+        }
+
+        // DEVIATE LU2: LLVM has no 8086 model, where an address is made of BX,
+        // SI and DI alone. A register named by addresses past those the target
+        // has is held in memory: every use that names it pays an instruction.
+        if lu.kind == Kind::Address
+            && let Some(limit) = r.address_limit
+        {
+            for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
+                if !self.addressing.contains(&reg) {
+                    self.addressing.push(reg);
+                }
+                if self.addressing.iter().position(|one| *one == reg).is_some_and(|at| at as u32 >= limit) {
+                    self.c.insns += ADDRESS_REGISTER_IN_MEMORY;
                 }
             }
         }
