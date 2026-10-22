@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:f32389043d093bdb0e28602df6df0fb432908f1f233e358fee2ce8b4916290b6 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:be3f3277d3100be21dee66fc94e59da6a7bd4266dc2accabe8f6b649a5087c3c -->
 
 # selectiondag
 
@@ -19,11 +19,22 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`lowering::FunctionLoweringInfo`): the block
-that defines it ends in `CopyToReg`, the blocks that read it start from
-`CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+block that defines it ends in `CopyToReg`, the blocks that read it start
+from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
 Calls, returns, arguments and switches are refused (`Refused`) until A2.
+
+## Example
+`%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+then `store i32 %s, ptr @g`:
+
+```text
+t2: i32,ch = CopyFromReg t0, Register:i32 %0
+t4: i32,ch = CopyFromReg t0, Register:i32 %1
+t5: i32 = add t2, t4
+t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+```
 
 ## Runs
 Nothing runs it yet but the tests and the shadow harness (sdag-d). The
