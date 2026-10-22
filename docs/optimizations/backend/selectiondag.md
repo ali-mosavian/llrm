@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:9d2e5184d5aaaabf3a63930e925d69ae694e8a6240ea2da1cc74000f5759b0d4 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:edd607745daddc6a3cef55688f87b686eea890149b00fd887e6f75c74586cdc6 -->
 
 # selectiondag
 
@@ -27,3 +27,60 @@ Arguments and returns go through the target's `Convention` (stack
 parameters are loads of fixed objects, register ones live-in copies;
 `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+A `switch` of range clusters is the split-and-chain compare blocks of
+`visitSwitch` (jump tables and bit tests are refused). Indirect calls,
+intrinsics, floats and values wider than a
+register are refused (`Refused`) until their pieces land.
+
+## Runs
+Nothing runs it yet but the tests and the shadow harness (sdag-d). The
+old selector stays the default; the DAG path is `--isel=dag` (shadow).
+
+DEVIATE SD10: no `SDLoc`; debug locations and IR order are not carried.
+Reason: nothing downstream reads them before the emitter (sdag-d).
+Exit: sdag-d adds them if the emitter needs line info. Owner sdag-a.
+Review 2026-11-13.
+
+DEVIATE SD11: no floating-point constant folding (`foldConstantFPMath`,
+`FP_TO_SINT` of a constant, `FoldSetCC` on FP constants), no FP constant
+bitcasts; `ConstFp` holds raw bits. Reason: needs an `APFloat` (f80
+included); not on the integer path A1 builds. Exit: with the FP builder
+piece. Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD12: the folds that ask `ComputeNumSignBits`, `MaskedValueIsZero`
+or `isGuaranteedNotToBeUndefOrPoison` (sext/zext of truncate, select with
+an undef arm, `FREEZE`) are not made: nothing is dropped, the combiner
+makes them. Exit: with `computeKnownBits` (sdag-b, B2). Owner sdag-a.
+Review 2026-11-13.
+
+DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
+`VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
+vector MIR. Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD15: `FindMergedConditions` (`a && b` branches split into two
+branches) is not ported; the condition stays one `setcc`/`and`. Exit: the
+switch-lowering piece (A2). Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD16: no `LiveOutRegInfo`: a value copied out of a block reads
+back without `AssertZext`/`AssertSext`. Exit: with `computeKnownBits`
+(sdag-b). Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD17: virtual register numbers differ from the pin's, whose
+selection of earlier blocks allocates registers between the exported
+ones; comparisons renumber them. Exit: none. Owner sdag-a.
+
+DEVIATE SD18: `select` is never matched as `abs`/`smin`/`smax`/`umin`/
+`umax` (`matchSelectPattern`). Exit: with the target action table (B0).
+Owner sdag-a. Review 2026-11-13.
+
+DEVIATE SD20: a call's `TargetGlobalAddress` carries no relocation flag
+(`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+Exit: none. Owner sdag-a.
+
+## See also
+LLVM's `SelectionDAG::getNode`
+([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
+`FoldConstantArithmetic`
+([L7642](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L7642)),
+`FoldSetCC`
+([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
