@@ -250,10 +250,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "CodeGen Prepare",
-        Missing,
-        "addresssink.rs (sinkCmpExpression, address sinking), extload.rs (ext-load promotion)",
+        Deviate,
+        "addresssink.rs (sinkCmpExpression, address phis), extload.rs (ext-load promotion), isel (address forms rebuilt in the user's block)",
         "-disable-cgp",
-        "funcattrs-port; 2026-10-25: partial; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ",
+        "CG3 (C1 in addresssink.rs): the pass's work is done by isel, addresssink.rs and the select and switch lowering; reason: per function on the same IR the m32 corpus matches the pin (the pass changes 16-17 of about 160 functions; ours is at its level) and the lea count equals the pin's with the pass (2092 against 2139, 3983 without) (docs/working/codegenprepare.md); cost: at m16 up to 1544 of 4132 instructions of excess lie in functions the pin's address sinking helps (row AM-C2); exit: the 8086-form experiment 2026-11-06; owner w-4; review 2026-12-01. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B; sub-features measured by a patched scratch llc: optimizeMemoryInst +20712 B, sinkCmpExpression +468, optimizeCmp +469, select +4, dupRet -2, empty blocks -302",
     ),
     row(
         "Exception handling preparation",
@@ -422,10 +422,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Live Range Shrink",
-        Missing,
+        Deviate,
         "pressuresink.rs stands in",
         "",
-        "lir-cleanup-port; 2026-11-13: registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
+        "CG2: pressuresink.rs does the work and the pin's pass is not translated; reason: with the pass off the 77 IRs change by -19 B (-O2) and +7 B (-Os), the 71 vsgcc programs by 1-2 instructions, QCport m16 by 1 (docs/working/live-range-shrink.md); cost: nil; exit: none planned; owner w-4; review 2026-12-01 or with the Machine Scheduler work. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup SetCC",
