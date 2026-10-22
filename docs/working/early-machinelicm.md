@@ -41,4 +41,4 @@ No kind dominates. Constants and addresses (the kinds our mid-end `licm` could t
 
 ## Decision
 
-CG2 stays a DEVIATE with no exit planned: the residual is diffuse and 1.6% of in-loop instructions at m16 -O2 only. Reopen if a row shows a loop-invariant constant, address or load left in a loop.
+CG2 stays a DEVIATE. The push/add-esp/call class (136) belongs to the convention row CC1 and the x87 class (70) to X87-GAP. Exit: re-measure with `tools/pairs/mlicm.py` after the allocator switch-over (deletion 11-03) and the CC1 work; if the in-loop excess of moves and loads stays above 1% of the pin's in-loop instructions at m16 -O2, translate MachineLICM's pressure-gated hoist. Review 2026-11-20.
