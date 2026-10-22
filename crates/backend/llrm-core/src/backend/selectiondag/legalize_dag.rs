@@ -43,14 +43,22 @@ use super::mvt::EVT;
 pub trait Hooks {
     /// The legal replacement of `node` (its first result), or `None` to have
     /// the node expanded instead.
-    fn lower_operation(&mut self, dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue>;
+    fn lower_operation(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue>;
 }
 
 /// A target with no custom lowering.
 pub struct NoHooks;
 
 impl Hooks for NoHooks {
-    fn lower_operation(&mut self, _dag: &mut SelectionDAG, _node: SDValue) -> Option<SDValue> {
+    fn lower_operation(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _node: SDValue,
+    ) -> Option<SDValue> {
         None
     }
 }
@@ -63,7 +71,11 @@ pub struct DagLegalizer<'a, H: Hooks> {
 }
 
 impl<'a, H: Hooks> DagLegalizer<'a, H> {
-    pub fn new(dag: &'a mut SelectionDAG, tli: &'a TargetLowering, hooks: &'a mut H) -> DagLegalizer<'a, H> {
+    pub fn new(
+        dag: &'a mut SelectionDAG,
+        tli: &'a TargetLowering,
+        hooks: &'a mut H,
+    ) -> DagLegalizer<'a, H> {
         DagLegalizer { dag, tli, hooks, legalized: HashSet::new() }
     }
 
@@ -107,7 +119,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     }
 
     /// A node nothing reads that is not the root.
-    fn is_dead(&self, n: u32) -> bool {
+    fn is_dead(
+        &self,
+        n: u32,
+    ) -> bool {
         if n == self.dag.get_root().node {
             return false;
         }
@@ -117,16 +132,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// The type the action table is asked about for `value`'s node (the
     /// switch at the top of `LegalizeOp`).
-    fn action_type(&self, node: SDValue) -> EVT {
+    fn action_type(
+        &self,
+        node: SDValue,
+    ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SetCC | ISD::Store => self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 })),
+            ISD::SetCC | ISD::Store => {
+                self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
+            }
             _ => self.dag.value_type(node),
         }
     }
 
     /// `LegalizeOp`.
-    fn legalize_op(&mut self, n: u32) -> Result<(), LegalizeError> {
+    fn legalize_op(
+        &mut self,
+        n: u32,
+    ) -> Result<(), LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         if matches!(self.dag.opcode(node), ISD::TargetConstant | ISD::Register) {
             return Ok(());
@@ -164,15 +187,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     }
                     Ok(())
                 }
-                None => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "convert node to libcall" }),
+                None => Err(LegalizeError::Unsupported {
+                    op: self.dag.opcode(node),
+                    ty: vt,
+                    what: "convert node to libcall",
+                }),
             },
-            Action::LibCall | Action::Custom => Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" }),
+            Action::LibCall | Action::Custom => {
+                Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" })
+            }
         }
     }
 
     /// `ExpandNode`, for the cases translated: the replacement for each result
     /// of `node`, or `None` if it has to become a library call.
-    fn expand_node(&mut self, node: SDValue) -> Option<Vec<SDValue>> {
+    fn expand_node(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
@@ -206,14 +238,92 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             _ => None,
         }
     }
 
+    /// `TargetLowering::expandCTPOP` ([L10830][pin]), scalar: the parallel
+    /// bit count, with the active bits found from known bits.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L10830
+    fn expand_ctpop(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let len = vt.size_in_bits();
+        let mut op = self.dag.operand(node, 0);
+        let known = super::known_bits::known_bits(self.dag, op);
+        let width = known.width;
+        let leading = (!known.zero & super::fold::mask(width)).leading_zeros() - (128 - width);
+        let trailing = known.zero.trailing_ones().min(width);
+        let shifted_active = width.saturating_sub(leading + trailing);
+        let effective =
+            if shifted_active > 0 && shifted_active < len { (shifted_active.div_ceil(8) * 8).min(len) } else { len };
+        if len > 128 || len % 8 != 0 {
+            return None;
+        }
+        if effective < len && trailing > 0 {
+            let amount = self.dag.get_constant(u128::from(trailing), EVT::I8);
+            op = self.dag.get_node(ISD::Srl, vt, &[op, amount]);
+        }
+        let splat = |byte: u128| (0..len / 8).fold(0u128, |acc, i| acc | (byte << (8 * i)));
+        let (mask55, mask33, mask0f) = (
+            self.dag.get_constant(splat(0x55), vt),
+            self.dag.get_constant(splat(0x33), vt),
+            self.dag.get_constant(splat(0x0f), vt),
+        );
+        let amount = |dag: &mut SelectionDAG, n: u128| dag.get_constant(n, EVT::I8);
+        let one = amount(self.dag, 1);
+        let half = self.dag.get_node(ISD::Srl, vt, &[op, one]);
+        let half = self.dag.get_node(ISD::And, vt, &[half, mask55]);
+        op = self.dag.get_node(ISD::Sub, vt, &[op, half]);
+        let low = self.dag.get_node(ISD::And, vt, &[op, mask33]);
+        let two = amount(self.dag, 2);
+        let high = self.dag.get_node(ISD::Srl, vt, &[op, two]);
+        let high = self.dag.get_node(ISD::And, vt, &[high, mask33]);
+        op = self.dag.get_node(ISD::Add, vt, &[low, high]);
+        let four = amount(self.dag, 4);
+        let nibbles = self.dag.get_node(ISD::Srl, vt, &[op, four]);
+        let sum = self.dag.get_node(ISD::Add, vt, &[op, nibbles]);
+        op = self.dag.get_node(ISD::And, vt, &[sum, mask0f]);
+        if effective <= 8 {
+            return Some(op);
+        }
+        if effective == 16 {
+            let eight = amount(self.dag, 8);
+            let upper = self.dag.get_node(ISD::Srl, vt, &[op, eight]);
+            let sum = self.dag.get_node(ISD::Add, vt, &[op, upper]);
+            let ff = self.dag.get_constant(0xff, vt);
+            return Some(self.dag.get_node(ISD::And, vt, &[sum, ff]));
+        }
+        let wide = if self.tli.is_operation_legal_or_custom(ISD::Mul, vt) {
+            let mask01 = self.dag.get_constant(splat(0x01), vt);
+            self.dag.get_node(ISD::Mul, vt, &[op, mask01])
+        } else {
+            let mut v = op;
+            let mut shift = 8;
+            while shift < effective {
+                let amount = amount(self.dag, u128::from(shift));
+                let shifted = self.dag.get_node(ISD::Shl, vt, &[v, amount]);
+                v = self.dag.get_node(ISD::Add, vt, &[v, shifted]);
+                shift *= 2;
+            }
+            v
+        };
+        let top = amount(self.dag, u128::from(len - 8));
+        Some(self.dag.get_node(ISD::Srl, vt, &[wide, top]))
+    }
+
     /// `TargetLowering::expandBSWAP`, for `i16` (a rotate by 8). Other widths
     /// are legal on the targets here or not yet translated.
-    fn expand_bswap(&mut self, node: SDValue) -> Option<SDValue> {
+    fn expand_bswap(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
         if vt != EVT::I16 {
             return None;
@@ -223,13 +333,20 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     }
 
     /// `ReplaceNode(Old, New)` for a node with one value result.
-    fn replace_node(&mut self, old: SDValue, new: SDValue) {
+    fn replace_node(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
         self.dag.replace_all_uses_with(old, new);
     }
 
     /// `PromoteNode`, for the simple integer operations: make the node in the
     /// wider type from any-extended operands and truncate the result.
-    fn promote_node(&mut self, node: SDValue) -> Result<(), LegalizeError> {
+    fn promote_node(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let EVT::Simple(from) = self.dag.value_type(node) else { unreachable!("promotion applies to simple types") };
         let to: EVT = self.tli.type_to_promote_to(op, from).into();
@@ -240,6 +357,44 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let rhs = self.dag.get_node(ISD::AnyExtend, to, &[rhs]);
                 let wide = self.dag.get_node(op, to, &[lhs, rhs]);
                 self.dag.get_node(ISD::Truncate, from.into(), &[wide])
+            }
+            ISD::CtTz | ISD::CtTzZeroPoison | ISD::CtLz | ISD::CtPop => {
+                // The argument is any-extended for a trailing count,
+                // zero-extended otherwise.
+                let src = self.dag.operand(node, 0);
+                let wide = self
+                    .dag
+                    .get_node(
+                        if matches!(op, ISD::CtTz | ISD::CtTzZeroPoison) { ISD::AnyExtend } else { ISD::ZeroExtend },
+                        to,
+                        &[src],
+                    );
+                let (old_bits, new_bits) = (u128::from(EVT::from(from).size_in_bits()), u128::from(to.size_in_bits()));
+                let (wide, new_op) = if op == ISD::CtTz {
+                    // Zero counts the original width: set the bit just above
+                    // it.
+                    let top = self.dag.get_constant(1 << old_bits, to);
+                    (self.dag.get_node(ISD::Or, to, &[wide, top]), ISD::CtTzZeroPoison)
+                } else {
+                    (wide, op)
+                };
+                let mut count = self.dag.get_node(new_op, to, &[wide]);
+                if new_op == ISD::CtLz {
+                    let extra = self.dag.get_constant(new_bits - old_bits, to);
+                    count = self.dag.get_node(ISD::Sub, to, &[count, extra]);
+                }
+                self.dag.get_node(ISD::Truncate, from.into(), &[count])
+            }
+            ISD::CtLzZeroPoison => {
+                // Not zero, so shifting the argument to the top keeps the
+                // count.
+                let src = self.dag.operand(node, 0);
+                let wide = self.dag.get_node(ISD::AnyExtend, to, &[src]);
+                let shift =
+                    self.dag.get_constant(u128::from(to.size_in_bits() - EVT::from(from).size_in_bits()), EVT::I8);
+                let top = self.dag.get_node(ISD::Shl, to, &[wide, shift]);
+                let count = self.dag.get_node(op, to, &[top]);
+                self.dag.get_node(ISD::Truncate, from.into(), &[count])
             }
             _ => return Err(LegalizeError::Unsupported { op, ty: from.into(), what: "promote node" }),
         };

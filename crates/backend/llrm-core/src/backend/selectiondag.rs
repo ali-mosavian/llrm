@@ -115,6 +115,8 @@ mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
 #[cfg(test)]
+mod bit_count_tests;
+#[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;

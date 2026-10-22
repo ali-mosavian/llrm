@@ -221,6 +221,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | DIVREM selects i16 and i32 only; i8 (AL/AH) and i64 (RAX/CQO) stay unselected | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
 | SD303 | sdag-c | MUL_LOHI skips `orderRegForMul` (no live-in physical registers in the DAG) and handles i32 only | `crates/backend/llrm-dagisel/src/x86_mul.rs` |
+| SD304 | sdag-c | `isKnownNeverZero` is the known-bits part only (a known set bit); the cttz `cmov` stays for values the pin proves non-zero by other means; `Abs` expansion without CMOV is not translated | `selectiondag/x86_lowering.rs` |
 | SD101 | sdag-a | switch case probabilities are `1/(cases+1)`, no BPI heuristics | `selectiondag/switchcg.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.

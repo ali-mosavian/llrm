@@ -50,6 +50,8 @@ pub mod x86isd {
     pub const ADD: ISD = ISD::Target(478);
     pub const AND: ISD = ISD::Target(485);
     pub const BRCOND: ISD = ISD::Target(493);
+    pub const BSF: ISD = ISD::Target(495);
+    pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
     /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
@@ -79,6 +81,7 @@ pub mod cond {
     pub const A: u128 = 7;
     pub const S: u128 = 8;
     pub const NS: u128 = 9;
+    pub const NP: u128 = 11;
     pub const L: u128 = 12;
     pub const GE: u128 = 13;
     pub const LE: u128 = 14;
@@ -125,6 +128,11 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
+            ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
+            ISD::CtTz => Some(lower_cttz(dag, node)),
+            ISD::Parity => Some(lower_parity(dag, node)),
+            ISD::CtPop => lower_ctpop(dag, node),
             _ => None,
         }
     }
@@ -598,4 +606,199 @@ fn lower_shift_parts(
         (dag.get_select(vt, cond, tmp3, tmp2), dag.get_select(vt, cond, tmp1, tmp3))
     };
     dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[out_lo, out_hi])
+}
+
+/// `isKnownNeverZero`, the part known bits answer: some bit is known set.
+/// DEVIATE SD304: the pin also looks through `or`, `shl`, `zext`, `smax` and
+/// the like; a value they prove non-zero costs one `cmov` more here. Reason:
+/// no general query yet. Exit: with the combiner's `isKnownNeverZero`.
+/// Owner sdag-c. Review 2026-12-10.
+fn is_known_never_zero(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    super::known_bits::known_bits(dag, value).one != 0
+}
+
+/// `KnownBits::countMinLeadingZeros`.
+fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
+    (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+}
+
+/// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -
+/// x`.
+fn lower_abs(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let x = dag.operand(node, 0);
+    let zero = dag.get_constant(0, vt);
+    let neg = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[zero, x]);
+    let flags = SDValue { node: neg.node, res: 1 };
+    let code = cond_code(dag, cond::NS);
+    dag.get_node(x86isd::CMOV, vt, &[x, neg, code, flags])
+}
+
+/// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and
+/// `xor bits-1`. No pass-through `bsr` (a tuning of newer CPUs).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29730
+fn lower_ctlz(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let bits = u128::from(vt.size_in_bits());
+    let mut op = dag.operand(node, 0);
+    let mut op_vt = vt;
+    if vt == EVT::I8 {
+        // There is no 8-bit bsr.
+        op_vt = EVT::I32;
+        op = dag.get_node(ISD::ZeroExtend, op_vt, &[op]);
+    }
+    let pass_through = dag.get_undef(op_vt);
+    let scan = dag.get_node_multi(x86isd::BSR, &[op_vt, EVT::I32], &[pass_through, op]);
+    let mut result = SDValue { node: scan.node, res: 0 };
+    if dag.opcode(node) == ISD::CtLz {
+        // A zero source sets ZF: the answer is `bits`, which the xor leaves.
+        let zero_answer = dag.get_constant(bits + bits - 1, op_vt);
+        let code = cond_code(dag, cond::E);
+        let flags = SDValue { node: scan.node, res: 1 };
+        result = dag.get_node(x86isd::CMOV, op_vt, &[result, zero_answer, code, flags]);
+    }
+    let last = dag.get_constant(bits - 1, op_vt);
+    result = dag.get_node(ISD::Xor, op_vt, &[result, last]);
+    if vt == EVT::I8 { dag.get_node(ISD::Truncate, EVT::I8, &[result]) } else { result }
+}
+
+/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, then a `cmov` of `bits`
+/// for a zero source unless the source cannot be zero.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29776
+fn lower_cttz(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let src = dag.operand(node, 0);
+    let pass_through = dag.get_undef(vt);
+    let scan = dag.get_node_multi(x86isd::BSF, &[vt, EVT::I32], &[pass_through, src]);
+    if is_known_never_zero(dag, src) {
+        return SDValue { node: scan.node, res: 0 };
+    }
+    let zero_answer = dag.get_constant(u128::from(vt.size_in_bits()), vt);
+    let code = cond_code(dag, cond::E);
+    let flags = SDValue { node: scan.node, res: 1 };
+    dag.get_node(x86isd::CMOV, vt, &[SDValue { node: scan.node, res: 0 }, zero_answer, code, flags])
+}
+
+/// `LowerPARITY` ([L33977][pin]) without POPCNT: the parity flag of an
+/// 8-bit `test`, or of the xor of the two low bytes after folding the rest.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L33977
+fn lower_parity(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let mut x = dag.operand(node, 0);
+    let known = super::known_bits::known_bits(dag, x);
+    let active = known.width - min_leading_zeros(&known);
+    let not_parity = |dag: &mut SelectionDAG, flags: SDValue| {
+        let code = cond_code(dag, cond::NP);
+        let setnp = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+        if vt == EVT::I8 { setnp } else { dag.get_node(ISD::ZeroExtend, vt, &[setnp]) }
+    };
+    if vt == EVT::I8 || active <= 8 {
+        x = dag.get_zext_or_trunc(x, EVT::I8);
+        let zero = dag.get_constant(0, EVT::I8);
+        let flags = dag.get_node(x86isd::CMP, EVT::I32, &[x, zero]);
+        return not_parity(dag, flags);
+    }
+    if vt != EVT::I16 {
+        let sixteen = dag.get_constant(16, EVT::I8);
+        let hi16 = dag.get_node(ISD::Srl, EVT::I32, &[x, sixteen]);
+        x = dag.get_node(ISD::Xor, EVT::I32, &[x, hi16]);
+    } else {
+        x = dag.get_node(ISD::AnyExtend, EVT::I32, &[x]);
+    }
+    let eight = dag.get_constant(8, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I32, &[x, eight]);
+    let hi = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let lo = dag.get_node(ISD::Truncate, EVT::I8, &[x]);
+    let xor = dag.get_node_multi(x86isd::XOR, &[EVT::I8, EVT::I32], &[lo, hi]);
+    not_parity(dag, SDValue { node: xor.node, res: 1 })
+}
+
+/// `LowerCTPOP` ([L33649][pin]) for scalars: a constant source, or a value
+/// with few active bits, gets a short sequence; anything else is `None`,
+/// the generic expansion.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L33649
+fn lower_ctpop(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let mut op = dag.operand(node, 0);
+    let known = super::known_bits::known_bits(dag, op);
+    if known.is_constant() {
+        return Some(dag.get_constant(u128::from(known.one.count_ones()), vt));
+    }
+    let width = known.width;
+    let leading = min_leading_zeros(&known);
+    let trailing = known.zero.trailing_ones();
+    let active = width - leading;
+    let shifted_active = width - (leading + trailing);
+    let i8_amount = |dag: &mut SelectionDAG, n: u32| dag.get_constant(u128::from(n), EVT::I8);
+    let shift_down = |dag: &mut SelectionDAG, op: SDValue| {
+        let amount = i8_amount(dag, trailing);
+        dag.get_node(ISD::Srl, vt, &[op, amount])
+    };
+    if shifted_active <= 2 {
+        if active > 2 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let one = i8_amount(dag, 1);
+        let half = dag.get_node(ISD::Srl, EVT::I32, &[op, one]);
+        op = dag.get_node(ISD::Sub, EVT::I32, &[op, half]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    if shifted_active <= 3 {
+        if active > 3 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let one = i8_amount(dag, 1);
+        op = dag.get_node(ISD::Shl, EVT::I32, &[op, one]);
+        let table = dag.get_constant(0b1110_1001_1001_0100, EVT::I32);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[table, op]);
+        let three = dag.get_constant(3, EVT::I32);
+        op = dag.get_node(ISD::And, EVT::I32, &[op, three]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    // The 4-bit table is an `i64` lookup, and `i64` is not legal here.
+    if shifted_active <= 8 {
+        let mask11 = dag.get_constant(0x1111_1111, EVT::I32);
+        if active > 8 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let magic = dag.get_constant(0x0804_0201, EVT::I32);
+        op = dag.get_node(ISD::Mul, EVT::I32, &[op, magic]);
+        let three = i8_amount(dag, 3);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[op, three]);
+        op = dag.get_node(ISD::And, EVT::I32, &[op, mask11]);
+        op = dag.get_node(ISD::Mul, EVT::I32, &[op, mask11]);
+        let top = i8_amount(dag, 28);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[op, top]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    None
 }
