@@ -565,6 +565,7 @@ impl<'m> Machine<'m> {
                 void
             }
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => void,
+            Intrinsic::Expect => argument(0),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => {

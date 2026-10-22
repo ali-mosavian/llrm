@@ -42,6 +42,9 @@ pub struct Summary {
     /// It is `llvm.lifetime.start` or `.end`: the object its second argument
     /// points to has its bytes live, or not, from here.
     pub lifetime: bool,
+    /// It is `llvm.expect`: its first argument, with a hint of what it is
+    /// expected to be.
+    pub expect: bool,
 }
 
 /// Hashed with fixed keys: std's seeds each map afresh, and the work of
@@ -67,6 +70,7 @@ pub fn callees(module: &Module) -> Callees {
                         memset: named("llvm.memset."),
                         pattern: named("llvm.experimental.memset.pattern."),
                         lifetime: named("llvm.lifetime."),
+                        expect: named("llvm.expect."),
                         ..summary(function)
                     },
                 ))
@@ -87,6 +91,7 @@ pub fn summary(function: &Function) -> Summary {
         memset: false,
         pattern: false,
         lifetime: false,
+        expect: false,
     }
 }
 
