@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:3663592e3a22a72e5b62998f4f5df220cfdf7aa5439785b63b932c1655ef4f39 -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:70d08174c70142744033a0180ae6f256657b8c9dacc53e0679e2da70de82ed98 -->
 
 # calleepop
 
@@ -49,13 +49,23 @@ its convention.
 
 DEVIATE CC1 (owner funcattrs-port, review 2026-11-05). Reason: on the 486
 and P5 an argument register costs no more than a stack slot, and `watcall32`
-has four of them. Cost, ours against the pin's `fastcc` (`LLRM_PIN_FASTCC=1`
-builds the latter), m32, 486 model, f36fd3559b: the 71 rows' clocks (code
-bytes) at -O1 -0.9% (+0.1%), -O2 -0.2% (+0.6%), -O3 -0.2% (+0.4%), -Os +0.2%
-(-0.1%); recursion moves it most, `rectwo` -9.6% at -O1, `x_hanoi2` +32% at
--Os. QCport, 62 modules, bytes ours/pin: -O1 299137/299678, -O2
-317103/317209, -O3 342916/343179, -Os 238865/239002 (+0.06%). Exit: adopt
-the pin's `fastcc` when its rows are no worse; they are mixed, so not yet.
+has four of them. Cost: the pin's `fastcc` (`LLRM_PIN_FASTCC=1`) relative to
+ours, m32, 486 model, f36fd3559b, 71 rows; negative is the pin's better.
+
+| level | clocks | code bytes | rows that decide |
+|---|---|---|---|
+| -O1 | -0.9% (-0.1% without the two) | +0.1% | `rectwo` -9.6%, `frames` -1.6% |
+| -O2 | -0.2% (+0.1%) | +0.6% | `rectwo` -9.8%, `frames` -0.1% |
+| -O3 | -0.2% (+0.0%) | +0.4% | the same two |
+| -Os | +0.2% | -0.1% | `x_hanoi2` +32% |
+
+QCport (62 modules, `qcport.py`), bytes pin/ours: -O1 299678/299137, -O2
+317209/317103, -O3 343179/342916, -Os 239002/238865 (+0.06%). Exit: adopt
+the pin's `fastcc` if it is no worse. Met on clocks at -O1..-O3, by two
+recursive rows; not met on code bytes at any level, nor on clocks at -Os.
+Re-price 2026-11-05, after the allocator work (frame traffic decides these
+rows); a level-dependent choice (pin's at -O1..-O3, ours at -Os) is the
+option if the clocks hold.
 
 ## Example
 Before:
