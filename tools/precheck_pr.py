@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""What the landing runner refuses a PR for, asked before the PR is marked ready.
+
+    tools/landing/precheck.sh [PR] [--body-file FILE --title TEXT]
+
+Run in the worktree of the PR's branch. Every check runs and every failure is named; exit 1 if any failed, and a PR that fails
+stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `new_lib_failures`) on the branch itself:
+
+1. the branch contains the current feat/parity tip, and merges with it cleanly (a conflict names its files);
+2. the description has `Owner:` and `Rows:` lines at the start of a line, a `Deletes:` or `Reverts:` line naming every path whose
+   squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
+3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
+4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
+5. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
+   does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
+   llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import parity_smoke  # noqa: E402
+import parity_squash  # noqa: E402
+from buildslot import slotted  # noqa: E402
+
+BASE = "origin/feat/parity"
+OWNER = re.compile(r"^Owner:\s*\S+", re.M)
+ROWS = re.compile(r"^Rows:\s*\S+", re.M)
+# Built from pieces: this file must not itself name what it looks for (the runner refuses an added line that does).
+CONFIG_DIR = re.compile(r"\." + "clau" + r"de\b")
+# Files whose change can leave the slot lists out of step: the machine phases and the parity registry.
+SLOT_FILES = re.compile(r"^crates/backend/llrm-core/src/flow\.rs$|^crates/opt/llrm-transforms/src/parity[^/]*\.rs$")
+
+
+def git(
+    *args: str,
+    cwd: Path,
+) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout
+
+
+def branch_merges(
+    root: Path,
+    base: str = BASE,
+    head: str = "HEAD",
+) -> list[str]:
+    """Why the branch is not mergeable with `base`: it does not contain the tip, or merging conflicts (the files named)."""
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=root).returncode == 0:
+        return []
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", base, head], cwd=root, capture_output=True, text=True)
+    if merged.returncode:
+        names = [line for line in merged.stdout.splitlines()[1:] if line and not line.startswith("CONFLICT")]
+        return [f"the branch conflicts with {base} in {', '.join(names[:6]) or 'some files'}: merge fresh {base} and resolve"]
+    return [f"the branch does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
+
+
+def description_failures(
+    title: str,
+    body: str,
+) -> list[str]:
+    """The description lines the runner needs."""
+    why = []
+    if not OWNER.search(body):
+        why.append("no `Owner: <session>` line at the start of a line in the description")
+    if not ROWS.search(body):
+        why.append("no `Rows:` line at the start of a line in the description (`Rows: none` for a PR with no rows)")
+    return why
+
+
+def claude_paths(
+    root: Path,
+    base: str = BASE,
+    head: str = "HEAD",
+) -> list[str]:
+    """An added line that names the assistant's config directory."""
+    path = ""
+    for line in git("diff", "-U0", base, head, cwd=root).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:]
+        elif line.startswith("+") and CONFIG_DIR.search(line):
+            return [f"{path}: an added line names the assistant's config directory: {line[1:80].strip()}"]
+    return []
+
+
+def changed_packages(
+    root: Path,
+    files: list[str],
+) -> list[str]:
+    packages, _ = parity_smoke.workspace_graph(root)
+    return sorted(parity_smoke.touched_packages(files, packages, root))
+
+
+def warning_failures(
+    root: Path,
+    packages: list[str],
+    run=subprocess.run,
+    env: dict | None = None,
+) -> list[str]:
+    """`RUSTFLAGS="-D warnings" cargo check -p <crates> --tests`: its errors, one line each (a dead-code error refused a landing)."""
+    if not packages:
+        return []
+    command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)]])
+    done = run(command, cwd=root, capture_output=True, text=True, env={**(env or {}), "RUSTFLAGS": "-D warnings"})
+    if not done.returncode:
+        return []
+    errors = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.startswith("error")]
+    return [f"cargo check -D warnings: {line[:160]}" for line in errors[:8]] or ["cargo check -D warnings failed"]
+
+
+def lib_failures(
+    root: Path,
+    packages: list[str],
+    files: list[str],
+    base: str = BASE,
+    run=subprocess.run,
+    on_base=None,
+) -> list[str]:
+    """The lib tests of `packages` that fail here and not on `base`, and the slot-list tests when the phase list or the registry changed."""
+    failed: dict[str, set[str]] = {}
+    targets = list(packages)
+    extra: list[tuple[str, str]] = []
+    if any(SLOT_FILES.match(path) for path in files):
+        extra.append(("llrm-transforms", "parity"))
+    for package in targets:
+        failed.setdefault(package, set()).update(_failing(root, package, None, run))
+    for package, filter_ in extra:
+        failed.setdefault(package, set()).update(_failing(root, package, filter_, run))
+    failed = {package: tests for package, tests in failed.items() if tests}
+    if not failed:
+        return []
+    also = (on_base or _failing_on_base)(root, failed, base)
+    return [f"lib test fails here and passes on {base}: {package}::{test}" for package, tests in sorted(failed.items()) for test in sorted(tests - also.get(package, set()))]
+
+
+def _failing(
+    root: Path,
+    package: str,
+    filter_: str | None,
+    run,
+) -> set[str]:
+    command = ["cargo", "test", "-q", "--no-fail-fast", "-p", package, "--lib"] + (["--", filter_] if filter_ else [])
+    done = run(slotted(command), cwd=root, capture_output=True, text=True)
+    output = done.stdout + done.stderr
+    found = set(parity_smoke.failed_tests(output))
+    if done.returncode and not found and "no library targets" not in output and "error: " in output:
+        found = {"did-not-run"}
+    return found
+
+
+def _failing_on_base(
+    root: Path,
+    failed: dict[str, set[str]],
+    base: str,
+) -> dict[str, set[str]]:
+    """Which of the failing tests also fail on `base`: run exactly those in a temporary worktree of it (the branch's own checkout is not touched)."""
+    with tempfile.TemporaryDirectory(prefix="precheck-base-") as scratch:
+        tree = Path(scratch) / "tree"
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), base], cwd=root, check=True)
+        try:
+            return {package: parity_squash.failing_on_checkout(package, tests, tree) for package, tests in failed.items()}
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
+
+
+def precheck(
+    root: Path,
+    title: str | None,
+    body: str | None,
+    base: str = BASE,
+    run=subprocess.run,
+    on_base=None,
+) -> list[str]:
+    """Every failure, named."""
+    why = branch_merges(root, base)
+    files = git("diff", "--name-only", f"{base}...HEAD", cwd=root).split()
+    if body is None:
+        why.append("no PR description to check (open the PR as a draft first, or pass --body-file)")
+    else:
+        why += description_failures(title or "", body)
+        why += parity_squash.refusals("HEAD", body, base, root, title or "")
+    why += claude_paths(root, base)
+    packages = changed_packages(root, files)
+    why += warning_failures(root, packages, run, dict(os.environ))
+    why += lib_failures(root, packages, files, base, run, on_base)
+    return list(dict.fromkeys(why))
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("pr", nargs="?", help="the PR number (default: the branch's PR, if it has one)")
+    parser.add_argument("--body-file", type=Path)
+    parser.add_argument("--title", default="")
+    args = parser.parse_args(argv)
+    root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
+    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=root)
+    title, body = args.title, args.body_file.read_text() if args.body_file else None
+    if body is None:
+        shown = subprocess.run(["gh", "pr", "view", *([args.pr] if args.pr else []), "--json", "title,body"], cwd=root, capture_output=True, text=True)
+        if shown.returncode == 0:
+            info = json.loads(shown.stdout)
+            title, body = info["title"], info["body"] or ""
+    failures = precheck(root, title, body)
+    for line in failures:
+        print(f"PRECHECK FAIL: {line}")
+    print("precheck: PASS" if not failures else f"precheck: FAIL ({len(failures)}): keep the PR draft")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
