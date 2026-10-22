@@ -53,3 +53,12 @@ def test_a_rustfmt_crash_is_not_exit_1(tmp_path):
 def test_a_failed_formatter_build_is_not_exit_1(tmp_path):
     """cargo build exits 1 for an error as well, which is the code for 'files would change'."""
     assert run(tmp_path, build=1) >= 2
+
+
+def test_every_ignored_path_is_left_alone_on_stdin():
+    """`ignore` held two paths and the stdin check read them glued into one, so only a lone entry was honoured: the
+    generated tables were reported as needing a format."""
+    text = "fn  a( ){ }\n"
+    for path in ("crates/ir/llrm-mir/src/intrinsic_attrs.rs", "crates/backend/llrm-dagisel/src/generated/ids.rs"):
+        done = subprocess.run([str(FMT), "--stdin", path], input=text, capture_output=True, text=True)
+        assert (done.returncode, done.stdout) == (0, text), path
