@@ -155,9 +155,9 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
     seen = fake_qcport(tmp_path, fail_level="-O2")
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    verdict, detail, *_ = ps.qc_d_faces(tmp_path)
+    verdict, detail, names = ps.qc_d_faces(tmp_path)
     assert verdict == "fail" and "-O2" in detail and "no instruction choosing" in detail, detail
-    assert seen.read_text().split() == ["-O1", "-O2"]
+    assert names == ["qc_d_faces -O2"] and seen.read_text().split() == ["-O1", "-O2", "-O3", "-Os"]
     seen.unlink()
     monkeypatch.setattr(ps, "compile_ok", ps.compile_ok)
     seen2 = fake_qcport(tmp_path / "ok")
