@@ -73,7 +73,8 @@ pub enum LoadExt {
 
 const INTS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
 const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
-const ALL: [MVT; 10] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
+const ALL: [MVT; 10] =
+    [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
 pub struct TargetLowering {
     pub types: TargetLoweringInfo,
@@ -97,11 +98,21 @@ impl TargetLowering {
         }
     }
 
-    pub fn set_operation_action(&mut self, op: ISD, vt: MVT, action: Action) {
+    pub fn set_operation_action(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        action: Action,
+    ) {
         self.operations.insert((op, vt), action);
     }
 
-    fn set_ops(&mut self, ops: &[ISD], vts: &[MVT], action: Action) {
+    fn set_ops(
+        &mut self,
+        ops: &[ISD],
+        vts: &[MVT],
+        action: Action,
+    ) {
         for &op in ops {
             for &vt in vts {
                 self.set_operation_action(op, vt, action);
@@ -110,50 +121,96 @@ impl TargetLowering {
     }
 
     /// `setOperationPromotedToType`.
-    pub fn set_operation_promoted_to_type(&mut self, op: ISD, vt: MVT, to: MVT) {
+    pub fn set_operation_promoted_to_type(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        to: MVT,
+    ) {
         self.set_operation_action(op, vt, Action::Promote);
         self.promoted_to.insert((op, vt), to);
     }
 
-    pub fn set_load_ext_action(&mut self, ext: LoadExt, vt: MVT, mem: MVT, action: Action) {
+    pub fn set_load_ext_action(
+        &mut self,
+        ext: LoadExt,
+        vt: MVT,
+        mem: MVT,
+        action: Action,
+    ) {
         self.load_ext.insert((ext, vt, mem), action);
     }
 
-    pub fn set_trunc_store_action(&mut self, vt: MVT, mem: MVT, action: Action) {
+    pub fn set_trunc_store_action(
+        &mut self,
+        vt: MVT,
+        mem: MVT,
+        action: Action,
+    ) {
         self.trunc_store.insert((vt, mem), action);
     }
 
-    pub fn set_cond_code_action(&mut self, cc: CondCode, vt: MVT, action: Action) {
+    pub fn set_cond_code_action(
+        &mut self,
+        cc: CondCode,
+        vt: MVT,
+        action: Action,
+    ) {
         self.cond_code.insert((cc, vt), action);
     }
 
     /// `getOperationAction`: a type with no simple form is expanded.
-    pub fn operation_action(&self, op: ISD, vt: EVT) -> Action {
+    pub fn operation_action(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> Action {
         match vt {
             EVT::Int(_) => Action::Expand,
             EVT::Simple(vt) => self.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
         }
     }
 
-    pub fn load_ext_action(&self, ext: LoadExt, vt: MVT, mem: MVT) -> Action {
+    pub fn load_ext_action(
+        &self,
+        ext: LoadExt,
+        vt: MVT,
+        mem: MVT,
+    ) -> Action {
         self.load_ext.get(&(ext, vt, mem)).copied().unwrap_or(Action::Legal)
     }
 
-    pub fn trunc_store_action(&self, vt: MVT, mem: MVT) -> Action {
+    pub fn trunc_store_action(
+        &self,
+        vt: MVT,
+        mem: MVT,
+    ) -> Action {
         self.trunc_store.get(&(vt, mem)).copied().unwrap_or(Action::Legal)
     }
 
-    pub fn cond_code_action(&self, cc: CondCode, vt: MVT) -> Action {
+    pub fn cond_code_action(
+        &self,
+        cc: CondCode,
+        vt: MVT,
+    ) -> Action {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
-    pub fn is_operation_legal_or_custom(&self, op: ISD, vt: EVT) -> bool {
+    pub fn is_operation_legal_or_custom(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
     }
 
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
     /// (or float) type that is legal and handles `op`.
-    pub fn type_to_promote_to(&self, op: ISD, vt: MVT) -> MVT {
+    pub fn type_to_promote_to(
+        &self,
+        op: ISD,
+        vt: MVT,
+    ) -> MVT {
         if let Some(&to) = self.promoted_to.get(&(op, vt)) {
             return to;
         }
@@ -170,7 +227,11 @@ impl TargetLowering {
     fn init_actions(&mut self) {
         use ISD::*;
         for vt in ALL {
-            self.set_ops(&[SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat], &[vt], Action::Expand);
+            self.set_ops(
+                &[SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat],
+                &[vt],
+                Action::Expand,
+            );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
             self.set_ops(&[UAddOCarry, USubOCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
@@ -182,7 +243,10 @@ impl TargetLowering {
     /// m32 for i486/P5 with the x87 and no SSE: `initActions`, then the
     /// constructor's calls in the pin's order (L179 to L2830, scalar arms).
     /// `ptr` is the pointer type (`PtrVT`).
-    pub fn x86_32(features: Features, ptr: MVT) -> TargetLowering {
+    pub fn x86_32(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::x86_32());
@@ -194,7 +258,15 @@ impl TargetLowering {
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Promote);
         }
-        for (vt, mem) in [(MVT::I64, MVT::I32), (MVT::I64, MVT::I16), (MVT::I64, MVT::I8), (MVT::I32, MVT::I16), (MVT::I32, MVT::I8), (MVT::I16, MVT::I8), (MVT::F64, MVT::F32)] {
+        for (vt, mem) in [
+            (MVT::I64, MVT::I32),
+            (MVT::I64, MVT::I16),
+            (MVT::I64, MVT::I8),
+            (MVT::I32, MVT::I16),
+            (MVT::I32, MVT::I8),
+            (MVT::I16, MVT::I8),
+            (MVT::F64, MVT::F32),
+        ] {
             t.set_trunc_store_action(vt, mem, Expand);
         }
         for vt in FLOATS {

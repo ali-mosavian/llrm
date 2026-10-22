@@ -2345,7 +2345,8 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
     let mut elsewhere_unknown = None;
     let mut out = llrm_mir::dense::IdMap::default();
     // Calls reaching the same references share the one list.
-    // Hashed by Fx: the default SipHash of these lists was 27 M Ir on d_faces -O2.
+    // Hashed by Fx: the default SipHash of these lists was 27 M Ir on d_faces
+    // -O2.
     let mut shared: llrm_support::hash::HashMap<Vec<MemRef>, Rc<[MemRef]>> = llrm_support::hash::HashMap::default();
     let mut share = |list: Vec<MemRef>| -> Rc<[MemRef]> {
         if let Some(one) = shared.get(&list) {

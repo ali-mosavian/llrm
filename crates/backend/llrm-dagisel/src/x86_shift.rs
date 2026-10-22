@@ -1,24 +1,31 @@
 //! `tryShiftAmountMod`: a shift count the hardware masks anyway.
 //!
 //! # How it works
-//! x86 shifts use only the low 5 bits of the count. A count of `n + 32`, `n ^ 32`, `31 - n`
-//! (as `n ^ -1`) or `32 - n` (as `0 - n`) is the same as `n`, `~n` or `-n` masked to 5 bits, and
-//! the table's `shiftMask*` patterns drop that mask. This rewrites the count to
-//! `(newcount & 31)` and lets the table select the shift. A translation of [L4664][fold] for
-//! 32-bit and narrower values; the 64-bit branch (`Size == 64`) is not needed here (SD35).
+//! x86 shifts use only the low 5 bits of the count. A count of `n + 32`, `n ^
+//! 32`, `31 - n` (as `n ^ -1`) or `32 - n` (as `0 - n`) is the same as `n`,
+//! `~n` or `-n` masked to 5 bits, and the table's `shiftMask*` patterns drop
+//! that mask. This rewrites the count to `(newcount & 31)` and lets the table
+//! select the shift. A translation of [L4664][fold] for 32-bit and narrower
+//! values; the 64-bit branch (`Size == 64`) is not needed here (SD35).
 //!
 //! # Used by
-//! The `X86DAGToDAGISel::Select` loop, for `SHL`, `SRL`, `SRA`, `ROTL` and `ROTR` nodes.
+//! The `X86DAGToDAGISel::Select` loop, for `SHL`, `SRL`, `SRA`, `ROTL` and
+//! `ROTR` nodes.
 //!
-//! [fold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L4664
+//! [fold]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L4664
 
 use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt};
 use crate::x86_addr::AddrDag;
 
-/// Rewrites the count of the shift `node`; the node now (it may have merged with an equal one)
-/// when it did, `None` when the count is not one of the shapes.
-pub fn try_shift_amount_mod<D: AddrDag>(dag: &mut D, node: u32) -> Option<u32> {
+/// Rewrites the count of the shift `node`; the node now (it may have merged
+/// with an equal one) when it did, `None` when the count is not one of the
+/// shapes.
+pub fn try_shift_amount_mod<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) -> Option<u32> {
     const SIZE: u64 = 32;
     let orig = dag.operand(node, 1);
     let mut amount = orig;

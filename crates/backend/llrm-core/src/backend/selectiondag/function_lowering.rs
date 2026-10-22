@@ -35,14 +35,21 @@ impl FunctionLoweringInfo {
                 }
             }
         }
-        let mut info = FunctionLoweringInfo { value_regs: IdMap::new(), static_allocas: IdMap::new(), next_reg: 0, next_jump_table: 0, next_frame_index: 0 };
+        let mut info = FunctionLoweringInfo {
+            value_regs: IdMap::new(),
+            static_allocas: IdMap::new(),
+            next_reg: 0,
+            next_jump_table: 0,
+            next_frame_index: 0,
+        };
         let entry = function.entry();
         for &block in function.layout() {
             for inst in function.iter_block(block) {
                 let instruction = function.instruction(inst);
                 let Some(result) = instruction.result else { continue };
                 if let Opcode::Alloca { .. } = instruction.opcode {
-                    if Some(block) == entry && instruction.operands.iter().all(|op| matches!(op, Operand::Constant(_))) {
+                    if Some(block) == entry && instruction.operands.iter().all(|op| matches!(op, Operand::Constant(_)))
+                    {
                         info.static_allocas.insert(result, info.next_frame_index);
                         info.next_frame_index += 1;
                         continue;
@@ -58,7 +65,10 @@ impl FunctionLoweringInfo {
     }
 
     /// `CreateRegs`: the next virtual register, recorded for `value`.
-    pub fn create_reg(&mut self, value: ValueId) -> u32 {
+    pub fn create_reg(
+        &mut self,
+        value: ValueId,
+    ) -> u32 {
         let reg = self.new_reg();
         self.value_regs.insert(value, reg);
         reg

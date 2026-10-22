@@ -464,8 +464,8 @@ pub(crate) fn wide_roots(
         return 0;
     };
     // A `lea` is arithmetic: the low 16 bits of `[e?x+e?x+k]` are those of the
-    // 16-bit sum whatever the upper halves hold, and a 32-bit result is the full
-    // sum; a cell that reads the result asks for its own upper half.
+    // 16-bit sum whatever the upper halves hold, and a 32-bit result is the
+    // full sum; a cell that reads the result asks for its own upper half.
     if what.op == Operation::Address {
         return 0;
     }
@@ -719,15 +719,18 @@ mod tests {
         assert_eq!(names, ["add", "movzx", "mov"], "esi is zero-extended between its write and the cell");
     }
 
-    /// A `lea` is arithmetic, not an address read: `lea ecx, [eax-1]` of a dword `eax` is the dword sum, and
-    /// a `movzx eax, ax` put before it by the cell rule destroyed the upper half of a `long` (the first
-    /// version of the m16 conversion of a tied add to a `lea`, `g(long *p, long n)` in ~/scratch/w1-gate/xa/l32.c).
+    /// A `lea` is arithmetic, not an address read: `lea ecx, [eax-1]` of a
+    /// dword `eax` is the dword sum, and a `movzx eax, ax` put before it by
+    /// the cell rule destroyed the upper half of a `long` (the first
+    /// version of the m16 conversion of a tied add to a `lea`, `g(long *p, long
+    /// n)` in ~/scratch/w1-gate/xa/l32.c).
     #[test]
     fn test_a_lea_cell_does_not_ask_for_its_registers_upper_half() {
         use crate::model::ir::{Held, Mem};
         let (esi, ebx) =
             (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
-        let cell = Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
+        let cell =
+            Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
         let lea = one(
             1,
             Operation::Address,

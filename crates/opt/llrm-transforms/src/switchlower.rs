@@ -46,8 +46,9 @@
 //! which adds no memory operation: the module analyses frozen at the end of the
 //! pipeline stand past it.
 //!
-//! DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at isel (`visitSwitch`), here MIR is
-//! lowered before selection (CG1); exit: isel lowers switches and this is deleted; owner w-6; review 2026-11-20).
+//! DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at
+//! isel (`visitSwitch`), here MIR is lowered before selection (CG1); exit: isel
+//! lowers switches and this is deleted; owner w-6; review 2026-11-20).
 //!
 //! # Example
 //! Before:

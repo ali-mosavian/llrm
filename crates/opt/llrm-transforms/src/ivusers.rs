@@ -202,8 +202,7 @@ impl IvUsers {
         let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
-            let order: IdMap<InstId, usize> =
-                cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect();
+            let order: IdMap<InstId, usize> = cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect();
             users.sort_by_key(|user| std::cmp::Reverse(order.get(user).copied()));
         }
         for user in users {

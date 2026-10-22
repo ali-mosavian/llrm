@@ -55,7 +55,8 @@
 //! join:   %r = phi i1 [ %b, %taken ], [ false, %entry ]
 //! ```
 //!
-//! From unit test `test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
+//! From unit test
+//! `test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
 //! in `selects.rs`.
 //!
 //! # Runs

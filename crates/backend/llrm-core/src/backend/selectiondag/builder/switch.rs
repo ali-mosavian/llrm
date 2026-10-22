@@ -102,14 +102,20 @@ struct WorkItem {
 
 impl Builder<'_> {
     /// The block after `block` in the layout so far.
-    fn layout_next(&self, block: BlockId) -> Option<BlockId> {
+    fn layout_next(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
         let at = self.order.iter().position(|one| *one == block)?;
         self.order.get(at + 1).copied()
     }
 
     /// A new block, placed at `*at` in the layout (and `*at` moves past it),
     /// named as the switch's block.
-    fn new_block(&mut self, at: &mut usize) -> BlockId {
+    fn new_block(
+        &mut self,
+        at: &mut usize,
+    ) -> BlockId {
         let id = BlockId(self.next_synthetic);
         self.next_synthetic += 1;
         self.order.insert(*at, id);
@@ -124,7 +130,10 @@ impl Builder<'_> {
     }
 
     /// `ExportFromCurrentBlock(Cond)`.
-    fn export_condition(&mut self, cond: Operand) -> Result<(), Refused> {
+    fn export_condition(
+        &mut self,
+        cond: Operand,
+    ) -> Result<(), Refused> {
         let Operand::Value(value) = cond else { return Ok(()) };
         if self.info.value_regs.contains_key(&value) {
             return Ok(());
@@ -133,24 +142,37 @@ impl Builder<'_> {
         self.copy_value_to_register(cond, reg, ISD::AnyExtend)
     }
 
-    pub(super) fn visit_switch(&mut self, instruction: &Instruction) -> Result<(), Refused> {
+    pub(super) fn visit_switch(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
         let cond = instruction.operands[0];
         let cond_type = self.operand_type(cond)?;
         let width = cond_type.size_in_bits();
         let Operand::Block(default) = instruction.operands[1] else { return Err(Refused("switch default")) };
         let mut cases = Vec::new();
         for pair in instruction.operands[2..].chunks(2) {
-            let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else { return Err(Refused("switch case")) };
-            let ConstantKind::Int(bits) = self.module.context.get(value).kind else { return Err(Refused("switch case value")) };
+            let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else {
+                return Err(Refused("switch case"));
+            };
+            let ConstantKind::Int(bits) = self.module.context.get(value).kind else {
+                return Err(Refused("switch case value"));
+            };
             let shift = 128 - width;
             cases.push((((bits << shift) as i128) >> shift, dest.0));
         }
-        let successors = std::iter::once(default).chain(instruction.operands[2..].chunks(2).filter_map(|pair| match pair[1] {
-            Operand::Block(block) => Some(block),
-            _ => None,
-        }));
+        let successors =
+            std::iter::once(default).chain(instruction.operands[2..].chunks(2).filter_map(|pair| match pair[1] {
+                Operand::Block(block) => Some(block),
+                _ => None,
+            }));
         for successor in successors {
-            if self.function.iter_block(successor).next().is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Phi) {
+            if self
+                .function
+                .iter_block(successor)
+                .next()
+                .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Phi)
+            {
                 return Err(Refused("switch to a block with phis"));
             }
         }
@@ -177,7 +199,14 @@ impl Builder<'_> {
             .next()
             .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Unreachable);
         let prob = BranchProbability::new(1, cases.len() as u32 + 1);
-        let mut work = vec![WorkItem { block: self.block, first: 0, last: clusters.len() - 1, ge: None, lt: None, default_prob: prob }];
+        let mut work = vec![WorkItem {
+            block: self.block,
+            first: 0,
+            last: clusters.len() - 1,
+            ge: None,
+            lt: None,
+            default_prob: prob,
+        }];
         let mut clusters = clusters;
         while let Some(item) = work.pop() {
             if item.last - item.first + 1 > 3 && self.target_optimizes() {
@@ -189,7 +218,10 @@ impl Builder<'_> {
         Ok(())
     }
 
-    pub(super) fn visit_deferred(&mut self, item: Deferred) -> Result<(), Refused> {
+    pub(super) fn visit_deferred(
+        &mut self,
+        item: Deferred,
+    ) -> Result<(), Refused> {
         match item {
             Deferred::Case(case, cond) => self.visit_switch_case(case, cond),
             Deferred::JumpTableHeader(header) => self.emit_jump_table_header(&header),
@@ -210,7 +242,10 @@ impl Builder<'_> {
     }
 
     /// `visitJumpTableHeader`.
-    fn emit_jump_table_header(&mut self, header: &JumpTableHeader) -> Result<(), Refused> {
+    fn emit_jump_table_header(
+        &mut self,
+        header: &JumpTableHeader,
+    ) -> Result<(), Refused> {
         let pointer = self.target.dag.pointer;
         let switch_op = self.get_value(header.cond)?;
         let vt = self.dag.value_type(switch_op);
@@ -236,7 +271,10 @@ impl Builder<'_> {
     }
 
     /// `visitBitTestHeader`.
-    fn emit_bit_test_header(&mut self, header: &BitTestHeader) -> Result<(), Refused> {
+    fn emit_bit_test_header(
+        &mut self,
+        header: &BitTestHeader,
+    ) -> Result<(), Refused> {
         let switch_op = self.get_value(header.cond)?;
         let vt = self.dag.value_type(switch_op);
         let low = self.dag.get_constant(header.low_bound as u128, vt);
@@ -263,14 +301,24 @@ impl Builder<'_> {
 
     /// The type the bit-test index lives in: the condition's, or a pointer
     /// when a mask does not fit it.
-    fn bit_test_type(&self, vt: EVT, header: &BitTestHeader) -> EVT {
+    fn bit_test_type(
+        &self,
+        vt: EVT,
+        header: &BitTestHeader,
+    ) -> EVT {
         let bits = vt.size_in_bits();
         let fits = bits >= 64 || header.masks.iter().all(|(mask, _)| mask >> bits == 0);
         if fits { vt } else { self.target.dag.pointer }
     }
 
     /// `visitBitTestCase`.
-    fn emit_bit_test_case(&mut self, block: BlockId, header: &BitTestHeader, case: usize, next: BlockId) -> Result<(), Refused> {
+    fn emit_bit_test_case(
+        &mut self,
+        block: BlockId,
+        header: &BitTestHeader,
+        case: usize,
+        next: BlockId,
+    ) -> Result<(), Refused> {
         let (mask, target) = header.masks[case];
         let cond_type = self.operand_type(header.cond)?;
         let vt = self.bit_test_type(cond_type, header);
@@ -307,7 +355,13 @@ impl Builder<'_> {
     }
 
     /// `splitWorkItem`: a compare against the pivot, the halves new work.
-    fn split_work_item(&mut self, work: &mut Vec<WorkItem>, item: &WorkItem, clusters: &[CaseCluster], cond: Operand) -> Result<(), Refused> {
+    fn split_work_item(
+        &mut self,
+        work: &mut Vec<WorkItem>,
+        item: &WorkItem,
+        clusters: &[CaseCluster],
+        cond: Operand,
+    ) -> Result<(), Refused> {
         let (last_left, first_right, left_prob, right_prob) = compute_split(item, clusters);
         let pivot = clusters[first_right].low;
         let mut at = self.order.iter().position(|one| *one == item.block).expect("a placed block") + 1;
@@ -319,7 +373,14 @@ impl Builder<'_> {
             BlockId(clusters[item.first].dest)
         } else {
             let block = self.new_block(&mut at);
-            work.push(WorkItem { block, first: item.first, last: last_left, ge: item.ge, lt: Some(pivot), default_prob: item.default_prob.div(2) });
+            work.push(WorkItem {
+                block,
+                first: item.first,
+                last: last_left,
+                ge: item.ge,
+                lt: Some(pivot),
+                default_prob: item.default_prob.div(2),
+            });
             self.export_condition(cond)?;
             block
         };
@@ -330,7 +391,14 @@ impl Builder<'_> {
             BlockId(clusters[item.last].dest)
         } else {
             let block = self.new_block(&mut at);
-            work.push(WorkItem { block, first: first_right, last: item.last, ge: Some(pivot), lt: item.lt, default_prob: item.default_prob.div(2) });
+            work.push(WorkItem {
+                block,
+                first: first_right,
+                last: item.last,
+                ge: Some(pivot),
+                lt: item.lt,
+                default_prob: item.default_prob.div(2),
+            });
             self.export_condition(cond)?;
             block
         };
@@ -349,7 +417,14 @@ impl Builder<'_> {
 
     /// `lowerWorkItem` for range clusters: a compare per cluster, each in a
     /// block of its own after the first.
-    fn lower_work_item(&mut self, item: &WorkItem, clusters: &mut [CaseCluster], cond: Operand, default: BlockId, unreachable_default: bool) -> Result<(), Refused> {
+    fn lower_work_item(
+        &mut self,
+        item: &WorkItem,
+        clusters: &mut [CaseCluster],
+        cond: Operand,
+        default: BlockId,
+        unreachable_default: bool,
+    ) -> Result<(), Refused> {
         let item_pos = self.order.iter().position(|one| *one == item.block).expect("a placed block");
         let next = self.order.get(item_pos + 1).copied();
         let size = item.last - item.first + 1;
@@ -431,7 +506,12 @@ impl Builder<'_> {
                         low_bound: bits.low_bound,
                         range: bits.range,
                         reg,
-                        masks: bits.cases.iter().zip(&case_blocks).map(|(case, _)| (case.mask, BlockId(case.dest))).collect(),
+                        masks: bits
+                            .cases
+                            .iter()
+                            .zip(&case_blocks)
+                            .map(|(case, _)| (case.mask, BlockId(case.dest)))
+                            .collect(),
                         case_blocks: case_blocks.clone(),
                         default: fallthrough,
                         unreachable,
@@ -447,23 +527,31 @@ impl Builder<'_> {
                     }
                 }
                 ClusterKind::Range => {
-            let mut case = if cluster.low == cluster.high {
-                CaseBlock { cc: CondCode::SetEq, lhs: CaseValue::Condition, rhs: CaseValue::Constant(cluster.low), mhs: None, true_bb: BlockId(cluster.dest), false_bb: fallthrough, this_bb: current }
-            } else {
-                CaseBlock {
-                    cc: CondCode::SetLe,
-                    lhs: CaseValue::Constant(cluster.low),
-                    rhs: CaseValue::Constant(cluster.high),
-                    mhs: Some(CaseValue::Condition),
-                    true_bb: BlockId(cluster.dest),
-                    false_bb: fallthrough,
-                    this_bb: current,
-                }
-            };
-            if unreachable {
-                case.cc = CondCode::SetTrue;
-            }
-            self.emit_or_defer(case, cond)?;
+                    let mut case = if cluster.low == cluster.high {
+                        CaseBlock {
+                            cc: CondCode::SetEq,
+                            lhs: CaseValue::Condition,
+                            rhs: CaseValue::Constant(cluster.low),
+                            mhs: None,
+                            true_bb: BlockId(cluster.dest),
+                            false_bb: fallthrough,
+                            this_bb: current,
+                        }
+                    } else {
+                        CaseBlock {
+                            cc: CondCode::SetLe,
+                            lhs: CaseValue::Constant(cluster.low),
+                            rhs: CaseValue::Constant(cluster.high),
+                            mhs: Some(CaseValue::Condition),
+                            true_bb: BlockId(cluster.dest),
+                            false_bb: fallthrough,
+                            this_bb: current,
+                        }
+                    };
+                    if unreachable {
+                        case.cc = CondCode::SetTrue;
+                    }
+                    self.emit_or_defer(case, cond)?;
                 }
             }
             current = fallthrough;
@@ -471,7 +559,11 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn emit_or_defer(&mut self, case: CaseBlock, cond: Operand) -> Result<(), Refused> {
+    fn emit_or_defer(
+        &mut self,
+        case: CaseBlock,
+        cond: Operand,
+    ) -> Result<(), Refused> {
         if case.this_bb == self.block {
             self.visit_switch_case(case, cond)
         } else {
@@ -480,7 +572,11 @@ impl Builder<'_> {
         }
     }
 
-    fn case_constant(&mut self, value: CaseValue, cond: Operand) -> Result<SDValue, Refused> {
+    fn case_constant(
+        &mut self,
+        value: CaseValue,
+        cond: Operand,
+    ) -> Result<SDValue, Refused> {
         match value {
             CaseValue::Condition => self.get_value(cond),
             CaseValue::Constant(bits) => {
@@ -491,7 +587,11 @@ impl Builder<'_> {
     }
 
     /// `visitSwitchCase`.
-    pub(super) fn visit_switch_case(&mut self, case: CaseBlock, cond: Operand) -> Result<(), Refused> {
+    pub(super) fn visit_switch_case(
+        &mut self,
+        case: CaseBlock,
+        cond: Operand,
+    ) -> Result<(), Refused> {
         let cond_lhs = self.case_constant(case.lhs, cond)?;
         if case.cc == CondCode::SetTrue {
             let next = self.layout_next(case.this_bb);
@@ -509,7 +609,9 @@ impl Builder<'_> {
                 self.dag.get_setcc(EVT::I1, cond_lhs, rhs, case.cc)
             }
             Some(mhs) => {
-                let (CaseValue::Constant(low), CaseValue::Constant(high)) = (case.lhs, case.rhs) else { return Err(Refused("range case")) };
+                let (CaseValue::Constant(low), CaseValue::Constant(high)) = (case.lhs, case.rhs) else {
+                    return Err(Refused("range case"));
+                };
                 let op = self.case_constant(mhs, cond)?;
                 let vt = self.dag.value_type(op);
                 let width = vt.size_in_bits();
@@ -543,7 +645,10 @@ impl Builder<'_> {
 
 /// `computeSplitWorkItemInfo`: the last cluster of the left half, the first
 /// of the right, and the probabilities each side gets.
-fn compute_split(item: &WorkItem, clusters: &[CaseCluster]) -> (usize, usize, BranchProbability, BranchProbability) {
+fn compute_split(
+    item: &WorkItem,
+    clusters: &[CaseCluster],
+) -> (usize, usize, BranchProbability, BranchProbability) {
     let mut last_left = item.first;
     let mut first_right = item.last;
     let half = item.default_prob.div(2);
@@ -563,7 +668,9 @@ fn compute_split(item: &WorkItem, clusters: &[CaseCluster]) -> (usize, usize, Br
     let rank = |cluster: &CaseCluster, first: usize, last: usize| {
         clusters[first..=last]
             .iter()
-            .filter(|other| if other.prob != cluster.prob { other.prob > cluster.prob } else { other.low < cluster.low })
+            .filter(
+                |other| if other.prob != cluster.prob { other.prob > cluster.prob } else { other.low < cluster.low },
+            )
             .count()
     };
     loop {

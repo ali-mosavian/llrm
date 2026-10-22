@@ -464,7 +464,17 @@ pub fn convention(
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
     let (result, _, variadic) = module.signature(function.ty);
-    convention_for(module, layout, arch, first, function.calling_convention, result, variadic, &param_types, &function.parameter_attrs)
+    convention_for(
+        module,
+        layout,
+        arch,
+        first,
+        function.calling_convention,
+        result,
+        variadic,
+        &param_types,
+        &function.parameter_attrs,
+    )
 }
 
 /// The convention of a function type's `types`, which is `function`'s
@@ -513,9 +523,7 @@ pub fn convention_for(
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&ty, &size), class)| {
-                entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes())
-            })
+            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
@@ -578,9 +586,8 @@ pub fn convention_for(
     let result_slot = described.is_some_and(|one| {
         hidden_slot_popped_by_callee(
             one,
-            (0..param_types.len()).map(|index| {
-                llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))
-            }),
+            (0..param_types.len())
+                .map(|index| llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))),
         )
     });
     let popped = if pops {

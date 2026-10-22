@@ -1,19 +1,23 @@
-//! `foldLoadStoreIntoMemOperand`: `store (op (load p), x), p` as one read-modify-write
-//! instruction (`add [m], r`, `inc [m]`, `neg [m]`).
+//! `foldLoadStoreIntoMemOperand`: `store (op (load p), x), p` as one
+//! read-modify-write instruction (`add [m], r`, `inc [m]`, `neg [m]`).
 //!
 //! # How it works
-//! A translation of [L3925][fold] and `isFusableLoadOpStorePattern` ([L3787][fusable]) for the
-//! 8, 16 and 32-bit memory types. The store's stored value must be an `X86ISD` arithmetic node
-//! with one use, whose one operand is a normal load of the store's own address that nothing else
-//! uses, and whose chain reaches the store with no path from the load round the arithmetic.
-//! Then the load, the arithmetic and the store become one machine node on the address
-//! `selectAddr` makes; `i64` memory types do not occur at 32 bits (SD35).
+//! A translation of [L3925][fold] and `isFusableLoadOpStorePattern`
+//! ([L3787][fusable]) for the 8, 16 and 32-bit memory types. The store's stored
+//! value must be an `X86ISD` arithmetic node with one use, whose one operand is
+//! a normal load of the store's own address that nothing else uses, and whose
+//! chain reaches the store with no path from the load round the arithmetic.
+//! Then the load, the arithmetic and the store become one machine node on the
+//! address `selectAddr` makes; `i64` memory types do not occur at 32 bits
+//! (SD35).
 //!
 //! # Used by
 //! The `X86DAGToDAGISel::Select` loop, before the table, for `ISD::STORE`.
 //!
-//! [fold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3925
-//! [fusable]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3787
+//! [fold]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3925
+//! [fusable]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3787
 
 use crate::dag::{LoadExt, SDValue};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
@@ -29,13 +33,27 @@ struct Forms {
 
 fn forms(op: u16) -> Forms {
     match op {
-        x86isd::ADD => Forms { reg: [x86::ADD8mr, x86::ADD16mr, x86::ADD32mr], imm: [x86::ADD8mi, x86::ADD16mi, x86::ADD32mi] },
-        x86isd::ADC => Forms { reg: [x86::ADC8mr, x86::ADC16mr, x86::ADC32mr], imm: [x86::ADC8mi, x86::ADC16mi, x86::ADC32mi] },
-        x86isd::SUB => Forms { reg: [x86::SUB8mr, x86::SUB16mr, x86::SUB32mr], imm: [x86::SUB8mi, x86::SUB16mi, x86::SUB32mi] },
-        x86isd::SBB => Forms { reg: [x86::SBB8mr, x86::SBB16mr, x86::SBB32mr], imm: [x86::SBB8mi, x86::SBB16mi, x86::SBB32mi] },
-        x86isd::AND => Forms { reg: [x86::AND8mr, x86::AND16mr, x86::AND32mr], imm: [x86::AND8mi, x86::AND16mi, x86::AND32mi] },
-        x86isd::OR => Forms { reg: [x86::OR8mr, x86::OR16mr, x86::OR32mr], imm: [x86::OR8mi, x86::OR16mi, x86::OR32mi] },
-        x86isd::XOR => Forms { reg: [x86::XOR8mr, x86::XOR16mr, x86::XOR32mr], imm: [x86::XOR8mi, x86::XOR16mi, x86::XOR32mi] },
+        x86isd::ADD => {
+            Forms { reg: [x86::ADD8mr, x86::ADD16mr, x86::ADD32mr], imm: [x86::ADD8mi, x86::ADD16mi, x86::ADD32mi] }
+        }
+        x86isd::ADC => {
+            Forms { reg: [x86::ADC8mr, x86::ADC16mr, x86::ADC32mr], imm: [x86::ADC8mi, x86::ADC16mi, x86::ADC32mi] }
+        }
+        x86isd::SUB => {
+            Forms { reg: [x86::SUB8mr, x86::SUB16mr, x86::SUB32mr], imm: [x86::SUB8mi, x86::SUB16mi, x86::SUB32mi] }
+        }
+        x86isd::SBB => {
+            Forms { reg: [x86::SBB8mr, x86::SBB16mr, x86::SBB32mr], imm: [x86::SBB8mi, x86::SBB16mi, x86::SBB32mi] }
+        }
+        x86isd::AND => {
+            Forms { reg: [x86::AND8mr, x86::AND16mr, x86::AND32mr], imm: [x86::AND8mi, x86::AND16mi, x86::AND32mi] }
+        }
+        x86isd::OR => {
+            Forms { reg: [x86::OR8mr, x86::OR16mr, x86::OR32mr], imm: [x86::OR8mi, x86::OR16mi, x86::OR32mi] }
+        }
+        x86isd::XOR => {
+            Forms { reg: [x86::XOR8mr, x86::XOR16mr, x86::XOR32mr], imm: [x86::XOR8mi, x86::XOR16mi, x86::XOR32mi] }
+        }
         _ => unreachable!("not a read-modify-write operation"),
     }
 }
@@ -44,12 +62,21 @@ fn width_index(vt: Vt) -> Option<usize> {
     [mvt::i8, mvt::i16, mvt::i32].iter().position(|&w| w == vt)
 }
 
-fn is_constant<D: AddrDag>(dag: &D, v: SDValue) -> Option<i64> {
+fn is_constant<D: AddrDag>(
+    dag: &D,
+    v: SDValue,
+) -> Option<i64> {
     (dag.opcode(v.node) == isd::Constant).then(|| dag.constant(v)).flatten()
 }
 
-/// `isFusableLoadOpStorePattern`: the load and the chain the new node starts from.
-fn fusable<D: AddrDag>(dag: &mut D, store: u32, stored: SDValue, load_op_no: usize) -> Option<(u32, SDValue)> {
+/// `isFusableLoadOpStorePattern`: the load and the chain the new node starts
+/// from.
+fn fusable<D: AddrDag>(
+    dag: &mut D,
+    store: u32,
+    stored: SDValue,
+    load_op_no: usize,
+) -> Option<(u32, SDValue)> {
     if stored.res != 0 || !dag.has_n_uses_of_value(SDValue::new(stored.node, 0), 1) {
         return None;
     }
@@ -92,7 +119,8 @@ fn fusable<D: AddrDag>(dag: &mut D, store: u32, stored: SDValue, load_op_no: usi
     if !found {
         return None;
     }
-    // Fusing must not put the arithmetic on a path from the load to the store's chain.
+    // Fusing must not put the arithmetic on a path from the load to the store's
+    // chain.
     for i in 0..dag.num_operands(stored.node) {
         let op = dag.operand(stored.node, i);
         if op.node != load.node {
@@ -107,7 +135,11 @@ fn fusable<D: AddrDag>(dag: &mut D, store: u32, stored: SDValue, load_op_no: usi
 }
 
 /// Folds the store `store` with its load and arithmetic; `true` when it did.
-pub fn fold_load_store_into_mem_operand<D: AddrDag>(dag: &mut D, hooks: &X86Hooks, store: u32) -> bool {
+pub fn fold_load_store_into_mem_operand<D: AddrDag>(
+    dag: &mut D,
+    hooks: &X86Hooks,
+    store: u32,
+) -> bool {
     let stored = dag.operand(store, 1);
     let opc = dag.opcode(stored.node);
     let mem_vt = dag.memory_vt(store);
@@ -129,7 +161,11 @@ pub fn fold_load_store_into_mem_operand<D: AddrDag>(dag: &mut D, hooks: &X86Hook
     let Some((load, input_chain)) = found else { return false };
 
     let ptr = dag.operand(load, 1);
-    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode }).select_addr_of(Some(load), ptr) else { return false };
+    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode })
+        .select_addr_of(Some(load), ptr)
+    else {
+        return false;
+    };
     let address = [a.base, a.scale, a.index, a.disp, a.segment];
     let results = [mvt::i32, mvt::Other];
 
@@ -146,7 +182,9 @@ pub fn fold_load_store_into_mem_operand<D: AddrDag>(dag: &mut D, hooks: &X86Hook
             let is_neg_one = is_constant(dag, rhs) == Some(-1);
             if (is_one || is_neg_one) && hooks.has_no_carry_flag_uses(dag, SDValue::new(stored.node, 1)) {
                 let inc = (opc == x86isd::ADD) == is_one;
-                let new = if inc { [x86::INC8m, x86::INC16m, x86::INC32m] } else { [x86::DEC8m, x86::DEC16m, x86::DEC32m] }[width];
+                let new =
+                    if inc { [x86::INC8m, x86::INC16m, x86::INC32m] } else { [x86::DEC8m, x86::DEC16m, x86::DEC32m] }
+                        [width];
                 let ops = [address[0], address[1], address[2], address[3], address[4], input_chain];
                 break 'build dag.machine_node(new, &results, &ops);
             }

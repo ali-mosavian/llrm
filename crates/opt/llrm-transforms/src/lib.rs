@@ -209,8 +209,8 @@ pub mod ipacp;
 pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
-pub mod jumpthreading;
 pub mod jumptableswitch;
+pub mod jumpthreading;
 #[cfg(test)]
 mod jumpthreading_tests;
 pub mod knownpred;

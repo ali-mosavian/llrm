@@ -5277,8 +5277,9 @@ mod tests {
         assert_eq!(ir::root(registers(&made[0].sources)[1]), RegId::ECX, "{:?}", made[0].sources);
     }
 
-    /// An operand read as undef names a value with no register: the rewrite gives it the first register of
-    /// the class where it used to stop with `Unplaced`.
+    /// An operand read as undef names a value with no register: the rewrite
+    /// gives it the first register of the class where it used to stop with
+    /// `Unplaced`.
     #[test]
     fn test_an_operand_read_as_undef_is_placed_in_any_register() {
         let what = Semantics {

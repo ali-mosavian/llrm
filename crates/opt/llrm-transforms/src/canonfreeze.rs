@@ -194,7 +194,10 @@ fn can_handle_inst(
     function: &Function,
     inst: InstId,
 ) -> bool {
-    matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul))
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+    )
 }
 
 /// `CanonicalizeFreezeInLoopsImpl::run` for the loop headed by `header`.
@@ -217,10 +220,8 @@ fn run(
             return false;
         }
         preheader = lp.get_loop_preheader(function).expect("a preheader");
-        let phis: Vec<InstId> = function
-            .iter_block(header)
-            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-            .collect();
+        let phis: Vec<InstId> =
+            function.iter_block(header).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
             let Some(descriptor) = is_induction_phi(&cx, se, phi, lp) else { continue };
             let Some(step) = descriptor.induction_bin_op else { continue };

@@ -3,13 +3,17 @@
 //! [X86FixupBWInsts.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L165)
 //! (`runOnMachineFunction`), function by function:
 //! [`getSuperRegDestIfDead`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L190)
-//! is `super_reg_dest_if_dead`, [`tryReplaceLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L285),
-//! [`tryReplaceCopy`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L316) and
+//! is `super_reg_dest_if_dead`,
+//! [`tryReplaceLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L285),
+//! [`tryReplaceCopy`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L316)
+//! and
 //! [`tryReplaceExtend`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L353)
-//! keep their names, [`tryReplaceInstr`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L388)
-//! chooses by opcode, and [`processBasicBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L434)
-//! decides every instruction of a block against the liveness of the block as
-//! it was, then replaces them.
+//! keep their names,
+//! [`tryReplaceInstr`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L388)
+//! chooses by opcode, and
+//! [`processBasicBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L434)
+//! decides every instruction of a block against the liveness of the block as it
+//! was, then replaces them.
 //!
 //! # How it works
 //! After allocation, `mov al,[m]` becomes `movzx eax,[m]`, `mov ax,[m]`
@@ -22,15 +26,17 @@
 //!
 //! DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 //! prefix, so the pin's claim that the size is the same is false there; the
-//! rewrite is made only if it is no longer. Exit: none (a fact of the encoding).
-//! DEVIATE W3 (no number yet): the pin refuses `movsx ax,al` only as the
-//! registers AX and AL; here a `movsx` within one register is refused whatever
-//! the registers. Owner w-5.
+//! rewrite is made only if it is no longer. Exit: none (a fact of the
+//! encoding). DEVIATE W3 (no number yet): the pin refuses `movsx ax,al` only as
+//! the registers AX and AL; here a `movsx` within one register is refused
+//! whatever the registers. Owner w-5.
 //!
 //! # Runs
 //! After `Peephole`, optimizing levels only.
 
 use std::sync::Arc;
+
+use llrm_lir::registers::Regs;
 
 use crate::backend::liveness;
 use crate::backend::peep::guards::{free_fields, short_in_real_mode_at};
@@ -40,8 +46,6 @@ use crate::backend::regthrash::_dead_after;
 use crate::model::ir::{self, Loc, Operation, Reg};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use llrm_lir::registers::Regs;
-
 
 /// What an instruction may carry and still widen: the requirement of a
 /// register (`widening`), or of a load's segment (`widening_load`).
@@ -156,10 +160,14 @@ impl FixupBw {
         if !_lanes(regs, dest.register).iter().all(|lane| lane.1 < dest.width as u32) {
             return None;
         }
-        make::rest_of_root(regs, dest).is_subset(dead).then(|| {
-            let Loc::Reg(wide) = make::dword_of(regs, dest) else { unreachable!("a register") };
-            wide
-        })
+        make::rest_of_root(regs, dest)
+            .is_subset(dead)
+            .then(
+                || {
+                    let Loc::Reg(wide) = make::dword_of(regs, dest) else { unreachable!("a register") };
+                    wide
+                },
+            )
     }
 
     /// `tryReplaceLoad`: `mov` from memory to `movzx` into the dword register.

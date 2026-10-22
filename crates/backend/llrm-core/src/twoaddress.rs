@@ -2,8 +2,9 @@
 //! commutative instruction so the destination can reuse the one that dies.
 //! Translated from llvm/lib/CodeGen/TwoAddressInstructionPass.cpp at
 //! d1106deb71cc (`isRevCopyChain`, `noUseAfterLastDef`, `isCopyToReg`,
-//! `isPlainlyKilled`, `isKilled`, `isProfitableToCommute`, `commuteInstruction`,
-//! `tryInstructionCommute`, `isProfitableToConv3Addr`, `convertInstTo3Addr`).
+//! `isPlainlyKilled`, `isKilled`, `isProfitableToCommute`,
+//! `commuteInstruction`, `tryInstructionCommute`, `isProfitableToConv3Addr`,
+//! `convertInstTo3Addr`).
 //!
 //! # How it works
 //! A block is walked in order with a distance map (`DistanceMap`: the position
@@ -42,10 +43,11 @@
 //! DEVIATE TA-4 (no exit while the target reads addresses through a prefix): a
 //! dword or 16-bit result of a `lea` at m16 is the 32-bit prefixed form
 //! (`lea ecx, [eax-1]`), which costs a prefix byte where the pin's `LEA32r` has
-//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there the
-//! adds and subs convert and the shifts stay the peephole's, which fuses them
-//! with the add after them (`ThreeAddress::AddSub`). `upperzero::wide_roots`
-//! does not count a `lea` cell: it is arithmetic, not an address read.
+//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there
+//! the adds and subs convert and the shifts stay the peephole's, which fuses
+//! them with the add after them (`ThreeAddress::AddSub`).
+//! `upperzero::wide_roots` does not count a `lea` cell: it is arithmetic, not
+//! an address read.
 //!
 //! DEVIATE TA-5 (exit: `isProfitableToConv3Addr` needs the register maps of
 //! piece 4): a source that dies is never converted; the pin also converts one
@@ -54,10 +56,10 @@
 //! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
 //! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
 //! 2026-11-14): the kills come from one backward scan of each block over the
-//! live-out rows (`BodyFacts`), not from `LiveIntervals`. The pin builds them once
-//! and shares them with the coalescer; ours built a second set here (+3.0 M Ir on
-//! d_faces -O2 at m32, `LiveIntervals::new`), and the scan answers the same
-//! question for a use: no later read, or a redefinition.
+//! live-out rows (`BodyFacts`), not from `LiveIntervals`. The pin builds them
+//! once and shares them with the coalescer; ours built a second set here (+3.0
+//! M Ir on d_faces -O2 at m32, `LiveIntervals::new`), and the scan answers the
+//! same question for a use: no later read, or a redefinition.
 //!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
@@ -81,17 +83,19 @@ pub type InstrKey = u64;
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
-/// What the walks ask of a body: who reads and writes each value, which block each
-/// instruction is in, and where a value dies (`isPlainlyKilled`). The pin reads the
-/// kills off `LiveIntervals`; here one backward scan of each block from the live-out
-/// rows gives them, without the intervals, the slot indexes and the trees that
-/// `LiveIntervals::new` builds (DEVIATE TA-6: the same answer for a use, from less).
+/// What the walks ask of a body: who reads and writes each value, which block
+/// each instruction is in, and where a value dies (`isPlainlyKilled`). The pin
+/// reads the kills off `LiveIntervals`; here one backward scan of each block
+/// from the live-out rows gives them, without the intervals, the slot indexes
+/// and the trees that `LiveIntervals::new` builds (DEVIATE TA-6: the same
+/// answer for a use, from less).
 pub struct BodyFacts {
     /// By value: each instruction that names it and whether it defines it.
     refs: HashMap<u32, Vec<(InstrKey, bool)>>,
     block_of: HashMap<InstrKey, usize>,
     insn: HashMap<InstrKey, Arc<Insn>>,
-    /// (instruction, value): the use is the value's last, nothing after reads it.
+    /// (instruction, value): the use is the value's last, nothing after reads
+    /// it.
     killed: HashSet<(InstrKey, u32)>,
 }
 
@@ -99,11 +103,16 @@ impl BodyFacts {
     pub fn of(body: &LirBody) -> Self {
         use crate::backend::allocate::LiveAt;
         let rows = crate::backend::allocate::live_rows(body);
-        let mut facts =
-            Self { refs: HashMap::default(), block_of: HashMap::default(), insn: HashMap::default(), killed: HashSet::default() };
+        let mut facts = Self {
+            refs: HashMap::default(),
+            block_of: HashMap::default(),
+            insn: HashMap::default(),
+            killed: HashSet::default(),
+        };
         for (at, block) in body.blocks.iter().enumerate() {
-            // Whether each value read in this block is live after the point the scan has reached:
-            // asked of the rows the first time, then kept up.
+            // Whether each value read in this block is live after the point the
+            // scan has reached: asked of the rows the first time,
+            // then kept up.
             let mut live: HashMap<u32, bool> = HashMap::default();
             for one in block.insns.iter().rev() {
                 let key = one.id();
@@ -134,9 +143,9 @@ impl BodyFacts {
     }
 }
 
-/// Which tied instructions become a `lea`: none; the adds and subs (a target that reads
-/// addresses through a prefix, where the fusion of a shift with the add that follows
-/// stays the peephole's); or those and the shifts by 1 to 3.
+/// Which tied instructions become a `lea`: none; the adds and subs (a target
+/// that reads addresses through a prefix, where the fusion of a shift with the
+/// add that follows stays the peephole's); or those and the shifts by 1 to 3.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ThreeAddress {
     #[default]
@@ -187,13 +196,9 @@ pub fn three_address(
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
             Mem { base: Some(*base), offset: step, ..Mem::new(None, 4) }
         }
-        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => Mem {
-            base: Some(*base),
-            index: Some(*index),
-            scale: 1,
-            offset: 0,
-            ..Mem::new(None, 4)
-        },
+        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
+            Mem { base: Some(*base), index: Some(*index), scale: 1, offset: 0, ..Mem::new(None, 4) }
+        }
         _ => return None,
     };
     let mut made = one.clone();
@@ -273,7 +278,8 @@ impl<'a> Commuter<'a> {
     ) -> Option<InstrKey> {
         let mut found = None;
         for &(instr, is_def) in self.facts.refs(reg) {
-            // A definition in another block is not counted (`DefMI.getParent() != BB`).
+            // A definition in another block is not counted (`DefMI.getParent()
+            // != BB`).
             if !is_def || self.facts.block_of.get(&instr) != Some(&self.block) {
                 continue;
             }

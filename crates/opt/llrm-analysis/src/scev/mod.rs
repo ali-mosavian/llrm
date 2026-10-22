@@ -52,8 +52,6 @@ mod golden_tests;
 pub mod guards;
 #[cfg(test)]
 mod guards_tests;
-#[cfg(test)]
-mod range_factoring_tests;
 pub mod how_many;
 pub mod implied;
 pub mod invariant;
@@ -65,6 +63,8 @@ pub mod poison;
 pub mod predicate;
 pub mod print;
 pub mod range;
+#[cfg(test)]
+mod range_factoring_tests;
 pub mod rewrite;
 pub mod scope;
 #[cfg(test)]

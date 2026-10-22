@@ -50,12 +50,20 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
-    fn has_target_combine(&self, _op: ISD) -> bool {
+    fn has_target_combine(
+        &self,
+        _op: ISD,
+    ) -> bool {
         false
     }
 
     /// The replacement for `node`, or `None` for no change.
-    fn perform_dag_combine(&mut self, _dag: &mut SelectionDAG, _node: SDValue, _level: CombineLevel) -> Option<SDValue> {
+    fn perform_dag_combine(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _node: SDValue,
+        _level: CombineLevel,
+    ) -> Option<SDValue> {
         None
     }
 }
@@ -74,17 +82,27 @@ pub struct DagCombiner<'a, H: CombineHooks> {
 }
 
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
-    pub fn new(dag: &'a mut SelectionDAG, hooks: &'a mut H, level: CombineLevel) -> DagCombiner<'a, H> {
+    pub fn new(
+        dag: &'a mut SelectionDAG,
+        hooks: &'a mut H,
+        level: CombineLevel,
+    ) -> DagCombiner<'a, H> {
         DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new() }
     }
 
-    fn add_to_worklist(&mut self, node: u32) {
+    fn add_to_worklist(
+        &mut self,
+        node: u32,
+    ) {
         if self.queued.insert(node) {
             self.worklist.push(node);
         }
     }
 
-    fn add_to_worklist_with_users(&mut self, node: u32) {
+    fn add_to_worklist_with_users(
+        &mut self,
+        node: u32,
+    ) {
         let results = self.dag.node(SDValue { node, res: 0 }).values.len() as u8;
         for res in 0..results {
             let users: Vec<u32> = self.dag.users(SDValue { node, res }).collect();
@@ -101,8 +119,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(node)
     }
 
-    /// A node nothing reads that is not the root (`recursivelyDeleteUnusedNodes`).
-    fn is_dead(&self, node: u32) -> bool {
+    /// A node nothing reads that is not the root
+    /// (`recursivelyDeleteUnusedNodes`).
+    fn is_dead(
+        &self,
+        node: u32,
+    ) -> bool {
         if node == self.dag.get_root().node {
             return false;
         }
@@ -152,7 +174,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// `combine`: the generic fold, else the target's.
-    fn combine(&mut self, node: SDValue) -> Option<SDValue> {
+    fn combine(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
         let op = self.dag.opcode(node);
         let mut result = self.visit(node);
         if result.is_none() && (matches!(op, ISD::Target(_)) || self.hooks.has_target_combine(op)) {
@@ -161,7 +186,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         result
     }
 
-    fn visit(&mut self, node: SDValue) -> Option<SDValue> {
+    fn visit(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
             _ => None,
@@ -169,7 +197,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// `visitMUL`, up to the multiply-by-power-of-two folds.
-    fn visit_mul(&mut self, node: SDValue) -> Option<SDValue> {
+    fn visit_mul(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(n0);
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
