@@ -720,7 +720,9 @@ no:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers. The
     // extensions and the negate sink into the arm that reads them (a88a614969,
-    // MachineSink outside size builds): the `no` path runs none of them.
+    // MachineSink outside size builds): the `no` path runs none of them. The
+    // `mov dl, al; and dl, cl` only the branch reads is one `test al, cl` (row
+    // 45).
     assert_eq!(
         got,
         [
@@ -732,8 +734,7 @@ no:
             "setl al",
             "cmp cx, 3",
             "sete cl",
-            "mov dl, al",
-            "and dl, cl",
+            "test al, cl",
             "je L0_8",
             "L0_6:",
             "movzx dx, al",
@@ -748,7 +749,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (19, 2));
+    assert_eq!(counts(&got), (18, 2));
 }
 
 #[test]
@@ -914,8 +915,8 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            "mov ax, word ptr count",
-            "push ax",
+            // `canFoldIntoRegPush`: the load nothing else reads is the push's cell.
+            "push word ptr count",
             "call far ptr helper",
             "retf",
             "MAIN endp",
@@ -6571,6 +6572,152 @@ entry:
     assert_eq!(addresses(&shared), 2);
 }
 
+/// The loads of data segment cells in `body`.
+fn memory_loads(body: &crate::model::lir::LirBody) -> usize {
+    use crate::model::ir::{Loc, Operation};
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| {
+            one.what.as_ref().is_some_and(|what| {
+                what.op == Operation::Move
+                    && matches!(
+                        what.sources.as_slice(),
+                        [Loc::Mem(cell)] if cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Segment)
+                    )
+            })
+        })
+        .count()
+}
+
+fn precse_of(text: &str) -> (crate::model::lir::LirBody, crate::model::lir::LirBody) {
+    let body = selected(text, "f").expect("selects").body;
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    (body, shared)
+}
+
+/// A load of a constant table at the same index in two blocks was made twice:
+/// MachineCSE shares a load of invariant memory
+/// (`isDereferenceableInvariantLoad`).
+#[test]
+fn test_a_load_of_a_constant_table_in_two_blocks_is_made_once() {
+    let text = "@tab = constant [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+define i16 @f(i16 %n, i1 %c) addrspace(1) {
+entry:
+  %p = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %a = load i16, ptr %p
+  br i1 %c, label %t, label %e
+t:
+  %q = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %b = load i16, ptr %q
+  %s = add i16 %a, %b
+  ret i16 %s
+e:
+  ret i16 %a
+}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(memory_loads(&body), 2, "the premise: the table is loaded twice");
+    assert_eq!(memory_loads(&shared), 1);
+}
+
+/// The same loads of a table that is not constant stay: a store may change it.
+#[test]
+fn test_a_load_of_a_table_that_is_not_constant_is_kept() {
+    let text = "@tab = global [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+define i16 @f(i16 %n, i1 %c) addrspace(1) {
+entry:
+  %p = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %a = load i16, ptr %p
+  br i1 %c, label %t, label %e
+t:
+  %q = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %b = load i16, ptr %q
+  %s = add i16 %a, %b
+  ret i16 %s
+e:
+  ret i16 %a
+}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(memory_loads(&body), 2, "the premise");
+    assert_eq!(memory_loads(&shared), 2);
+}
+
+/// The zero extensions of `body`: what is computed from a register, sets no
+/// flags and is not a copy.
+fn extensions(body: &crate::model::lir::LirBody) -> Vec<(i64, usize)> {
+    body.blocks
+        .iter()
+        .map(|block| {
+            let count = block
+                .insns
+                .iter()
+                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Extend))
+                .count();
+            (block.at, count)
+        })
+        .collect()
+}
+
+/// An expression computed in a block and again in a block it reaches, where
+/// neither dominates the other, was computed twice: `PerformSimplePRE` makes
+/// it once before the branch of their dominator and CSE removes both.
+#[test]
+fn test_a_partially_redundant_expression_is_computed_once_in_the_dominator() {
+    let text = "@g = global i16 0
+@h = global i16 0
+define void @f(i8 %b, i1 %c, i1 %d) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %m
+a:
+  %z1 = zext i8 %b to i16
+  store i16 %z1, ptr @g
+  br i1 %d, label %m, label %r
+m:
+  %z2 = zext i8 %b to i16
+  store i16 %z2, ptr @h
+  ret void
+r:
+  ret void
+}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(extensions(&body).iter().map(|one| one.1).sum::<usize>(), 2, "the premise");
+    assert_eq!(extensions(&shared).iter().map(|one| one.1).sum::<usize>(), 1);
+    assert_eq!(extensions(&shared)[0].1, 1, "made in the entry block: {:?}", extensions(&shared));
+}
+
+/// The same shape where the dominator runs far more often than the two blocks
+/// together: hoisting would add work, so the copies stay.
+#[test]
+fn test_a_partially_redundant_expression_is_not_hoisted_where_it_costs() {
+    let text = "@g = global i16 0
+@h = global i16 0
+define void @f(i8 %b, i1 %c, i1 %d, i1 %e) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %o, !prof !0
+a:
+  %z1 = zext i8 %b to i16
+  store i16 %z1, ptr @g
+  br label %m
+o:
+  br i1 %d, label %m, label %r, !prof !1
+m:
+  %z2 = zext i8 %b to i16
+  store i16 %z2, ptr @h
+  ret void
+r:
+  ret void
+}
+!0 = !{!\"branch_weights\", i32 1, i32 99}
+!1 = !{!\"branch_weights\", i32 1, i32 99}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(extensions(&body).iter().map(|one| one.1).sum::<usize>(), 2, "the premise");
+    assert_eq!(extensions(&shared), extensions(&body));
+}
+
 /// A float argument read after a call is read from its cell there, as the
 /// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
 /// reader, so both arguments were loaded first and spilled across the call.
@@ -6751,4 +6898,20 @@ b0:
     assert!(text.contains("sub sp,") || text.contains("sub esp,"), "the stack pointer is lowered: {text}");
     assert!(text.contains("and "), "by a size rounded to the stack's alignment: {text}");
     assert!(!text.contains("loop") && !text.contains("__chkstk") && !text.contains("B$STK"), "no probe: {text}");
+}
+
+/// A register-plus-register add of a live source is a `lea [a+b]`, and the assembler has a form for it
+/// at both targets: the first version carried a literal address in the cell and `host.c` and `mdl.c`
+/// (QCport -Os, m16) stopped with "no encoding" for `lea r32, [abs+r38+r37]`.
+#[test]
+fn test_a_register_sum_of_a_live_source_is_encoded_as_a_lea() {
+    let text = "define i32 @f(i32 %a, i32 %b) addrspace(1) {
+  %c = add i32 %a, %b
+  %d = and i32 %c, %a
+  %e = xor i32 %d, %b
+  ret i32 %e
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("lea ")), "{got:?}");
 }

@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 10] = [
+const UNOPTIMIZED: &[&str] = &[
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -68,21 +68,33 @@ const UNOPTIMIZED: [&str; 10] = [
     "MachineCSE",
     "OptimizePHIs",
     "LateCleanup",
+    "PushFold",
     "FixupSetCC",
+    "CopyPropagation",
+    "LiveRangeShrink",
+    "X86OptimizeLEAs",
+    "MachineLICM",
+    "CmpAsSub",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 23] = [
+const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
+    ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
+    ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
+    ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("FlagsCopy", "flagscopy@5"),
+    ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
+    ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
     ("FloatAlloc", "floatalloc@8"),
@@ -96,6 +108,7 @@ const SLOTS: [(&str, &str); 23] = [
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
+    ("CopyPropagation", "copyprop@18"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where
@@ -125,6 +138,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // The compare of a value with the constant it was just subtracted by
+        // shares the subtract's flags (X86TargetLowering::EmitCmp).
+        Box::new(crate::backend::cmpsub::CmpAsSub),
         // On SSA, first: a phi cycle that carries one value is that value (the
         // pin: OptimizePHIs, ahead of MachineCSE).
         Box::new(crate::backend::optimizephis::OptimizePhis),
@@ -138,11 +154,23 @@ pub fn machine_with<'a>(
             prices: ssaspill::Prices::of(target),
             run: spilling.clone().unwrap_or_default(),
         }),
+        // On SSA, a loop-invariant computation in the preheader (the pin:
+        // EarlyMachineLICM, ahead of MachineCSE).
+        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, before the pin allocates: two addresses that differ in a
+        // displacement are one (X86OptimizeLEAs, pre-RA).
+        Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
+        // On SSA, last: an instruction up to the last definition of what it
+        // reads (the pin: LiveRangeShrink, x86 addPreRegAlloc).
+        Box::new(crate::backend::liverangeshrink::LiveRangeShrink {
+            segments: segments.clone(),
+            classes: Rc::clone(classes),
+        }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
@@ -152,9 +180,15 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // Flags kept across an instruction that clobbers them become a byte
+        // per condition (the pin: X86FlagsCopyLowering, every level).
+        Box::new(crate::backend::flagscopy::FlagsCopy),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        // A pushed value a load made, read nowhere else, is pushed from the
+        // load's cell (the pin: X86CallFrameOptimization's push folding).
+        Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
         if crate::backend::allocate::rfp_on() {
             Box::new(floatassign::FloatPrep {
@@ -167,7 +201,13 @@ pub fn machine_with<'a>(
             Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
         },
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress { native: target.dword_address_form().is_some_and(|form| !form.secondary) }),
+        Box::new(twoaddr::TwoAddress {
+            lea: match target.dword_address_form() {
+                None => crate::twoaddress::ThreeAddress::Off,
+                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSub,
+                Some(_) => crate::twoaddress::ThreeAddress::All,
+            },
+        }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
         Box::new(allocate::RegAlloc::new(
             Some(&pinned),
@@ -201,6 +241,8 @@ pub fn machine_with<'a>(
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
+        // The pin runs MachineCopyPropagation again after tail duplication.
+        Box::new(crate::backend::machinecp::CopyPropagation),
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
@@ -549,5 +591,25 @@ mod tests {
         .expect("a phase that changes nothing");
         assert_eq!(Arc::strong_count(&kept), 1, "the phase's end kept it");
         drop(body);
+    }
+
+    /// Each PR that added a phase bumped the literal length of `UNOPTIMIZED`
+    /// and `SLOTS`: two of them in one batch did not build, and the second
+    /// always conflicted (the 18:10 batch, 12 PRs). The lists are slices.
+    #[test]
+    fn the_phase_lists_have_no_literal_length() {
+        let text = include_str!("flow.rs");
+        for name in ["UNOPTIMIZED", "SLOTS"] {
+            let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
+            assert!(line.contains(": &["), "{line}");
+        }
+    }
+
+    /// Every phase `-O0` leaves out is a phase with a slot.
+    #[test]
+    fn every_unoptimized_phase_has_a_slot() {
+        for class in UNOPTIMIZED {
+            assert!(SLOTS.iter().any(|(one, _)| one == class), "{class}");
+        }
     }
 }

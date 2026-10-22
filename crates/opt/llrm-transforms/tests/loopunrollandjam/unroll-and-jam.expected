@@ -381,7 +381,7 @@ B0:
   %v0 = load i32, ptr @f
   br i1 false, label %B1, label %B6
 B1:
-  %v1 = phi i32 [ %v0, %B0 ], [ %v25, %B10 ]
+  %v1 = phi i32 [ %v0, %B0 ], [ %v24, %B10 ]
   call void @llvm.assume(i1 true)
   br label %B2
 B2:
@@ -396,8 +396,8 @@ B4:
   %v6 = phi i32 [ %v2, %B3 ]
   br label %B5
 B5:
-  %v7 = phi i32 [ %v23, %B10 ], [ %v6, %B4 ]
-  %v8 = phi i32 [ %v24, %B10 ], [ 7, %B4 ]
+  %v7 = phi i32 [ %v22, %B10 ], [ %v6, %B4 ]
+  %v8 = phi i32 [ %v23, %B10 ], [ 7, %B4 ]
   ret i32 0
 B6:
   br label %B7
@@ -419,12 +419,11 @@ B8:
   %v21 = icmp ne i32 %v20, 7
   br i1 %v21, label %B8, label %B9
 B9:
-  %v22 = icmp ne i32 %v12, 4
-  br i1 %v22, label %B7, label %B10
+  br i1 false, label %B7, label %B10
 B10:
-  %v23 = phi i32 [ 2, %B9 ]
-  %v24 = phi i32 [ 7, %B9 ]
-  %v25 = phi i32 [ 2, %B9 ]
+  %v22 = phi i32 [ 2, %B9 ]
+  %v23 = phi i32 [ 7, %B9 ]
+  %v24 = phi i32 [ 2, %B9 ]
   br i1 true, label %B1, label %B5
 @test7
 B0:
@@ -769,9 +768,9 @@ B6:
   %v7 = phi i64 [ %v4, %B5 ]
   br label %B7
 B7:
-  %v8 = phi i64 [ %v27, %B23 ], [ 0, %B6 ]
-  %v9 = phi i64 [ %v28, %B23 ], [ %v7, %B6 ]
-  %v10 = phi i32 [ %v29, %B23 ], [ 0, %B6 ]
+  %v8 = phi i64 [ %v26, %B23 ], [ 0, %B6 ]
+  %v9 = phi i64 [ %v27, %B23 ], [ %v7, %B6 ]
+  %v10 = phi i32 [ %v28, %B23 ], [ 0, %B6 ]
   store i64 %v8, ptr @g
   ret i16 0
 B8:
@@ -818,12 +817,11 @@ B21:
   br i1 %v24, label %B22, label %B13
 B22:
   %v25 = phi i64 [ %v22, %B21 ]
-  %v26 = icmp ne i64 %v14, 4
-  br i1 %v26, label %B12, label %B23
+  br i1 false, label %B12, label %B23
 B23:
-  %v27 = phi i64 [ 0, %B22 ]
-  %v28 = phi i64 [ %v25, %B22 ]
-  %v29 = phi i32 [ 0, %B22 ]
+  %v26 = phi i64 [ 0, %B22 ]
+  %v27 = phi i64 [ %v25, %B22 ]
+  %v28 = phi i32 [ 0, %B22 ]
   br i1 true, label %B1, label %B7
 B24:
   br label %B21
@@ -1232,7 +1230,7 @@ B0:
   %v0 = load i32, ptr @f
   br i1 false, label %B1, label %B6
 B1:
-  %v1 = phi i32 [ %v0, %B0 ], [ %v25, %B10 ]
+  %v1 = phi i32 [ %v0, %B0 ], [ %v24, %B10 ]
   call void @llvm.assume(i1 true)
   br label %B2
 B2:
@@ -1247,8 +1245,8 @@ B4:
   %v6 = phi i32 [ %v2, %B3 ]
   br label %B5
 B5:
-  %v7 = phi i32 [ %v23, %B10 ], [ %v6, %B4 ]
-  %v8 = phi i32 [ %v24, %B10 ], [ 7, %B4 ]
+  %v7 = phi i32 [ %v22, %B10 ], [ %v6, %B4 ]
+  %v8 = phi i32 [ %v23, %B10 ], [ 7, %B4 ]
   ret i32 0
 B6:
   br label %B7
@@ -1270,12 +1268,11 @@ B8:
   %v21 = icmp ne i32 %v20, 7
   br i1 %v21, label %B8, label %B9
 B9:
-  %v22 = icmp ne i32 %v12, 4
-  br i1 %v22, label %B7, label %B10
+  br i1 false, label %B7, label %B10
 B10:
-  %v23 = phi i32 [ 2, %B9 ]
-  %v24 = phi i32 [ 7, %B9 ]
-  %v25 = phi i32 [ 2, %B9 ]
+  %v22 = phi i32 [ 2, %B9 ]
+  %v23 = phi i32 [ 7, %B9 ]
+  %v24 = phi i32 [ 2, %B9 ]
   br i1 true, label %B1, label %B5
 @test7
 B0:
@@ -1620,9 +1617,9 @@ B6:
   %v7 = phi i64 [ %v4, %B5 ]
   br label %B7
 B7:
-  %v8 = phi i64 [ %v27, %B23 ], [ 0, %B6 ]
-  %v9 = phi i64 [ %v28, %B23 ], [ %v7, %B6 ]
-  %v10 = phi i32 [ %v29, %B23 ], [ 0, %B6 ]
+  %v8 = phi i64 [ %v26, %B23 ], [ 0, %B6 ]
+  %v9 = phi i64 [ %v27, %B23 ], [ %v7, %B6 ]
+  %v10 = phi i32 [ %v28, %B23 ], [ 0, %B6 ]
   store i64 %v8, ptr @g
   ret i16 0
 B8:
@@ -1669,12 +1666,11 @@ B21:
   br i1 %v24, label %B22, label %B13
 B22:
   %v25 = phi i64 [ %v22, %B21 ]
-  %v26 = icmp ne i64 %v14, 4
-  br i1 %v26, label %B12, label %B23
+  br i1 false, label %B12, label %B23
 B23:
-  %v27 = phi i64 [ 0, %B22 ]
-  %v28 = phi i64 [ %v25, %B22 ]
-  %v29 = phi i32 [ 0, %B22 ]
+  %v26 = phi i64 [ 0, %B22 ]
+  %v27 = phi i64 [ %v25, %B22 ]
+  %v28 = phi i32 [ 0, %B22 ]
   br i1 true, label %B1, label %B7
 B24:
   br label %B21

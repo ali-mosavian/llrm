@@ -328,6 +328,7 @@ dependencies = [
  "llrm-coff32",
  "llrm-coff64",
  "llrm-core",
+ "llrm-dagisel",
  "llrm-dwarf",
  "llrm-elf32",
  "llrm-elf64",

@@ -549,6 +549,9 @@ def batch(prs: list, passes, land, refuse) -> None:
     batch(prs[middle:], passes, land, refuse)
 
 
+SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
+
+
 def new_lib_failures(
     files: list[str],
     on_merged=None,
@@ -560,6 +563,10 @@ def new_lib_failures(
     smoke = parity_smoke_module()
     packages, _ = smoke.workspace_graph()
     touched = smoke.touched_packages(files, packages)
+    # llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources: a change to any .rs under crates/ can turn one red,
+    # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
+    if touched and any(f.startswith("crates/") and f.endswith(".rs") for f in files):
+        touched = touched | {SCAN_CRATE}
     smoke.LAST_LIB.clear()
     failed = (on_merged or smoke.dependants_lib_failures)(touched) if touched else set()
     print(lib_tests_line(touched, smoke.LAST_LIB))

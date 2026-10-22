@@ -393,10 +393,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine Common Subexpression Elimination",
-        Missing,
+        Executed,
         "precse.rs (before phi elimination), machinecse.rs (after allocation)",
         "-disable-machine-cse",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry machinecse@4 is partial; untranslated PerformSimplePRE and invariant-load CSE. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 897 instr 2780 B, pin-with 811 instr 2652 B, pin-without 832 instr 2716 B (4 programs)",
+        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE4, #3734); machinecse.rs (after allocation) is ours alone, DEVIATE CSE5: removed, 10 of 568 objects grow (+15..+187 B), none shrinks. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 897 instr 2780 B, pin-with 811 instr 2652 B, pin-without 832 instr 2716 B (4 programs)",
     ),
     row(
         "Machine code sinking",
@@ -422,10 +422,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Live Range Shrink",
-        Missing,
-        "pressuresink.rs stands in",
+        Match,
+        "liverangeshrink.rs",
         "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry pressuresink@5. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
+        "w-4; translated 2026-10-23, registry liverangeshrink@4, before phi elimination. DEVIATE LRS1 in the header (class test, flags). pressuresink.rs stays until the machine scheduler. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup SetCC",
@@ -436,17 +436,17 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Optimize",
-        Missing,
-        "",
+        Match,
+        "leaopt.rs",
         "-disable-x86-lea-opt",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -Os: ours 92 instr 244 B, pin-with 92 instr 250 B, pin-without 92 instr 251 B (1 programs)",
+        "translated (slot leaopt@5, before phi elimination); DEVIATE LO-1: only register-and-number addresses (no symbol or frame displacement), LO-2: 32-bit addresses only (exit w-6, 2026-11-09). Pin: changed code in 4 (-O2) and 34 (-Os) of 77 IRs; -disable-x86-lea-opt -O2: +6 instr, +32 B, 3 IRs differ; -disable-x86-lea-opt -Os: -60 instr, +707 B, 34 IRs differ",
     ),
     row(
         "X86 Optimize Call Frame",
-        Missing,
+        Deviate,
+        "pushfold.rs",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",
@@ -471,10 +471,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 EFLAGS copy lowering",
-        Missing,
-        "flag lanes (liveness.rs), stepflags.rs",
+        Deviate,
+        "flagscopy.rs",
         "",
-        "w-4; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "CG9: translated (registry flagscopy@5) over an explicit flags copy, the pseudo pair standing for the pin's COPY $eflags search (R1 one block, R2); reason: isel makes no flags copy; cost: none; exit: an isel producer of a flags copy; owner w-5; review 2026-11-19. Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -657,10 +657,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
-        Missing,
-        "prologue.rs, masm.rs",
+        Deviate,
+        "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, not yet called: FO-1)",
         "",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry prologue@13. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner w-6; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
@@ -778,10 +778,10 @@ const ROWS: &[Row] = &[
     row("X86 vzeroupper inserter", Na, "", "", "AVX only. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs"),
     row(
         "X86 Byte/Word Instruction Fixup",
-        Missing,
+        Deviate,
+        "peephole.peep group byte_word_fixup",
         "",
-        "",
-        "w-8; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a peephole group (W2), one rule per pin function with its permalink, not a pass; reason: the liveness and encoding facts are the peephole's; cost: none known; exit: a Rust pass once those facts reach LIRTransforms; owner w-5; review 2026-11-19. W1: real mode only if not longer. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
     ),
     row(
         "X86 Atom pad short functions",

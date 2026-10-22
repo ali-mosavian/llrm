@@ -17,9 +17,16 @@
 pub mod dag;
 #[rustfmt::skip]
 pub mod generated;
+pub mod instr;
 pub mod interp;
 pub mod matcher;
 pub mod predicates;
+pub mod x86_addr;
+pub mod x86_classes;
+pub mod x86_hooks;
+pub mod x86_rmw;
+pub mod x86_select;
+pub mod x86_shift;
 
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;
