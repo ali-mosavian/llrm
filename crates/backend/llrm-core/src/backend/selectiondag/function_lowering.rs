@@ -1,8 +1,7 @@
 //! `FunctionLoweringInfo`: which values live in virtual registers across
 //! blocks, and which allocas are frame indices.
 
-use std::collections::{HashMap, HashSet};
-
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{Function, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
@@ -10,9 +9,9 @@ use llrm_mir::opcode::Opcode;
 pub struct FunctionLoweringInfo {
     /// `ValueMap`: a value used outside its block (or by a phi) and the
     /// virtual register that carries it.
-    pub value_regs: HashMap<ValueId, u32>,
+    pub value_regs: IdMap<ValueId, u32>,
     /// `StaticAllocaMap`.
-    pub static_allocas: HashMap<ValueId, i32>,
+    pub static_allocas: IdMap<ValueId, i32>,
     next_reg: u32,
     next_frame_index: i32,
 }
@@ -21,7 +20,7 @@ impl FunctionLoweringInfo {
     /// `FunctionLoweringInfo::set`: one walk in layout order, numbering
     /// registers and frame indices as the pin does.
     pub fn new(function: &Function) -> FunctionLoweringInfo {
-        let mut outside: HashSet<ValueId> = HashSet::new();
+        let mut outside: IdSet<ValueId> = IdSet::new();
         for &block in function.layout() {
             for inst in function.iter_block(block) {
                 let instruction = function.instruction(inst);
@@ -35,7 +34,7 @@ impl FunctionLoweringInfo {
                 }
             }
         }
-        let mut info = FunctionLoweringInfo { value_regs: HashMap::new(), static_allocas: HashMap::new(), next_reg: 0, next_frame_index: 0 };
+        let mut info = FunctionLoweringInfo { value_regs: IdMap::new(), static_allocas: IdMap::new(), next_reg: 0, next_frame_index: 0 };
         let entry = function.entry();
         for &block in function.layout() {
             for inst in function.iter_block(block) {
