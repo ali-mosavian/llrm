@@ -951,3 +951,58 @@ b0:
     .expect("the walk runs");
     assert!(!stale.get(), "the held declarations differ from a fresh listing");
 }
+
+/// queens' `place`: one self-call, in a loop that runs it per column. gcc's
+/// `recursive_inlining` takes it; the admission by two call sites did not, so
+/// main's three-deep nesting was never made (-O3 clocks 151958 against 94766).
+#[test]
+fn test_a_recursion_with_one_call_in_a_loop_is_copied_into_itself() {
+    use llrm_mir::program::ProgramPass;
+    let text = "define internal i32 @place(i32 %row, i32 %n) {
+b0:
+  %done = icmp eq i32 %row, %n
+  br i1 %done, label %leaf, label %loop
+
+leaf:
+  ret i32 1
+
+loop:
+  %col = phi i32 [ 0, %b0 ], [ %col2, %loop ]
+  %found = phi i32 [ 0, %b0 ], [ %found2, %loop ]
+  %next = add i32 %row, 1
+  %r = call i32 @place(i32 %next, i32 %n)
+  %found2 = add i32 %found, %r
+  %col2 = add i32 %col, 1
+  %again = icmp slt i32 %col2, %n
+  br i1 %again, label %loop, label %out
+
+out:
+  ret i32 %found2
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @place(i32 0, i32 %n)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let copies = llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut analyses = Default::default();
+            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            walk.run(program, &mut analyses).expect("the walk runs");
+            let mut modules = super::managers(program, &mut analyses);
+            let mut late = crate::walk::SelfInline { simplify: Box::new(|_, _, _, _| {}), for_size: false };
+            late.apply(program, &mut modules).expect("the late step runs");
+            let printed = crate::testing::printed(&program.modules[0]);
+            let body = printed.split("define internal i32 @place").nth(1).expect("@place");
+            let body = body.split("\ndefine ").next().expect("its body");
+            body.matches("%next").count()
+        },
+    )
+    .expect("lent");
+    assert!(copies >= 3, "place was not copied into itself: {copies} levels of `next`");
+}

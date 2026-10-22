@@ -440,15 +440,16 @@ fn self_calls(
             distinct.push((operands, inst));
         }
     }
-    if for_size || distinct.len() < 2 {
+    if for_size || distinct.is_empty() {
         return None;
     }
     let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
-    // A tree: each call of the function makes one or more calls of itself
-    // (the frequencies of its distinct self-calls over the entry's sum to 1
-    // or more). Fewer, as in recpow's two calls in exclusive branches (0.625),
-    // is a linear recursion, which tail-call elimination turns into a loop:
-    // copying it peels it (+3.7% clocks at -O2).
+    // A tree, in gcc's sense of `recursive_inlining`: each call of the function
+    // makes one or more calls of itself, from one site in a loop (queens'
+    // `place`) or several (the frequencies of its distinct self-calls over the
+    // entry's sum to 1 or more). Fewer, as in recpow's two calls in exclusive
+    // branches (0.625), is a linear recursion, which tail-call elimination
+    // turns into a loop: copying it peels it (+3.7% clocks at -O2).
     let calls: f64 = distinct.iter().map(|(_, inst)| frequencies.get(inst).copied().unwrap_or(0.0)).sum();
     if calls < 1.0 - 1e-9 {
         return None;
