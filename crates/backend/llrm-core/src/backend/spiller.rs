@@ -4984,7 +4984,7 @@ fn _tied(
 /// `LirBody::next_value`, from the postings the allocator follows the body
 /// with: the largest value they hold and the phis' results, not a walk of
 /// every instruction.
-fn _next_value_following(body: &LirBody) -> u32 {
+pub(crate) fn _next_value_following(body: &LirBody) -> u32 {
     let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
     let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
     if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
