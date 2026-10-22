@@ -1051,15 +1051,4 @@ impl ScalarEvolution {
             }
         }
     }
-
-    /// `isKnownOnEveryIteration(Pred, AR, RHS)`. SEAM (S5).
-    pub fn is_known_on_every_iteration_pred(
-        &mut self,
-        _cx: &Cx,
-        _pred: IntPredicate,
-        _ar: Scev,
-        _rhs: Scev,
-    ) -> bool {
-        false
-    }
 }

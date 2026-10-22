@@ -1,5 +1,4 @@
 d 0 call fp
-d 1 fadd fp
 d 2 fneg fp
 d 4 add vector
 d 5 call i32
