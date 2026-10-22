@@ -2804,7 +2804,7 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let applied = Applied { options, ..Applied::default() };
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
-        assert_eq!(&names[at.saturating_sub(2)..at], ["loopsimplify", "lcssa"], "{names:?}");
+        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
         assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
     }
 }
