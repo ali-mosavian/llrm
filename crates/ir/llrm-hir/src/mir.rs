@@ -3494,7 +3494,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
                 self.define(instruction, result);
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fln | Op::Fexp | Op::Fround => {
+            Op::Fabs
+            | Op::Fsqrt
+            | Op::Fsin
+            | Op::Fcos
+            | Op::Fatan
+            | Op::Flog2
+            | Op::Fexp2
+            | Op::Fln
+            | Op::Fexp
+            | Op::Fround => {
                 let value = self.value(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let result = self.intrinsic(op, value, ty)?.ok_or_else(|| format!("{op} of a non-float"))?;
