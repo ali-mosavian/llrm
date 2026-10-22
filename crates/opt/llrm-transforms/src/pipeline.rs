@@ -598,6 +598,10 @@ impl FunctionPass for Slot {
         self.inner.reads()
     }
 
+    fn wants_sizes(&self) -> bool {
+        self.inner.wants_sizes()
+    }
+
     fn run(
         &mut self,
         unit: &mut Unit,
@@ -1276,6 +1280,9 @@ fn rerun(
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    if fixed.wants_sizes() {
+        declared.count_referenced(module);
+    }
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
@@ -1547,6 +1554,10 @@ impl Fixed {
 impl FunctionPass for Fixed {
     fn dumps_inputs_itself(&self) -> bool {
         true
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.passes.iter().any(|pass| pass.wants_sizes())
     }
 
     fn name(&self) -> &'static str {
