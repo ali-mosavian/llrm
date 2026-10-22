@@ -111,7 +111,7 @@ pub fn three_address(one: &Insn) -> Option<Arc<Insn>> {
     use crate::model::ir::{Imm, Mem, Operation};
     let what = one.what.as_ref()?;
     if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "sub"))
+        || !matches!(what.name.as_deref(), Some("add" | "sub" | "shl"))
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
@@ -125,6 +125,17 @@ pub fn three_address(one: &Insn) -> Option<Arc<Insn>> {
         return None;
     }
     let cell = match (&what.sources[1], what.name.as_deref()) {
+        // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
+        // (the index alone takes a 32-bit displacement, as the pin's does).
+        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl")) => Mem {
+            base: (*shift == 1).then_some(*base),
+            index: Some(*base),
+            scale: if *shift == 1 { 1 } else { 1 << shift },
+            offset: 0,
+            disp_width: if *shift == 1 { 0 } else { 4 },
+            ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+        },
+        (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
             Mem { base: Some(*base), offset: step, ..Mem::new(None, 4) }

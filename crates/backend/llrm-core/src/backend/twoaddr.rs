@@ -136,7 +136,7 @@ pub fn tied(
             if native
                 && let Some(three) = crate::twoaddress::three_address(&one)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
-                && !walk.killed_at(&one, base.value)
+                && !walk.killed_at(&block.insns[place], base.value)
                 && crate::twoaddress::flags_dead_after(&block.insns, place, body.regs(), body.bits)
             {
                 changed = true;
@@ -919,6 +919,34 @@ mod tests {
         let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().expect("a lea");
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!(cell.offset, -5);
+    }
+
+    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`, `[a*8]`; a shift of 4 or a
+    /// shift of a register stays.
+    #[test]
+    fn test_a_shift_by_one_to_three_of_a_live_source_is_a_scaled_lea() {
+        for (shift, scale, base) in [(1, 1, true), (2, 4, false), (3, 8, false)] {
+            let got = tied(&of(live_source_add(shift, "shl")), true);
+            let lea = got
+                .insns()
+                .iter()
+                .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+                .cloned()
+                .unwrap_or_else(|| panic!("a lea for shl {shift}"));
+            let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+            assert_eq!((cell.index.map(|held| held.value), cell.scale, cell.base.is_some()), (Some(7), scale, base));
+        }
+        assert!(!names_of(&tied(&of(live_source_add(4, "shl")), true)).contains(&"lea".to_owned()));
+    }
+
+    /// A commuted instruction is a new one, which the intervals do not know: the kill of its tied
+    /// source is asked of the instruction as it was (the sweep failed 120 of 568 objects with "Instruction
+    /// not found in maps" on the first version of the conversion).
+    #[test]
+    fn test_a_commuted_add_is_still_asked_about_its_kills_by_the_instruction_it_was() {
+        let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 1), read(4, 3)];
+        let got = tied(&of(insns), true);
+        assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
     }
 
     #[test]
