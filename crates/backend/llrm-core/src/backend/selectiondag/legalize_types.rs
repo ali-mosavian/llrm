@@ -557,6 +557,8 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
                 (les, selector)
             }
+            ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
+            op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
@@ -689,6 +691,42 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
         }
+    }
+
+    /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
+    /// result, the high halves with that carry in. The ADDC/ADDE form (glue)
+    /// and the compare-for-carry form are not translated.
+    fn expand_add_sub(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let (lo_op, carry_op, plain) = if op == ISD::Add {
+            (ISD::UAddO, ISD::UAddOCarry, ISD::Add)
+        } else {
+            (ISD::USubO, ISD::USubOCarry, ISD::Sub)
+        };
+        if !self.tli.is_operation_legal_or_custom(carry_op, half) {
+            return Err(LegalizeError::Unsupported {
+                op,
+                ty: self.dag.value_type(value),
+                what: "expand add or subtract without a carry operation",
+            });
+        }
+        let overflow_vt = self.tli.types.set_cc_result_type(half);
+        let lo = self.dag.get_node_multi(lo_op, &[half, overflow_vt], &[ll, rl]);
+        let carry = SDValue { node: lo.node, res: 1 };
+        // A constant-zero carry needs no carry operation (`computeKnownBits`,
+        // SD202).
+        let hi = if self.dag.constant(carry) == Some(0) {
+            self.dag.get_node(plain, half, &[lh, rh])
+        } else {
+            self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, carry])
+        };
+        Ok((lo, hi))
     }
 
     /// `ExpandIntegerOperand`.
