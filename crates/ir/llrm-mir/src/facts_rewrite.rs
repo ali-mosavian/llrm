@@ -245,6 +245,10 @@ mod tests {
             // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
             // to flag the constant that replaces it.
             "constantfolding.rs",
+            // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
+            // `inbounds` into the node's SDNodeFlags (`visitBinary`,
+            // `visitGetElementPtr`); the DAG grants no promise from them.
+            "builder.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
