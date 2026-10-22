@@ -148,6 +148,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
+        LifetimeStart => pin::LIFETIME_START,
+        LifetimeEnd => pin::LIFETIME_END,
         // The pin's X86ISD numbers.
         Target(code) => code,
         // A machine node reads as the pin's `~opcode`.

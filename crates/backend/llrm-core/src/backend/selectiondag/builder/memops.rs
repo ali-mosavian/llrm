@@ -23,8 +23,37 @@ impl Builder<'_> {
     pub(super) fn visit_intrinsic(&mut self, instruction: &Instruction, info: &CallInfo, intrinsic: &Intrinsic) -> Result<(), Refused> {
         match intrinsic {
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => self.visit_mem_intrinsic(instruction, info, intrinsic),
+            Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart)),
             _ => Err(Refused("intrinsic call")),
         }
+    }
+
+    /// `fshl`/`fshr`: a rotate when both inputs are one value, else the funnel node.
+    fn visit_funnel_shift(&mut self, instruction: &Instruction, left: bool) -> Result<(), Refused> {
+        let x = self.get_value(instruction.operands[0])?;
+        let y = self.get_value(instruction.operands[1])?;
+        let z = self.get_value(instruction.operands[2])?;
+        let vt = self.dag.value_type(x);
+        let node = if x == y {
+            self.dag.get_node(if left { ISD::Rotl } else { ISD::Rotr }, vt, &[x, z])
+        } else {
+            self.dag.get_node(if left { ISD::FShl } else { ISD::FShr }, vt, &[x, y, z])
+        };
+        self.set_value(instruction.result.ok_or(Refused("a funnel shift without a result"))?, node);
+        Ok(())
+    }
+
+    /// `lifetime.start`/`end` of a static alloca: a chain node on the frame
+    /// index; any other object is ignored.
+    fn visit_lifetime(&mut self, instruction: &Instruction, start: bool) -> Result<(), Refused> {
+        let Some(Operand::Value(object)) = instruction.operands.iter().rev().nth(1).copied() else { return Ok(()) };
+        let Some(index) = self.info.static_allocas.get(&object).copied() else { return Ok(()) };
+        let root = self.root();
+        let frame = self.dag.get_target_frame_index(self.target.dag.pointer, index);
+        let node = self.dag.get_node(if start { ISD::LifetimeStart } else { ISD::LifetimeEnd }, EVT::OTHER, &[root, frame]);
+        self.dag.set_root(node);
+        Ok(())
     }
 
     fn function_has(&self, name: &str) -> bool {
@@ -113,6 +142,37 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&chains)))
     }
 
+    /// `getMemmoveLoadsAndStores`: every load first, then the stores on the
+    /// loads' joined chains (the regions may overlap).
+    fn inline_memmove(&mut self, chain: SDValue, dst: SDValue, src: SDValue, size: u64, limit: usize, dst_align: u64, src_align: u64) -> Result<Option<SDValue>, Refused> {
+        let widest = u64::from(self.target.dag.pointer.size_in_bits() / 8);
+        let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
+        let (mut off, mut left) = (0u64, size);
+        let mut loads = Vec::new();
+        let mut placed = Vec::new();
+        for width in &ops {
+            if *width > left {
+                off -= width - left;
+            }
+            let vt = EVT::integer(*width as u32 * 8);
+            let from = self.dag.get_object_ptr_offset(src, off as i64);
+            let info = MemInfo { mem_vt: vt, align: common_alignment(src_align, off) as u32, volatile: false, base: MemBase::Unknown };
+            let value = self.dag.get_load(vt, chain, from, info);
+            placed.push((value, off, vt));
+            loads.push(SDValue { node: value.node, res: 1 });
+            off += width;
+            left = left.saturating_sub(*width);
+        }
+        let joined = self.dag.get_token_factor(&loads);
+        let mut stores = Vec::new();
+        for (value, at, vt) in placed {
+            let to = self.dag.get_object_ptr_offset(dst, at as i64);
+            let info = MemInfo { mem_vt: vt, align: common_alignment(dst_align, at) as u32, volatile: false, base: MemBase::Unknown };
+            stores.push(self.dag.get_store(joined, value, to, info));
+        }
+        Ok(Some(self.dag.get_token_factor(&stores)))
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(&mut self, chain: SDValue, dst: SDValue, value: SDValue, size: u64, limit: usize, align: u64) -> Result<Option<SDValue>, Refused> {
@@ -184,8 +244,7 @@ impl Builder<'_> {
         let src_align = if matches!(which, Intrinsic::MemSet) { dst_align } else { Self::argument_alignment(info, 1) };
         let alignment = dst_align.min(src_align);
         let root = self.memory_root();
-        let pointer = self.target.dag.pointer;
-        let widest = u64::from(pointer.size_in_bits() / 8);
+
         let opt_size = self.function_has("optsize") || self.function_has("minsize");
         let constant = self.constant_size(size);
         if constant == Some(0) {
@@ -196,7 +255,7 @@ impl Builder<'_> {
                 let limit = if opt_size { 4 } else { 8 };
                 let inline = match constant {
                     Some(bytes) if matches!(which, Intrinsic::MemCpy) => self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?,
-                    Some(bytes) if Self::mem_ops(bytes, widest, limit, false).is_some() => return Err(Refused("inline memmove")),
+                    Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     _ => None,
                 };
                 match (inline, which, constant) {

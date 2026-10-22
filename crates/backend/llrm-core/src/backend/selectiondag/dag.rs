@@ -458,6 +458,10 @@ impl SelectionDAG {
         self.intern(ISD::BasicBlock, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Block(block))
     }
 
+    pub fn get_target_frame_index(&mut self, vt: EVT, index: i32) -> SDValue {
+        self.intern(ISD::TargetFrameIndex, &[vt], &[], SDNodeFlags::default(), NodeData::FrameIndex(index))
+    }
+
     pub fn get_frame_index(&mut self, vt: EVT, index: i32) -> SDValue {
         self.intern(ISD::FrameIndex, &[vt], &[], SDNodeFlags::default(), NodeData::FrameIndex(index))
     }
