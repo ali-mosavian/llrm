@@ -38,6 +38,10 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-MS-1 | d_faces compile (`Annotated`, `PlainAccesses::update`) | O2 | Ir | not stated | 24.7 M | share of 1435 M (1.7%) | `update` recomputes the whole `Annotated` to compare it with the held one, 39 calls (w-3, licm-compile-cost.md) | funcattrs-port | 2026-11-04, Lazy-Annotated A+A', Ir measured in the PR | |
 | AM-MS-2 | d_faces compile (`Writes`) | O2 | Ir | not stated | 17.9 M | share of 1435 M (1.2%) | a `CallEffects` solve per change; goes with the deletion of `CallEffects` | funcattrs-port | 2026-11-02 first code (#3436), first Ir drop with it | #3436 |
 | AM-MS-3 | d_faces compile (`PlainAccesses::run`) | O2 | Ir | not stated | 15.0 M | share of 1435 M (1.0%) | the accesses graph made from `Annotated` for every access, 71 builds | funcattrs-port | 2026-11-06, Lazy-Annotated B, first Ir drop the same day | |
+| AM-GEP-1 | lru m32 | O2 | clocks | 175 | 210 | +35 (+20.0%); +20 (+10.5%) over 27675e950 | better AA forwards loads, loop constants hoisted, more live values than registers; allocator pays (code 448 B on main, 444 base, 508 with #3569) | splitkit | their allocation work, after deletion 2026-11-03 | #3569 |
+| AM-GEP-2 | lru m32 | O3 | clocks | 169 | 210 | +41 (+24.3%); +20 (+10.5%) over base | as AM-GEP-1 (code 459 on main, 444 base, 508) | splitkit | as AM-GEP-1 | #3569 |
+| AM-GEP-3 | lru m32 | Os | clocks | 315 | 374 | +59 (+18.7%); +20 (+5.6%) over base | as AM-GEP-1 (code 396 on main, 404 base, 473, +17.1% over base) | splitkit | as AM-GEP-1 | #3569 |
+| AM-GEP-4 | x_nbody_f m32 | O2 | clocks | 378197 | 381606 | +3409 (+0.9%); +5229 (+1.4%) over base | as AM-GEP-1; base is 376377, below main | splitkit | as AM-GEP-1 | #3569 |
 
 ## To add by their owners
 
