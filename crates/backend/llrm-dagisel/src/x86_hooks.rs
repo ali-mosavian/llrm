@@ -4,16 +4,16 @@
 //! # How it works
 //! The generated table names its complex patterns by number; [`X86Hooks`] reads the function
 //! each number stands for from the CPU's `COMPLEX_PATTERNS` and runs the matcher of that name
-//! from [`crate::x86_addr`]. `selectTLSADDRAddr` and `selectMOV64Imm32` never match here (SD34).
+//! from [`crate::x86_addr`]. `selectTLSADDRAddr` and `selectMOV64Imm32` never match here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD35** `checkTCRetEnoughRegs` is `false` and `isDef32`, `isSExtAbsoluteSymbolRef` are
+//! - **SD36** `checkTCRetEnoughRegs` is `false` and `isDef32`, `isSExtAbsoluteSymbolRef` are
 //!   `false`: tail calls, 64-bit zero-extension and absolute symbols are not translated yet, and
 //!   `false` only declines a pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD36** `hasNoCarryFlagUses` answers `false` for a use through `CopyToReg EFLAGS`, which
+//! - **SD37** `hasNoCarryFlagUses` answers `false` for a use through `CopyToReg EFLAGS`, which
 //!   needs the instruction table's condition operand number. Costs `inc`/`dec` in that shape.
 //!   Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD37** `isUnneededShiftMask` reads the mask only, not `computeKnownBits`: the DAG API
+//! - **SD38** `isUnneededShiftMask` reads the mask only, not `computeKnownBits`: the DAG API
 //!   has no known-bits yet. Owner sdag-c. Exit: when it has. Review 2026-12-10.
 //!
 //! # Used by
@@ -21,15 +21,17 @@
 
 use crate::dag::{Hooks, PatternContext, SDValue};
 use crate::generated::ids::{isd, mvt, x86isd};
-use crate::generated::{x86_i486, x86_p5};
+use crate::generated::{x86_i486, x86_m16, x86_p5};
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, Matcher};
+use crate::x86_addr::{AddrDag, AddrMode, Matcher};
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cpu {
     I486,
     P5,
+    /// Real mode: the pin's table with `m16.td` on top (C2).
+    M16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +45,15 @@ pub struct Options {
     pub min_size: bool,
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     pub has_frame_pointer: bool,
+    /// The address forms the target has (SD3).
+    pub address_mode: AddrMode,
+}
+
+impl Options {
+    /// `TLI->getPointerTy`: a word near pointer in real mode.
+    pub fn pointer_type(&self) -> Vt {
+        if self.address_mode == AddrMode::Real16 { mvt::i16 } else { mvt::i32 }
+    }
 }
 
 pub struct X86Hooks {
@@ -77,6 +88,7 @@ fn complex_function(cpu: Cpu, id: u8) -> &'static str {
     let patterns = match cpu {
         Cpu::I486 => x86_i486::COMPLEX_PATTERNS,
         Cpu::P5 => x86_p5::COMPLEX_PATTERNS,
+        Cpu::M16 => x86_m16::COMPLEX_PATTERNS,
     };
     patterns.iter().find(|(n, _, _)| *n == id).map_or("", |(_, name, _)| name)
 }
@@ -213,10 +225,10 @@ impl X86Hooks {
             return None;
         }
         let ptr = dag.operand(n.node, 1);
-        Matcher { dag, pointer_type: mvt::i32 }.select_addr(ptr)
+        Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }.select_addr_of(Some(n.node), ptr)
     }
 
-    /// `hasNoCarryFlagUses` ([L3650][carry]); SD36.
+    /// `hasNoCarryFlagUses` ([L3650][carry]); SD37.
     ///
     /// [carry]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3650
     pub fn has_no_carry_flag_uses<D: AddrDag>(&self, dag: &D, flags: SDValue) -> bool {
@@ -263,13 +275,14 @@ fn find_non_imm_use<D: AddrDag>(dag: &D, root: u32, def: u32, immediate_use: u32
 
 impl<D: AddrDag> Hooks<D> for X86Hooks {
     fn pointer_type(&self) -> Vt {
-        mvt::i32
+        self.options.pointer_type()
     }
 
     fn check_pattern_predicate(&self, predicate: u16) -> bool {
         match self.options.cpu {
             Cpu::I486 => x86_i486::pattern_predicate(self, predicate),
             Cpu::P5 => x86_p5::pattern_predicate(self, predicate),
+            Cpu::M16 => x86_m16::pattern_predicate(self, predicate),
         }
     }
 
@@ -277,6 +290,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         match self.options.cpu {
             Cpu::I486 => x86_i486::node_predicate(dag, self, value, predicate),
             Cpu::P5 => x86_p5::node_predicate(dag, self, value, predicate),
+            Cpu::M16 => x86_m16::node_predicate(dag, self, value, predicate),
         }
     }
 
@@ -284,24 +298,24 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         &mut self,
         dag: &mut D,
         _root: u32,
-        _parent: Option<u32>,
+        parent: Option<u32>,
         value: SDValue,
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        let mut matcher = Matcher { dag, pointer_type: mvt::i32 };
+        let mut matcher = Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode };
         let operands = match complex_function(self.options.cpu, pattern) {
-            "selectAddr" => matcher.select_addr(value),
+            "selectAddr" => matcher.select_addr_of(parent, value),
             "selectLEAAddr" => matcher.select_lea_addr(value),
             "selectRelocImm" => {
-                // `Wrapper sym` as an immediate; the truncated form needs absolute symbols (SD35).
+                // `Wrapper sym` as an immediate; the truncated form needs absolute symbols (SD36).
                 if matcher.dag.opcode(value.node) != x86isd::Wrapper {
                     return false;
                 }
                 results.push((matcher.dag.operand(value.node, 0), None));
                 return true;
             }
-            // ELF TLS and 64-bit immediates (SD34).
+            // ELF TLS and 64-bit immediates (SD35).
             _ => None,
         };
         let Some(a) = operands else { return false };
@@ -313,15 +327,22 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         let width = bits(dag, value);
         let constant = dag.constant(value).expect("an xform of a constant") as u64;
         let masked = if width == 64 { constant } else { constant & ((1u64 << width) - 1) };
-        match xform {
-            // The XFORMS of the table: the lowest set bit, the low 32 bits, the lowest clear bit,
-            // and two condition-code complements.
-            2 => dag.target_constant(i64::from(if masked == 0 { width } else { masked.trailing_zeros() } as u8), mvt::i64),
-            5 => dag.target_constant(i64::from(masked as u32), mvt::i32),
-            8 => dag.target_constant(i64::from(trailing_ones(masked, width) as u8), mvt::i64),
-            26 => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
-            33 => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
-            other => panic!("node transform {other} is not in the table"),
+        // The table numbers its transforms; the pin's C++ call says what each is.
+        let table = match self.options.cpu {
+            Cpu::I486 => x86_i486::XFORMS,
+            Cpu::P5 => x86_p5::XFORMS,
+            Cpu::M16 => x86_m16::XFORMS,
+        };
+        let call = table.iter().find(|(n, _)| *n == xform).unwrap_or_else(|| panic!("node transform {xform} is not in the table")).1;
+        match call {
+            c if c.contains("countr_zero()") => {
+                dag.target_constant(i64::from(if masked == 0 { width } else { masked.trailing_zeros() } as u8), mvt::i64)
+            }
+            c if c.starts_with("getI32Imm((uint32_t)N->getZExtValue()") => dag.target_constant(i64::from(masked as u32), mvt::i32),
+            c if c.contains("countr_one()") => dag.target_constant(i64::from(trailing_ones(masked, width) as u8), mvt::i64),
+            "getI8Imm(Imm ^ 0x0f, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
+            "getI8Imm(Imm ^ 0x03, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
+            other => panic!("node transform `{other}` is not translated"),
         }
     }
 

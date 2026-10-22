@@ -135,6 +135,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
+    entry("jumptableswitch@672", Simplify, "jump-table-to-switch", Translated, "jumptableswitch.rs"),
     partial(
         "decide@675",
         Simplify,
@@ -349,8 +350,15 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "lir-cleanup-poc",
     ),
     entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
+    entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    partial(
+        "pushfold@6",
+        Backend,
+        "x86-cf-opt (X86CallFrameOptimization.cpp)",
+        "criterion: a pushed value a load made and nothing else reads is pushed from memory, rows identical or better; exit: none, the pass's reserved-frame input is not made (CG6)",
+    ),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
@@ -703,6 +711,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
+    "jumptableswitch@672",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

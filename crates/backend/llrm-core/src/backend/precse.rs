@@ -64,6 +64,12 @@
 //! of a copy's source are counted from the body as it was. Heuristics 2 and 3
 //! see the pin's lists except for that.
 //!
+//! DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
+//! same elimination after allocation, is ours alone (the pin runs MachineCSE
+//! once, before allocation). Removed, 10 of 568 objects grow and none shrinks
+//! (shellsort m16 +15 B, x_mergesort m32 +34, m16 +187, same tree both sides):
+//! it stays until what it finds there is found before allocation.
+//!
 //! # Example
 //! `v3 := add v1, v2` in a block and `v7 := add v1, v2` in a block it
 //! dominates: `v7` is gone and its readers read `v3`.

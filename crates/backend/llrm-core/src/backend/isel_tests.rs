@@ -720,7 +720,9 @@ no:
     // Greedy's register choice (#2312): the old pin's instructions, memory
     // operands, prefixes and adjacent dependencies, other registers. The
     // extensions and the negate sink into the arm that reads them (a88a614969,
-    // MachineSink outside size builds): the `no` path runs none of them.
+    // MachineSink outside size builds): the `no` path runs none of them. The
+    // `mov dl, al; and dl, cl` only the branch reads is one `test al, cl` (row
+    // 45).
     assert_eq!(
         got,
         [
@@ -732,8 +734,7 @@ no:
             "setl al",
             "cmp cx, 3",
             "sete cl",
-            "mov dl, al",
-            "and dl, cl",
+            "test al, cl",
             "je L0_8",
             "L0_6:",
             "movzx dx, al",
@@ -748,7 +749,7 @@ no:
             "retf",
         ]
     );
-    assert_eq!(counts(&got), (19, 2));
+    assert_eq!(counts(&got), (18, 2));
 }
 
 #[test]
@@ -914,8 +915,8 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            "mov ax, word ptr count",
-            "push ax",
+            // `canFoldIntoRegPush`: the load nothing else reads is the push's cell.
+            "push word ptr count",
             "call far ptr helper",
             "retf",
             "MAIN endp",
