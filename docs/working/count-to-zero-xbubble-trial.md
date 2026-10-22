@@ -14,3 +14,5 @@ Why x_bubble is worse: the model picks the zero-end counter for the fill loop (`
 Dependency: x_bubble waits for SelectionDAG C1 (sdag-c's `matchAddress`), the translation of the fold below; the old isel is not patched. sdag-c is asked to add x_bubble's fill loop to the select shadow and report whether `add(x, shl(y,2))` under a symbol selects `[sym+x+y*4]`. The generator stays unapplied until then.
 
 Next, in order: (1) the address fold, from C1; (2) pair the stride-4 forms in the generator; (3) rerun rows. Owner w-5, by 2026-11-06.
+
+sdag-c (2026-10-22): `@_a + (x + (y<<2))` and `(@_a + x) + (y<<2)` both select `[_a + x + y*4]` in the C1 matcher (unit test `symbol_plus_two_registers`, #3779); the real _bench_x_bubble is not through the shadow yet, refused at the type legalizer (SetCC i1 promote, sdag-b).
