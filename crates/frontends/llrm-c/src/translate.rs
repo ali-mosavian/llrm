@@ -3621,6 +3621,28 @@ impl<'a, 't> Body<'a, 't> {
             Got::Function(symbol) => &unit.symbols[&symbol],
             _ => &unit.symbols[&call.symbol],
         };
+        // GNU C's builtins: the table lowers them, or the unit is refused.
+        if matches!(target, Got::Function(_))
+            && symbol.imported()
+            && let Some(name) = symbol.name.strip_prefix("__builtin_")
+        {
+            return match crate::builtins::lowering(name) {
+                Some(crate::builtins::Lowering::Identity) => {
+                    // `parms` lists the arguments last first: the first
+                    // argument of the source is the last of
+                    // them.
+                    let mut first = None;
+                    for (node, type_) in &call.parms {
+                        first = Some(self.value_as(node, type_)?);
+                    }
+                    match first {
+                        Some(value) => Ok(Got::Returned(Some(value))),
+                        None => refuse(format!("{}: __builtin_{name} called with no argument", self.name())),
+                    }
+                }
+                None => refuse(format!("{}: unsupported builtin __builtin_{name}", self.name())),
+            };
+        }
         // bcc -O's builtin: the library's fabs is the x87 instruction.
         if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
             && symbol.name == "fabs"
@@ -4238,6 +4260,23 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
+    }
+
+    /// A GNU C builtin the table lacks was a call of an undefined extern,
+    /// found by the linker if at all: it is refused here, by name.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn an_unknown_builtin_is_refused_with_its_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, "int __cdecl f(int x) { return __builtin_popcount(x); }\n").unwrap();
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let profile = crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let refused = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile)
+            .err()
+            .expect("refused");
+        assert!(format!("{refused:?}").contains("unsupported builtin __builtin_popcount"), "{refused:?}");
     }
 
     /// CGCall.cpp `DetermineNoUndef`: a scalar argument of a call is
