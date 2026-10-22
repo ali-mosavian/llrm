@@ -17,7 +17,12 @@ FULL=$(git rev-parse --verify -q "$SHA^{commit}") || { echo "pair_build: $SHA is
 REPO=$(git rev-parse --show-toplevel)
 flock "$S/tgt-dist.lock" bash -c '
   S=$0; T=$1; FULL=$2; REPO=$3; B=$S/tgt-dist; W=$S/wt-pair-$FULL
-  for old in $(find "$S" -maxdepth 1 -name "wt-pair-*" -mmin +${PAIR_KEEP_MIN:-4320}); do git -C "$REPO" worktree remove --force "$old" 2>/dev/null || rm -rf "$old"; done
+  # An old tree goes only when no dist of its sha is left: llrm-c reads its headers from it.
+  for old in $(find "$S" -maxdepth 1 -name "wt-pair-*" -mmin +${PAIR_KEEP_MIN:-4320}); do
+    sha=${old##*/wt-pair-}
+    ls -d "$S/sbp-$sha" "$S/sbp-${sha:0:9}" "$S/sbp-${sha:0:10}" "$S/sbp-$sha-"* 2>/dev/null | grep -q . && continue
+    git -C "$REPO" worktree remove --force "$old" 2>/dev/null || rm -rf "$old"
+  done
   git -C "$REPO" worktree remove --force "$W" 2>/dev/null || true
   git -C "$REPO" worktree add -q --detach "$W" "$FULL"
   at() { [ "$(git -C "$W" rev-parse HEAD)" = "$FULL" ] || { echo "pair_build: $W is at $(git -C "$W" rev-parse --short HEAD), not $FULL $1" >&2; exit 1; }; }
