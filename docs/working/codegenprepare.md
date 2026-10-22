@@ -20,6 +20,24 @@ The largest codegen gap: with the pin's pass off (`llc -disable-cgp`, 77 IRs: 12
 
 Address-mode sinking is 97% of the pass's worth at -O2 (the parts sum to a little over the whole because merging empty blocks is a loss: the pass is smaller without it). Compare sinking is 0.13% and ours already has it (`addresssink.rs`); nothing else is worth a PR before the sinking.
 
+## The premise, tested on our backend (2026-10-23)
+
+The 21 KB is the pin's `llc` without its own pass; the question for us is whether our backend loses the same. Same IR for both: our mid-end's output at the switchconv stage of the 65 QCport modules (m16), compiled by our backend and by the pin's `llc` with and without the pass (`~/scratch/w4-cgp/leacmp.py`, instructions and `lea` counted in the assembly):
+
+| -Os | instructions | `lea` |
+|---|--:|--:|
+| ours | 77032 | 2092 |
+| pin `llc`, pass on | 74952 | 2139 |
+| pin `llc`, `-disable-cgp` | 78643 | 3983 |
+
+| -O2 | instructions | `lea` |
+|---|--:|--:|
+| ours | 93856 | 2682 |
+| pin `llc`, pass on | 88311 | 2598 |
+| pin `llc`, `-disable-cgp` | 92783 | 4835 |
+
+Our address folding matches the pin's with the pass on (about half the `lea` of the pin without it, 2092 against 2139 and 3983): our isel already rebuilds an address expression in the block that uses it (a probe: an address computed in the entry block and used in two later blocks is `[eax+ecx*4+8]` in both). So **address-mode sinking is not a gap of ours**, and the pass's 21 KB is not ours to translate. The instruction gap that remains (2.7% at -Os, 6.3% at -O2, with `lea` equal) is something else; it has no CodeGenPrepare transform behind it.
+
 ## Table (the pin's order in `optimizeInst`)
 
 | transform | pin | status | ours | pin switch | switch off, -O2 | notes |
@@ -52,9 +70,6 @@ Address-mode sinking is 97% of the pass's worth at -O2 (the parts sum to a littl
 | optimizeBranch (x&m)==0 and friends | [8878](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8878) | missing | - | -disable-cgp-branch-opts | +0 B |  |
 | makeBitReverse | [9139](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L9139) | missing | - | - | - |  |
 
-## Plan, in the pin's order
+## Plan
 
-1. **Address-mode sinking** (`optimizeMemoryInst`, `AddressingModeMatcher`): a GEP, add or shift used as an address in another block is rebuilt in the user's block as the x86 base + index*scale + displacement the target accepts (`isLegalAddressingMode`), so isel folds it. Needs the TTI's addressing-mode legality for m16 (BX/SI/DI, no scale) and m32. Premise test: 20712 B at -O2 and 20053 B at -Os over the 77 IRs when off; 881 sunk values. First code PR 2026-11-06.
-2. Everything else in the table is below 0.15% on these inputs (compare folds +0.13%, select 0, dupRet 0): after the tuning phase, each priced first. Merging empty blocks is a loss in the pin (-302 B when off): not translated until a row says otherwise.
-
-Rows, QCport and compile Ir with every PR; this file's table is updated by each.
+None for this pass on the evidence above: no transform is worth a PR before the tuning phase. Open: where the remaining 2.7% / 6.3% of instructions against the pin on the same IR comes from (`leacmp.py` is the instrument; the rest of the pin's `llc` passes, per `docs/working/codegen-ablation.md`).
