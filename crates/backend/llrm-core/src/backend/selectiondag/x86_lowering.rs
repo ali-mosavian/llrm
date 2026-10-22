@@ -127,6 +127,7 @@ impl Hooks for X86Lowering {
             ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
@@ -378,6 +379,17 @@ fn lower_global_address(
         let delta = dag.get_constant(rest as u128, vt);
         dag.get_node(ISD::Add, vt, &[wrapped, delta])
     })
+}
+
+/// `LowerConstantPool`: `Wrapper (TargetConstantPool)`.
+fn lower_constant_pool(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
 }
 
 /// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of

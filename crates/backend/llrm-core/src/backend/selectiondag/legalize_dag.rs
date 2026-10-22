@@ -23,6 +23,11 @@
 //! walk skips a node nothing reads. Exit: none. Owner sdag-b. Review
 //! 2026-11-13.
 //!
+//! DEVIATE SD203: `ExpandConstantFP` does not shrink an `f80` constant to a
+//! narrower pool entry (no `APFloat`, SD11), and the pool entry's alignment is
+//! the i386 data layout's preferred one by type. Exit: with an `APFloat`.
+//! Owner sdag-b. Review 2026-11-27.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::Legalize`
 //! ([L6301](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L6301)),
@@ -34,10 +39,10 @@
 use std::collections::HashSet;
 
 use super::actions::{Action, TargetLowering};
-use super::dag::{SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::legalize_types::LegalizeError;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -153,6 +158,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let node = SDValue { node: n, res: 0 };
         if matches!(self.dag.opcode(node), ISD::TargetConstant | ISD::Register) {
             return Ok(());
+        }
+        if self.dag.opcode(node) == ISD::ConstantFP {
+            return self.legalize_constant_fp(node);
         }
         let vt = self.action_type(node);
         let mut action = match vt {
@@ -330,6 +338,49 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         let amount = self.dag.get_constant(8, EVT::I8);
         Some(self.dag.get_node(ISD::Rotl, vt, &[self.dag.operand(node, 0), amount]))
+    }
+
+    /// `LegalizeOp` for a float constant: left if the target makes it
+    /// (`isFPImmLegal`), else loaded from the constant pool
+    /// (`ExpandConstantFP`), through a narrower pool entry when that is exact.
+    fn legalize_constant_fp(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let vt = self.dag.value_type(node);
+        let NodeData::ConstFp { bits } = self.dag.node(node).data else {
+            unreachable!("a float constant has its bits")
+        };
+        let EVT::Simple(mvt) = vt else { unreachable!("floats are simple types") };
+        if self.tli.is_fp_imm_legal(mvt, bits) {
+            return Ok(());
+        }
+        // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
+        // is stored as one.
+        let (pool_vt, pool_bits) = match mvt {
+            MVT::F64 => {
+                let value = f64::from_bits(bits as u64);
+                let narrow = value as f32;
+                if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {
+                    (EVT::Simple(MVT::F32), u128::from(narrow.to_bits()))
+                } else {
+                    (vt, bits)
+                }
+            }
+            _ => (vt, bits),
+        };
+        let pointer = self.dag.config().pointer;
+        let index = self.dag.get_constant_pool(pointer, pool_bits, pool_vt, false);
+        let align = match pool_vt {
+            EVT::Simple(MVT::F64) => 8,
+            _ => 4,
+        };
+        let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
+        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry) };
+        let chain = self.dag.entry_node();
+        let loaded = self.dag.get_load(vt, chain, index, info);
+        self.replace_node(node, loaded);
+        Ok(())
     }
 
     /// `ReplaceNode(Old, New)` for a node with one value result.
