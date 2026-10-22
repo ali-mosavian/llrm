@@ -58,7 +58,7 @@ pub fn machine<'a>(
 }
 
 /// The phases -O0 leaves out: each only makes code better.
-const UNOPTIMIZED: [&str; 10] = [
+const UNOPTIMIZED: [&str; 11] = [
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -69,10 +69,11 @@ const UNOPTIMIZED: [&str; 10] = [
     "OptimizePHIs",
     "LateCleanup",
     "FixupSetCC",
+    "X86OptimizeLEAs",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
-const SLOTS: [(&str, &str); 23] = [
+const SLOTS: [(&str, &str); 24] = [
     ("FarIndirectCalls", "farcall@1"),
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
@@ -82,6 +83,7 @@ const SLOTS: [(&str, &str); 23] = [
     ("MachineSink", "machinesink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
@@ -143,6 +145,9 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink { size: target.size }),
+        // On SSA, before the pin allocates: two addresses that differ in a
+        // displacement are one (X86OptimizeLEAs, pre-RA).
+        Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
         Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
