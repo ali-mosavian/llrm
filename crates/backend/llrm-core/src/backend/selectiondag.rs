@@ -80,6 +80,8 @@ pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
+pub mod x86_lowering;
+pub mod schedule;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG};
@@ -87,5 +89,7 @@ pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod schedule_tests;
 #[cfg(test)]
 mod tests;
