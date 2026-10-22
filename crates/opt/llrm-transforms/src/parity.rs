@@ -101,6 +101,7 @@ use SlotKind::{Missing, Old, Partial, Translated};
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
 /// subset), then the slots LLVM has that llrm does not.
 pub(crate) const REGISTRY: &[Entry] = &[
+    entry("lowerexpect@1177", Early, "lower-expect", Translated, "lowerexpect.rs"),
     partial(
         "decide@1178",
         Early,

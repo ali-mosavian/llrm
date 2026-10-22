@@ -141,7 +141,7 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, extload, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
     promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
@@ -707,7 +707,13 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![
+                // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
+                slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
+                simplify_cfg("decide@1178"),
+                sroa("sroa@1179"),
+                earlycse("earlycse@1180"),
+            ]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -1142,6 +1148,12 @@ pub fn recorded(
     // sinks.
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
+    }
+    // After addresssink, with the other passes that make the forms isel sees:
+    // the pin's DAGCombiner makes one extending load for a load and its
+    // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
+    if applied.options.wanted("extload") {
+        manager.add(extload::ExtLoad);
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.

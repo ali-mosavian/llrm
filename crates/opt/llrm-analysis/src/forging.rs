@@ -23,6 +23,11 @@
 //! `available_externally`, and the runtime module is another module; both are
 //! out of the scan, the same trust boundary as `!llrm.named`.
 //!
+//! # Example
+//! `%s = add i16 %v, 4` then `%p = inttoptr i16 %s to ptr addrspace(2)` forges:
+//! the selector is computed, and every global of the module is reachable by it.
+//! `inttoptr i16 -18432 to ptr addrspace(2)` (`&HB800`) does not.
+//!
 //! # Provides
 //! `forges_selector`; the manager entry `ForgedSelectors` computes it once for
 //! a module, and `GlobalsAA` and `GlobalsModRef` take it from there.

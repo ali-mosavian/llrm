@@ -4,16 +4,24 @@ Counts are `#[test]` attributes in the crate's sources at feat/parity a0843c575 
 
 ## Layers of the landing gate (tools/parity_squash.py, tools/parity_smoke.py)
 
-- Step names (#3503): every red step is compared with the head by failing test or program name, not by step.
-- tests/run (#3522): a PR touching llrm-qb, qbfront, llrm-qbruntime, runtime/qb, llrm-x86 or llrm-core runs all 8 groups.
-- QCport (#3526): a PR touching crates/ compiles all 65 modules at 4 levels.
-- Fixed steps (programs, sc, d_faces, qc_d_faces, qc_modules, run), 11 ratchets, workspace and warnings builds, fmt, docs: every PR.
-- Unit tests: only the lib tests of the crates the PR touches, cut at a CPU allowance (parity_smoke.toml has no ranking, so all of them, cut).
+Every layer prints its failures as names and the gate compares them with the head's, cached per head sha and never for the PR's own run. A name the head does not fail refuses the PR; names the head fails and the PR fixes print `FIXED:`.
 
-## Never run by the gate
+| layer | PR | runs on a PR that touches | what it protects | measured cost |
+|---|---|---|---|---|
+| step names | #3503 | any | a new failing test inside an already red step | none |
+| tests/run groups | #3522 | llrm-qb, qbfront, llrm-qbruntime, runtime/qb, llrm-x86, llrm-core | the printed output of every BASIC, C and Nib program | 75 s alone, 252 s at load |
+| tests/qbrt differential | #3539 | the same | the QB runtime against the MS runtime, 218 results | 67 s at load 7 |
+| QCport 65 modules x 4 levels | #3526 | crates/ | a compile failure of valid C | 3 s |
+| lib tests of the dependants | #3542 | a crate (closure from `cargo metadata`) | a red lib test in a crate that depends on the changed one | debug profile as the gate builds it: 18 s build after a change in llrm-transforms (76 s cold) + 28 s run, load 18 |
+| mapped root integration targets | #3542 | a crate (targets whose imports and compilers include it) | pinned asm and tool tests; a new unmapped target fails its test | 40-47 s run; 109 of 116 targets for a transforms or core change, 22 for llrm-nib |
+| fixed steps, 11 ratchets, builds, fmt, docs | | any | | about 7 s of CPU |
+| nightly integration (not per PR) | #3542 | all 126 binaries, `tools/gate/nightly_integration.py` | turbo (138 s), cv4 (30 s), run (70 s) and every target, names to the board | 275 s |
+| stamps | #3545 | | a measurement from another sha: `llrm-c --version`, `tools/stamp.py --expect-sha` | none |
 
-- The lib tests of every crate the PR does not touch: a change in llrm-transforms never runs llrm-core's 1433 (five isel tests were red on parity unseen).
-- Integration tests (`tests/*.rs` targets) except the 8 named ratchets: the root crate has 116 targets with 645 tests; the 11 ratchets run 8 of them.
+## Not covered
+
+- Lib tests of crates that do not depend on the changed one.
+- turbo, cv4 and run integration targets per PR (nightly only).
 
 | crate | lib tests | integration targets | integration tests |
 |---|---|---|---|
@@ -56,10 +64,12 @@ Counts are `#[test]` attributes in the crate's sources at feat/parity a0843c575 
 | llrm-elf-arm64 | 2 | 0 | 0 |
 | llrm-env | 1 | 0 | 0 |
 
-## Smallest addition inside the budget
-
-Run the lib tests of every crate that depends on a touched crate, names vs the head (measured: llrm-core, llrm-hir, llrm-mir and llrm-x86 together run in 5 s once built; the cost is building their test binaries). Adding integration targets is a separate decision for oversight.
-
 ## Ratchets with no per-test names
 
 `ratchet:docs`, `ratchet:prepush-docs|facts|fmt|scans|test docs_links`, `ratchet:warnings` and `workspace` print no test names; a second failure inside one is hidden. Each needs to print its items or be split.
+
+## Measured (tinytim, 2026-10-22)
+
+- Root crate integration targets: 126 binaries, run 275 s (turbo 138 s, run 70 s, cv4 30 s, the other 123 about 37 s); rebuilding all of them after a transforms change 277 s at load 14. 63 tests in 40 targets are red on parity (names: `tools/gate/nightly_integration.py`).
+- Each target is mapped from what it imports and the compilers it runs (`parity_smoke.integration_map`; a new target nobody can map fails its test). A PR runs the targets whose crates include a touched crate, the 11 scanners, and a target whose own file changed. A llrm-transforms or llrm-core change selects 109 targets (every compiler depends on them); a llrm-nib change 22; qbfront 34. turbo, cv4 and run are nightly only (`tools/gate/nightly_integration.py`, report to the board).
+- tests/run groups: 75 s alone, 252 s at load; qbrt `--all` 67 s at load 7; QCport 65x4 3 s.

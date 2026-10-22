@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_addsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_addsub.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_addsub.rs sha256:6a88086567882f4139cb0f91d2536b5b9b09718e8dc4fde6c99b8523d36300a2 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_addsub.rs sha256:6dec7e1a87078da540c6b917acff86cc7a1d62191659b81e7f4739d004c9e708 -->
 
 # combine_addsub
 
@@ -21,9 +21,8 @@ operations.
 
 DEVIATE 2 (temporary, `uselist-port`): steps that call a helper another
 family owns are left out and named where they stood:
-`foldUsingDistributiveLaws` and `foldBinOpShiftWithShift` (shared helpers,
-next in `combine_shared`). Each is a `// DEVIATE 2:` comment at its place in
-the order. `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
+Each is a `// DEVIATE 2:` comment at its place in the order.
+`foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
 `foldBinOpSelectBinOp` are the phi and select families'.
 
 DEVIATE 3 (temporary): the folds that build an intrinsic call (`usub.sat`,

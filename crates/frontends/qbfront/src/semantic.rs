@@ -8184,15 +8184,13 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        // Where errors land the processor's trap, which names no statement, is
-        // code.
-        if (self.options.checked_division || self.handles_errors || self.module_handled)
-            && matches!(op, Binary::Modulo | Binary::IntegerDivide)
-            && !matches!(common, SINGLE | DOUBLE)
-        {
-            // Where only errors land (no -fsanitize), the zero divisor is the
-            // IR's own check.
-            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
+        // BC's divide traps on a zero divisor and the error names the
+        // statement; MIR's `sdiv` by zero is undefined, which -O2
+        // deletes (`x% = 5 \ y%` with y% = 0 and x% unused printed on):
+        // the zero divisor is an explicit ERROR 11 here, as
+        // -fsanitize=integer-divide-by-zero made it.
+        if matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, true)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));

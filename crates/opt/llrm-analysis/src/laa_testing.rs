@@ -1,6 +1,11 @@
 //! How `opt` writes the values `print<access-info>` lists, for the tests that
 //! compare with it: the instruction lines of the function as MIR prints them
 //! (the same text, in order, for the same names), and an argument as `ptr %x`.
+//!
+//! # Example
+//! `%0 = load i16, ptr %p` as the function prints it is `%0 = load i16, ptr %p`
+//! here, and an argument `%p` is `ptr %p`, so a test can compare the pin's
+//! `print<access-info>` line with the pass's.
 
 use std::collections::HashMap;
 

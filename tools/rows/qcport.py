@@ -30,4 +30,6 @@ def run(j):
     t=emitted(o); os.unlink(o); return (n,s.stem,l,t)
 with ThreadPoolExecutor(24) as p: res=list(p.map(run,jobs))
 json.dump(res,open(os.path.join(os.environ.get('ROWS_WORK',os.path.expanduser('~/scratch/rows')),'qcport.json'),'w'))
-print(len(res),"fail",sum(1 for r in res if r[3] is None))
+failed={n:sum(1 for r in res if r[0]==n and r[3] is None) for n in bins}
+print(len(res),"fail",sum(failed.values()))
+if any(failed.values()): raise SystemExit(f"compiles failed {failed} of {len(res)//len(bins)} each: the report is void (a dist whose headers are gone fails every one)")

@@ -167,6 +167,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod extload;
 pub mod fixednarrow;
 pub mod float2int;
 pub mod floatfold;
@@ -229,6 +230,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]

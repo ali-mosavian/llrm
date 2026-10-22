@@ -137,8 +137,9 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
     (corpus / "huge.bas").write_text("' flags: -O2 --huge-arrays\nPRINT 3\n")
     (corpus / "frames.bas").write_text("' flags: -O2 --own-frames -fsanitize=stack\nPRINT 4\n")
     (corpus / "vb.bas").write_text("' dialect: qb45 vbdos\nPRINT 5\n")
+    (corpus / "ms_runtime.bas").write_text("' flags: -O1 | -O2\n' dialect: qb45\nPRINT 6\n")
     machines = {}
     for tool, source, machine, level in q.extra_jobs(tmp_path):
         if source.parent == corpus:
             machines.setdefault(source.name, set()).add(machine)
-    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}}, machines
+    assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}, "ms_runtime.bas": {"-m16"}}, machines
