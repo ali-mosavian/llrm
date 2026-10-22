@@ -112,7 +112,12 @@ fn meaning(
         )),
         None => None,
     };
-    Ok(Meaning { routine: name.to_owned(), parameters, result, releases, check })
+    let always_inline = match row.get("inline").and_then(toml::Value::as_str) {
+        None => false,
+        Some("always") => true,
+        other => return Err(format!("inline is {other:?}, not \"always\"")),
+    };
+    Ok(Meaning { routine: name.to_owned(), parameters, result, releases, always_inline, check })
 }
 
 /// `text` as an expression: `or` over `==` and `<` over `+` and `-` over
