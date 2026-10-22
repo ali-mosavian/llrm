@@ -178,6 +178,7 @@ pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
 pub mod globalopt;
+pub mod globalsra;
 pub mod gvn;
 #[cfg(test)]
 mod gvn_load_tests;

@@ -29,7 +29,7 @@
 //! 2. The private bodies nothing reaches any more, the ones the walk
 //!    ([`crate::walk::Walk`]) inlined into every caller, lose their bodies
 //!    (`bare_the_unreached`). Inlining is the walk's alone.
-//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]):
+//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]), `globalsra.` ([`crate::globalsra`]):
 //!    a pointer a body only reads is passed as the fields it reads; a far
 //!    pointer every call fills from DGROUP is passed as its offset.
 //! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
@@ -679,6 +679,18 @@ pub fn optimized_with<E: From<String>>(
         }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
+        }
+    }
+
+    // An internal variable is split into the pieces its loads read, and one a
+    // body that does not recurse writes before it reads is that body's stack
+    // slot: GlobalOpt's `SRAGlobal` and its localizing branch.
+    for at in 0..count {
+        for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::globalsra::split(module, &program.layout)
+        }) {
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "globalsra.")?;
         }
     }
 
