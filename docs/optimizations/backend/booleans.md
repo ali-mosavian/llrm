@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/booleans.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/booleans.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:e421ff79b6be73059269531fd46d88df91dd5fd53504a628fdceeda36f78487c -->
+<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:7c3993d09477a89ff26b5eb7d786457d15159db9d1723a016365fc4125812b2b -->
 
 # booleans
 
@@ -40,6 +40,26 @@ Row LIGHTS-OS-1, owner llrm-w-2, 2026-11-06: the gate prices bytes too
 it is shorter at -Os. Compare of operands wider than a register, a chain a
 branch reads, and an `and` with a non-compare side are left alone (each
 grew a QCport module at -Os: snd, menu, console).
+
+## Example
+`p >= lo && p < hi` as a value, on a target with no conditional move.
+
+Schematic, from the fixture of test
+`test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
+(`selects.rs`; not printer output):
+```mir
+%a = icmp uge i16 %p, %lo            ; before: two setcc and an and
+%b = icmp ult i16 %p, %hi
+%r = and i1 %a, %b
+
+%a = icmp uge i16 %p, %lo            ; after: the second compare only when the first holds
+br i1 %a, label %taken, label %join
+taken:  %b = icmp ult i16 %p, %hi ; br label %join
+join:   %r = phi i1 [ %b, %taken ], [ false, %entry ]
+```
+
+From unit test `test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
+in `selects.rs`.
 
 ## Runs
 Inside `selects::priced`, after the selects of the module were folded and
