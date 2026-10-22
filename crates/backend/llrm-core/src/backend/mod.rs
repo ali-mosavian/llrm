@@ -318,6 +318,7 @@ pub mod select {
         emit_in(BITNESS, what, at, r#where, short, relocated, held)
     }
 }
+pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
 pub mod rewriter;

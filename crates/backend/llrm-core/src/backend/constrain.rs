@@ -94,7 +94,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::{regclass, spiller, target};
+use crate::backend::{regclass, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -161,7 +161,7 @@ pub fn constrained(
 
     let defined: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let constants = spiller::_constants(body, &defined);
+    let constants = crate::backend::bodyfacts::_constants(body, &defined);
 
     let source = |value: u32, width: u32| -> Loc {
         match constants.get(&value) {

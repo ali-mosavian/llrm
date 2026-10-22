@@ -136,7 +136,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::frame::Frame;
 use crate::backend::regclass::{self, Classes};
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, ssarepair, twoaddr};
+use crate::backend::{ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -300,7 +300,7 @@ pub(crate) fn widths_through_phis(
     let (web, members) = phi_webs(body);
     let every: BTreeSet<u32> =
         values.iter().flat_map(|one| web.get(one).map_or_else(|| vec![*one], |root| members[root].clone())).collect();
-    let known = spiller::_widest(body, &every);
+    let known = crate::backend::bodyfacts::_widest(body, &every);
     // A web's width is found once, whoever of it asks.
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
     values
@@ -770,7 +770,7 @@ pub(crate) fn folded_into(
     if what.op == Operation::Move {
         return None;
     }
-    let right = spiller::folded_source_in(&candidate, &values, false)?;
+    let right = crate::backend::bodyfacts::folded_source_in(&candidate, &values, false)?;
     sources[1] = Loc::Mem(crate::model::ir::Mem { width: right.width, ..cell.clone() });
     let mut made = (*candidate).clone();
     made.what = Some(Semantics { sources, ..what.clone() });
@@ -1263,10 +1263,15 @@ fn remakable(
         }
     }
     let mut out: IndexMap<u32, Arc<Insn>> = IndexMap::default();
-    let pure: BTreeSet<u32> =
-        spiller::_constants(body, values).keys().chain(spiller::_addresses(body, values).keys()).copied().collect();
+    let pure: BTreeSet<u32> = crate::backend::bodyfacts::_constants(body, values)
+        .keys()
+        .chain(crate::backend::bodyfacts::_addresses(body, values).keys())
+        .copied()
+        .collect();
     for value in &pure {
-        let Some(one) = defining.get(value).and_then(|found| spiller::_one_definition(found)) else { continue };
+        let Some(one) = defining.get(value).and_then(|found| crate::backend::bodyfacts::_one_definition(found)) else {
+            continue;
+        };
         let alone = one.defines == [*value]
             && one.uses.is_empty()
             && one.requires.is_empty()
@@ -1277,8 +1282,8 @@ fn remakable(
             out.insert(*value, Arc::clone(one));
         }
     }
-    let copies = spiller::_copies(body, values);
-    for value in spiller::_stable_loads_through(body, values, &copies).keys() {
+    let copies = crate::backend::bodyfacts::_copies(body, values);
+    for value in crate::backend::bodyfacts::_stable_loads_through(body, values, &copies).keys() {
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
@@ -2522,7 +2527,7 @@ mod tests {
         ];
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         assert!(!remakable(&body, &BTreeSet::from([1])).contains_key(&1));
-        assert!(spiller::_stable_loads(&body, &BTreeSet::from([1])).is_empty());
+        assert!(crate::backend::bodyfacts::_stable_loads(&body, &BTreeSet::from([1])).is_empty());
     }
 
     /// Two values that may only sit in BX (each is the base of an address

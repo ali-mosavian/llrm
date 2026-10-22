@@ -15,7 +15,8 @@
 //! DEVIATE D-I (exit: an invariant-load flag on the instruction): the pin takes
 //! a load when its memory operand is a dereferenceable invariant load
 //! (`isLoadFromInvariantOrConstantMemory`); llrm proves it per live range
-//! (`spiller::_stable_loads_by`), so the load is passed in as a fact.
+//! (`crate::backend::bodyfacts::_stable_loads_by`), so the load is passed in as
+//! a fact.
 //!
 //! DEVIATE R1 (no number): a literal read wider than the move that makes it is
 //! not made again, and a use inside a parallel copy that cannot take a literal
