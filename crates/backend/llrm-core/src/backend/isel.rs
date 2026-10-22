@@ -353,7 +353,8 @@ fn passing(
             let Some(found) = entry(arch, convention, variadic) else {
                 return refuse(format!("calling convention {convention}"));
             };
-            // `fastcc` is C's callee-pop twin unless the description states a `fastcc` of its own.
+            // `fastcc` is C's callee-pop twin unless the description states a
+            // `fastcc` of its own.
             let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
@@ -854,6 +855,9 @@ const MEMSET_STORES: i64 = 16;
 /// The most load and store pairs a memcpy expands to, as LLVM's x86
 /// MaxStoresPerMemcpy; past it, `rep movs`.
 const MEMCPY_MOVES: i64 = 8;
+/// `MaxStoresPerMemcpyOptSize` (X86ISelLowering.cpp#L2939 at d1106deb71cc): a
+/// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
+const MEMCPY_MOVES_SIZE: i64 = 4;
 
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
@@ -5979,7 +5983,7 @@ impl Selector<'_, '_, '_> {
                     match (proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD)) {
                         (true, false) => self.memcpy(arguments, false, at, out),
                         (false, true) => self.memcpy(arguments, true, at, out),
-                        _ => refuse("a memmove whose direction no pass proved"),
+                        _ => self.memmove_loads_then_stores(arguments, at, out),
                     }
                 }
                 Some(Intrinsic::Unary(function)) => {
@@ -6874,10 +6878,28 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
-    /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
-    /// from it, widest first, where only the bytes it names are read; else
-    /// `rep movsd` through es:di, the tail by `movsw` and `movsb`, as `memset`
-    /// does its fill.
+    /// most `MEMCPY_MOVES` pairs (`MEMCPY_MOVES_SIZE` tuned for size), each a
+    /// load into a register and a store from it, widest first, where only the
+    /// bytes it names are read; else `rep movsd` through es:di, the tail by
+    /// `movsw` and `movsb`, as `memset` does its fill.
+    ///
+    /// DEVIATE I1 (AM-I1, priced): beyond the moves the pin's
+    /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
+    /// the generic path, a `memcpy` libcall, for a size over
+    /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
+    /// `rep movsd` for both, the runtime having no `memcpy`. Price at -Os,
+    /// 2026-10-23: QCport 5 `rep movsd` copies, none over 128 bytes (0 modules
+    /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
+    /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
+    /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a libcall
+    /// would move. Exit: a runtime `_memcpy` in each C target and a target
+    /// "has memcpy" fact, then the libcall here, queued after the tuning phase.
+    ///
+    /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
+    /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
+    /// ours is `rep movsd` and a tail, `cpu.size` not telling -Os from -Oz.
+    /// Exit: a minsize flag from the driver options to the selector.
     fn memcpy(
         &mut self,
         arguments: &[Operand],
@@ -6897,6 +6919,68 @@ impl Selector<'_, '_, '_> {
         self.copied(to, from, constant, Some(length), volatile, backward, at, out)
     }
 
+    /// `llvm.memmove` whose direction no pass proved, of a constant length that
+    /// fits the inline limit: every chunk is loaded before any is stored, so
+    /// the sides may overlap however they lie
+    /// (`getMemmoveLoadsAndStores`,
+    /// [SelectionDAG.cpp#L9687](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L9687)).
+    /// DEVIATE: past the limit LLVM calls `memmove`; here the call is refused,
+    /// as before. The limit is `MEMCPY_MOVES` (x86's `MaxStoresPerMemmove` is
+    /// 8, 4 when optimizing for size; the memcpy expansion does not tell
+    /// them apart either).
+    fn memmove_loads_then_stores(
+        &mut self,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else {
+            return refuse("a memmove of other than four operands");
+        };
+        let refused = || refuse("a memmove whose direction no pass proved");
+        if self.is_huge(destination) || self.is_huge(source) {
+            return refused();
+        }
+        let Some(length) = self.length(length) else { return refused() };
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
+        if length / 4 + (length % 4).count_ones() as i64 > most {
+            return refused();
+        }
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let regs = self.regs();
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                chunks.push((offset, width));
+                offset += i64::from(width);
+            }
+        }
+        let mut held = Vec::new();
+        for &(offset, width) in &chunks {
+            let value = self.fresh_held(width);
+            let load = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(value)],
+                vec![Loc::Mem(Self::memory(regs, from.moved(offset), width))],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+            held.push(value);
+        }
+        for (&(offset, width), value) in chunks.iter().zip(held) {
+            let store = semantics(
+                Operation::Move,
+                "mov",
+                vec![Loc::Mem(Self::memory(regs, to.moved(offset), width))],
+                vec![Loc::Held(value)],
+            );
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+        }
+        Ok(())
+    }
+
     /// `memcpy`'s lowering, between pointers made by the caller: a constant
     /// `length` (or the operand that holds it).
     #[allow(clippy::too_many_arguments)]
@@ -6914,8 +6998,9 @@ impl Selector<'_, '_, '_> {
         let regs = self.regs();
         let length = length.filter(|_| constant.is_none());
         let counted_operand = || length.expect("a length that is no constant is an operand");
+        let most = if self.cpu.size { MEMCPY_MOVES_SIZE } else { MEMCPY_MOVES };
         if let Some(length) = constant
-            && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
+            && length / 4 + (length % 4).count_ones() as i64 <= most
         {
             let mut offset = 0;
             let mut chunks = Vec::new();

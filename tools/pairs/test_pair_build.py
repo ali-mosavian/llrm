@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import textwrap
 import threading
@@ -121,4 +122,12 @@ def test_the_dist_still_compiles_after_the_pair_and_an_old_worktree_is_pruned(tm
     old = scratch / f"wt-pair-{first}"
     os.utime(old, (1, 1))
     build(scratch, repo, second, {**env, "PAIR_KEEP_MIN": "60"})
-    assert not old.exists() and (scratch / f"wt-pair-{second}").exists()
+    assert old.exists(), "the tree of a dist still there is kept: llrm-c reads its headers from it"
+    assert (scratch / f"wt-pair-{second}").exists()
+    # With its dist gone the old tree is pruned by age.
+    shutil.rmtree(scratch / f"sbp-{first}")
+    os.utime(old, (1, 1))
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c2"], check=True)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    build(scratch, repo, head, {**env, "PAIR_KEEP_MIN": "60"})
+    assert not old.exists()

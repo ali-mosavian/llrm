@@ -495,13 +495,13 @@ pub fn optimized(
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let profile = options.cpu()?;
         timed("mir selects", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(
-                    |module| crate::backend::selects::lowered(module, &*tti, &|ty| layout.expands_for("select", ty)),
-                )
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::selects::priced(module, &*tti, &|ty| layout.expands_for("select", ty), &|name| {
+                    profile.cost(name).ok()
+                })
+            })
         })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
