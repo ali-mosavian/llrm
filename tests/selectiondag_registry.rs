@@ -1,7 +1,8 @@
 //! The SelectionDAG DEVIATE registry (`docs/working/selectiondag-plan.md`,
 //! section 6) is the one list of `SD` numbers. Two groups took the same
 //! number three times (SD10, SD14, SD21); each number now has one owner row,
-//! one declaration, and a "Next free" line above every number in use.
+//! one declaration, and the owner's block: SD44..SD99 are closed, then
+//! sdag-a takes SD100.., sdag-b SD200.., sdag-c SD300.., sdag-d SD400...
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -29,19 +30,37 @@ fn tracked(pattern: &str) -> Vec<Source> {
         .collect()
 }
 
+/// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
+/// to sdag-a, SD200.. to sdag-b, SD300.. to sdag-c, SD400.. to sdag-d.
+fn block_problem(id: u32, owner: &str) -> Option<String> {
+    if (44..100).contains(&id) {
+        return Some(format!("SD{id} is in the closed range SD44..SD99"));
+    }
+    if id >= 100 {
+        let letter = ["a", "b", "c", "d"].get((id / 100) as usize - 1)?;
+        if owner != format!("sdag-{letter}") {
+            return Some(format!("SD{id} is in sdag-{letter}'s block but its row says {owner}"));
+        }
+    }
+    None
+}
+
 /// Every problem with the registry in `plan` given the declarations in
 /// `code` (the `//!` headers of Rust files) and `docs` (other working docs).
 fn problems(plan: &Source, code: &[Source], docs: &[Source]) -> Vec<String> {
-    let row = Regex::new(r"^\|\s*SD(\d+)\s*\|").unwrap();
+    let row = Regex::new(r"^\|\s*SD(\d+)\s*\|\s*([\w-]+)\s*\|").unwrap();
     let bold = Regex::new(r"^\s*[-*]\s+\*\*SD(\d+)\*\*").unwrap();
     let deviate = Regex::new(r"^//!\s*(?:[-*]\s+\*\*SD(\d+)\*\*|DEVIATE\s+SD(\d+):)").unwrap();
-    let next = Regex::new(r"Next free:\s*\*\*SD(\d+)\*\*").unwrap();
     let mut out = Vec::new();
 
     let mut rows: BTreeMap<u32, usize> = BTreeMap::new();
     for line in plan.text.lines() {
         if let Some(found) = row.captures(line) {
-            *rows.entry(found[1].parse().unwrap()).or_default() += 1;
+            let id: u32 = found[1].parse().unwrap();
+            *rows.entry(id).or_default() += 1;
+            if let Some(why) = block_problem(id, &found[2]) {
+                out.push(why);
+            }
         }
     }
     for (id, count) in &rows {
@@ -70,15 +89,8 @@ fn problems(plan: &Source, code: &[Source], docs: &[Source]) -> Vec<String> {
         }
     }
 
-    match next.captures(&plan.text) {
-        None => out.push(format!("{} has no `Next free: **SDn**` line", plan.path)),
-        Some(found) => {
-            let next: u32 = found[1].parse().unwrap();
-            let top = rows.keys().chain(declared.keys()).max().copied().unwrap_or(0);
-            if next <= top {
-                out.push(format!("Next free is SD{next} but SD{top} is in use"));
-            }
-        }
+    if !plan.text.lines().any(|line| line.starts_with("Next free:") && line.contains("blocks:")) {
+        out.push(format!("{} has no `Next free: ... blocks: ...` line", plan.path));
     }
     out
 }
@@ -101,7 +113,7 @@ fn the_registry_has_no_clash_and_every_declared_number_is_in_it() {
     assert!(found.is_empty(), "SD registry:\n{}", found.join("\n"));
 }
 
-const PLAN_TEXT: &str = "| SD1 | a | x | y |\n| SD2 | b | x | y |\n\nNext free: **SD3**.\n";
+const PLAN_TEXT: &str = "| SD1 | a | x | y |\n| SD2 | b | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n";
 
 /// A number taken twice was found only by a human reading two PRs. A seeded
 /// duplicate (a second header declaring SD2) must be named with both places.
@@ -115,16 +127,32 @@ fn a_number_declared_twice_is_reported() {
 }
 
 #[test]
-fn a_number_with_no_row_and_a_stale_next_free_are_reported() {
+fn a_number_with_no_row_is_reported() {
     let plan = source("plan.md", PLAN_TEXT);
     let found = problems(&plan, &[source("c.rs", "//! DEVIATE SD3: new\n")], &[]);
     assert!(found.iter().any(|problem| problem.contains("SD3") && problem.contains("no row")), "{found:?}");
-    assert!(found.iter().any(|problem| problem.contains("Next free is SD3 but SD3 is in use")), "{found:?}");
+}
+
+/// Numbers clashed three times; a row in the closed range or in another
+/// owner's block is reported.
+#[test]
+fn a_number_outside_its_owners_block_is_reported() {
+    let plan = source("plan.md", "| SD50 | sdag-a | x | y |\n| SD150 | sdag-b | x | y |\n| SD120 | sdag-a | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n");
+    let found = problems(&plan, &[], &[]);
+    assert!(found.iter().any(|problem| problem.contains("SD50 is in the closed range")), "{found:?}");
+    assert!(found.iter().any(|problem| problem.contains("SD150") && problem.contains("sdag-a's block")), "{found:?}");
+    assert!(!found.iter().any(|problem| problem.contains("SD120")), "{found:?}");
+}
+
+#[test]
+fn a_missing_next_free_line_is_reported() {
+    let found = problems(&source("plan.md", "| SD1 | a | x | y |\n"), &[], &[]);
+    assert!(found.iter().any(|problem| problem.contains("no `Next free")), "{found:?}");
 }
 
 #[test]
 fn a_duplicate_registry_row_is_reported() {
-    let plan = source("plan.md", "| SD1 | a | x | y |\n| SD1 | b | x | y |\n\nNext free: **SD2**.\n");
+    let plan = source("plan.md", "| SD1 | a | x | y |\n| SD1 | b | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n");
     let found = problems(&plan, &[], &[]);
     assert!(found.iter().any(|problem| problem.contains("SD1 has 2 rows")), "{found:?}");
 }

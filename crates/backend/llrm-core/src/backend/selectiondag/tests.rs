@@ -408,7 +408,7 @@ mod builder {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
-                match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
+                match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                     Ok(done) => {
                         built.insert(name, normalized(&done.dag.dump()));
                     }
@@ -449,6 +449,100 @@ mod builder {
         for (name, dag) in &ours {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }
+    }
+
+    /// A direct call: `callseq_start`, the stack stores, `X86ISD::CALL`,
+    /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
+    /// is refused before this piece.
+    /// Floating point: loads and stores of `f32`/`f64`, `fadd`/`fmul`/`fsub`,
+    /// `fneg`, `fcmp`, conversions, an FP constant, and a `ret` of the value
+    /// (RET_GLUE's operand, st(0) naming no register). Floats were refused.
+    #[test]
+    fn floating_point_matches_the_pins_initial_dag() {
+        let ll = include_str!("golden/fp.ll");
+        let pin = pin_blocks(include_str!("golden/fp.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// `llvm.memcpy`/`llvm.memset`: the libcall (variable or large size) and
+    /// `REP_MOVS`/`REP_STOS` (constant size up to 128 bytes at alignment 4)
+    /// are the pin's. An intrinsic call was refused.
+    #[test]
+    fn memory_intrinsics_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/mem.ll");
+        let pin = pin_blocks(include_str!("golden/mem.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 6);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// Small constant sizes are loads and stores (overlapping at the end),
+    /// and a REP whose size is not a multiple of the block adds the tail as
+    /// stores: the pin's. These were refused.
+    #[test]
+    fn small_memory_intrinsics_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/memsmall.ll");
+        let pin = pin_blocks(include_str!("golden/memsmall.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 9);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    #[test]
+    fn indirect_calls_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/indirect.ll");
+        let pin = pin_blocks(include_str!("golden/indirect.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new(), "a call of a value was refused");
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    #[test]
+    fn calls_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/calls.ll");
+        let pin = pin_blocks(include_str!("golden/calls.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// A `watcallcc` call passes its first four word arguments in AX, DX, BX,
+    /// CX: the call's register copies are `CopyToReg` of those, in that order,
+    /// glued, each read back as an operand of `X86ISD::CALL`. A call that
+    /// left them on the stack would show `store` nodes instead.
+    #[test]
+    fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
+        let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+            declare watcallcc i16 @w(i16, i16, i16, i16)\n\
+            define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  %r = call watcallcc i16 @w(i16 %a, i16 %b, i16 %c, i16 %d)\n  ret i16 %r\n}\n";
+        let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let built = build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap()).unwrap_or_else(|why| panic!("{}", why.0));
+        let dump = built.dag.dump();
+        let copies: Vec<&str> = dump.lines().filter(|line| line.contains("CopyToReg") && line.contains(" $")).collect();
+        let registers: Vec<&str> = copies.iter().filter_map(|line| line.split("Register:i16 $").nth(1)?.split(',').next()).collect();
+        assert_eq!(registers, ["ax", "dx", "bx", "cx", "ax"], "four arguments, then the result:\n{dump}");
+        assert!(!dump.contains("store"), "{dump}");
     }
 }
 
@@ -711,5 +805,487 @@ mod expand_node {
         assert_eq!(dag.opcode(root), ISD::Rotl);
         let amount = dag.operand(root, 1);
         assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(8), EVT::I8));
+    }
+}
+
+mod x86_conditions {
+    use super::super::legalize_dag::DagLegalizer;
+    use super::super::x86_lowering::{cond, x86isd, X86Lowering};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn lowered(dag: &mut SelectionDAG, cmov: bool) {
+        let tli = TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32);
+        DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov }).run().unwrap();
+    }
+
+    fn code(dag: &SelectionDAG, value: SDValue) -> u128 {
+        dag.constant(value).expect("a condition code constant")
+    }
+
+    /// `select (a <u b), x, y` is `CMOV y, x, B, flags(a - b)`; the flags are
+    /// the second result of a `SUB`, so a real subtraction of the same
+    /// operands shares them. The same DAG with or without CMOV.
+    #[test]
+    fn a_select_on_a_compare_is_a_cmov_of_the_subtract_flags() {
+        for cmov in [false, true] {
+            let mut dag = dag();
+            let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
+            let test = dag.get_setcc(EVT::I8, a, b, CondCode::SetULt);
+            let pick = dag.get_select(EVT::I32, test, x, y);
+            dag.set_root(pick);
+            lowered(&mut dag, cmov);
+            let root = dag.get_root();
+            assert_eq!(dag.opcode(root), x86isd::CMOV, "cmov={cmov}");
+            assert_eq!((dag.operand(root, 0), dag.operand(root, 1)), (y, x), "false value first");
+            assert_eq!(code(&dag, dag.operand(root, 2)), cond::B);
+            let flags = dag.operand(root, 3);
+            assert_eq!((dag.opcode(flags), flags.res), (x86isd::SUB, 1));
+            assert_eq!((dag.operand(flags, 0), dag.operand(flags, 1)), (a, b));
+        }
+    }
+
+    /// A compare against zero tests the value (`cmp x, 0`), and `x < 0` is
+    /// the sign condition: no subtraction is built.
+    #[test]
+    fn a_branch_on_a_compare_with_zero_is_a_test() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let zero = dag.get_constant(0, EVT::I32);
+        let negative = dag.get_setcc(EVT::I8, x, zero, CondCode::SetLt);
+        let chain = dag.entry_node();
+        let dest = dag.get_register(EVT::OTHER, 9);
+        let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, negative, dest]);
+        dag.set_root(branch);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), x86isd::BRCOND);
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::S);
+        let flags = dag.operand(root, 3);
+        assert_eq!(dag.opcode(flags), x86isd::CMP);
+        assert!(dag.is_null_constant(dag.operand(flags, 1)));
+    }
+
+    /// `a > 5` becomes `a >= 6` (a smaller immediate on the comparison).
+    #[test]
+    fn greater_than_a_constant_becomes_greater_or_equal_plus_one() {
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::I32, 1);
+        let five = dag.get_constant(5, EVT::I32);
+        let test = dag.get_setcc(EVT::I8, a, five, CondCode::SetGt);
+        let (x, y) = (load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3));
+        let pick = dag.get_select(EVT::I32, test, x, y);
+        dag.set_root(pick);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::GE);
+        let flags = dag.operand(root, 3);
+        assert_eq!(dag.constant(dag.operand(flags, 1)), Some(6));
+    }
+
+    /// A select on a plain `i8` is tested against zero: `NE` on `cmp c, 0`.
+    #[test]
+    fn a_select_on_a_plain_byte_tests_it() {
+        let mut dag = dag();
+        let c = load(&mut dag, EVT::I8, 1);
+        let (x, y) = (load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3));
+        let pick = dag.get_select(EVT::I32, c, x, y);
+        dag.set_root(pick);
+        lowered(&mut dag, false);
+        let root = dag.get_root();
+        assert_eq!(code(&dag, dag.operand(root, 2)), cond::NE);
+        assert_eq!(dag.opcode(dag.operand(root, 3)), x86isd::CMP);
+    }
+
+    /// `i16` selects widen to a 32-bit `cmov` and truncate; `i8` only when the
+    /// CPU has CMOV (else the `CMOV_GR8` pseudo takes the byte).
+    #[test]
+    fn narrow_selects_widen_by_cpu() {
+        for (vt, cmov, widens) in [(EVT::I16, false, true), (EVT::I8, false, false), (EVT::I8, true, true)] {
+            let mut dag = dag();
+            let c = load(&mut dag, EVT::I8, 1);
+            let (x, y) = (dag.get_register(vt, 2), dag.get_register(vt, 3));
+            let pick = dag.get_select(vt, c, x, y);
+            dag.set_root(pick);
+            lowered(&mut dag, cmov);
+            let root = dag.get_root();
+            assert_eq!(dag.opcode(root) == ISD::Truncate, widens, "{vt:?} cmov={cmov}");
+        }
+    }
+}
+
+mod setcc_result {
+    use super::super::legalize_types::TypeLegalizer;
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    /// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no register
+    /// holds. 73 of 160 functions of the shadow corpus stopped here ("SetCC:
+    /// promote result"). After: an `i8` compare (the target's result type)
+    /// zero-extended-in-register into the select's condition, and nothing
+    /// illegal reachable.
+    #[test]
+    fn an_i1_compare_feeding_a_select_is_promoted_to_i8() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
+        let pick = dag.get_select(EVT::I32, test, x, y);
+        dag.set_root(pick);
+        let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+        assert!(!legalizer.all_legal());
+        assert_eq!(legalizer.run(), Ok(true));
+        assert!(legalizer.all_legal());
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Select);
+        let cond = dag.operand(root, 0);
+        // `zext i8 (and (anyext (setcc i8)), 1)`: the `i1` was promoted to the setcc's own `i8`.
+        assert_eq!(dag.value_type(cond), EVT::I8);
+        let setcc = (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).find(|&v| dag.opcode(v) == ISD::SetCC && dag.value_type(v) == EVT::I8);
+        assert!(setcc.is_some(), "an i8 setcc exists");
+    }
+
+    /// A compare consumed as an `i1` and widened: `zext i32 (setcc i1)` is the
+    /// promoted compare masked to one bit.
+    #[test]
+    fn a_zero_extended_i1_compare_is_masked_to_one_bit() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
+        let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
+        dag.set_root(wide);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I32));
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
+    }
+}
+
+mod switches {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+
+    use super::super::switchcg::{SwitchTarget, describe, plan};
+
+    /// Each switch of `switches.ll` makes the clusters the pin prints in
+    /// `Case clusters:` (jump tables `JT:`, bit tests `BT:`, the rest as
+    /// ranges). Without the planner the line is empty.
+    #[test]
+    fn switch_clusters_match_the_pins() {
+        let text: String = include_str!("golden/switches.ll").lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let mut ours = String::new();
+        for (_, global, function) in module.functions() {
+            for &block in function.layout() {
+                let Some(terminator) = function.terminator(block) else { continue };
+                let instruction = function.instruction(terminator);
+                if instruction.opcode != Opcode::Switch {
+                    continue;
+                }
+                let Operand::Value(cond) = instruction.operands[0] else { panic!("a value condition") };
+                let width = match module.context.types.get(function.value(cond).ty) {
+                    llrm_mir::types::Type::Int(bits) => *bits,
+                    other => panic!("{other:?}"),
+                };
+                let Operand::Block(default) = instruction.operands[1] else { panic!("a default") };
+                let cases: Vec<(i128, u32)> = instruction.operands[2..]
+                    .chunks(2)
+                    .map(|pair| {
+                        let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else { panic!("a case") };
+                        let ConstantKind::Int(bits) = module.context.get(value).kind else { panic!("an integer case") };
+                        let shift = 128 - width;
+                        ((((bits << shift) as i128) >> shift), dest.0)
+                    })
+                    .collect();
+                let planned = plan(&cases, default.0, &SwitchTarget::x86(32));
+                let mut line = describe(&planned.clusters);
+                if let Some((peeled, _)) = planned.peeled {
+                    line = format!("{}{line}", describe(&[peeled]));
+                }
+                ours.push_str(&format!("{}: {line}\n", global.name.as_deref().unwrap()));
+            }
+        }
+        assert_eq!(ours, include_str!("golden/switches.pin.txt"));
+    }
+}
+
+mod global_address {
+    use super::super::legalize_dag::DagLegalizer;
+    use super::super::x86_lowering::{x86isd, X86Lowering};
+    use super::*;
+
+    fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let global = dag.get_global_address(EVT::I32, 3, offset);
+        dag.set_root(global);
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().unwrap();
+        let root = dag.get_root();
+        (dag, root)
+    }
+
+    /// 71 of 158 functions of the shadow corpus stopped at "GlobalAddress:
+    /// convert node to libcall". The pin makes `Wrapper (TargetGlobalAddress g)`,
+    /// which the matcher turns into `mov reg, offset g`.
+    #[test]
+    fn a_global_is_a_wrapper_of_the_target_address() {
+        let (dag, root) = legalized(0);
+        assert_eq!(dag.opcode(root), x86isd::WRAPPER);
+        let target = dag.operand(root, 0);
+        assert_eq!(dag.opcode(target), ISD::TargetGlobalAddress);
+        assert_eq!(dag.node(target).data, NodeData::Global { symbol: 3, offset: 0 });
+    }
+
+    /// `&g[2]` folds into the symbol; a negative offset is added after, as the
+    /// pin does when the code model would not take it.
+    #[test]
+    fn a_non_negative_offset_folds_and_a_negative_one_is_added() {
+        let (dag, root) = legalized(8);
+        assert_eq!(dag.node(dag.operand(root, 0)).data, NodeData::Global { symbol: 3, offset: 8 });
+        let (dag, root) = legalized(-4);
+        assert_eq!(dag.opcode(root), ISD::Add);
+        assert_eq!(dag.node(dag.operand(dag.operand(root, 0), 0)).data, NodeData::Global { symbol: 3, offset: 0 });
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(0xFFFF_FFFC));
+    }
+}
+
+mod combiner {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+    use super::super::x86_lowering::{x86isd, X86Lowering};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn mul_by(dag: &mut SelectionDAG, x: SDValue, c: u128) -> SDValue {
+        let c = dag.get_constant(c, EVT::I32);
+        dag.get_node(ISD::Mul, EVT::I32, &[x, c])
+    }
+
+    fn generic(dag: &mut SelectionDAG) {
+        DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    }
+
+    fn x86(dag: &mut SelectionDAG, level: CombineLevel) {
+        DagCombiner::new(dag, &mut X86Lowering { cmov: false }, level).run();
+    }
+
+    /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
+    /// (A0: identity folds are the combiner's), so a matcher sees an `imul`.
+    #[test]
+    fn multiply_by_one_and_by_a_power_of_two() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let one = mul_by(&mut dag, x, 1);
+        dag.set_root(one);
+        generic(&mut dag);
+        assert_eq!(dag.get_root(), x);
+
+        let eight = mul_by(&mut dag, x, 8);
+        dag.set_root(eight);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Shl);
+        let amount = dag.operand(root, 1);
+        assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(3), EVT::I8));
+    }
+
+    /// `x * -8` is `0 - (x << 3)`.
+    #[test]
+    fn multiply_by_a_negated_power_of_two() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let product = mul_by(&mut dag, x, (-8i32) as u32 as u128);
+        dag.set_root(product);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Sub);
+        assert!(dag.is_null_constant(dag.operand(root, 0)));
+        assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Shl);
+    }
+
+    /// The worklist revisits what a rewrite made: `(x * 2) * 3` is
+    /// `(x << 1) * 3`, then `x * 6`.
+    #[test]
+    fn a_rewrite_is_combined_again() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let twice = mul_by(&mut dag, x, 2);
+        let thrice = mul_by(&mut dag, twice, 3);
+        dag.set_root(thrice);
+        generic(&mut dag);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Mul);
+        assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(6)));
+    }
+
+    /// Before types are legal the target leaves a multiply alone (the pin's
+    /// `isBeforeLegalize`); after, `x * 5` is `MUL_IMM`, one `lea`. The shadow
+    /// found `x * 5` as an `imul` where the pin has `lea`.
+    #[test]
+    fn multiply_by_five_is_a_lea_after_types_are_legal() {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let five = mul_by(&mut dag, x, 5);
+        dag.set_root(five);
+        x86(&mut dag, CombineLevel::BeforeLegalizeTypes);
+        assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+        x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), x86isd::MUL_IMM);
+        assert_eq!((dag.operand(root, 0), dag.constant(dag.operand(root, 1))), (x, Some(5)));
+    }
+
+    /// The other constants (root and first operand): 15 is `(x*5)*3`, 10 is `(x<<1)*5`, 11 is
+    /// `(x*5 << 1) + x`, -5 is `0 - x*5`, 7 is `(x << 3) - x`.
+    #[test]
+    fn multiply_by_other_constants_is_leas_shifts_and_adds() {
+        let shape = |c: i32| {
+            let mut dag = dag();
+            let x = load(&mut dag, EVT::I32, 1);
+            let product = mul_by(&mut dag, x, c as u32 as u128);
+            dag.set_root(product);
+            x86(&mut dag, CombineLevel::AfterLegalizeTypes);
+            let root = dag.get_root();
+            let opcodes = |dag: &SelectionDAG, v: SDValue| (dag.opcode(v), dag.opcode(dag.operand(v, 0)));
+            opcodes(&dag, root)
+        };
+        assert_eq!(shape(15), (x86isd::MUL_IMM, x86isd::MUL_IMM));
+        assert_eq!(shape(10), (x86isd::MUL_IMM, ISD::Shl));
+        assert_eq!(shape(11), (ISD::Add, ISD::Shl));
+        assert_eq!(shape(-5).0, ISD::Sub);
+        assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+    }
+}
+
+mod far_load {
+    use super::super::legalize_types::TypeLegalizer;
+    use super::super::x86_lowering::{x86isd, ES};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    /// A far load is one `les`: the offset is its result and the selector is
+    /// read from `ES` after it, on its chain. Two word loads cost two
+    /// instructions and let anything between them change `ES`.
+    #[test]
+    fn a_far_load_is_les_and_a_read_of_es() {
+        let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+        let mut dag = dag();
+        let ptr = dag.get_register(EVT::I16, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: MVT::Far.into(), align: 2, volatile: false, base: MemBase::Stack(1) };
+        let far = dag.get_load(MVT::Far.into(), chain, ptr, info);
+        let offset = dag.get_node(ISD::Truncate, EVT::I16, &[far]);
+        dag.set_root(offset);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let les = dag.get_root();
+        assert_eq!((dag.opcode(les), les.res, dag.value_type(les)), (x86isd::LES, 0, EVT::I16), "the offset is the les result");
+        assert_eq!((dag.operand(les, 0), dag.operand(les, 1)), (chain, ptr));
+        // The chain users of the original load follow the read of ES.
+        let copy_chain = dag.users(SDValue { node: les.node, res: 1 }).next().expect("something reads the les chain");
+        let copy = SDValue { node: copy_chain, res: 0 };
+        assert_eq!((dag.opcode(copy), dag.value_type(copy)), (ISD::CopyFromReg, EVT::I16));
+        assert_eq!(dag.node(dag.operand(copy, 1)).data, NodeData::Register(ES));
+    }
+}
+
+mod switch_dags {
+    use llrm_mir::datalayout::DataLayout;
+
+    use super::super::builder::{BlockDag, BuilderTarget, build_block};
+    use super::super::dump::normalized;
+    use super::super::function_lowering::FunctionLoweringInfo;
+
+    fn flat(done: &BlockDag, out: &mut Vec<String>) {
+        out.push(normalized(&done.dag.dump()));
+        for (_, extra) in &done.extra {
+            flat(extra, out);
+        }
+    }
+
+    /// The blocks of each function, ours and the pin's, as sorted dumps.
+    fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+        let text: String = text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let mut all = std::collections::BTreeMap::new();
+        for (id, global, function) in module.functions() {
+            let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+            let mut info = FunctionLoweringInfo::new(function);
+            let mut dumps = Vec::new();
+            for &block in function.layout() {
+                let done = build_block(&module, function, &layout, &BuilderTarget::m32(), &llrm_x86_m32::M32, &convention, &mut info, block)
+                    .unwrap_or_else(|why| panic!("{} {block:?}: {}", global.name.as_deref().unwrap(), why.0));
+                flat(&done, &mut dumps);
+            }
+            dumps.sort();
+            all.insert(global.name.as_deref().unwrap().to_string(), dumps);
+        }
+        all
+    }
+
+    fn pins(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut all: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        let mut current: Option<(String, String)> = None;
+        let finish = |current: &mut Option<(String, String)>, all: &mut std::collections::BTreeMap<String, Vec<String>>| {
+            if let Some((name, body)) = current.take() {
+                all.entry(name).or_default().push(normalized(&body));
+            }
+        };
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("Initial selection DAG: ") {
+                finish(&mut current, &mut all);
+                let name = rest.split('\'').nth(1).unwrap().split(':').next().unwrap().to_string();
+                current = Some((name, String::new()));
+            } else if let Some((_, body)) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
+        finish(&mut current, &mut all);
+        all.values_mut().for_each(|dumps| dumps.sort());
+        all
+    }
+
+    /// The compare-and-branch blocks a range-only `switch` becomes (the split
+    /// compares, the chains, the or-trick) are the pin's, block for block.
+    /// A `switch` is refused before this piece.
+    #[test]
+    fn jump_table_and_bit_test_blocks_match_the_pins_initial_dags() {
+        let (ours, pins) = (ours(include_str!("golden/jtbt.ll")), pins(include_str!("golden/jtbt.pin.txt")));
+        assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
+        for (name, dumps) in &ours {
+            assert_eq!(dumps, &pins[name], "function {name}");
+        }
+    }
+
+    #[test]
+    fn switch_blocks_match_the_pins_initial_dags() {
+        let (ours, pins) = (ours(include_str!("golden/switchdag.ll")), pins(include_str!("golden/switchdag.pin.txt")));
+        assert_eq!(ours.keys().collect::<Vec<_>>(), pins.keys().collect::<Vec<_>>());
+        for (name, dumps) in &ours {
+            assert_eq!(dumps, &pins[name], "function {name}");
+        }
     }
 }

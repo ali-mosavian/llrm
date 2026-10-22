@@ -20,7 +20,11 @@
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
 //! Arguments and returns go through the target's `Convention` (stack
 //! parameters are loads of fixed objects, register ones live-in copies;
-//! `ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+//! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
+//! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
+//! A `switch` of range clusters is the split-and-chain compare blocks of
+//! `visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
+//! intrinsics, floats and values wider than a
 //! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
@@ -64,6 +68,10 @@
 //! `umax` (`matchSelectPattern`). Exit: with the target action table (B0).
 //! Owner sdag-a. Review 2026-11-13.
 //!
+//! DEVIATE SD100: a call's `TargetGlobalAddress` carries no relocation flag
+//! (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
+//! Exit: none. Owner sdag-a.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -74,6 +82,7 @@
 
 pub mod actions;
 pub mod builder;
+pub mod dag_combiner;
 mod dag;
 pub mod dump;
 pub mod emit;
@@ -85,7 +94,9 @@ pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
+pub mod x86_lowering;
 pub mod schedule;
+pub mod switchcg;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
