@@ -23,9 +23,10 @@
 //! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 //! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
 //! A `switch` of range clusters is the split-and-chain compare blocks of
-//! `visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
-//! intrinsics, floats and values wider than a
-//! register are refused (`Refused`) until their pieces land.
+//! `visitSwitch` (jump tables and bit tests included). Small constant copies
+//! and fills are loads and stores; indirect calls, intrinsics, floats and
+//! values wider than a register are refused (`Refused`) until their pieces
+//! land.
 //!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -82,21 +83,23 @@
 
 pub mod actions;
 pub mod builder;
-pub mod dag_combiner;
 mod dag;
+pub mod dag_combiner;
+pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod isd;
+pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
-pub mod x86_lowering;
 pub mod schedule;
 pub mod switchcg;
+pub mod x86_lowering;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
@@ -107,6 +110,8 @@ pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
+#[cfg(test)]
+mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
 #[cfg(test)]

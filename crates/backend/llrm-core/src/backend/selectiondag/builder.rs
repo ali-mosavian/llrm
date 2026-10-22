@@ -549,7 +549,16 @@ impl Builder<'_> {
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
             ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
-            _ => Err(Refused("constant expression or aggregate")),
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
+                let base = self.constant_value(operands[0])?;
+                let indices: Vec<Operand> = operands[1..].iter().map(|id| Operand::Constant(*id)).collect();
+                self.gep_value(base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices)
+            }
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op, value }) => {
+                let operand = self.constant_value(*value)?;
+                self.cast_value(*op, operand, vt, SDNodeFlags::default())
+            }
+            _ => Err(Refused("aggregate constant")),
         }
     }
 
@@ -677,8 +686,14 @@ impl Builder<'_> {
     fn visit_cast(&mut self, instruction: &llrm_mir::module::Instruction, op: CastOp) -> Result<(), Refused> {
         let operand = self.get_value(instruction.operands[0])?;
         let dest = self.type_of(instruction.ty)?;
-        let flags = flags_of(instruction.flags);
-        let result = match op {
+        let result = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
+        self.set_value(instruction.result.expect("a cast has a result"), result);
+        Ok(())
+    }
+
+    /// The node a cast makes of `operand` (`visitTrunc`, `visitZExt`, ...).
+    fn cast_value(&mut self, op: CastOp, operand: SDValue, dest: EVT, flags: SDNodeFlags) -> Result<SDValue, Refused> {
+        Ok(match op {
             CastOp::Trunc => self.dag.get_node_flags(ISD::Truncate, dest, &[operand], flags),
             CastOp::ZExt => self.dag.get_node_flags(ISD::ZeroExtend, dest, &[operand], flags),
             CastOp::SExt => self.dag.get_node(ISD::SignExtend, dest, &[operand]),
@@ -702,9 +717,7 @@ impl Builder<'_> {
             CastOp::SIToFP => self.dag.get_node(ISD::SIntToFp, dest, &[operand]),
             CastOp::UIToFP => self.dag.get_node_flags(ISD::UIntToFp, dest, &[operand], flags),
             _ => return Err(Refused("cast not in the scalar subset")),
-        };
-        self.set_value(instruction.result.expect("a cast has a result"), result);
-        Ok(())
+        })
     }
 
     fn visit_icmp(&mut self, instruction: &llrm_mir::module::Instruction, predicate: IntPredicate) -> Result<(), Refused> {
@@ -796,15 +809,24 @@ impl Builder<'_> {
     /// `visitGetElementPtr`.
     fn visit_gep(&mut self, instruction: &llrm_mir::module::Instruction, source: TypeId) -> Result<(), Refused> {
         use llrm_mir::opcode::Flags;
+        let base = self.get_value(instruction.operands[0])?;
+        let nuw = instruction.flags.contains(Flags::NUW);
+        let inbounds = instruction.flags.contains(Flags::INBOUNDS);
+        let nusw = instruction.flags.contains(Flags::NUSW) || inbounds;
+        let n = self.gep_value(base, source, nuw, nusw, inbounds, &instruction.operands[1..])?;
+        self.set_value(instruction.result.expect("a gep has a result"), n);
+        Ok(())
+    }
+
+    /// `visitGetElementPtr`'s walk over the indices, for an instruction or a
+    /// constant expression.
+    fn gep_value(&mut self, base: SDValue, source: TypeId, nuw: bool, nusw: bool, inbounds: bool, indices: &[Operand]) -> Result<SDValue, Refused> {
         let types = &self.module.context.types;
-        let mut n = self.get_value(instruction.operands[0])?;
+        let mut n = base;
         let ptr_vt = self.dag.value_type(n);
         let index_bits = ptr_vt.size_in_bits();
-        let nuw = instruction.flags.contains(Flags::NUW);
-        let nusw = instruction.flags.contains(Flags::NUSW) || instruction.flags.contains(Flags::INBOUNDS);
-        let inbounds = instruction.flags.contains(Flags::INBOUNDS);
         let mut current = source;
-        for (at, index) in instruction.operands[1..].iter().enumerate() {
+        for (at, index) in indices.iter().enumerate() {
             let constant = match index {
                 Operand::Constant(id) => match self.module.context.get(*id).kind {
                     ConstantKind::Int(bits) => Some(bits),
@@ -858,8 +880,7 @@ impl Builder<'_> {
             let add_flags = SDNodeFlags::default().with(SDNodeFlags::NO_UNSIGNED_WRAP, nuw).with(SDNodeFlags::IN_BOUNDS, inbounds);
             n = self.dag.get_mem_base_plus_offset(n, idx, add_flags);
         }
-        self.set_value(instruction.result.expect("a gep has a result"), n);
-        Ok(())
+        Ok(n)
     }
 
     fn index_operand_width(&self, operand: Operand) -> Result<u32, Refused> {

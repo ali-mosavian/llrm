@@ -1262,6 +1262,12 @@ impl<'a, 't> Body<'a, 't> {
             facts.state(Subject::Operand { function: id, instruction, operand }, fact);
         }
         for (value, fact) in stated {
+            // An interrupt handler's parameters are the registers it saved,
+            // read from its frame slots: its lowered signature has no parameter
+            // to state a fact of.
+            if function.abi.as_ref().is_some_and(|abi| abi.distance == CallDistance::Interrupt) {
+                continue;
+            }
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
             facts.state(Subject::Param { function: id, index }, fact);
         }
