@@ -18,7 +18,10 @@
 //! block that defines it ends in `CopyToReg`, the blocks that read it start
 //! from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 //! predecessor. `dump::normalized` makes a dump comparable with the pin's.
-//! Calls, returns, arguments and switches are refused (`Refused`) until A2.
+//! Arguments and returns go through the target's `Convention` (stack
+//! parameters are loads of fixed objects, register ones live-in copies;
+//! `ret` is `RET_GLUE`). Calls, switches, floats and values wider than a
+//! register are refused (`Refused`) until their pieces land.
 //!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -83,6 +86,7 @@ pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
 pub mod schedule;
+pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
