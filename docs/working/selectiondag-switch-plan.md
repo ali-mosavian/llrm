@@ -10,7 +10,7 @@ One scalar block runs end to end: builder, type legalizer, DAG legalizer, `selec
 
 | Group | Remaining | Dates (owner's) |
 |---|---|---|
-| builder (sdag-a) | A2b/c calls and varargs, byval, atomics, memset/memcpy patterns, FP builder; refuses nothing on the corpus | asked 10-22, row to be filled with sdag-a's dates before 10-28 |
+| builder (sdag-a) | refuses now: va_*, dynamic alloca, atomics, EH, aggregates, freeze, intrinsics beyond mem*, switch with phi successors, float call results, i64 at m16. The gcc-corpus shadow (153 functions) hits none but memset.pattern (done); QCport, tests/run and qbrt are not yet run | byval/sret #3848 open; va_* 11-10; dynamic alloca 11-12; atomics 11-20; EH 11-27; aggregates, freeze, intrinsic sweep 12-04; **refuses nothing on the corpus 12-10** (shadow of QCport/tests/run/qbrt from 11-02) |
 | legalizer, lowering (sdag-b) | i64 div/rem helper, remaining promote/expand (select, setcc, ext/trunc, neg, load/store, ret operands), x87 and FP conversions (SD6), bit counts, bswap, abs, funnel shifts | mul 10-27; div/rem 11-05; promote/expand 11-14; x87 11-18; bit counts 11-25; **legalizer complete 12-05 (types), 12-19 (lowering incl. x87)** |
 | combiner (sdag-b) | first 8 visitors 12-12; known bits and SimplifyDemandedBits is the long pole | **complete for the scalar corpus 2027-02-12**; not a gate (rows, below) |
 | matcher, m16 (sdag-c) | hand matchers (FrameIndex to LEA, MUL_LOHI, DIVREM, logic-immediate shrink) 11-05; x87 goldens 11-08; DAG segment overrides 11-10; m16 shadow against the old selector 11-14 | **no CannotSelect: m32 11-12, m16 11-20** |
