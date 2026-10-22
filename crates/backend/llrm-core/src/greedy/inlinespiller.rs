@@ -894,7 +894,7 @@ impl InlineSpiller<'_> {
         if one.group.is_some() {
             return false;
         }
-        let Some((dst, src)) = crate::backend::coalesce::_copy(&one) else { return false };
+        let Some((dst, src)) = one.copy_of() else { return false };
         // A copy of the program owns bytes of the object that its erasure
         // would leave unclaimed.
         let owns = one.covers.is_some_and(|(from, to)| from != to);
@@ -1013,7 +1013,7 @@ impl InlineSpiller<'_> {
                     continue;
                 }
                 // Follow sibling copies down the dominator tree.
-                if let Some((dst, from)) = crate::backend::coalesce::_copy(one).filter(|_| one.group.is_none()) {
+                if let Some((dst, from)) = one.copy_of().filter(|_| one.group.is_none()) {
                     if from == reg && matrix.vrm.get_original(dst) == self.original && lis.has_interval(dst) {
                         if let Some(dst_vni) = lis.get_interval(dst).range.get_vn_info_at(&idx.get_reg_slot(false)) {
                             work.push((dst, dst_vni));
@@ -1085,9 +1085,7 @@ impl InlineSpiller<'_> {
                 let one = lis.instr(def);
                 // An instruction of the program owns bytes of the object that
                 // an erased one would leave unclaimed.
-                if one.covers.is_none_or(|(from, to)| from == to)
-                    && (crate::backend::coalesce::_copy(one).is_some() || remat_shape(one))
-                {
+                if one.covers.is_none_or(|(from, to)| from == to) && (one.copy_of().is_some() || remat_shape(one)) {
                     dead.push(def);
                 }
             }
@@ -1251,7 +1249,7 @@ mod tests {
             &self,
             instr: &Insn,
         ) -> Option<(u32, u32)> {
-            crate::backend::coalesce::_copy(instr)
+            instr.copy_of()
         }
 
         fn pinned(
@@ -1353,7 +1351,7 @@ mod tests {
         assert_eq!(at.len(), 1, "stores of the home: {after:?}");
         assert_eq!(after[at[0]].uses, [1], "the source is stored, not the copy: {after:?}");
         assert_eq!(at[0], 1, "right after the source's definition: {after:?}");
-        assert!(after.iter().all(|one| crate::backend::coalesce::_copy(one).is_none()), "the copy is dead: {after:?}");
+        assert!(after.iter().all(|one| one.copy_of().is_none()), "the copy is dead: {after:?}");
         // Spilling the source in its turn stores its value once more, in the
         // same home: the store of the register itself goes.
         let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };

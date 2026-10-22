@@ -201,6 +201,19 @@ impl<T> std::fmt::Debug for Derived<T> {
 }
 
 impl LirBody {
+    /// One more than the largest value the body names, or one
+    /// (`MachineRegisterInfo::createVirtualRegister`'s next number).
+    pub fn next_value(&self) -> u32 {
+        let mut largest = 0;
+        for block in &self.blocks {
+            largest = block.phis.iter().map(|phi| phi.result).fold(largest, u32::max);
+            for one in &block.insns {
+                largest = one.defines.iter().chain(&one.uses).copied().fold(largest, u32::max);
+            }
+        }
+        largest + 1
+    }
+
     /// The values (by the number their register had in SSA) that `-g`'s notes
     /// name.
     #[must_use]
@@ -390,6 +403,19 @@ impl LirBody {
 }
 
 impl Insn {
+    /// The (written, read) pair this instruction is a plain move of
+    /// (`TargetInstrInfo::isCopyInstr`).
+    pub fn copy_of(&self) -> Option<(u32, u32)> {
+        let what = self.what.as_ref()?;
+        if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
+            return None;
+        }
+        match (&what.dests[0], &what.sources[0]) {
+            (Loc::Held(into), Loc::Held(out_of)) => Some((into.value, out_of.value)),
+            _ => None,
+        }
+    }
+
     /// This instruction with every value it names put through `rename`, and the
     /// same allocation where none of them moves: a rewrite that renames a few
     /// values paid for a copy of every instruction (`phielim` renamed 3,500

@@ -146,7 +146,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         &split_body
     };
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut next = crate::backend::splitkit::_next_value(body);
+    let mut next = body.next_value();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
@@ -232,7 +232,6 @@ fn _held(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::coalesce::_copy as copy_of;
     use crate::model::ir::{Imm, Loc, Operation, Semantics};
 
     fn held(value: u32) -> Loc {
@@ -284,7 +283,7 @@ mod tests {
     }
 
     fn copies(block: &Block) -> Vec<(u32, u32)> {
-        block.insns.iter().filter_map(|one| copy_of(one)).collect()
+        block.insns.iter().filter_map(|one| one.copy_of()).collect()
     }
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was

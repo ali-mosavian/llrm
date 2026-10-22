@@ -63,7 +63,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::LiveAt;
-use crate::backend::{allocate, coalesce, spiller};
+use crate::backend::{allocate, coalesce};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -100,7 +100,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
     let mut changed = false;
-    let mut counter = spiller::_next_value(body);
+    let mut counter = body.next_value();
     let mut mint = || {
         counter += 1;
         counter - 1
