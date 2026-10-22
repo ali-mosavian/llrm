@@ -792,10 +792,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 LEA Fixup",
-        Missing,
+        Deviate,
+        "peephole.rs (`addresses`, `increments`)",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: i486 runs only `optTwoAddrLEA`; it is not translated; reason: ours makes an LEA only where it prices below the add (`addresses`), so no scale-1 LEA has its destination as a source (0 of 3855 LEAs, 115 tests/run/c programs, -O2 m32 sysv i486); cost: none measured; exit: pre-RA LEA formation (row 62) or a site found (docs/working/lea-fixup-plan.md, LF-2); owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",
