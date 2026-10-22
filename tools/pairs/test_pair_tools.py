@@ -108,7 +108,7 @@ def fake_selector(path: Path, extra: int = 0, refuse: bool = False) -> str:
     path.write_text(
         '#!/bin/bash\n[ "$1" = --version ] && { echo "llrm-c abc1234"; exit 0; }\n'
         'for a; do case $a in --isel=*) s=${a#--isel=};; esac; [ "$p" = -o ] && o=$a; p=$a; done\n'
-        f'[ "$s" = dag ] && {{ [ {int(refuse)} = 1 ] && {{ echo "@f: --isel=dag: cannot select" >&2; exit 1; }}; n={extra}; }} || n=0\n'
+        f'[ "$s" = dag -o "$s" = shadow ] && {{ [ {int(refuse)} = 1 ] && {{ echo "@f: --isel=dag: cannot select" >&2; exit 1; }}; n={extra}; }} || n=0\n'
         'echo x > "$o"\necho "[isel] f selector=$s instructions=4 copies=1 executed=9 memory=2" >&2\n'
         'echo "[isel] g selector=$s instructions=$((7+n)) copies=0 executed=20 memory=5" >&2\n'
     )
@@ -148,3 +148,11 @@ def test_isel_shadow_reads_m16_function_bytes_from_a_jwasm_listing():
     shadow = load("isel_shadow")
     listing = "00000000                        _id@3 proc far\n00000001                        _id@3 endp\n00000001                        _sum@3 proc far\n00000015                        _sum@3 endp\n"
     assert shadow.parse_listing(listing) == {"id": "1", "sum": "20"}
+
+
+def test_isel_shadow_lists_a_function_the_dag_path_refused_and_never_as_equal():
+    """`--isel=shadow` falls back to the old selector for a refused function: its row then equals the old one, and the report read zero."""
+    shadow = load("isel_shadow")
+    old = shadow.parse_rows("[isel] f selector=old instructions=4 copies=1 executed=9 memory=2\n")
+    new = shadow.parse_rows("[isel] f selector=shadow instructions=4 copies=1 executed=9 memory=2\n[isel] f refused: --isel=dag: a function of several blocks\n")
+    assert shadow.differences(old, new) == ["f: REFUSED --isel=dag: a function of several blocks"]

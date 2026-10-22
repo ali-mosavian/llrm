@@ -206,13 +206,13 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD36 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
 | SD37 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
 | SD38 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
-| SD39 | sdag-d | emitter: no frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
+| SD39 | sdag-d | emitter: no local frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
 
 | SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
-| SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
+| SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 
