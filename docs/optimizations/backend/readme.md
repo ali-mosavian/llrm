@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 123 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -40,6 +40,8 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented
 | expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and | [expansion](expansion.md) |
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
+| fixupsetcc | `setcc` into a register zeroed before the compare, not a `movzx` of a byte after it: `X86FixupSetCC`. | After `PressureSink`, before the float phases. Optimizing levels only. | [fixupsetcc](fixupsetcc.md) |
+| flagscopy | Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`. | After `FixupSetCC`, before the float phases. Every level (the pin's pass is | [flagscopy](flagscopy.md) |
 | floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
 | floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
@@ -50,6 +52,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented
 | fpstack | The x87 stackifier: flat floating values in stack form, as LLVM's `X86FloatingPoint` does it. | As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once | [fpstack](fpstack.md) |
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
+| frameobjects | Where each frame object goes and how big the frame is: LLVM's `PEIImpl::calculateFrameObjectOffsets` ([PrologEpilogInserter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PrologEpilogInserter.cpp#L856)). | Nothing yet (FO-1). | [frameobjects](frameobjects.md) |
 | funnel | Expands `llvm.fshl` and `llvm.fshr` into shifts and an or in MIR before instruction selection, for the targets whose description lists `fshl` or `fshr` under `expand`. | Once per module in `driver::optimized`, for a target that lists `fshl` or | [funnel](funnel.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
@@ -73,6 +76,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
+| machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
@@ -102,8 +106,9 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 117 documented
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
 | selectconstants | A select between two constants made arithmetic on its condition. | Once per program in `driver::optimized`, in front of `selects::lowered` | [selectconstants](selectconstants.md) |
-| selectiondag | SelectionDAG: value types, opcodes, the node arena and `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`). | Nothing runs it yet: the builder (A1) and legalizer are the callers. The | [selectiondag](selectiondag.md) |
+| selectiondag | SelectionDAG: value types, opcodes, the node arena, `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`), and the builder that makes one DAG per block of MIR (pin `SelectionDAGBuilder.cpp`, scalar subset). | Nothing runs it yet but the tests and the shadow harness (sdag-d). The | [selectiondag](selectiondag.md) |
 | selects | Turns each MIR `select` into a branch around an empty block and a phi, where the target has no conditional move. | Once per program in `driver::optimized`, after `fpconvert` and before the | [selects](selects.md) |
+| shadow | Which instruction selector runs, and the row each function leaves for `tools/pairs/isel_shadow.py`. | `assemble::staged` (the choice and the dump), `assemble::machined` (the | [shadow](shadow.md) |
 | sharedstores | At -Os, a run of stores of one literal becomes the literal loaded once into a dead register, then register stores. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [sharedstores](sharedstores.md) |
 | shrinkwrap | Sets up a procedure's frame and kept registers where they are first needed, not at the entry, and takes them back only on the returns that path reaches. | `wrapped` runs when masm builds a procedure's items, for a procedure that | [shrinkwrap](shrinkwrap.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of | [slots](slots.md) |

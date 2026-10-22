@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:00f5a89589f9256060596ace0233a23d8e7e00e6d7aa247babe2f1a562cf75ac -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:21410a59c713ba4f7950720a61ae66670e25f3c880d5c9116c995e5d2d7c3fe5 -->
 
 # sroa
 
@@ -27,7 +27,13 @@ DEVIATE, each with its reason (line numbers are SROA.cpp's):
 - Address-space casts abort; pointers in a space that is a selector and an
   offset are not converted to integers (`canConvertValue` L2057).
 - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
-  L6066): an alloca a `Declare` names is left alone.
+  L6066): an alloca a `Declare` names is processed like any other, so `-g`
+  does not change the code. One that SROA splits loses its `Declare` with
+  the alloca (the variable is reported dropped), where LLVM migrates it to
+  the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
+  lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
+  -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
+  `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
 - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
   an alloca or a sized argument, no alignment, no global, no "a load of it
