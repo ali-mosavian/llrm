@@ -596,3 +596,52 @@ fn test_a_copy_at_a_loop_entry_that_the_latch_reverses_moves_to_the_preheader() 
     assert_eq!((in_loop, in_preheader), (0, 1), "the copy moved out of the loop");
     assert_consistent(&lis, &was, 2);
 }
+
+/// `v1 := op v1, v2` (tied) is `v1 := load; v1 := mov v3; v1 := add v1, v2;
+/// v2 := mov v1; read v2; read v1`: `v2` dies at the `add` and the copy back
+/// cannot join (the first `v1` overlaps `v2` with another value). The `add` is
+/// commuted to `v2 := add v2, v1`, the readers read `v2` and the copy goes
+/// (`removeCopyByCommutingDef`). Without it the copy stayed: a `mov` a trip in
+/// the loops of `_dl_muzzle@3`.
+#[test]
+fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
+    let (b0, a2, tie, copy_back) = (load(2), load(3), copy(1, 3), copy(2, 1));
+    let what = Semantics {
+        name: Some("add".to_owned()),
+        dests: vec![held(1)],
+        sources: vec![held(1), held(2)],
+        ..Semantics::new(Operation::Binary)
+    };
+    let add = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![1, 2]));
+    let (r2, r1) = (read(2), read(1));
+    let was = body(&[(
+        &[
+            Arc::clone(&b0),
+            Arc::clone(&a2),
+            Arc::clone(&tie),
+            Arc::clone(&add),
+            Arc::clone(&copy_back),
+            Arc::clone(&r2),
+            Arc::clone(&r1),
+        ],
+        &[],
+    )]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), copy_back.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(
+        names(&lis),
+        vec![
+            (vec![2], vec![]),
+            (vec![3], vec![]),
+            (vec![1], vec![3]),
+            (vec![2], vec![2, 1]),
+            (vec![], vec![2]),
+            (vec![], vec![2]),
+        ],
+        "the add writes v2 and reads v1; the copy is gone; both readers read v2"
+    );
+    assert_consistent(&lis, &was, 2);
+}

@@ -354,12 +354,15 @@ fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
     _swappable_held(one).map(|(into, first, second)| (into.value, first.value, second.value))
 }
 
+/// Whether the two sources of `what` can swap places (`isCommutable`).
+pub fn commutative(what: &Semantics) -> bool {
+    (what.op == Operation::Binary && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
+        || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
+}
+
 fn _swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
-    let commutative = (what.op == Operation::Binary
-        && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
-        || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"));
-    if !commutative
+    if !commutative(what)
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
