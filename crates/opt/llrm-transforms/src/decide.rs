@@ -30,8 +30,7 @@
 //! ```mir
 //! define i16 @f(i16 %x) {
 //! b0:
-//!   %k = add i16 2, 3
-//!   %c = icmp slt i16 %k, 10
+//!   %c = icmp slt i16 5, 10
 //!   br i1 %c, label %b1, label %b2
 //!
 //! b1:
@@ -47,8 +46,7 @@
 //! ```mir
 //! define i16 @f(i16 %x) {
 //! b0:
-//!   %k = add i16 2, 3
-//!   %c = icmp slt i16 %k, 10
+//!   %c = icmp slt i16 5, 10
 //!   br label %b1
 //!
 //! b1:
@@ -69,10 +67,10 @@
 //! thread edges.
 //!
 //! # ScalarEvolution
-//! A branch the other engines leave is asked of ScalarEvolution
-//! (`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
-//! engine for what it cannot prove (the partition index: not an add
-//! recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
+//! None. A branch only a loop's trip count settles is `indvars`'s
+//! (`eliminateIVComparison`, on the loops an unroll made too: `indvars@753`),
+//! as in LLVM; the `guards` engine answers what it can from the guards over
+//! the branch (the partition index: not an add recurrence).
 //!
 //! # Needs
 //! `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
@@ -100,7 +98,6 @@ use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -111,15 +108,6 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 
 use crate::transform;
-
-/// Read once: `decide` asks ScalarEvolution (`isKnownPredicateAt`) what the
-/// guards over a branch prove, then the old guard engine for what it cannot
-/// (the partition index, `PARTITION_CHECK`: not an add recurrence, so LLVM
-/// drops it only in the loop passes). `LLRM_NO_SCEV_DECIDE` asks the old
-/// engine alone.
-fn scev_enabled() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_SCEV_DECIDE")
-}
 
 /// `decided`, then its chains merged, as the old Decide.
 pub struct Decide {
@@ -146,7 +134,7 @@ impl FunctionPass for Decide {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled(), self.constants)
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses, self.constants)
             .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -160,18 +148,7 @@ pub fn decided(
     function: &mut Function,
     outer: &Outer,
 ) -> Result<bool, String> {
-    decided_using(context, layout, function, outer, scev_enabled())
-}
-
-/// [`decided`], asking ScalarEvolution (`scev`) or the old guard engine.
-pub fn decided_using(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &Outer,
-    scev: bool,
-) -> Result<bool, String> {
-    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev, true)
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), true)
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
@@ -180,7 +157,6 @@ fn _decided(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
-    use_scev: bool,
     constants: bool,
 ) -> Result<bool, String> {
     // What the values say, as LLVM's SimplifyCFG decides a branch: a number
@@ -191,11 +167,10 @@ fn _decided(
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
-    let scev = LazyScevView::new(analyses);
     let unit = held.unit(context, layout, function, &outer);
     let decisions = match registers.as_deref() {
-        Some(facts) => _decisions_known(&unit, facts, &scev, use_scev)?,
-        None => _decisions_implied(&unit, &scev, use_scev),
+        Some(facts) => _decisions_known(&unit, facts)?,
+        None => _decisions_implied(&unit),
     };
     if decisions.is_empty() {
         return Ok(false);
@@ -210,12 +185,8 @@ fn _decided(
 }
 
 /// Each block whose terminator's way is known, with that way: only what the
-/// guards and ScalarEvolution prove of a branch's compare.
-fn _decisions_implied(
-    unit: &Unit,
-    scev: &LazyScevView,
-    use_scev: bool,
-) -> Vec<(BlockId, BlockId)> {
+/// guards prove of a branch's compare.
+fn _decisions_implied(unit: &Unit) -> Vec<(BlockId, BlockId)> {
     let function = unit.function;
     let mut out = Vec::new();
     for &block in function.layout() {
@@ -223,26 +194,10 @@ fn _decisions_implied(
         let [_, Operand::Block(taken), Operand::Block(other)] = function.instruction(last).operands[..] else {
             continue;
         };
-        let answer = _implied(unit, scev, block, last, use_scev);
+        let answer = _implied_by_guards(unit, block, last);
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     out
-}
-
-/// Whether the compare `last` branches on holds or fails there: by what
-/// ScalarEvolution proves, then by the guards.
-fn _implied(
-    unit: &Unit,
-    scev: &LazyScevView,
-    block: BlockId,
-    last: InstId,
-    use_scev: bool,
-) -> Option<bool> {
-    if use_scev {
-        _implied_by_scev(unit, scev, last).or_else(|| _implied_by_guards(unit, block, last))
-    } else {
-        _implied_by_guards(unit, block, last)
-    }
 }
 
 /// Each block whose terminator's way is known, with that way, from the numbers
@@ -250,8 +205,6 @@ fn _implied(
 fn _decisions_known(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    scev: &LazyScevView,
-    use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -308,8 +261,7 @@ fn _decisions_known(
         let [_, Operand::Block(taken), Operand::Block(other)] = instruction.operands[..] else {
             continue;
         };
-        let answer =
-            _outcome(unit, block, &facts, Some(&nonnull)).or_else(|| _implied(unit, scev, block, last, use_scev));
+        let answer = _outcome(unit, block, &facts, Some(&nonnull)).or_else(|| _implied_by_guards(unit, block, last));
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
@@ -335,28 +287,6 @@ fn _implied_by_guards(
         return Some(true);
     }
     given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
-}
-
-/// Whether the compare `last` branches on holds or fails there, by what
-/// ScalarEvolution proves of its two sides at `last` (`isKnownPredicateAt`,
-/// which reads the guards over its block and the loops holding it).
-fn _implied_by_scev(
-    unit: &Unit,
-    scev: &LazyScevView,
-    last: InstId,
-) -> Option<bool> {
-    let function = unit.function;
-    let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
-    let (_, compare) = unit.defining(Operand::Value(condition))?;
-    let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
-    unit.int_bits(*left)?;
-    scev.ask(unit.context, unit.layout, function, |scev, cx| {
-        let (left, right) = (scev.get_scev(cx, *left), scev.get_scev(cx, *right));
-        if scev.is_known_predicate_at(cx, *predicate, left, right, Some(last)) {
-            return Some(true);
-        }
-        scev.is_known_predicate_at(cx, predicate.inverse(), left, right, Some(last)).then_some(false)
-    })
 }
 
 /// `last`, a terminator, replaced by a jump to `target`. `br i1 %c, T, T` has

@@ -37,6 +37,18 @@
 //!   a frame array (SI, DI) has no register that fits all reads. The reads that
 //!   fit the most others keep the value; each remaining read takes a copy, live
 //!   across that instruction alone.
+//! - [`hoisted`]: a copy into a required register that a loop makes of a value
+//!   defined before it, the same each trip, is made once in the loop's
+//!   preheader. The register is then the value's for the whole loop, which
+//!   nothing else in it may use: no other instruction requires, delivers,
+//!   clobbers or defines a value pinned to its root, calls included. A loop
+//!   with several preheaders is left alone.
+//!
+//!   DEVIATE C1 (no number): the pin has no such step. Its x86 states a
+//!   segment as a prefix, never a register copy, and `MachineLICM` does not
+//!   move a copy into a physical register. Owner laa-runtime-checks-loadelim;
+//!   exit: a pin-shaped segment class, or `MachineLICM` learning copies to a
+//!   physical register; review 2026-11-30.
 //! - [`required`], [`required_in`] and [`required_added`]: the pin map of a
 //!   body, of some blocks, or of only the instructions added since a previous
 //!   body.
@@ -695,6 +707,119 @@ fn _next_value(body: &LirBody) -> u32 {
     every.into_iter().max().unwrap_or(0) + 1
 }
 
+/// `body` with each copy a loop makes into a required register, of a value
+/// the loop does not change, made in the loop's preheader instead.
+///
+/// `fixed` is the pin map `constrained` returned. Loops are taken innermost
+/// first, so a copy leaves every loop it can.
+pub fn hoisted(
+    body: &LirBody,
+    fixed: &IndexMap<u32, RegId>,
+) -> LirBody {
+    if fixed.is_empty() {
+        return body.clone();
+    }
+    let regs = body.regs();
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    let mut order: Vec<usize> = (0..forest.loops.len()).collect();
+    order.sort_by_key(|&one| forest.loops[one].size);
+    let mut out = body.clone();
+    for one in order {
+        let looped = &forest.loops[one];
+        let members: BTreeSet<i64> = forest.blocks(one).collect();
+        let outside: Vec<i64> = out
+            .blocks
+            .iter()
+            .filter(|block| block.succ.contains(&looped.header) && !members.contains(&block.at))
+            .map(|block| block.at)
+            .collect();
+        let &[preheader] = outside.as_slice() else { continue };
+        if out
+            .blocks
+            .iter()
+            .find(|block| block.at == preheader)
+            .is_none_or(|block| block.succ.as_slice() != [looped.header])
+        {
+            continue;
+        }
+        let inside: Vec<&Arc<Insn>> =
+            out.blocks.iter().filter(|block| members.contains(&block.at)).flat_map(|block| &block.insns).collect();
+        let defined: BTreeSet<u32> = inside
+            .iter()
+            .flat_map(|one| one.defines.iter().copied())
+            .chain(
+                out.blocks
+                    .iter()
+                    .filter(|block| members.contains(&block.at))
+                    .flat_map(|block| block.phis.iter().map(|phi| phi.result)),
+            )
+            .collect();
+        let moving: Vec<Arc<Insn>> = inside
+            .iter()
+            .filter(|copy| {
+                let Some((into, from)) = crate::backend::optimizephis::plain_copy(copy) else { return false };
+                let Some(&register) = fixed.get(&into) else { return false };
+                // A general register held for a loop is one fewer for
+                // everything else in it (x_radix m32 -Os: +68 B
+                // of spills); a segment register is not one
+                // they compete for.
+                if !regs.is_segment(register) {
+                    return false;
+                }
+                let root = regs.root(register);
+                if defined.contains(&from) || inside.iter().filter(|one| one.defines.contains(&into)).count() != 1 {
+                    return false;
+                }
+                // Read only in the loop.
+                let read_outside = out
+                    .blocks
+                    .iter()
+                    .filter(|block| !members.contains(&block.at))
+                    .any(|block| block.insns.iter().any(|one| one.uses.contains(&into)));
+                if read_outside {
+                    return false;
+                }
+                // Nothing else in the loop has the register.
+                inside
+                    .iter()
+                    .all(
+                        |other| Arc::ptr_eq(other, copy)
+                            || !(other
+                                .requires
+                                .iter()
+                                .chain(&other.delivers)
+                                .any(|(held, at)| held.value != into && regs.root(*at) == root)
+                                || other.clobbers.iter().chain(&other.clobbers_high).any(|at| regs.root(*at) == root)
+                                || other.defines.iter().any(|value| {
+                                    *value != into && fixed.get(value).is_some_and(|at| regs.root(*at) == root)
+                                })),
+                    )
+            })
+            .map(|copy| Arc::clone(copy))
+            .collect();
+        if moving.is_empty() {
+            continue;
+        }
+        for block in &mut out.blocks {
+            if members.contains(&block.at) {
+                let kept: Vec<Arc<Insn>> = block
+                    .insns
+                    .iter()
+                    .filter(|one| !moving.iter().any(|gone| Arc::ptr_eq(gone, one)))
+                    .cloned()
+                    .collect();
+                if kept.len() != block.insns.len() {
+                    *block = crate::model::lir::LirBlock { insns: kept.into(), ..(**block).clone() }.into();
+                }
+            } else if block.at == preheader {
+                let placed = crate::backend::phielim::_before_the_terminator(block, &moving);
+                *block = crate::model::lir::LirBlock { insns: placed.into(), ..(**block).clone() }.into();
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_constrain.py`.
@@ -704,7 +829,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{constrained, required};
+    use super::{constrained, hoisted, required};
     use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
     use crate::backend::{allocate, select, spiller, target};
@@ -1206,5 +1331,146 @@ mod tests {
         let insns = got.insns();
         assert_eq!(insns.len(), 4, "one copy");
         assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
+    }
+
+    // ---- hoisted ----
+
+    fn block_to(
+        at: i64,
+        insns: Vec<Insn>,
+        succ: &[i64],
+    ) -> LirBlock {
+        LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, insns.into_iter().map(Arc::new).collect()) }
+    }
+
+    fn flow(blocks: Vec<LirBlock>) -> LirBody {
+        LirBody::new(
+            "one",
+            0,
+            blocks.into_iter().map(crate::model::lir::Block::from).collect::<Vec<_>>(),
+            IndexMap::default(),
+            IndexMap::default(),
+        )
+    }
+
+    fn defined(
+        value: u32,
+        at: i64,
+    ) -> Insn {
+        _insn(semantics(Operation::Move, "mov", vec![held(value, 2)], vec![imm(5, 2)]), &[value], &[], at)
+    }
+
+    fn copied(
+        into: u32,
+        from: u32,
+        at: i64,
+    ) -> Insn {
+        _insn(semantics(Operation::Move, "mov", vec![held(into, 2)], vec![held(from, 2)]), &[into], &[from], at)
+    }
+
+    /// A read of `value` in `register`, as a far access reads its selector or a
+    /// shift its count.
+    fn reads_in(
+        value: u32,
+        register: RegId,
+        result: u32,
+        at: i64,
+    ) -> Insn {
+        let mut one = _insn(
+            semantics(Operation::Move, "mov", vec![held(result, 2)], vec![held(value, 2)]),
+            &[result],
+            &[value],
+            at,
+        );
+        one.requires = vec![(Held { value, width: 2 }, register)];
+        one
+    }
+
+    fn at_block(
+        body: &LirBody,
+        at: i64,
+    ) -> Vec<u32> {
+        body.blocks.iter().find(|one| one.at == at).unwrap().insns.iter().flat_map(|one| one.defines.clone()).collect()
+    }
+
+    /// bench/huge -O2: the selector of a far access, copied into ES in the loop
+    /// on every trip (`ES := mov CX` 40,200 times a loop) though it is made
+    /// before the loop and nothing else in it uses ES.
+    #[test]
+    fn test_an_invariant_copy_into_a_required_register_leaves_the_loop() {
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0)], &[10]),
+            block_to(10, vec![copied(2, 1, 10), reads_in(2, RegId::ES, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::ES)]));
+        assert_eq!(at_block(&done, 0), vec![1, 2], "made once, after its source");
+        assert_eq!(at_block(&done, 10), vec![3]);
+    }
+
+    /// A general register is left alone: held for the loop it costs the rest of
+    /// the loop a register (x_radix m32 -Os grew 68 B of spills when a shift
+    /// count was kept in CX).
+    #[test]
+    fn test_a_copy_into_a_general_register_stays_in_the_loop() {
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0)], &[10]),
+            block_to(10, vec![copied(2, 1, 10), reads_in(2, RegId::CX, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::CX)]));
+        assert_eq!(at_block(&done, 10), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_a_copy_of_a_value_the_loop_changes_stays() {
+        let body = flow(vec![
+            block_to(0, vec![], &[10]),
+            block_to(10, vec![defined(1, 10), copied(2, 1, 11), reads_in(2, RegId::ES, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::ES)]));
+        assert_eq!(at_block(&done, 10), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_a_loop_that_clobbers_the_register_keeps_the_copy_in_it() {
+        let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[], &[], 11);
+        call.clobbers = BTreeSet::from([RegId::ES]);
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0)], &[10]),
+            block_to(10, vec![copied(2, 1, 10), call, reads_in(2, RegId::ES, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::ES)]));
+        assert_eq!(at_block(&done, 10), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_a_second_value_in_the_register_keeps_both_copies_in_the_loop() {
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0), defined(4, 1)], &[10]),
+            block_to(
+                10,
+                vec![copied(2, 1, 10), reads_in(2, RegId::ES, 3, 11), copied(5, 4, 12), reads_in(5, RegId::ES, 6, 13)],
+                &[10, 20],
+            ),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::ES), (5, RegId::ES)]));
+        assert_eq!(at_block(&done, 10), vec![2, 3, 5, 6]);
+    }
+
+    #[test]
+    fn test_a_loop_with_two_preheaders_is_left_alone() {
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0)], &[1, 2]),
+            block_to(1, vec![], &[10]),
+            block_to(2, vec![], &[10]),
+            block_to(10, vec![copied(2, 1, 10), reads_in(2, RegId::ES, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let done = hoisted(&body, &pinned(&[(2, RegId::ES)]));
+        assert_eq!(at_block(&done, 10), vec![2, 3]);
     }
 }

@@ -533,8 +533,9 @@ impl InlineSpiller<'_> {
     /// writes it. DEVIATE D-RFP1: the cell is the value's float type
     /// (4, 8 or 10 bytes, `float_precisions`), as the pin's RFP32/RFP64/RFP80
     /// spill rounds, not one class width, where the language follows the pin
-    /// (`Profile::rounds_float_spills`, llrm-c); Nib and BASIC keep the qword,
-    /// as only a store the program writes rounds there (stft_single). Exit: the
+    /// (`Profile::rounds_float_spills`, llrm-c); Nib keeps the qword,
+    /// as only a store the program writes rounds there (stft_single); BASIC
+    /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
     /// OPEN D-RFP3 (RFP-5, owner w-1, 2026-10-31): where the qword is kept (Nib

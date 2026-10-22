@@ -312,12 +312,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // `lsr_pass::LoopStrengthReduce`.
     entry("lsr", Module, "loop-reduce (LoopStrengthReduce.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
+    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
     partial(

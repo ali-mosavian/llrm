@@ -270,13 +270,14 @@ impl Use {
 pub fn is_am_completely_folded_at(
     tti: &dyn Tti,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode(base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_in(addr_space, base_gv, base_offset.0, has_base_reg, scale),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -312,6 +313,7 @@ pub fn is_am_completely_folded_between(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -327,8 +329,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(low), has_base_reg, scale)
+        && is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(high), has_base_reg, scale)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -338,6 +340,7 @@ pub fn is_am_completely_folded_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     f: &Formula,
     l: BlockId,
 ) -> bool {
@@ -349,6 +352,7 @@ pub fn is_am_completely_folded_formula(
         min_offset,
         max_offset,
         kind,
+        addr_space,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -369,6 +373,7 @@ pub fn is_am_completely_folded(
         lu.min_offset,
         lu.max_offset,
         lu.kind,
+        lu.access_ty.addr_space,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -384,14 +389,34 @@ pub fn is_legal_use(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
-    is_am_completely_folded_between(tti, min_offset, max_offset, kind, base_gv, base_offset, has_base_reg, scale)
-        || (scale == 1
-            && is_am_completely_folded_between(tti, min_offset, max_offset, kind, base_gv, base_offset, true, 0))
+    is_am_completely_folded_between(
+        tti,
+        min_offset,
+        max_offset,
+        kind,
+        addr_space,
+        base_gv,
+        base_offset,
+        has_base_reg,
+        scale,
+    ) || (scale == 1
+        && is_am_completely_folded_between(
+            tti,
+            min_offset,
+            max_offset,
+            kind,
+            addr_space,
+            base_gv,
+            base_offset,
+            true,
+            0,
+        ))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
@@ -400,9 +425,20 @@ pub fn is_legal_use_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
+    addr_space: u32,
     f: &Formula,
 ) -> bool {
-    is_legal_use(tti, min_offset, max_offset, kind, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
+    is_legal_use(
+        tti,
+        min_offset,
+        max_offset,
+        kind,
+        addr_space,
+        f.base_gv.is_some(),
+        f.base_offset,
+        f.has_base_reg,
+        f.scale,
+    )
 }
 
 /// `isLegalAddImmediate`.
@@ -426,7 +462,7 @@ pub fn scaling_factor_cost(
         return TtiCost::FREE;
     }
     // Not completely folded: an extra cost only for a scale other than 1.
-    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, f, l) {
+    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f, l) {
         return TtiCost::of(i64::from(f.scale != 1));
     }
     match lu.kind {
@@ -576,6 +612,7 @@ impl Cost {
                 && !is_am_completely_folded_at(
                     r.tti,
                     Kind::Address,
+                    lu.access_ty.addr_space,
                     f.base_gv.is_some(),
                     offset,
                     f.has_base_reg,

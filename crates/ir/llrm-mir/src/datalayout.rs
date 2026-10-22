@@ -196,6 +196,16 @@ impl DataLayout {
         spec.bits != spec.index_bits || spec.unstable
     }
 
+    /// Whether `ni:` names `space`: its pointers are not addresses (a selector
+    /// alone), as the layout says it, where `is_non_integral_address_space`
+    /// also holds a far pointer (its bits exceed its index).
+    pub fn has_unstable_representation(
+        &self,
+        space: u32,
+    ) -> bool {
+        self.pointer(space).unstable
+    }
+
     /// `DataLayout::mustNotIntroduceIntToPtr`
     /// ([DataLayout.h:461](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h#L461)).
     pub fn must_not_introduce_int_to_ptr(

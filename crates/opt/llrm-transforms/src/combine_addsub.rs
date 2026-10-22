@@ -16,8 +16,7 @@
 //!
 //! DEVIATE 2 (temporary, `uselist-port`): steps that call a helper another
 //! family owns are left out and named where they stood:
-//! `foldBinOpShiftWithShift` (a shared helper, next in `combine_shared`). Each
-//! is a `// DEVIATE 2:` comment at its place in the order.
+//! Each is a `// DEVIATE 2:` comment at its place in the order.
 //! `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
 //! `foldBinOpSelectBinOp` are the phi and select families'.
 //!
@@ -64,6 +63,7 @@ use crate::combine_shared::{
     binop, commutative, fold_constants, has_one_use, inst_def, parts, query, simplify_associative_or_commutative,
     simplify_visited, specific_int, width, wrap_of,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 /// `InstCombiner::AddOne` and `SubOne` of a constant.
 pub fn add_to(
@@ -674,7 +674,9 @@ pub fn visit_add(
     if let Some(r) = fold_no_wrap_add(c, inst) {
         return r;
     }
-    // DEVIATE 2: foldBinOpShiftWithShift.
+    if let Some(r) = fold_binop_shift_with_shift(c, inst) {
+        return r;
+    }
     if let Some(r) = combine_add_sub_with_shl_add_sub(c, inst) {
         return r;
     }

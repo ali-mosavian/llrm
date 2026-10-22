@@ -173,6 +173,7 @@ impl Collection<'_, '_> {
             lu.min_offset,
             lu.max_offset,
             lu.kind,
+            lu.access_ty.addr_space,
             f.base_gv.is_some(),
             f.base_offset,
             f.has_base_reg,
@@ -217,12 +218,12 @@ impl Collection<'_, '_> {
             {
                 continue;
             }
-            let (min, max, kind) = {
+            let (min, max, kind, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space)
             };
             // A constant that could be folded into an immediate stays there.
-            if is_always_foldable_scev(self.tti, se, cx, min, max, kind, piece, base.num_regs() > 1) {
+            if is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, piece, base.num_regs() > 1) {
                 continue;
             }
             // All operands but this one.
@@ -230,7 +231,7 @@ impl Collection<'_, '_> {
                 add_ops.iter().enumerate().filter(|&(at, _)| at != j).map(|(_, &op)| ScevUse::of(op)).collect();
             // Not just a constant left behind in a register, if it could fold.
             if inner.len() == 1
-                && is_always_foldable_scev(self.tti, se, cx, min, max, kind, inner[0].scev, base.num_regs() > 1)
+                && is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, inner[0].scev, base.num_regs() > 1)
             {
                 continue;
             }
@@ -559,6 +560,7 @@ impl Collection<'_, '_> {
                     offset,
                     offset,
                     lu.kind,
+                    lu.access_ty.addr_space,
                     f.base_gv.is_some(),
                     f.base_offset,
                     f.has_base_reg,
@@ -638,9 +640,9 @@ impl Collection<'_, '_> {
             base.scale = factor;
             base.has_base_reg = base.base_regs.len() > 1;
             // Whether this scale will be legal.
-            let (min, max, kind, outside) = {
+            let (min, max, kind, outside, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty.addr_space)
             };
             let legal = |kind| {
                 is_legal_use(
@@ -648,6 +650,7 @@ impl Collection<'_, '_> {
                     min,
                     max,
                     kind,
+                    space,
                     base.base_gv.is_some(),
                     base.base_offset,
                     base.has_base_reg,

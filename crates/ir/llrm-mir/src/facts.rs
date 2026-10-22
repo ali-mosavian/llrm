@@ -13,14 +13,63 @@
 //! attribute by name.
 
 use crate::context::{ConstantKind, Context};
-use crate::module::{Function, InstId, MetadataNode, MetadataOperand};
-use crate::opcode::{Attribute, Flags};
+use crate::module::{Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, ValueDef, ValueId};
+use crate::opcode::{Attribute, Flags, Opcode};
 use crate::types::TypeId;
 
 /// Whether `function` is `noipa`: no interprocedural pass uses its body for
 /// anyone else or changes how it is called.
 pub fn opaque(function: &Function) -> bool {
     Facts::of(&function.attrs).no_ipa()
+}
+
+/// Whether the call `inst` or its callee states `flagsresult`: the machine
+/// flags are its result.
+pub fn returns_flags(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    Facts::of(&info.attrs).contains(Fact::FlagsResult)
+        || crate::memory::callee(context, function, inst)
+            .and_then(|callee| globals.get(callee.0 as usize))
+            .and_then(GlobalValue::function)
+            .is_some_and(|callee| Facts::of(&callee.attrs).contains(Fact::FlagsResult))
+}
+
+/// Whether `value` is a flags result, which only a comparison may read: a
+/// fold that gives it another user (`sext (icmp slt v, 0)` to `ashr v`) leaves
+/// instruction selection nothing to read the flags with. The verifier states
+/// it and every fold that builds a user of a compared value asks it.
+pub fn result_read_only_by_comparison(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    value: ValueId,
+) -> bool {
+    matches!(
+        function.value(value).def,
+        ValueDef::Instruction(call) if returns_flags(context, globals, function, call)
+    )
+}
+
+/// Whether `inst` is a comparison of a flags result: a use the fold of
+/// something that reads it would end.
+pub fn compares_flags_result(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    matches!(function.instruction(inst).opcode, Opcode::ICmp(_))
+        && function.instruction(inst).operands.iter().any(|operand| {
+            matches!(
+                operand,
+                Operand::Value(value) if result_read_only_by_comparison(context, globals, function, *value)
+            )
+        })
 }
 
 /// The kind of thing a fact is stated of: a routine, one of its parameters,
@@ -273,6 +322,10 @@ facts! {
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.
         ThreeWayCompare three_way_compare "threeway" on [Callable];
+        // Of a routine: its result is the machine flags of a comparison, so
+        // only a comparison can read it (`result_read_only_by_comparison`).
+        // The runtime's description says which routines (QB's B$SCMP).
+        FlagsResult flags_result "flagsresult" on [Callable];
         // Of a routine: it compares SP with its runtime's stack limit on entry
         // (`-fsanitize=stack`). The runtime's description says where the limit
         // is.

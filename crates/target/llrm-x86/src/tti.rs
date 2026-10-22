@@ -68,6 +68,9 @@ pub struct RealMode {
     /// What a scaled index costs in instructions, once for each scaled
     /// register: the address-size prefix and the stall it takes.
     pub scaled_index_insns: u32,
+    /// The space of huge pointers: an offset there carries into the selector,
+    /// so an address is one register and no more.
+    pub huge_space: Option<u32>,
 }
 
 impl RealMode {
@@ -684,6 +687,20 @@ impl Tti for X86 {
             (Ty::Int(a), Ty::Int(b)) => a > b,
             _ => false,
         }
+    }
+
+    fn is_legal_addressing_mode_in(
+        &self,
+        addr_space: u32,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        if self.real_mode.as_ref().is_some_and(|real| real.huge_space == Some(addr_space)) {
+            return !base_gv && has_base_reg && base_offset == 0 && scale == 0;
+        }
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
     }
 
     /// `X86TargetLowering::isLegalAddressingMode`:
