@@ -478,10 +478,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "X86 DynAlloca Expander",
-        Missing,
+        Na,
         "",
         "",
-        "funcattrs-port; 2026-11-13: (premise below: start only where ours exceeds pin-with) dynamic alloca needs an HIR op (builtins row B2). Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs",
+        "the pin's DYN_ALLOCA pseudo is made only under MSVC-style stack probing: for `alloca i8, i32 %n` on i486-linux its llc emits the rounded `sub esp` with no pseudo and no probe (a `probe-stack` function gets an inline probe loop, no frontend sets it); `hook_dynamic_alloca` makes the same rounded `sub sp`, test test_a_dynamic_alloca_is_a_rounded_stack_pointer_subtraction_with_no_probe; 0 of 77 IRs change in the pin",
     ),
     row(
         "Tile Register Pre-configure",
