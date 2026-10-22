@@ -1,10 +1,5 @@
 use super::*;
 
-    reg: u32,
-) -> SDValue {
-    dag.get_register(vt, reg)
-}
-
 /// Without folding `x + 0` stays an add node, so a later `store` of it
 /// selects a needless `add`; the pin returns `x`.
 #[test]

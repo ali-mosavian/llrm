@@ -7,6 +7,10 @@ fn dag() -> SelectionDAG {
 fn arg(
     dag: &mut SelectionDAG,
     vt: EVT,
+    reg: u32,
+) -> SDValue {
+    dag.get_register(vt, reg)
+}
 
 mod get_node;
 mod type_actions;
