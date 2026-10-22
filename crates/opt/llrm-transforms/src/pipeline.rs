@@ -850,7 +850,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                fold("fold@768"),
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
