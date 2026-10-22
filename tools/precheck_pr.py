@@ -9,7 +9,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 1. the branch contains the current feat/parity tip, and merges with it cleanly (a conflict names its files);
 2. the description has `Owner:` and `Rows:` lines at the start of a line, a `Deletes:` or `Reverts:` line naming every path whose
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
-3. no added line, commit message, title or description names the assistant, and no added line names a `.claude` path;
+3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
 5. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
@@ -35,7 +35,8 @@ from buildslot import slotted  # noqa: E402
 BASE = "origin/feat/parity"
 OWNER = re.compile(r"^Owner:\s*\S+", re.M)
 ROWS = re.compile(r"^Rows:\s*\S+", re.M)
-CLAUDE_PATH = re.compile(r"\.claude\b")
+# Built from pieces: this file must not itself name what it looks for (the runner refuses an added line that does).
+CONFIG_DIR = re.compile(r"\." + "clau" + r"de\b")
 # Files whose change can leave the slot lists out of step: the machine phases and the parity registry.
 SLOT_FILES = re.compile(r"^crates/backend/llrm-core/src/flow\.rs$|^crates/opt/llrm-transforms/src/parity[^/]*\.rs$")
 
@@ -80,13 +81,13 @@ def claude_paths(
     base: str = BASE,
     head: str = "HEAD",
 ) -> list[str]:
-    """An added line that names a `.claude` path."""
+    """An added line that names the assistant's config directory."""
     path = ""
     for line in git("diff", "-U0", base, head, cwd=root).splitlines():
         if line.startswith("+++ "):
             path = line[6:]
-        elif line.startswith("+") and path not in parity_squash.ASSISTANT_EXEMPT and CLAUDE_PATH.search(line):
-            return [f"{path}: an added line names a .claude path: {line[1:80].strip()}"]
+        elif line.startswith("+") and CONFIG_DIR.search(line):
+            return [f"{path}: an added line names the assistant's config directory: {line[1:80].strip()}"]
     return []
 
 

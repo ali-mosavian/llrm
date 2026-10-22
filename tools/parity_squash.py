@@ -118,8 +118,6 @@ def acknowledged(description: str, path: str) -> bool:
 
 # The user's rule: nothing in the repository, its PRs or its history names the assistant that wrote it. Spelled in two halves so this file does not match itself.
 ASSISTANT_NAME = re.compile(r"\b(?:clau" + "de|anthro" + r"pic)\b", re.I)
-# The one tool and its test that must write the pattern they look for (the precheck's `.claude` path rule); every other file is checked.
-ASSISTANT_EXEMPT = ("tools/precheck_pr.py", "tools/test_precheck_pr.py")
 
 
 def assistant_mentions(title: str, description: str, base: str, head: str, cwd: Path = ROOT) -> list[str]:
@@ -135,7 +133,7 @@ def assistant_mentions(title: str, description: str, base: str, head: str, cwd: 
     for line in git("diff", "-U0", base, head, cwd=cwd).splitlines():
         if line.startswith("+++ "):
             path = line[6:]
-        elif line.startswith("+") and path not in ASSISTANT_EXEMPT and ASSISTANT_NAME.search(line):
+        elif line.startswith("+") and ASSISTANT_NAME.search(line):
             why.append(f"{path}: an added line names the assistant: {line[1:80].strip()}")
             break
     return why
