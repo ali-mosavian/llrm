@@ -449,7 +449,7 @@ fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselecte
 
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
-pub(crate) fn convention(
+pub fn convention(
     module: &Module,
     layout: &DataLayout,
     global: GlobalId,
@@ -463,26 +463,27 @@ pub(crate) fn convention(
         _ => arch.first_argument_offset(far(global)?),
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
-    convention_for(module, layout, arch, first, function.calling_convention, function.ty, &param_types, &function.parameter_attrs)
+    let (result, _, variadic) = module.signature(function.ty);
+    convention_for(module, layout, arch, first, function.calling_convention, result, variadic, &param_types, &function.parameter_attrs)
 }
 
 /// The convention of a function type's `types`, which is `function`'s
 /// parameters or, for a call, its arguments': where each arrives, where the
 /// result leaves, and what is popped. `first` is the displacement of the
 /// first stack argument.
-pub(crate) fn convention_for(
+pub fn convention_for(
     module: &Module,
     layout: &DataLayout,
     arch: &dyn llrm_target::Target,
     first: i64,
     calling_convention: u32,
-    function_type: TypeId,
+    result: TypeId,
+    variadic: bool,
     param_types: &[TypeId],
     parameter_attrs: &[Vec<llrm_mir::Attribute>],
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
-    let (_, _, variadic) = module.signature(function_type);
     let Passing { in_order, pops, registers } = passing(arch, calling_convention, variadic)?;
     let types = &module.context.types;
     let sizes = param_types
@@ -562,7 +563,6 @@ pub(crate) fn convention_for(
             *parameter = Parameter::Bytes(*disp);
         }
     }
-    let (result, _, _) = module.signature(function_type);
     if interrupt && !types.is_void(result) {
         return refuse("an interrupt handler that returns a value");
     }
