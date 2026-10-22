@@ -165,8 +165,7 @@ pub fn three_address(
             index: Some(*index),
             scale: 1,
             offset: 0,
-            disp_width: 2,
-            ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+            ..Mem::new(None, 4)
         },
         _ => return None,
     };
