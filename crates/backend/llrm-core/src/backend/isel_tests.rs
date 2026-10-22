@@ -5981,6 +5981,20 @@ fn test_an_undef_initializer_is_zero_bytes() {
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }
 
+/// Old: a switch lookup table with `poison` holes (the pin's holes for cases the
+/// guard never reaches) was refused as "a poison initializer": item.c at every
+/// level once a conditional-branch chain became a `switch`. The holes are zero.
+#[test]
+fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@t = private constant [4 x i8] [i8 1, i8 poison, i8 poison, i8 4]\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
+    assert_eq!(datums, [Datum::Label(Label { name: "t".to_owned() }), Datum::Bytes(vec![1, 0, 0, 4])]);
+}
+
 /// A load only an add reads is the add's memory operand, as `ADD32rm` is
 /// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
 #[test]
