@@ -42,6 +42,7 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-C4-2 | nbody, x_bubble, x_base64 m32 | O1,O2,O3,Os | clocks | not stated | nbody 377442, x_bubble 88533, x_base64 9727 | +200 (+0.05%), +119 (+0.13%), +5 (+0.05%) over #3600's base | as AM-C4-1 | splitkit | 2026-10-30, allocation rows | #3600 |
 | AM-C4-3 | x_rle, x_list m32 | O2,O3 / Os | bytes | not stated | 251 / 127 | +16 (+6.4%) at -O2,-O3 (-O1 -16); x_list -Os +3 B | cause not examined; x_rle -O1 goes down by the same 16 | splitkit | 2026-10-30, allocation rows | #3600 |
 | AM-3582 | QCport mod_tex, snd | O2 / Os | bytes | not stated | not stated | +13 B / +12 B over #3582's base; QCport -263/-51/-78/-91 B elsewhere | cause not examined; the PR changes block frequencies (hot block 64.5 to 500.4, the pin's BFI 500.35) | splitkit | 2026-10-30, allocation rows | #3582 |
+| AM-C4-4 | recgcd m32 | O1 | clocks | not stated | 122713 | +862 (+0.71%) over the #3600 head; code +32 B (+4.3%) | register-pressure shift in one loop: the commuted `add` changes which values hold registers, one more spill; cause not examined beyond `~/scratch/rg-*.s` | splitkit | 2026-10-30, allocation rows | |
 
 ## To add by their owners
 
