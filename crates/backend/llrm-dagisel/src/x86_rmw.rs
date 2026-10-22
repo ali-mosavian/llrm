@@ -7,7 +7,7 @@
 //! with one use, whose one operand is a normal load of the store's own address that nothing else
 //! uses, and whose chain reaches the store with no path from the load round the arithmetic.
 //! Then the load, the arithmetic and the store become one machine node on the address
-//! `selectAddr` makes; `i64` memory types do not occur at 32 bits (SD26).
+//! `selectAddr` makes; `i64` memory types do not occur at 32 bits (SD34).
 //!
 //! # Used by
 //! The `X86DAGToDAGISel::Select` loop, before the table, for `ISD::STORE`.

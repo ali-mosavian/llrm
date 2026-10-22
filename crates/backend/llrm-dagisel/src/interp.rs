@@ -8,14 +8,14 @@
 //! A match ends in `MorphNodeTo` (the root node becomes the machine node) or `CompleteMatch`.
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD21** Jumps count items, not bytes, and `ByHwMode` operands are resolved to a type when
+//! - **SD20** Jumps count items, not bytes, and `ByHwMode` operands are resolved to a type when
 //!   the table is generated. Reason: the table is decoded once; the hardware mode is fixed per
 //!   target. Owner sdag-c. Exit: none. Review 2026-12-10.
-//! - **SD22** `mayRaiseFPException`/`NoFPExcept` are not carried. Reason: MIR has no strict FP.
+//! - **SD21** `mayRaiseFPException`/`NoFPExcept` are not carried. Reason: MIR has no strict FP.
 //!   Owner sdag-c. Exit: when the builder lowers constrained FP. Review 2026-12-10.
-//! - **SD23** The `MatchStateUpdater` is not installed around complex patterns; a complex pattern
+//! - **SD22** The `MatchStateUpdater` is not installed around complex patterns; a complex pattern
 //!   that CSEs a node while matching is a C1 question. Owner sdag-c. Exit: C1. Review 2026-12-10.
-//! - **SD24** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors before 32-bit
+//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors before 32-bit
 //!   parity. Owner sdag-c. Exit: vector MIR. Review 2026-12-10.
 //!
 //! # Used by

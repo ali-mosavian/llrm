@@ -9,12 +9,12 @@
 //! The matchers never change the DAG here, so the pin's `HandleSDNode` guards are not needed.
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD25** Not translated: the mask-and-shift folds (`foldMaskAndShiftToExtract`,
+//! - **SD33** Not translated: the mask-and-shift folds (`foldMaskAndShiftToExtract`,
 //!   `foldMaskAndShiftToScale`, `foldMaskedShiftToBEXTR`, `foldMaskedShiftToScaledMask`) and the
 //!   `SIGN_EXTEND`/`ZERO_EXTEND` re-association of `matchIndexRecursively`, `SRL`, `AND` and
 //!   `ZERO_EXTEND` cases of `matchAddressRecursively`: they rewrite the DAG and need the DAG API's
 //!   `RepositionNode`. Owner sdag-c. Exit: C1b. Review 2026-12-10.
-//! - **SD26** The 64-bit, x32 and 16-bit branches, RIP-relative modes, large code model, the
+//! - **SD34** The 64-bit, x32 and 16-bit branches, RIP-relative modes, large code model, the
 //!   TLS segment loads (`matchLoadInAddress`) and the vector forms (`matchVectorAddress`) are
 //!   left out: no such target here. m16 has its own matcher (C2). Owner sdag-c. Exit: none.
 //!   Review 2026-12-10.
@@ -269,7 +269,7 @@ impl<D: AddrDag> Matcher<'_, D> {
         true
     }
 
-    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD25.
+    /// `matchIndexRecursively` ([L2557][idx]); the rewriting cases are SD33.
     ///
     /// [idx]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2557
     fn match_index_recursively(&self, n: SDValue, am: &mut AddressMode, depth: u32) -> SDValue {
