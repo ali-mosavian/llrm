@@ -385,13 +385,24 @@ pub fn recorded(
     )
 }
 
-/// Why this binary cannot compile: the tree it was built in is gone.
-pub fn tree_missing() -> Option<String> {
-    let root = Path::new(env!("LLRM_ROOT"));
-    let wccq = option_env!("LLRM_WCCQ_DIR").map(Path::new);
-    let mut needs = vec![("source tree", root)];
-    needs.extend(wccq.map(|dir| ("front end directory", dir)));
-    llrm_support::tree::missing("llrm-c", &needs)
+/// The Open Watcom front end of each CPU, carried in the binary.
+const WCCQ: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/wccq.rs"));
+
+/// The headers the front end is forced to include, by file name.
+const HEADERS: &[(&str, &str)] = &[
+    ("borland.h", include_str!("borland.h")),
+    ("flat.h", include_str!("flat.h")),
+    ("watcom.h", include_str!("watcom.h")),
+    ("owkeywords.h", include_str!("owkeywords.h")),
+];
+
+fn write_executable(
+    path: &Path,
+    image: &[u8],
+) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, image)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
 }
 
 /// `source` recorded by the front end of `profile`'s tree, asked as it says.
@@ -402,11 +413,16 @@ pub fn recorded_for(
     watcom: &[&str],
     profile: &Profile,
 ) -> Result<String, hir::Unsupported> {
-    let root = Path::new(env!("LLRM_ROOT"));
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
-    let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
+    let image = WCCQ.iter().find(|(cpu, _)| *cpu == profile.cpu).map(|(_, image)| *image).ok_or_else(unbuilt)?;
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
+    for (name, text) in HEADERS {
+        fs::write(scratch.path().join(name), text).map_err(|error| failed(error.to_string()))?;
+    }
+    let wccq = scratch.path().join("wccq");
+    write_executable(&wccq, image).map_err(|error| failed(error.to_string()))?;
+    let header = Path::new(&profile.header).file_name().and_then(|name| name.to_str()).unwrap_or_default();
     // One forced include (a second `-fi=` replaces the first): what GCC
     // predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`,
     // `__BYTE_ORDER__`), as the target's sizes make them, and then the target's
@@ -415,7 +431,7 @@ pub fn recorded_for(
     let text = format!(
         "{}#include \"{}\"\n",
         crate::predefined::header(profile.cpu == "386", profile.long_double_bytes),
-        root.join(&profile.header).display()
+        scratch.path().join(header).display()
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());

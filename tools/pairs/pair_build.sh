@@ -1,6 +1,6 @@
 #!/bin/bash
 # pair_build.sh SCRATCH SHA: the dist binaries (llrm-c, llrm-qb, llrm-nib, nibfront, their .d, and jwasm/jwlink/dosbox-x when the build made them: run_tests links and runs with them) of commit SHA, as SCRATCH/sbp-SHA/dist.
-# Run in any checkout of the repository. The commit is built in a worktree of its own (SCRATCH/wt-pair-<full sha>, kept: llrm-c reads its C headers from the build tree at run time, so a removed tree broke every compile of the dist, and pruned by age), never by `git checkout` in a
+# Run in any checkout of the repository. The commit is built in a worktree of its own (SCRATCH/wt-pair-<full sha>, pruned by age), never by `git checkout` in a
 # shared directory: another session moving wt-head10 mid-build left a binary of an unknown tree under a sha's name (the 65eed2ad7 dist, and numbers taken from it). HEAD is checked before
 # and after the build as a tripwire. One persistent dist target (SCRATCH/tgt-dist) under a lock holds the build of every sha in turn: a target dir per sha left a whole build (0.7 GB of binaries,
 # 7+ GB of deps) for each of 76 pairs, 51 GB in a day.
@@ -17,7 +17,7 @@ FULL=$(git rev-parse --verify -q "$SHA^{commit}") || { echo "pair_build: $SHA is
 REPO=$(git rev-parse --show-toplevel)
 flock "$S/tgt-dist.lock" bash -c '
   S=$0; T=$1; FULL=$2; REPO=$3; B=$S/tgt-dist; W=$S/wt-pair-$FULL
-  # An old tree goes only when no dist of its sha is left: llrm-c reads its headers from it.
+  # An old tree goes only when no dist of its sha is left (llrm-qb and llrm-nib may still read it).
   for old in $(find "$S" -maxdepth 1 -name "wt-pair-*" -mmin +${PAIR_KEEP_MIN:-4320}); do
     sha=${old##*/wt-pair-}
     ls -d "$S/sbp-$sha" "$S/sbp-${sha:0:9}" "$S/sbp-${sha:0:10}" "$S/sbp-$sha-"* 2>/dev/null | grep -q . && continue
@@ -27,7 +27,7 @@ flock "$S/tgt-dist.lock" bash -c '
   git -C "$REPO" worktree add -q --detach "$W" "$FULL"
   at() { [ "$(git -C "$W" rev-parse HEAD)" = "$FULL" ] || { echo "pair_build: $W is at $(git -C "$W" rev-parse --short HEAD), not $FULL $1" >&2; exit 1; }; }
   at "before the build"
-  (cd "$W" && nice -n 10 env -u RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
+  (cd "$W" && nice -n 10 env RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
   at "after the build"
   mkdir -p $T/dist && cp -p $B/dist/llrm-c $B/dist/llrm-qb $B/dist/llrm-nib $B/dist/nibfront $B/dist/*.d $T/dist/ && for t in jwasm jwlink dosbox-x; do [ -e $B/dist/$t ] && cp -p $B/dist/$t $T/dist/; done
   { echo "sha: $FULL"; echo "cmd: build --profile dist --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront (${PAIR_CARGO:-buildslot cargo}, CARGO_TARGET_DIR=$B)"; (cd $T/dist && md5sum *); } > $T/ok.part

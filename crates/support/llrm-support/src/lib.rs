@@ -13,7 +13,6 @@ pub mod pypath;
 pub mod pyrepr;
 pub mod pyset;
 mod register;
-pub mod tree;
 pub mod version;
 
 pub use register::PhysicalRegister;
