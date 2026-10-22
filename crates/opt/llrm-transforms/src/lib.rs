@@ -259,6 +259,8 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
