@@ -8,8 +8,9 @@
 //! that all the others hold the same entry of; a predecessor not yet walked, a
 //! back edge, holds none). An instruction that writes a register's lanes drops
 //! the entries on those lanes, and one with an unknown effect drops them all. A
-//! candidate is a pure `mov reg, imm` writing no flag: one identical to the held
-//! entry of its register is replaced by an anchor, else it becomes the entry.
+//! candidate is a pure `mov reg, imm` writing no flag: one identical to the
+//! held entry of its register is replaced by an anchor, else it becomes the
+//! entry.
 //!
 //! ```text
 //!   b0: mov ax, 5            b0: mov ax, 5
@@ -144,11 +145,22 @@ pub fn cleaned(body: LirBody) -> LirBody {
         let mut mine: HashMap<Loc, Held> = HashMap::default();
         if let Some((&first, rest)) = preds[index].split_first() {
             for (register, held) in &defs[first] {
-                let everywhere = rest.iter().all(|&pred| {
-                    defs[pred].get(register).is_some_and(|other| Arc::ptr_eq(&other.insn, &held.insn) || {
-                        other.insn.what.as_ref().zip(held.insn.what.as_ref()).is_some_and(|(a, b)| a.same_meaning(b))
-                    })
-                });
+                let everywhere = rest
+                    .iter()
+                    .all(
+                        |&pred| defs[pred]
+                            .get(register)
+                            .is_some_and(
+                                |other| Arc::ptr_eq(&other.insn, &held.insn) || {
+                                    other
+                                        .insn
+                                        .what
+                                        .as_ref()
+                                        .zip(held.insn.what.as_ref())
+                                        .is_some_and(|(a, b)| a.same_meaning(b))
+                                },
+                            ),
+                    );
                 if everywhere {
                     mine.insert(register.clone(), held.clone());
                 }
@@ -177,23 +189,29 @@ pub fn cleaned(body: LirBody) -> LirBody {
     if redundant.is_empty() {
         return body;
     }
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            if block.insns.iter().any(|one| redundant.contains(&id(one))) {
-                block.with_insns(
-                    block
-                        .insns
-                        .iter()
-                        .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                        .collect(),
-                )
-            } else {
-                block.clone()
-            }
-        })
-        .collect();
+    let blocks =
+        body.blocks
+            .iter()
+            .map(|block| {
+                if block.insns.iter().any(|one| redundant.contains(&id(one))) {
+                    block.with_insns(
+                        block
+                            .insns
+                            .iter()
+                            .map(|one| {
+                                if redundant.contains(&id(one)) {
+                                    lir::anchor(Arc::clone(one))
+                                } else {
+                                    Arc::clone(one)
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    block.clone()
+                }
+            })
+            .collect();
     body.with_blocks(blocks)
 }
 
@@ -252,7 +270,11 @@ mod tests {
     /// stays loaded twice (a second `mov ax, 5` per rematerialized use).
     #[test]
     fn a_load_the_register_already_holds_goes() {
-        let result = cleaned(body(vec![block(0, vec![mov(0, 5, RegId::AX), mov(3, 1, RegId::BX), mov(6, 5, RegId::AX)], vec![])]));
+        let result = cleaned(body(vec![block(
+            0,
+            vec![mov(0, 5, RegId::AX), mov(3, 1, RegId::BX), mov(6, 5, RegId::AX)],
+            vec![],
+        )]));
         assert!(!gone(&result, 0, 0) && !gone(&result, 0, 1) && gone(&result, 0, 2));
     }
 

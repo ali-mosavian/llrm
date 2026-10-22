@@ -664,10 +664,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
-        Missing,
+        Match,
+        "latecleanup.rs",
         "",
-        "",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 13 (-O2) and 12 (-Os) of 77 IRs",
+        "translated (slot latecleanup@13, after prologue); DEVIATE LC1: immediates only, no frame-register load-address. Pin: changed code in 13 (-O2) and 12 (-Os) of 77 IRs. Ours on the 71 bench programs: 6 objects change, all smaller (-17..-24 B)",
     ),
     row(
         "Control Flow Optimizer",
