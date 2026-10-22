@@ -330,3 +330,37 @@ b2:
         .collect();
     assert_eq!(order, [Fact::WillReturn, Fact::NoUnwind, Fact::NoRecurse]);
 }
+
+/// `will_return_by_loops` derived what is known of the whole body (0.94 M
+/// instructions a body at d_faces -O2, 11 M over the stamps) before it asked
+/// whether the calls state `willreturn`; with one that does not, the answer
+/// is no whatever the loops are.
+#[test]
+fn a_call_that_does_not_state_willreturn_costs_no_derivation_of_the_loops() {
+    let mut module = parsed(
+        "declare void @external(i32)
+
+define i32 @count() {
+b0:
+  br label %b1
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %n, %b1 ]
+  call void @external(i32 %i)
+  %n = add i32 %i, 1
+  %more = icmp ult i32 %n, 10
+  br i1 %more, label %b1, label %b2
+b2:
+  ret i32 %n
+}
+",
+    );
+    let id = module.named("count").unwrap();
+    let before = crate::consts::scratch_derivations();
+    post_order(&mut module, &DataLayout::default(), Spaces::FLAT, &[id]);
+    assert_eq!(
+        crate::consts::scratch_derivations(),
+        before,
+        "the body's values were derived for a loop proof nothing reads"
+    );
+    assert!(!Facts::of(&module.global(id).function().unwrap().attrs).will_return());
+}

@@ -134,6 +134,26 @@ fn test_a_reference_parameter_is_dereferenceable() {
     assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
 }
 
+/// B$SCMP's result is the machine flags, read by comparisons alone: combine
+/// turned `sext (icmp slt v, 0)` into `ashr v, 15`, and every string
+/// comparison of the BC runtime failed to compile at -O1 ("flags read other
+/// than by a comparison").
+#[test]
+fn a_string_comparison_stays_a_comparison_of_the_flags_when_optimized() {
+    use crate::driver as qb_driver;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("SCMP.BAS");
+    std::fs::write(&basic, "PRINT \"\" < \"a\"\r\n").unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    let optimized = crate::test_hir::optimized_mir(&program);
+    assert!(
+        optimized.contains("@llrm.qb.B$SCMP(ptr, ptr) addrspace(1) threeway nocallback nounwind flagsresult"),
+        "{optimized}"
+    );
+    assert!(optimized.contains("icmp slt") && !optimized.contains("ashr"), "{optimized}");
+}
+
 /// The MIR of `lines` compiled as a program, whole.
 fn mir_of(lines: &[&str]) -> String {
     use crate::driver as qb_driver;

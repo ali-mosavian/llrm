@@ -753,6 +753,12 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
+            // LICMPass again (l.1508,
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
+            // `AllowSpeculation=true`), in a loop pass manager of its own after
+            // the unroll and the combine that follow it: "helps to clean up
+            // some loop-invariant code created by the loop unroll pass".
+            licm("licm@1508", true),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             // DivRemPairs, ExpandMemCmp and TailCallElim, between the two at
@@ -820,6 +826,8 @@ pub(crate) fn llvm_order(
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
+            // What the unroll makes, for the slot after it.
+            let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
                 slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
@@ -831,8 +839,12 @@ pub(crate) fn llvm_order(
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        created: std::rc::Rc::clone(&created),
                     }),
                 ),
+                // The loops the unroll made go on to LPM2's passes: indvars on
+                // them.
+                slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at

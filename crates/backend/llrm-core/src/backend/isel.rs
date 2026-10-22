@@ -1101,8 +1101,8 @@ pub fn selected_with<'c>(
     }
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
-    if cpu.rounds_float_spills {
-        body.float_bytes = Arc::new(float_bytes(module, function, &selector.values));
+    if cpu.rounds_float_spills || cpu.spills_extended {
+        body.float_bytes = Arc::new(float_bytes(module, function, &selector.values, cpu.spills_extended));
     }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
@@ -1236,11 +1236,13 @@ fn float_bytes(
     module: &Module,
     function: &Function,
     values: &IndexMap<ValueId, u32>,
+    extended: bool,
 ) -> std::collections::BTreeMap<u32, u32> {
     let mut bytes = std::collections::BTreeMap::new();
     for (&id, &number) in values {
         let Type::Float(kind) = module.context.types.get(function.value(id).ty) else { continue };
-        let size = match kind {
+        // D-RFP5: BASIC spills every x87 value at the register's width.
+        let size = match if extended { &FloatKind::X86Fp80 } else { kind } {
             FloatKind::Float => 4,
             FloatKind::Double => 8,
             FloatKind::X86Fp80 => 10,
@@ -5942,10 +5944,15 @@ impl Selector<'_, '_, '_> {
                     };
                     let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                    out.push(insn(
+                    let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
-                    ));
+                    );
+                    // The sequence pushes above its operand: the stack's top
+                    // slots are not free for a value live across it.
+                    let scratch = llrm_x86::select::x87_scratch(name);
+                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    out.push(Arc::new(one));
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.

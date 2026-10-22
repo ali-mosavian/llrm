@@ -240,6 +240,7 @@ pub fn decoded(
         .map(|(name, _)| name.clone())
         .collect();
     program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
+    program.promises.flags_results = llrm_core::abi::runtime::flags_results().into_iter().map(str::to_owned).collect();
     program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)
 }
