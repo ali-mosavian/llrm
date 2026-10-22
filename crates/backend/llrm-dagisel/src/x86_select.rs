@@ -7,7 +7,7 @@
 //! mask makes the rewrite free ([`try_shift_amount_mod`]); everything else, and what the hand
 //! matchers decline, goes to the generated table through [`Selector`].
 //!
-//! Numbered deviation: **SD301** the pin's `Select` has more hand cases than these two (`AND`/`OR`/
+//! Numbered deviation: **SD301** the pin's `Select` has more hand cases than these three (`AND`/`OR`/
 //! `XOR` immediate shrinking, `MUL_LOHI`, the 64-bit forms, `INTRINSIC`s, atomics, `ADD` to `LEA`
 //! for flag-less adds); each is added with the pattern that needs it. Owner sdag-c. Exit: C3
 //! follow-ups. Review 2026-12-10.
@@ -20,6 +20,7 @@
 use crate::generated::ids::isd;
 use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
+use crate::x86_divrem::select_divrem;
 use crate::x86_hooks::X86Hooks;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -29,6 +30,11 @@ pub fn select_node<D: AddrDag>(selector: &Selector, dag: &mut D, hooks: &mut X86
     match dag.opcode(node) {
         isd::STORE => {
             if fold_load_store_into_mem_operand(dag, hooks, node) {
+                return Outcome::Selected;
+            }
+        }
+        isd::SDIVREM | isd::UDIVREM => {
+            if select_divrem(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }

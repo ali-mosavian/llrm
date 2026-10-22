@@ -425,6 +425,11 @@ impl Dag for DagisAdapter<'_> {
         ops.extend(glue.map(ours));
         self.dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops).node
     }
+    fn copy_from_reg(&mut self, chain: PinValue, register: u16, vt: Vt, glue: PinValue) -> u32 {
+        let vt = our_vt(vt);
+        let reg = self.dag.get_register(vt, u32::from(register));
+        self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
+    }
     fn token_factor(&mut self, chains: &[PinValue]) -> PinValue {
         let chains: Vec<SDValue> = chains.iter().copied().map(ours).collect();
         theirs(self.dag.get_token_factor(&chains))

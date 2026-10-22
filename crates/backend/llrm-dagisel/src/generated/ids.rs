@@ -703,20 +703,35 @@ pub mod x86 {
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const AX: u16 = 3;
+    pub const CDQ: u16 = 1202;
     pub const CL: u16 = 11;
     pub const CS: u16 = 12;
+    pub const CWD: u16 = 1506;
     pub const CX: u16 = 13;
     pub const DEC16m: u16 = 1511;
     pub const DEC32m: u16 = 1522;
     pub const DEC8m: u16 = 1543;
+    pub const DIV16m: u16 = 1553;
+    pub const DIV16r: u16 = 1556;
+    pub const DIV32m: u16 = 1559;
+    pub const DIV32r: u16 = 1562;
     pub const DS: u16 = 20;
+    pub const DX: u16 = 21;
+    pub const EAX: u16 = 22;
+    pub const EDX: u16 = 27;
     pub const EFLAGS: u16 = 28;
     pub const ES: u16 = 31;
     pub const FS: u16 = 36;
     pub const GS: u16 = 38;
+    pub const IDIV16m: u16 = 1757;
+    pub const IDIV16r: u16 = 1760;
+    pub const IDIV32m: u16 = 1763;
+    pub const IDIV32r: u16 = 1766;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV32r0: u16 = 386;
     pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
     pub const NEG32m: u16 = 2859;
@@ -748,6 +763,7 @@ pub mod x86 {
     pub const XOR32mr: u16 = 22637;
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
+    pub const sub_16bit: u16 = 4;
 }
 
 pub mod target_opcode {

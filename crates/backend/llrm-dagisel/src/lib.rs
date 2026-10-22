@@ -23,6 +23,7 @@ pub mod matcher;
 pub mod predicates;
 pub mod x86_addr;
 pub mod x86_classes;
+pub mod x86_divrem;
 pub mod x86_hooks;
 pub mod x86_rmw;
 pub mod x86_select;

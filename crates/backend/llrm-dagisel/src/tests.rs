@@ -1126,3 +1126,60 @@ mod symbol_plus_two_registers {
         }
     }
 }
+
+mod divrem {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `{q, r} = UDIVREM/SDIVREM a, b` (i32) with both results used; returns the dag and the node.
+    fn divide(opcode: u16, a: SDValue, b: SDValue, dag: &mut TestDag) -> u32 {
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        node
+    }
+
+    fn run(dag: &mut TestDag, node: u32) -> Outcome {
+        let mut hooks = X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 });
+        select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
+    }
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// Without the hand case the table has no pattern for DIVREM: a division was `CannotSelect`.
+    #[test]
+    fn an_unsigned_divide_is_div_after_clearing_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::UDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::DIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_sign_extends_with_cdq() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::SDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::CDQ) && m.contains(&x86::IDIV32r) && !m.contains(&x86::MOV32r0), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_of_a_non_negative_dividend_clears_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let small = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[a, mask]), 0);
+        let node = divide(isd::SDIVREM, small, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::IDIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+}

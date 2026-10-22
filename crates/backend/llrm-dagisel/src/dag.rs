@@ -103,6 +103,8 @@ pub trait Dag {
     fn register(&mut self, register: u16, vt: Vt) -> SDValue;
     /// `getCopyToReg`; the node's results are the chain and, last, the glue.
     fn copy_to_reg(&mut self, chain: SDValue, register: u16, value: SDValue, glue: Option<SDValue>) -> u32;
+    /// `getCopyFromReg` with glue: the value is result 0, the chain 1, the glue 2.
+    fn copy_from_reg(&mut self, chain: SDValue, register: u16, vt: Vt, glue: SDValue) -> u32;
     fn token_factor(&mut self, chains: &[SDValue]) -> SDValue;
     fn machine_node(&mut self, opcode: u16, vts: &[Vt], operands: &[SDValue]) -> u32;
     /// `MorphNodeTo`: the node now, and the nodes it deleted when an equal one existed.
