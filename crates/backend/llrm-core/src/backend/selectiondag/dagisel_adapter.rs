@@ -152,6 +152,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
+        LifetimeStart => pin::LIFETIME_START,
+        LifetimeEnd => pin::LIFETIME_END,
         // sdag-a's codes are private and named (`x86isd::name`), the pin's
         // number comes from the name; sdag-b's lowering writes the pin's
         // numbers, which `name` does not know.
