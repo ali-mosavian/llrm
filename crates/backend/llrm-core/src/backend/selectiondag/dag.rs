@@ -282,6 +282,44 @@ impl SelectionDAG {
         }
     }
 
+    /// `MorphNodeTo`: `node` becomes `opcode` over `values` and `ops` in place, leaving the CSE
+    /// map consistent. When an equal node exists it is returned instead and `node` is untouched
+    /// (the caller then replaces it, as `SelectionDAGISel::MorphNode` does).
+    pub(super) fn morph_node_to(&mut self, node: u32, opcode: ISD, values: &[EVT], ops: &[SDValue]) -> u32 {
+        let shareable = !values.contains(&EVT::GLUE);
+        let key = (opcode, values.to_vec(), ops.to_vec(), NodeData::None);
+        if shareable {
+            if let Some(&found) = self.cse.get(&key) {
+                if found != node {
+                    return found;
+                }
+            }
+        }
+        if let Some(old) = self.key_of(node) {
+            if self.cse.get(&old) == Some(&node) {
+                self.cse.remove(&old);
+            }
+        }
+        let data = &mut self.nodes[node as usize];
+        data.opcode = opcode;
+        data.values = key.1.clone();
+        data.ops = key.2.clone();
+        data.data = NodeData::None;
+        if shareable {
+            self.cse.insert(key, node);
+        }
+        node
+    }
+
+    /// Drops `node` from the CSE map, so a later request builds a new node rather than reuse it.
+    pub(super) fn forget_node(&mut self, node: u32) {
+        if let Some(key) = self.key_of(node) {
+            if self.cse.get(&key) == Some(&node) {
+                self.cse.remove(&key);
+            }
+        }
+    }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }

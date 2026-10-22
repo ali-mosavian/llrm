@@ -213,6 +213,11 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 
 Next free: **SD44**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
+| SD43 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
+| SD44 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
+
+Next free: **SD45**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
+
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
