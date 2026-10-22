@@ -168,7 +168,7 @@ pub fn selected(
         .blocks
         .iter()
         .enumerate()
-        .map(|(at, block)| {
+        .map(|(at, block)| -> Block {
             let succ: Vec<i64> = match (at, emitted.blocks.len()) {
                 (0, 3) => vec![emitted.blocks[1].at, emitted.blocks[2].at],
                 (1, 3) => vec![emitted.blocks[2].at],
