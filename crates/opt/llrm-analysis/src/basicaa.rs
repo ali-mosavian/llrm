@@ -1153,7 +1153,7 @@ impl AAResults for BasicAA<'_> {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L271
     /// `AAResults::getModRefInfo(Call1, Call2)` from the effects and argument
-    /// attributes of the two calls. DEVIATE G2: LLVM's reads the aggregate's
+    /// attributes of the two calls. DEVIATE AA-D1: LLVM's reads the aggregate's
     /// answers; here they are BasicAA's own, which the aggregate meets with
     /// the others'. Exit: this moves into `AggregateAA`. Owner w-5, review
     /// 2026-11-19.
