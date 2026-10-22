@@ -92,6 +92,7 @@ pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
 pub mod schedule;
+pub mod switchcg;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};

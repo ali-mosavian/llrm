@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:0a0b34d17dd860e09364eace3dce38f5ef0aeda3b949cd1202b2b4099bede175 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:af052acb65a2c3dc3eb300b14e77cee9a1dab1cdcf9315af8bdcfbe666de1363 -->
 
 # selectiondag
 
@@ -19,9 +19,9 @@ node's width (up to 128).
 The builder (`builder::build_block`) visits a block's instructions in order
 and keeps the pin's chain bookkeeping: pending loads, pending exports,
 `getRoot` / `getControlRoot`. A value used outside its block or by a phi
-lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the block
-that defines it ends in `CopyToReg`, the blocks that read it start from
-`CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
+lives in a virtual register (`function_lowering::FunctionLoweringInfo`): the
+block that defines it ends in `CopyToReg`, the blocks that read it start
+from `CopyFromReg`; a phi is the `CopyToReg` of its incoming value in each
 predecessor. `dump::normalized` makes a dump comparable with the pin's.
 Arguments and returns go through the target's `Convention` (stack
 parameters are loads of fixed objects, register ones live-in copies;
