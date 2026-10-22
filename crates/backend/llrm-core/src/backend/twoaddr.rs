@@ -150,6 +150,11 @@ pub fn tied(
                 place += 1;
                 continue;
             }
+            // `rescheduleKillAboveMI`: the reader that kills the source goes above the tied instruction.
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+                changed = true;
+                continue;
+            }
             place += 1;
             let Some(fix) = _untied(&one, &mut mint) else {
                 insns.push(one);
@@ -1005,6 +1010,23 @@ mod tests {
         let add = live_source_add(5, "add")[1].clone();
         let insns = vec![imm_def(0, 7), add, lea_of(2, 5, 7), read(3, 8), read(4, 5)];
         // `live_source_add` reads v7 and defines v8.
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down (a load stays), so the
+    /// `lea` that kills its source goes up above it.
+    #[test]
+    fn test_the_reader_that_kills_the_source_of_a_tied_add_with_a_load_goes_above_it() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("add".to_owned()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Binary)
+        };
+        let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let insns = vec![imm_def(0, 7), add, lea_of(2, 5, 7), read(3, 8), read(4, 5)];
         let got = tied(&of(insns), Off);
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
