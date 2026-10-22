@@ -151,7 +151,8 @@ pub fn tied(
                 place += 1;
                 continue;
             }
-            // `rescheduleKillAboveMI`: the reader that kills the source goes above the tied instruction.
+            // `rescheduleKillAboveMI`: the reader that kills the source goes
+            // above the tied instruction.
             if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
                 changed = true;
                 continue;
@@ -1037,8 +1038,8 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
 
-    /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down (a load stays), so the
-    /// `lea` that kills its source goes up above it.
+    /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down
+    /// (a load stays), so the `lea` that kills its source goes up above it.
     #[test]
     fn test_the_reader_that_kills_the_source_of_a_tied_add_with_a_load_goes_above_it() {
         use crate::model::ir::Mem;

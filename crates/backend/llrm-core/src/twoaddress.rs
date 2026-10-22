@@ -693,9 +693,11 @@ impl<'a> Commuter<'a> {
         true
     }
 
-    /// `isDefTooClose`: whether the definition of `reg` that `work[at]` follows is too near to move a reader of `reg`
-    /// above `work[at]`: `work[at]` itself defines it, a definition sits below it, or a load defines it
-    /// one instruction above (a load takes 2, anything else 1: `getInstrLatency` without itineraries, TA-7).
+    /// `isDefTooClose`: whether the definition of `reg` that `work[at]` follows
+    /// is too near to move a reader of `reg` above `work[at]`: `work[at]`
+    /// itself defines it, a definition sits below it, or a load defines it
+    /// one instruction above (a load takes 2, anything else 1:
+    /// `getInstrLatency` without itineraries, TA-7).
     fn def_too_close(
         &self,
         reg: u32,
@@ -714,11 +716,12 @@ impl<'a> Commuter<'a> {
                 return true;
             }
             let Some(&at) = self.distance.get(&instr) else { return true };
-            let latency = if def.what.as_ref().is_some_and(|what| what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))) {
-                2
-            } else {
-                1
-            };
+            let latency =
+                if def.what.as_ref().is_some_and(|what| what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))) {
+                    2
+                } else {
+                    1
+                };
             if latency > dist - at {
                 return true;
             }
@@ -726,9 +729,10 @@ impl<'a> Commuter<'a> {
         false
     }
 
-    /// `rescheduleKillAboveMI` for the tied instruction `work[at]`: the one later reader that kills its
-    /// source goes above it, so the source dies at the tied instruction. True when the list changed;
-    /// `at` then holds the moved reader.
+    /// `rescheduleKillAboveMI` for the tied instruction `work[at]`: the one
+    /// later reader that kills its source goes above it, so the source dies
+    /// at the tied instruction. True when the list changed; `at` then holds
+    /// the moved reader.
     pub fn reschedule_kill_above_mi(
         &mut self,
         work: &mut Vec<Arc<Insn>>,
@@ -755,13 +759,17 @@ impl<'a> Commuter<'a> {
             return false;
         }
         let kill = Arc::clone(&work[last]);
-        // A copy is left to the coalescer (the pin moves one only for a folded load, which has no case here).
+        // A copy is left to the coalescer (the pin moves one only for a folded
+        // load, which has no case here).
         if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
             && crate::backend::twoaddr::ties(what)
-            && matches!(what.sources.first(), Some(Loc::Held(held)) if held.value == reg)
+            && matches!(
+                what.sources.first(),
+                Some(Loc::Held(held)) if held.value == reg
+            )
         {
             return false;
         }
