@@ -43,3 +43,19 @@ The targets are guesses from the callee costs until each is profiled in isolatio
 - **LVI `get_edge_value_local`:** ours 13,831 calls at 1,153 Ir each (15.9 M); the pin 8,593 calls at 498 Ir (4.28 M). So 1.6x the asks and 2.3x the cost of each. The cost is flat: `get_value_from_condition` 11,297 calls at 1,150 Ir (`get_value_from_icmp_condition` 0.8 K per call, `match_icmp_operand` 20,627 calls), no one function above 1.3 M self.
 - **Allocation:** `__rust_alloc` 44 M, `memcpy` 41 M and `__rust_dealloc` 27 M are 7% of the whole run; the lattice and range values are cloned per query.
 - **Next:** cut the asks first (the per-block visitors of SimplifyCfg ask LVI for edges `knownpred` and `jumpthreading` already asked), then the clones in `get_edge_value_local`; each as its own PR with Ir on both arms and identical objects.
+
+## Allocation sites (callgrind d_faces -O2, parity 76db1d41dd)
+
+`__rust_alloc` 44.1 M Ir, `memcpy` 41.1 M, `__rust_dealloc` 27.1 M: 7% of the run. By caller (Ir inside the allocator, calls):
+
+| M Ir | calls | site |
+|--:|--:|---|
+| 8.12 | 308,659 | `RawVec::finish_grow` (a `Vec` grown one push at a time): 10.6 M of it under `do_reserve_and_handle`, 5.4 M `RawVec<u32>::grow_one` (72 K), 3.4 M `IndexMap<InstId, MemRef>::insert_full` (455 inserts: one map regrown) |
+| 3.05 | 116,854 | `String::clone`: 2.9 M from `Semantics::clone` (39,542), 1.2 M from `Vec<String>::clone` |
+| 1.55 | 64,200 | `Vec<Loc>::clone` (`Semantics` operands) |
+| 1.12 | 27,592 | `HashMap::with_capacity` |
+| 0.98 | 40,852 | `peep::walk::windows` |
+
+Two sites that name their cost: `masm::frame_omitted` clones the whole item list 11 times (5.65 M inclusive: `stack_addressed` does `items.clone()` for each pass of its retry loop), and `peephole::_register_effects_worked` clones a `Semantics` as the cache key 5,559 times (5.8 M inclusive, `EffectsHeld::remember`). `Semantics` carries a `String` name and two `Vec<Loc>`: every clone of an `Insn` is three allocations.
+
+Next, each its own PR with Ir on both arms and objects identical: `Semantics` names as `&'static str`/`Arc<str>` (removes the String clones), the key of `EffectsHeld` by reference, `stack_addressed` without the per-pass clone, and `with_capacity` at the `RawVec<u32>` pushes.
