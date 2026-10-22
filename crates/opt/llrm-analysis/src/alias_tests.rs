@@ -1671,6 +1671,55 @@ fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
     assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
 }
 
+/// A local published only after a call is still reached by its unknown writes:
+/// the footprint names the unknown object, which may be any object whose
+/// address leaves the function anywhere (`ObjectRef::captured`), not before
+/// the call as the pin's `isNotCapturedBefore` has it. The old effect lists
+/// (`a_pointer_published_after_a_call_is_not_reached_by_it`) were flow
+/// sensitive; the precision is row AM-CA-8. A local that is never published
+/// stays out.
+#[test]
+fn a_calls_footprint_reaches_a_local_published_later_but_not_one_never_published() {
+    let text = PUBLISHED.replace(
+        "  store ptr %escaped, ptr @g\n  call void @external()\n",
+        "  call void @external()\n  store ptr %escaped, ptr @g\n",
+    );
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let found = crate::alias::calls_by_attributes(&unit);
+    let effect = found.iter().next().map(|(_, effect)| effect).expect("the call");
+    assert!(writes(effect, &bytes(&parsed.object("escaped"), 0, 4)), "published later: reached (AM-CA-8)");
+    assert!(!writes(effect, &bytes(&parsed.object("private"), 0, 4)), "never published: not reached");
+}
+
+/// A byval parameter is the callee's own copy: the call writes nothing of the
+/// object it passes, and `initializes` on it fills nothing of it. Without
+/// `byval` the same call writes and fills the object. Ported from
+/// `a_callee_that_writes_a_byval_parameter_writes_nothing_of_the_callers_object`
+/// and `a_byval_argument_that_initializes_fills_nothing_of_the_callers_object`
+/// (c/byval_inline -O2 dropped the store `g.a[0] = 1`).
+#[test]
+fn a_byval_argument_is_neither_written_nor_filled_by_the_call() {
+    let of = |attrs: &str| {
+        let text = format!(
+            "declare void @h(ptr {attrs}initializes((0, 4))) memory(argmem: write) nounwind\ndefine void @f() {{\nb0:\n  %a = alloca i32\n  call void @h(ptr %a)\n  ret void\n}}\n"
+        );
+        let parsed = Parsed::new(&text);
+        let unit = parsed.unit();
+        let found = crate::alias::calls_by_attributes(&unit);
+        let call = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+            .unwrap();
+        let accesses = crate::memoryssa::Accesses::of(&unit, IndexMap::default(), &found);
+        (found[&call].stores.len(), accesses.fills(call).len())
+    };
+    assert_eq!(of(""), (1, 1), "premise: a plain parameter is written and filled");
+    assert_eq!(of("byval(i32) "), (0, 0));
+}
+
 /// A call's footprint from its attributes alone (`calls_by_attributes`): a
 /// `memset` of a constant length writes those bytes through its destination
 /// and reads nothing; a callee with `memory(argmem: read)` reads through its
