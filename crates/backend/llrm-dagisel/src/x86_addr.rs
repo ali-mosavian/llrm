@@ -17,7 +17,7 @@
 //! - **SD39** `MaskedValueIsZero` is [`known_zero`], a structural subset of `computeKnownBits`
 //!   (constants, `AND` with a constant, zero-extension, constant shifts); the folds decline what
 //!   it cannot prove. Owner sdag-c. Exit: when the DAG API has known bits. Review 2026-12-10.
-//! - **SD34** The 64-bit, x32 and 16-bit branches, RIP-relative modes, large code model, the
+//! - **SD34** The 64-bit and x32 branches, RIP-relative modes, large code model, the
 //!   TLS segment loads (`matchLoadInAddress`) and the vector forms (`matchVectorAddress`) are
 //!   left out: no such target here. m16 has its own matcher (C2). Owner sdag-c. Exit: none.
 //!   Review 2026-12-10.
@@ -205,10 +205,21 @@ fn is_disp_safe_for_frame_index_or_reg_base(value: i64) -> bool {
     (-(1 << 30)..(1 << 30)).contains(&value)
 }
 
+/// Which address forms exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddrMode {
+    /// 32-bit flat: `[base + index*scale + disp32]`.
+    Flat32,
+    /// Real mode (SD3): `[bx|bp] + [si|di] + disp16`, no scale. Which register is which is the
+    /// register class's business (SD4); the matcher only keeps one base and one index.
+    Real16,
+}
+
 /// The matchers over one DAG. `true` from a `match_*` means it cannot be done, as in the pin.
 pub struct Matcher<'a, D: AddrDag> {
     pub dag: &'a mut D,
     pub pointer_type: Vt,
+    pub mode: AddrMode,
 }
 
 impl<D: AddrDag> Matcher<'_, D> {
@@ -363,7 +374,12 @@ impl<D: AddrDag> Matcher<'_, D> {
         if val != 0 && matches!(am.symbol, Some(Symbol { kind: SymbolKind::External | SymbolKind::McSymbol, .. })) {
             return true;
         }
-        if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
+        if self.mode == AddrMode::Real16 {
+            // `X86AsmBackend::applyFixup` cannot tell the sign of a 16-bit fixup.
+            if !(-i64::from(u16::MAX)..=i64::from(u16::MAX)).contains(&val) {
+                return true;
+            }
+        } else if am.has_base_or_index_reg() && !is_disp_safe_for_frame_index_or_reg_base(val) {
             return true;
         }
         am.disp = val as i32;
@@ -479,7 +495,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
         }
         // x + x is x * 2.
-        if self.opcode(n) == isd::ADD && self.operand(n, 0) == self.operand(n, 1) && am.scale <= 4 {
+        if self.mode == AddrMode::Flat32 && self.opcode(n) == isd::ADD && self.operand(n, 0) == self.operand(n, 1) && am.scale <= 4 {
             am.scale *= 2;
             return self.match_index_recursively(self.operand(n, 0), am, depth + 1);
         }
@@ -514,7 +530,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SHL => {
-                if am.index_reg.is_none() && am.scale == 1 {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(shift) = self.constant(self.operand(n, 1)) {
                         if (1..=3).contains(&(shift as u64)) {
                             let sh_val = self.operand(n, 0);
@@ -526,7 +542,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SRL => {
-                if am.index_reg.is_none() && am.scale == 1 {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
                     let and = self.operand(n, 0);
                     if self.opcode(and) == isd::AND {
                         let x = self.operand(and, 0);
@@ -542,7 +558,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::AND => {
-                if am.index_reg.is_none() && am.scale == 1 {
+                if self.mode == AddrMode::Flat32 && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(mask) = self.constant(self.operand(n, 1)) {
                         let shift = self.operand(n, 0);
                         if self.opcode(shift) == isd::SRL {
@@ -561,7 +577,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::MUL | x86isd::MUL_IMM => {
-                if am.base_type == BaseType::Reg && am.base_reg.is_none() && am.index_reg.is_none() {
+                if self.mode == AddrMode::Flat32 && am.base_type == BaseType::Reg && am.base_reg.is_none() && am.index_reg.is_none() {
                     if let Some(c) = self.constant(self.operand(n, 1)) {
                         if matches!(c as u64, 3 | 5 | 9) {
                             am.scale = c as u32 - 1;
