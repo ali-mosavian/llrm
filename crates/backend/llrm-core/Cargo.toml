@@ -22,6 +22,7 @@ llrm-x86-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-instr = { workspace = true }
+llrm-dagisel = { path = "../llrm-dagisel" }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
@@ -58,4 +59,4 @@ llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }
-llrm-dagisel = { path = "../llrm-dagisel" }
+
