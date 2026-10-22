@@ -17,11 +17,17 @@
 //! Nothing runs it yet: stage 3 of the translation of LSR.
 //!
 //! # Limits
+//! DEVIATE IU1: users of a value are visited in descending program order, not
+//! use-list order. Use-list order is edit history; the pin's order on parsed
+//! IR is the only reproducible one, and it breaks ties in LSR's register
+//! choice. Exit: use lists keep LLVM's order. Owner: w-5. Review: 2026-11-19.
+//!
 //! DEVIATE: whether an instruction is safe to speculate and whether it is
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
 //! Walks each value's users once, with a visited set: O(users).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
@@ -195,7 +201,12 @@ impl IvUsers {
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
         let mut unique = IdSet::<InstId>::new();
-        let users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
+        let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
+        if users.len() > 1 {
+            let order: HashMap<InstId, usize> =
+                cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect();
+            users.sort_by_key(|user| std::cmp::Reverse(order.get(user).copied()));
+        }
         for user in users {
             if !unique.insert(user) {
                 continue;
