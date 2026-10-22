@@ -327,9 +327,15 @@ impl Builder<'_> {
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(&mut self, instruction: &llrm_mir::module::Instruction, info: &llrm_mir::opcode::CallInfo) -> Result<(), Refused> {
         let (callee, arguments) = instruction.operands.split_last().expect("a call names its callee");
-        let Operand::Constant(callee_id) = *callee else { return Err(Refused("indirect call")) };
-        let ConstantKind::Global(global) = self.module.context.get(callee_id).kind else { return Err(Refused("indirect call")) };
-        if self.module.global(global).intrinsic().is_some() {
+        // A direct call names a function; an indirect one calls the value.
+        let direct = match *callee {
+            Operand::Constant(id) => match self.module.context.get(id).kind {
+                ConstantKind::Global(global) => Some(global),
+                _ => return Err(Refused("call of a constant expression")),
+            },
+            _ => None,
+        };
+        if direct.is_some_and(|global| self.module.global(global).intrinsic().is_some()) {
             return Err(Refused("intrinsic call"));
         }
         let types = &self.module.context.types;
@@ -342,8 +348,11 @@ impl Builder<'_> {
             .map_err(|_| Refused("call the convention does not describe"))?;
         let (result_type, _, _) = self.module.signature(info.function_type);
         // Evaluate the callee and the arguments before the call sequence starts.
-        let _ = self.get_value(*callee)?;
-        let callee_node = self.dag.get_target_global_address(self.target.dag.pointer, global.0, 0);
+        let called = self.get_value(*callee)?;
+        let callee_node = match direct {
+            Some(global) => self.dag.get_target_global_address(self.target.dag.pointer, global.0, 0),
+            None => called,
+        };
         let mut values = Vec::new();
         for argument in arguments {
             let value = self.get_value(*argument)?;

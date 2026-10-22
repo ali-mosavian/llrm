@@ -455,6 +455,18 @@ mod builder {
     /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
     /// is refused before this piece.
     #[test]
+    fn indirect_calls_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/indirect.ll");
+        let pin = pin_blocks(include_str!("golden/indirect.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new(), "a call of a value was refused");
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    #[test]
     fn calls_match_the_pins_initial_dag() {
         let ll = include_str!("golden/calls.ll");
         let pin = pin_blocks(include_str!("golden/calls.pin.txt"));
