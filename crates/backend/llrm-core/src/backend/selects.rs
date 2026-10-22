@@ -138,6 +138,17 @@ pub fn lowered(
     tti: &dyn Tti,
     wanted: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
+    priced(module, tti, wanted, &|_| None)
+}
+
+/// `lowered`, and the setcc chains the target's cost table prices above a
+/// branch made selects first (`booleans::branched`, DEVIATE B2).
+pub fn priced(
+    module: &mut Module,
+    tti: &dyn Tti,
+    wanted: &dyn Fn(&str) -> bool,
+    price: &dyn Fn(&str) -> Option<i64>,
+) -> Result<(), String> {
     let context = &module.context;
     for global in &mut module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -160,6 +171,7 @@ pub fn lowered(
                 }
             }
         }
+        crate::backend::booleans::branched(context, function, price, wanted)?;
         loop {
             let found = function
                 .walk()
@@ -183,7 +195,7 @@ pub fn lowered(
 /// The selects that `EmitLoweredSelect` lowers with `select` (same condition,
 /// operands not made after it) and the instructions of the block that follow
 /// the join, terminator last.
-fn _run(
+pub(crate) fn _run(
     context: &llrm_mir::context::Context,
     function: &Function,
     select: InstId,
@@ -261,11 +273,11 @@ fn _run(
 
 /// The selects of `run` (in a row, on one condition) made a branch around an
 /// empty block and a phi each (`createPHIsForCMOVsInSinkBB`).
-fn _branched(
+pub(crate) fn _branched(
     function: &mut Function,
     run: &[InstId],
     moved: &[InstId],
-) -> Result<(), String> {
+) -> Result<BlockId, String> {
     let select = run[0];
     let block = function.parent(select).ok_or("a placed select")?;
     let first = function.instruction(select).clone();
@@ -321,11 +333,11 @@ fn _branched(
     for &inst in run {
         function.erase(inst)?;
     }
-    Ok(())
+    Ok(taken)
 }
 
 /// `next`'s phis name `to` where they named `from`.
-fn _renamed_edges(
+pub(crate) fn _renamed_edges(
     function: &mut Function,
     next: BlockId,
     from: BlockId,
@@ -431,6 +443,91 @@ entry:
         for (a, b) in [(0, 5), (3, 3), (4, 9), (9, 4)] {
             let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
             assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), run(&before, "f", arguments, 100).unwrap());
+        }
+    }
+
+    /// The i486's prices (timings.times): `setcc` 4, `movzx` 3, `alu_rr` 1,
+    /// `jcc` 3, `jcc_not_taken` 1.
+    fn i486(name: &str) -> Option<i64> {
+        Some(match name {
+            "setcc" => 4,
+            "movzx" => 3,
+            "alu_rr" => 1,
+            "jcc" => 3,
+            "jcc_not_taken" => 1,
+            _ => return None,
+        })
+    }
+
+    fn branched(
+        text: &str,
+        price: &dyn Fn(&str) -> Option<i64>,
+    ) -> (Module, Module) {
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        super::priced(&mut after, &llrm_mir::tti::Basic, &|_| true, price).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        (before, after)
+    }
+
+    /// x_mergesort's merge loop steps `i` by `zext(a <= b)` and `j` by
+    /// `zext(!(a <= b))`: `cmp; setcc; movzx; add` twice on a target with no
+    /// cmov, where main keeps the branch (and `inc` in its arm). Priced from
+    /// the cost table, one branch for both.
+    #[test]
+    fn test_two_steps_by_one_compare_are_one_branch_where_the_table_prices_it_so() {
+        let text = "define i16 @f(i16 %a, i16 %b, i16 %i, i16 %j) {
+entry:
+  %c = icmp sle i16 %a, %b
+  %zi = zext i1 %c to i16
+  %ni = xor i1 %c, true
+  %zj = zext i1 %ni to i16
+  %i2 = add i16 %i, %zi
+  %j2 = add i16 %j, %zj
+  %r = mul i16 %i2, %j2
+  ret i16 %r
+}
+";
+        let (before, after) = branched(text, &i486);
+        assert!(!llrm_mir::print::module(&after).contains("zext"), "{}", llrm_mir::print::module(&after));
+        // The negation is gone with its use: a second use of the compare
+        // keeps it from fusing with the branch (`setle; test; je`).
+        assert!(!llrm_mir::print::module(&after).contains("xor"), "{}", llrm_mir::print::module(&after));
+        assert_eq!(conditional_branches(&after), 1, "{}", llrm_mir::print::module(&after));
+        for (a, b) in [(3, 5), (5, 3), (4, 4), (0, 0)] {
+            for (i, j) in [(1, 2), (7, 9)] {
+                let arguments =
+                    |a: i128, b: i128| [a, b, i, j].map(|v| Val::Int { bits: v as u128 & 0xFFFF, width: 16 }).to_vec();
+                assert_eq!(
+                    run(&after, "f", arguments(a, b), 100).unwrap(),
+                    run(&before, "f", arguments(a, b), 100).unwrap(),
+                    "{a} {b} {i} {j}"
+                );
+            }
+        }
+        // Without the prices the chain stays.
+        let (_, kept) = branched(text, &|_| None);
+        assert!(llrm_mir::print::module(&kept).contains("zext"), "{}", llrm_mir::print::module(&kept));
+    }
+
+    /// nhstutil's `p >= lo && p < hi` as a value: two `setcc`, an `and` and a
+    /// `movzx`, where main branches around the second compare.
+    #[test]
+    fn test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second() {
+        let text = "define i1 @f(i16 %p, i16 %lo, i16 %hi) {
+entry:
+  %a = icmp uge i16 %p, %lo
+  %b = icmp ult i16 %p, %hi
+  %r = and i1 %a, %b
+  ret i1 %r
+}
+";
+        let (before, after) = branched(text, &i486);
+        assert!(!llrm_mir::print::module(&after).contains(" and "), "{}", llrm_mir::print::module(&after));
+        assert_eq!(conditional_branches(&after), 1, "{}", llrm_mir::print::module(&after));
+        for (p, lo, hi) in [(5, 3, 9), (2, 3, 9), (9, 3, 9), (3, 3, 9)] {
+            let arguments = || [p, lo, hi].map(|v| Val::Int { bits: v, width: 16 }).to_vec();
+            assert_eq!(run(&after, "f", arguments(), 100).unwrap(), run(&before, "f", arguments(), 100).unwrap());
         }
     }
 
