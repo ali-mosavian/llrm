@@ -2,7 +2,10 @@ use super::super::legalize_types::TypeLegalizer;
 use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
 
-fn dword(dag: &mut SelectionDAG, slot: i32) -> SDValue {
+fn dword(
+    dag: &mut SelectionDAG,
+    slot: i32,
+) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot) };

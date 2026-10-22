@@ -830,7 +830,11 @@ impl<'a> TypeLegalizer<'a> {
     /// halves, plus the two cross products in the high half. The cases that
     /// need known bits (a zero-extended or sign-extended operand, SD202) and
     /// the library call are not translated.
-    fn expand_mul(&mut self, value: SDValue, half: EVT) -> Result<(SDValue, SDValue), LegalizeError> {
+    fn expand_mul(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
         let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
@@ -839,7 +843,11 @@ impl<'a> TypeLegalizer<'a> {
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else {
-            return Err(LegalizeError::Unsupported { op: ISD::Mul, ty: self.dag.value_type(value), what: "expand multiply without a widening multiply" });
+            return Err(LegalizeError::Unsupported {
+                op: ISD::Mul,
+                ty: self.dag.value_type(value),
+                what: "expand multiply without a widening multiply",
+            });
         };
         let cross_right = self.dag.get_node(ISD::Mul, half, &[ll, rh]);
         let cross_left = self.dag.get_node(ISD::Mul, half, &[lh, rl]);
