@@ -57,6 +57,7 @@
 //!   1  far-indirect-calls       farcall       memory operand for a far call
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
 //!   3  SsaSpill                 ssaspill      spiller route only
+//!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
 //!   5  pressuresink             pressuresink  move a load to its one reader
 //!   6  floatfold                floatfold     float load as memory operand
@@ -229,6 +230,7 @@ pub mod postrasink;
 pub mod fixupsetcc;
 pub mod flagscopy;
 pub mod precse;
+pub mod liverangeshrink;
 pub mod pressuresink;
 pub mod pushfold;
 pub mod prologue;
