@@ -209,7 +209,7 @@ mod builder {
 
     use super::super::builder::{BuilderTarget, build_block};
     use super::super::dump::normalized;
-    use super::super::lowering::FunctionLoweringInfo;
+    use super::super::function_lowering::FunctionLoweringInfo;
 
     /// The pin's "Initial selection DAG" dumps by block name (`f:b1`).
     fn pin_blocks(text: &str) -> BTreeMap<String, String> {

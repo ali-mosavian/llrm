@@ -114,11 +114,24 @@ impl Default for DagConfig {
     }
 }
 
+/// What a `replace_all_uses_with` did to a user of the replaced value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rauw {
+    /// The user reads the new value and is still its own node.
+    Updated(u32),
+    /// The user became equal to an existing node and its results were
+    /// replaced by that node's in turn.
+    Merged { from: u32, into: u32 },
+}
+
 type CseKey = (ISD, Vec<EVT>, Vec<SDValue>, NodeData);
 
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
 pub struct SelectionDAG {
     nodes: Vec<SDNode>,
+    /// Per node, the nodes that have read one of its results (may hold
+    /// stale or repeated entries; `users` filters them).
+    uses: Vec<Vec<u32>>,
     cse: HashMap<CseKey, u32>,
     pub(super) config: DagConfig,
     entry: SDValue,
@@ -131,7 +144,7 @@ pub struct SelectionDAG {
 impl SelectionDAG {
     pub fn new(config: DagConfig) -> SelectionDAG {
         let zero = SDValue { node: 0, res: 0 };
-        let mut dag = SelectionDAG { nodes: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
+        let mut dag = SelectionDAG { nodes: Vec::new(), uses: Vec::new(), cse: HashMap::new(), config, entry: zero, root: zero, global_names: Vec::new(), block_names: Vec::new() };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
         dag
@@ -170,7 +183,17 @@ impl SelectionDAG {
     /// The nodes that read `value` as an operand, in creation order, once
     /// each (`SDValue::users()`).
     pub fn users(&self, value: SDValue) -> impl Iterator<Item = u32> + '_ {
-        self.nodes.iter().enumerate().filter(move |(_, node)| node.ops.contains(&value)).map(|(at, _)| at as u32)
+        let mut users: Vec<u32> = self.uses.get(value.node as usize).into_iter().flatten().copied().filter(|&user| self.nodes[user as usize].ops.contains(&value)).collect();
+        users.sort_unstable();
+        users.dedup();
+        users.into_iter()
+    }
+
+    fn note_uses(&mut self, user: u32) {
+        for at in 0..self.nodes[user as usize].ops.len() {
+            let operand = self.nodes[user as usize].ops[at].node as usize;
+            self.uses[operand].push(user);
+        }
     }
 
     fn key_of(&self, node: u32) -> Option<CseKey> {
@@ -182,9 +205,10 @@ impl SelectionDAG {
     /// user that then equals an existing node is replaced by it in turn
     /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
     /// stay in it with no users. The root follows.
-    pub fn replace_all_uses_with(&mut self, from: SDValue, to: SDValue) {
+    pub fn replace_all_uses_with(&mut self, from: SDValue, to: SDValue) -> Vec<Rauw> {
+        let mut events = Vec::new();
         if from == to {
-            return;
+            return events;
         }
         let mut work = vec![(from, to)];
         while let Some((from, to)) = work.pop() {
@@ -202,9 +226,14 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                let Some(key) = self.key_of(user) else { continue };
+                self.uses[to.node as usize].push(user);
+                let Some(key) = self.key_of(user) else {
+                    events.push(Rauw::Updated(user));
+                    continue;
+                };
                 match self.cse.get(&key) {
                     Some(&existing) if existing != user => {
+                        events.push(Rauw::Merged { from: user, into: existing });
                         let flags = self.nodes[existing as usize].flags.intersect(self.nodes[user as usize].flags);
                         self.nodes[existing as usize].flags = flags;
                         let results = self.nodes[user as usize].values.len() as u8;
@@ -213,10 +242,41 @@ impl SelectionDAG {
                         }
                     }
                     _ => {
+                        events.push(Rauw::Updated(user));
                         self.cse.insert(key, user);
                     }
                 }
             }
+        }
+        events
+    }
+
+    /// `UpdateNodeOperands`: `node` reads `ops` instead. If that equals an
+    /// existing node, that node is returned (and `node` stays as it was,
+    /// unused); else `node` itself, re-entered in the CSE map.
+    pub fn update_node_operands(&mut self, node: u32, ops: &[SDValue]) -> u32 {
+        if let Some(key) = self.key_of(node) {
+            if self.cse.get(&key) == Some(&node) {
+                self.cse.remove(&key);
+            }
+        }
+        let old = std::mem::replace(&mut self.nodes[node as usize].ops, ops.to_vec());
+        self.note_uses(node);
+        match self.key_of(node) {
+            Some(key) => match self.cse.get(&key) {
+                Some(&existing) if existing != node => {
+                    self.nodes[node as usize].ops = old;
+                    if let Some(key) = self.key_of(node) {
+                        self.cse.insert(key, node);
+                    }
+                    existing
+                }
+                _ => {
+                    self.cse.insert(key, node);
+                    node
+                }
+            },
+            None => node,
         }
     }
 
@@ -285,6 +345,8 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode { opcode, values: key.1.clone(), ops: key.2.clone(), flags, data });
+        self.uses.push(Vec::new());
+        self.note_uses(index);
         if shareable {
             self.cse.insert(key, index);
         }
