@@ -67,11 +67,15 @@ pub enum Event {
     LirRenameAsks,
     /// The asks that moved a value, so the instruction was rebuilt.
     LirRenameRebuilds,
+    /// A SCEV expression made for a value (`create_scev_iter`).
+    ScevNodes,
+    /// A phi `exitsink` looked at as a candidate.
+    ExitSinkPhis,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 20] = [
+const NAMES: [&str; 22] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -92,6 +96,8 @@ const NAMES: [&str; 20] = [
     "lsr_rewritten",
     "lir_rename_asks",
     "lir_rename_rebuilds",
+    "scev_nodes",
+    "exitsink_phis",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -108,7 +114,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 20] = const { [const { Cell::new(0) }; 20] };
+    static EVENTS: [Cell<u64>; 22] = const { [const { Cell::new(0) }; 22] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

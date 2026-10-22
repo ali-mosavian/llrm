@@ -134,7 +134,6 @@ use crate::backend::frame::Frame;
 use crate::backend::overlap;
 use crate::backend::parcopy;
 use crate::backend::select;
-use crate::backend::spiller::_next_value;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -2039,7 +2038,7 @@ pub fn assigned(
         written: RefCell::default(),
         shaped: RefCell::default(),
         stepped: RefCell::default(),
-        first_fresh: _next_value(&body),
+        first_fresh: body.next_value(),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
@@ -2189,7 +2188,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
     if !body.insns().iter().any(|one| float_copy(one).is_some()) {
         return body.clone();
     }
-    let mut fresh = _next_value(body);
+    let mut fresh = body.next_value();
     let blocks = body
         .blocks
         .iter()

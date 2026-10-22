@@ -1596,7 +1596,7 @@ fn constant_fold_inst_operands_impl(
                 op,
                 BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
             ) {
-                return None;
+                return constfold::float_binary(context, *op, flags, ops[0], ops[1]);
             }
             constant_fold_binary_op_operands(context, env, *op, ops[0], ops[1])
         }

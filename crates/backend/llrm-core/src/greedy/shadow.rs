@@ -102,7 +102,7 @@ impl SpillWeightEnv for BodyEnv {
         &self,
         instr: &Insn,
     ) -> Option<(u32, u32)> {
-        crate::backend::coalesce::_copy(instr)
+        instr.copy_of()
     }
 
     fn pinned(
@@ -357,7 +357,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         &self,
         insn: &Insn,
     ) -> bool {
-        crate::backend::coalesce::_copy(insn).is_some()
+        insn.copy_of().is_some()
     }
 
     fn is_pure_def(

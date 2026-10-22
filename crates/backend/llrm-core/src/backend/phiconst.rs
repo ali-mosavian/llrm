@@ -83,8 +83,8 @@ pub fn shared(body: &LirBody) -> LirBody {
         return body.clone();
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let floating = crate::backend::ssaspill::floating(body);
-    let mut next = crate::backend::splitkit::_next_value(body);
+    let floating = crate::backend::regclass::floating(body);
+    let mut next = body.next_value();
     // (the phi's block, the phi's result) -> where the constant is made, what
     // it is, the new value, the edges.
     let mut made: IndexMap<i64, Vec<(Held, Loc)>> = IndexMap::default();
