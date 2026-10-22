@@ -1,17 +1,14 @@
 #!/bin/bash
 # pair.sh NAME BASE_SHA NEW_SHA: dist builds of both shas (llrm-c, llrm-qb, llrm-nib, nibfront), then rows m32 (tools/rows/run.sh), tools/sizes.py m16 (C+qb+nib), objsweep and
 # the tests/run outputs on a tree pinned to each sha; results in PAIR_SCRATCH/pair-NAME/ (rows-report.txt, sizes.txt, objsweep.txt, runs-*.txt, md5.txt, done).
-# PAIR_WT: a worktree under PAIR_SCRATCH whose checkout builds the shas (one per concurrent pair); PAIR_SCRATCH defaults to ~/scratch. A script of this name in a shared
+# Each sha is built in a worktree of its own (tools/pairs/build_sha.sh), never in a directory two builds share; PAIR_SCRATCH defaults to ~/scratch. A script of this name in a shared
 # scratch directory was overwritten by another session: this one lives in the repo and finds everything from its own path.
 set -u
 R=$(cd "$(dirname "$0")/../.." && pwd); S=${PAIR_SCRATCH:-$HOME/scratch}; N=$1; B=$2; W=$3; D=$S/pair-$N; mkdir -p $D
-cd "$S/${PAIR_WT:?PAIR_WT: a worktree to build the shas in}" || exit 2
 for p in "base $B" "new $W"; do set -- $p
-  T=$S/sbp-$2; ln -sfn $T $S/sb-$N-$1
-  if [ ! -x $T/dist/llrm-c ] || [ ! -e $T/ok ]; then
-    git checkout -q --detach $2 && bash $R/tools/pairs/pair_build.sh $S $2 > $D/build-$1.log 2>&1 && touch $T/ok || echo "build $1 failed" >> $D/status
-  fi
-  touch $T/dist/llrm-* $T/dist/nibfront
+  ln -sfn $S/sbp-$2 $S/sb-$N-$1
+  bash $R/tools/pairs/build_sha.sh $R $S $2 > $D/build-$1.log 2>&1 || echo "build $1 failed" >> $D/status
+  touch $S/sbp-$2/dist/llrm-* $S/sbp-$2/dist/nibfront
 done
 # A build is the sha the caller names, in a tree without changes: tools/stamp.py (a worktree moved during a build once gave a number for another commit).
 python3 $R/tools/stamp.py --expect-sha $B $S/sb-$N-base/dist/llrm-c && python3 $R/tools/stamp.py --expect-sha $W $S/sb-$N-new/dist/llrm-c || { echo "stamp refused" >> $D/status; exit 3; }
