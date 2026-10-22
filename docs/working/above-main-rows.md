@@ -38,6 +38,10 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-MS-1 | d_faces compile (`Annotated`, `PlainAccesses::update`) | O2 | Ir | not stated | 24.7 M | share of 1435 M (1.7%) | `update` recomputes the whole `Annotated` to compare it with the held one, 39 calls (w-3, licm-compile-cost.md) | funcattrs-port | 2026-11-04, Lazy-Annotated A+A', Ir measured in the PR | |
 | AM-MS-2 | d_faces compile (`Writes`) | O2 | Ir | not stated | 17.9 M | share of 1435 M (1.2%) | a `CallEffects` solve per change; goes with the deletion of `CallEffects` | funcattrs-port | 2026-11-02 first code (#3436), first Ir drop with it | #3436 |
 | AM-MS-3 | d_faces compile (`PlainAccesses::run`) | O2 | Ir | not stated | 15.0 M | share of 1435 M (1.0%) | the accesses graph made from `Annotated` for every access, 71 builds | funcattrs-port | 2026-11-06, Lazy-Annotated B, first Ir drop the same day | |
+| AM-C4-1 | quicksort m32 | O2,O3,Os | clocks | not stated | 194626 / 201881 / 230450 | +142 (+0.07%) / +133 (+0.07%) / +1362 (+0.59%) over #3600's base; code +16/+16/+4 B | cause not examined; the pair is #3600 against parity 257d36e2ad (`~/scratch/rows-c4pair/res`, 71 programs x 4 levels, all outputs ok) | splitkit | 2026-10-30, allocation rows | #3600 |
+| AM-C4-2 | nbody, x_bubble, x_base64 m32 | O1,O2,O3,Os | clocks | not stated | nbody 377442, x_bubble 88533, x_base64 9727 | +200 (+0.05%), +119 (+0.13%), +5 (+0.05%) over #3600's base | as AM-C4-1 | splitkit | 2026-10-30, allocation rows | #3600 |
+| AM-C4-3 | x_rle, x_list m32 | O2,O3 / Os | bytes | not stated | 251 / 127 | +16 (+6.4%) at -O2,-O3 (-O1 -16); x_list -Os +3 B | cause not examined; x_rle -O1 goes down by the same 16 | splitkit | 2026-10-30, allocation rows | #3600 |
+| AM-3582 | QCport mod_tex, snd | O2 / Os | bytes | not stated | not stated | +13 B / +12 B over #3582's base; QCport -263/-51/-78/-91 B elsewhere | cause not examined; the PR changes block frequencies (hot block 64.5 to 500.4, the pin's BFI 500.35) | splitkit | 2026-10-30, allocation rows | #3582 |
 
 ## To add by their owners
 
