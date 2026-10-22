@@ -1,23 +1,26 @@
-//! Selects every block of an LLVM IR file with the DAG path and prints what it makes.
+//! Selects every block of an LLVM IR file with the DAG path and prints what it
+//! makes.
 //!
 //!     cargo run --release -p llrm-core --example select_shadow -- FILE.ll
 //!
-//! Per function, one line: `FUNC name blocks=N built=B refused=R machine=OP:n,... unselected=NODE:n,...`.
-//! `machine` counts the machine nodes the selector left in each block's DAG, `unselected` the nodes it
-//! could not select; a block the builder or a legalizer refuses is `refused` with its reason on a
-//! `REFUSED name:block reason` line. `tools/dagisel/select_shadow.py` compares this with the pin's
+//! Per function, one line: `FUNC name blocks=N built=B refused=R
+//! machine=OP:n,... unselected=NODE:n,...`. `machine` counts the machine nodes
+//! the selector left in each block's DAG, `unselected` the nodes it
+//! could not select; a block the builder or a legalizer refuses is `refused`
+//! with its reason on a `REFUSED name:block reason` line.
+//! `tools/dagisel/select_shadow.py` compares this with the pin's
 //! `llc -stop-after=finalize-isel` on the same file.
 
 use std::collections::BTreeMap;
 
 use llrm_core::backend::selectiondag::actions::{Features, TargetLowering};
 use llrm_core::backend::selectiondag::builder::{BuilderTarget, build_block};
+use llrm_core::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
 use llrm_core::backend::selectiondag::dagisel_adapter::DagisAdapter;
 use llrm_core::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_core::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
 use llrm_core::backend::selectiondag::legalize_dag::DagLegalizer;
-use llrm_core::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_core::backend::selectiondag::legalize_types::TypeLegalizer;
+use llrm_core::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_core::backend::selectiondag::{ISD, MVT, SDValue};
 use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
@@ -27,16 +30,28 @@ use llrm_dagisel::x86_select::select_node;
 use llrm_mir::datalayout::DataLayout;
 
 fn opcode_name(code: u32) -> String {
-    table::MACHINE_OPCODES.iter().find(|(v, _)| u32::from(*v) == code).map_or_else(|| format!("#{code}"), |(_, n)| n.split('|').next().unwrap().to_string())
+    table::MACHINE_OPCODES
+        .iter()
+        .find(|(v, _)| u32::from(*v) == code)
+        .map_or_else(|| format!("#{code}"), |(_, n)| n.split('|').next().unwrap().to_string())
 }
 
 fn main() {
     let path = std::env::args().nth(1).expect("a .ll file");
-    let text: String = std::fs::read_to_string(&path).expect("readable").lines().filter(|l| !l.starts_with("target triple")).map(|l| format!("{l}\n")).collect();
+    let text: String = std::fs::read_to_string(&path)
+        .expect("readable")
+        .lines()
+        .filter(|l| !l.starts_with("target triple"))
+        .map(|l| format!("{l}\n"))
+        .collect();
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("a datalayout"));
+    let layout =
+        module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("a datalayout"));
     let target = BuilderTarget::m32();
-    let tli = TargetLowering::x86_32(Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false }, MVT::I32);
+    let tli = TargetLowering::x86_32(
+        Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false },
+        MVT::I32,
+    );
     let selector = Selector::new(table::TABLE);
     let mut hooks = X86Hooks::new(Options {
         cpu: Cpu::I486,
@@ -63,7 +78,16 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
+            let mut done = match build_block(
+                &module,
+                function,
+                &layout,
+                &target,
+                &llrm_x86_m32::M32,
+                &convention,
+                &mut info,
+                block,
+            ) {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);
@@ -74,7 +98,8 @@ fn main() {
             let dags: Vec<&mut llrm_core::backend::selectiondag::SelectionDAG> =
                 std::iter::once(&mut done.dag).chain(done.extra.iter_mut().map(|(_, b)| &mut b.dag)).collect();
             for dag in dags {
-                // The pin's order: combine, legalize types, combine, legalize the DAG, combine.
+                // The pin's order: combine, legalize types, combine, legalize
+                // the DAG, combine.
                 let mut lowering = X86Lowering { cmov: false };
                 DagCombiner::new(dag, &mut lowering, CombineLevel::BeforeLegalizeTypes).run();
                 if let Err(why) = TypeLegalizer::new(dag, &tli).run() {
@@ -95,7 +120,8 @@ fn main() {
                 let mut adapter = DagisAdapter::new(dag);
                 // Users before operands, as the pin walks `allnodes` backwards.
                 for node in reachable_users_first(&adapter) {
-                    // As `DoInstructionSelection`: nothing reads a node that matching made dead (the root has a handle).
+                    // As `DoInstructionSelection`: nothing reads a node that
+                    // matching made dead (the root has a handle).
                     let root = done_root;
                     if llrm_dagisel::dag::Dag::is_machine(&adapter, node)
                         || adapter.is_dead(node)
@@ -123,8 +149,13 @@ fn main() {
                 }
             }
         }
-        let list = |m: &BTreeMap<String, usize>| m.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(",");
-        println!("FUNC {name} blocks={blocks} built={built} machine={} unselected={}", list(&machine), list(&unselected));
+        let list =
+            |m: &BTreeMap<String, usize>| m.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(",");
+        println!(
+            "FUNC {name} blocks={blocks} built={built} machine={} unselected={}",
+            list(&machine),
+            list(&unselected)
+        );
     }
 }
 
@@ -151,11 +182,15 @@ fn reachable_users_first(adapter: &DagisAdapter<'_>) -> Vec<u32> {
     order
 }
 
-/// Whether the node is still read by a node reachable from the root (selection removes the rest).
+/// Whether the node is still read by a node reachable from the root (selection
+/// removes the rest).
 struct DagisAdapterView;
 
 impl DagisAdapterView {
-    fn dead(dag: &llrm_core::backend::selectiondag::SelectionDAG, node: u32) -> bool {
+    fn dead(
+        dag: &llrm_core::backend::selectiondag::SelectionDAG,
+        node: u32,
+    ) -> bool {
         let mut seen = std::collections::HashSet::new();
         let mut stack = vec![dag.get_root().node];
         while let Some(n) = stack.pop() {

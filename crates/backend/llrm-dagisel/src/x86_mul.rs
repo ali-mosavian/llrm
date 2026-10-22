@@ -1,20 +1,23 @@
-//! `ISD::SMUL_LOHI` / `ISD::UMUL_LOHI` selection ([L6085][case]): the one-operand `MUL`/`IMUL`,
-//! with an operand in `EAX` and the 64-bit product left in `EDX:EAX`.
+//! `ISD::SMUL_LOHI` / `ISD::UMUL_LOHI` selection ([L6085][case]): the
+//! one-operand `MUL`/`IMUL`, with an operand in `EAX` and the 64-bit product
+//! left in `EDX:EAX`.
 //!
 //! # How it works
-//! A translation of the pin's case for `i32` without `MULX` (no 486 or P5 has BMI2). Either
-//! operand folds from memory, the multiply being commutative; the product halves that are used
-//! are copied out of `EAX` and `EDX`.
+//! A translation of the pin's case for `i32` without `MULX` (no 486 or P5 has
+//! BMI2). Either operand folds from memory, the multiply being commutative; the
+//! product halves that are used are copied out of `EAX` and `EDX`.
 //!
-//! Numbered deviation: **SD303** `orderRegForMul` (swap so the operand already in `EAX` is the
-//! implicit one) is skipped: it reads the live-in physical register of a virtual `CopyFromReg`,
-//! which the DAG does not carry. At worst one extra copy. Owner sdag-c. Exit: live-in map in
-//! the adapter. Review 2026-12-10.
+//! Numbered deviation: **SD303** `orderRegForMul` (swap so the operand already
+//! in `EAX` is the implicit one) is skipped: it reads the live-in physical
+//! register of a virtual `CopyFromReg`, which the DAG does not carry. At worst
+//! one extra copy. Owner sdag-c. Exit: live-in map in the adapter. Review
+//! 2026-12-10.
 //!
 //! # Used by
 //! [`crate::x86_select::select_node`].
 //!
-//! [case]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6085
+//! [case]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6085
 
 use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt, x86};
@@ -22,8 +25,13 @@ use crate::x86_addr::AddrDag;
 use crate::x86_divrem::copy_results;
 use crate::x86_hooks::X86Hooks;
 
-/// Selects `node`; false when its type is one the pin's case has no row for at 32 bits.
-pub fn select_mul_lohi<D: AddrDag>(dag: &mut D, hooks: &X86Hooks, node: u32) -> bool {
+/// Selects `node`; false when its type is one the pin's case has no row for at
+/// 32 bits.
+pub fn select_mul_lohi<D: AddrDag>(
+    dag: &mut D,
+    hooks: &X86Hooks,
+    node: u32,
+) -> bool {
     let nvt = dag.value_type(SDValue::new(node, 0));
     if nvt != mvt::i32 {
         return false;

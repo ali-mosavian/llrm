@@ -1,12 +1,14 @@
-//! The pin's DAG instruction selector: the matcher table tblgen writes for the target and the
-//! interpreter that walks it.
+//! The pin's DAG instruction selector: the matcher table tblgen writes for the
+//! target and the interpreter that walks it.
 //!
 //! # How it works
-//! `llvm-tblgen -gen-dag-isel X86.td` writes a byte table that `SelectCodeCommon` interprets.
-//! `llrm-dagisel-gen` decodes that table once, drops what the target's CPU cannot run and checks
-//! in the result under `generated/`; [`interp::Selector`] is the interpreter. The DAG is
-//! reached through the [`dag::Dag`] trait and the target's hooks through [`dag::Hooks`].
-//! Regenerate with `tools/dagisel/regen.sh`; a test fails when the checked-in tables are stale.
+//! `llvm-tblgen -gen-dag-isel X86.td` writes a byte table that
+//! `SelectCodeCommon` interprets. `llrm-dagisel-gen` decodes that table once,
+//! drops what the target's CPU cannot run and checks in the result under
+//! `generated/`; [`interp::Selector`] is the interpreter. The DAG is
+//! reached through the [`dag::Dag`] trait and the target's hooks through
+//! [`dag::Hooks`]. Regenerate with `tools/dagisel/regen.sh`; a test fails when
+//! the checked-in tables are stale.
 //!
 //! # Used by
 //! `X86DAGToDAG` (piece C1) and the shadow harness (D0).
