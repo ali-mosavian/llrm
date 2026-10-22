@@ -488,3 +488,186 @@ mod builder {
         assert!(!dump.contains("store"), "{dump}");
     }
 }
+
+mod legalize_types {
+    use super::super::legalize_types::{LegalizeError, TypeLegalizer};
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    fn legalize(dag: &mut SelectionDAG, tli: &TargetLowering) -> Result<bool, LegalizeError> {
+        TypeLegalizer::new(dag, tli).run()
+    }
+
+    fn all_legal(dag: &mut SelectionDAG, tli: &TargetLowering) -> bool {
+        TypeLegalizer::new(dag, tli).all_legal()
+    }
+
+    /// `trunc(load i12 + load i12)` to a byte: before legalization the root
+    /// reads an `i12`, which no register holds. After it the add is an `i16`
+    /// add of extending loads, and the root is rewritten to read it.
+    #[test]
+    fn an_odd_width_add_is_promoted_and_its_user_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let i12 = EVT::Int(12);
+        let (a, b) = (load(&mut dag, i12, 1), load(&mut dag, i12, 2));
+        let sum = dag.get_node(ISD::Add, i12, &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[sum]);
+        dag.set_root(byte);
+        assert!(!all_legal(&mut dag, &tli));
+        assert_eq!(legalize(&mut dag, &tli), Ok(true));
+        assert!(all_legal(&mut dag, &tli));
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Truncate);
+        let wide = dag.operand(root, 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::Add, EVT::I16));
+        assert_ne!(dag.operand(wide, 0), dag.operand(wide, 1), "each operand is its own promoted load");
+        for operand in [dag.operand(wide, 0), dag.operand(wide, 1)] {
+            assert_eq!((dag.opcode(operand), dag.value_type(operand)), (ISD::Load, EVT::I16));
+        }
+    }
+
+    /// The load's chain result stands for the promoted load's: a node that
+    /// read the old chain would read a load nothing uses.
+    #[test]
+    fn a_promoted_loads_chain_users_follow() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let chain_user = dag.get_node(ISD::TokenFactor, EVT::OTHER, &[SDValue { node: a.node, res: 1 }, dag.entry_node()]);
+        dag.set_root(chain_user);
+        legalize(&mut dag, &tli).unwrap();
+        // A token factor of one chain and the entry is that chain.
+        let chain = dag.get_root();
+        assert_eq!(chain.res, 1);
+        assert_eq!(dag.value_type(SDValue { node: chain.node, res: 0 }), EVT::I16, "the promoted load");
+    }
+
+    /// An `i64` load truncated to a word reads the low half; the constants of
+    /// an `i64` are two `i32`.
+    #[test]
+    fn an_i64_constant_is_two_halves_and_logic_follows() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let k = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
+        let word = dag.get_node(ISD::Truncate, EVT::I32, &[k]);
+        dag.set_root(word);
+        legalize(&mut dag, &tli).unwrap();
+        assert!(all_legal(&mut dag, &tli));
+        assert_eq!(dag.constant(dag.get_root()), Some(0x5566_7788), "trunc of the low half is the low half");
+    }
+
+    /// A node nothing translated handles is refused by name rather than left
+    /// with an illegal type.
+    #[test]
+    fn an_unhandled_node_is_refused_by_name() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let a = load(&mut dag, EVT::Int(12), 1);
+        let b = load(&mut dag, EVT::Int(12), 2);
+        let shifted = dag.get_node(ISD::Shl, EVT::Int(12), &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+        dag.set_root(byte);
+        let error = legalize(&mut dag, &tli).unwrap_err();
+        assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
+    }
+}
+
+mod legalize_dag {
+    use super::super::legalize_dag::{DagLegalizer, Hooks, NoHooks};
+    use super::super::legalize_types::LegalizeError;
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    /// With `Add` on `i8` marked Promote and nothing doing it, the add
+    /// reaches the matcher in a type it has no instruction for. After: a
+    /// truncate of an `i16` add of any-extended operands.
+    #[test]
+    fn a_promoted_add_is_made_wide_and_truncated() {
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        tli.set_operation_action(ISD::Add, MVT::I8, Action::Promote);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I8, 1), load(&mut dag, EVT::I8, 2));
+        let sum = dag.get_node(ISD::Add, EVT::I8, &[a, b]);
+        dag.set_root(sum);
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Truncate, EVT::I8));
+        let wide = dag.operand(root, 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::Add, EVT::I16));
+        let (l, r) = (dag.operand(wide, 0), dag.operand(wide, 1));
+        assert_eq!((dag.opcode(l), dag.opcode(r)), (ISD::AnyExtend, ISD::AnyExtend));
+        assert_ne!(l, r);
+    }
+
+    /// A node the table says Expand, with no expansion translated, is refused
+    /// by name and not left in the DAG.
+    #[test]
+    fn an_expand_with_no_case_is_refused_by_name() {
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        tli.set_operation_action(ISD::Sub, MVT::I32, Action::Expand);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+        let diff = dag.get_node(ISD::Sub, EVT::I32, &[a, b]);
+        dag.set_root(diff);
+        let error = DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap_err();
+        assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Sub, .. }), "{error:?}");
+    }
+
+    /// Legal nodes are left alone: no node is added.
+    #[test]
+    fn legal_nodes_are_untouched() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+        let sum = dag.get_node(ISD::Add, EVT::I32, &[a, b]);
+        dag.set_root(sum);
+        let before = dag.node_count();
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        assert_eq!(dag.node_count(), before);
+        assert_eq!(dag.get_root(), sum);
+    }
+
+    /// Users are legalized before their operands, so a custom lowering sees
+    /// its operand as built: `mul(mul(a,b),c)` is lowered outer first and
+    /// the outer still reads a `mul`. Walking operands first showed it an
+    /// `add` already.
+    #[test]
+    fn a_custom_lowering_sees_its_operands_as_built() {
+        struct MulToAdd(Vec<ISD>);
+        impl Hooks for MulToAdd {
+            fn lower_operation(&mut self, dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+                let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+                self.0.push(dag.opcode(lhs));
+                Some(dag.get_node(ISD::Add, EVT::I32, &[lhs, rhs]))
+            }
+        }
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        tli.set_operation_action(ISD::Mul, MVT::I32, Action::Custom);
+        let mut dag = dag();
+        let (a, b, c) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3));
+        let inner = dag.get_node(ISD::Mul, EVT::I32, &[a, b]);
+        let outer = dag.get_node(ISD::Mul, EVT::I32, &[inner, c]);
+        dag.set_root(outer);
+        let mut hooks = MulToAdd(Vec::new());
+        DagLegalizer::new(&mut dag, &tli, &mut hooks).run().unwrap();
+        assert_eq!(hooks.0, vec![ISD::Mul, ISD::Load], "outer sees the inner mul; inner sees a load");
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Add);
+        assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Add, "the inner one was lowered too");
+    }
+}
