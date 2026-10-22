@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:af052acb65a2c3dc3eb300b14e77cee9a1dab1cdcf9315af8bdcfbe666de1363 -->
+<!-- src: crates/backend/llrm-core/src/backend/selectiondag.rs sha256:edd607745daddc6a3cef55688f87b686eea890149b00fd887e6f75c74586cdc6 -->
 
 # selectiondag
 
@@ -27,7 +27,9 @@ Arguments and returns go through the target's `Convention` (stack
 parameters are loads of fixed objects, register ones live-in copies;
 `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
-Indirect calls, intrinsics, switches, floats and values wider than a
+A `switch` of range clusters is the split-and-chain compare blocks of
+`visitSwitch` (jump tables and bit tests are refused). Indirect calls,
+intrinsics, floats and values wider than a
 register are refused (`Refused`) until their pieces land.
 
 ## Runs

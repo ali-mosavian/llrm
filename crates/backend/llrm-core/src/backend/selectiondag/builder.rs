@@ -11,6 +11,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, Val
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+mod switch;
+
 use crate::backend::isel::{Convention, Parameter, convention_for};
 use llrm_lir::registers::RegId;
 
@@ -54,6 +56,9 @@ pub struct BlockDag {
     pub phi_updates: Vec<(ValueId, u32)>,
     /// The argument registers copied to virtual registers, in the entry block.
     pub live_ins: Vec<(RegId, u32)>,
+    /// The blocks a `switch` lowering made, built after it: their ids start
+    /// at the function's block capacity.
+    pub extra: Vec<(BlockId, BlockDag)>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -68,25 +73,8 @@ pub fn build_block(
     info: &mut FunctionLoweringInfo,
     block: BlockId,
 ) -> Result<BlockDag, Refused> {
-    let mut builder = Builder {
-        module,
-        function,
-        layout,
-        target,
-        arch,
-        convention,
-        info,
-        live_ins: Vec::new(),
-        dag: SelectionDAG::new(target.dag),
-        node_map: IdMap::new(),
-        pending_loads: Vec::new(),
-        pending_exports: Vec::new(),
-        constants_out: HashMap::new(),
-        phi_updates: Vec::new(),
-        block,
-    };
-    builder.dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
-    builder.dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
+    let order = function.layout().to_vec();
+    let mut builder = Builder::new(module, function, layout, target, arch, convention, info, block, order, function.block_capacity() as u32, None);
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
     }
@@ -96,8 +84,69 @@ pub fn build_block(
     }
     let root = builder.control_root();
     builder.dag.set_root(root);
-    Ok(BlockDag { dag: builder.dag, phi_updates: builder.phi_updates, live_ins: builder.live_ins })
+    let switch_name = dag_name(&builder.dag, block);
+    let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, .. } = builder;
+    // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that is final
+    let mut extra = Vec::new();
+    let mut next = next_synthetic;
+    for (case, cond) in deferred {
+        let mut one = Builder::new(module, function, layout, target, arch, convention, info, case.this_bb(), order.clone(), next, Some(switch_name.clone()));
+        one.visit_switch_case(case, cond)?;
+        let root = one.control_root();
+        one.dag.set_root(root);
+        next = one.next_synthetic;
+        extra.push((case.this_bb(), BlockDag { dag: one.dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new() }));
+    }
+    Ok(BlockDag { dag, phi_updates, live_ins, extra })
 }
+
+fn dag_name(dag: &SelectionDAG, block: BlockId) -> String {
+    dag.block_names.get(block.0 as usize).cloned().unwrap_or_default()
+}
+
+impl<'a> Builder<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        module: &'a Module,
+        function: &'a Function,
+        layout: &'a DataLayout,
+        target: &'a BuilderTarget,
+        arch: &'a dyn llrm_target::Target,
+        convention: &'a Convention,
+        info: &'a mut FunctionLoweringInfo,
+        block: BlockId,
+        order: Vec<BlockId>,
+        next_synthetic: u32,
+        synthetic_name: Option<String>,
+    ) -> Builder<'a> {
+        let mut dag = SelectionDAG::new(target.dag);
+        dag.global_names = module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
+        dag.block_names = (0..function.block_capacity()).map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))).collect();
+        let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+        dag.block_names.resize(next_synthetic as usize, name);
+        Builder {
+            module,
+            function,
+            layout,
+            target,
+            arch,
+            convention,
+            info,
+            live_ins: Vec::new(),
+            dag,
+            node_map: IdMap::new(),
+            pending_loads: Vec::new(),
+            pending_exports: Vec::new(),
+            constants_out: HashMap::new(),
+            phi_updates: Vec::new(),
+            block,
+            order,
+            deferred: Vec::new(),
+            next_synthetic,
+        }
+    }
+}
+
 
 struct Builder<'a> {
     module: &'a Module,
@@ -115,6 +164,10 @@ struct Builder<'a> {
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     block: BlockId,
+    /// The blocks in layout order, with the ones a switch lowering adds.
+    order: Vec<BlockId>,
+    deferred: Vec<(switch::CaseBlock, Operand)>,
+    next_synthetic: u32,
 }
 
 fn flags_of(flags: llrm_mir::opcode::Flags) -> SDNodeFlags {
@@ -490,7 +543,7 @@ impl Builder<'_> {
             Opcode::Alloca { .. } if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
-            Opcode::Switch => return Err(Refused("switch (A2)")),
+            Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
             Opcode::Invoke(_) => return Err(Refused("invoke")),
             _ => return Err(Refused("instruction not in the scalar subset")),
@@ -736,9 +789,8 @@ impl Builder<'_> {
     }
 
     fn next_block(&self) -> Option<BlockId> {
-        let layout = self.function.layout();
-        let at = layout.iter().position(|block| *block == self.block)?;
-        layout.get(at + 1).copied()
+        let at = self.order.iter().position(|block| *block == self.block)?;
+        self.order.get(at + 1).copied()
     }
 
     /// `HandlePHINodesInSuccessorBlocks`: the incoming value of each phi of
