@@ -538,7 +538,7 @@ const ROWS: &[Row] = &[
         Missing,
         "coalesce.rs, coalescer/",
         "",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry coalesce@10 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "splitkit; 2026-11-06 (C5 dead copies through eliminateDeadDefs), 2026-11-14 (C2 physical-register copies, fires: 3256 in 88 of 130 m16 runs of the pin), 2026-11-20 (C1 lanes and C6 undef flags, fire: 5316 sub-register copies in 88 of 130), C3 implicit defs after w-1 rows 59/61; C7 terminal rule and debug values cannot fire (off at the pin, no -g). Each untranslated function, its permalink and blocker: docs/working/row63-66-plan.md. (premise below: start only where ours exceeds pin-with) registry coalesce@10 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Rename Disconnected Subregister Components",
@@ -560,7 +560,7 @@ const ROWS: &[Row] = &[
         Missing,
         "allocate.rs, greedy/, splitkit",
         "-regalloc=fast",
-        "splitkit; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry allocate@11 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "splitkit; 2026-11-10 (trySplitAroundHintReg and hint recoloring: collectHintInfo, getBrokenHintFreq, tryHintRecoloring, tryHintsRecoloring, aboutToRemoveInterval), 2026-11-12 (callee-saved cost: tryAssignCSRFirstTime, initializeCSRCost, calcSpillCost); the rest of RegAllocGreedy.cpp is translated, statistics and pass plumbing excepted. Each function and permalink: docs/working/row63-66-plan.md. (premise below: start only where ours exceeds pin-with) registry allocate@11 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Tile Register Configure",
@@ -580,9 +580,9 @@ const ROWS: &[Row] = &[
     row(
         "Virtual Register Rewriter",
         Missing,
-        "allocate.rs, parcopy.rs",
+        "rewriter.rs, parcopy.rs",
         "",
-        "splitkit; 2026-11-13 (premise below: start only where ours exceeds pin-with). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "splitkit; 2026-11-20: rewriter.rs translates VirtRegRewriter::rewrite and handleIdentityCopy (DEVIATE W1-W4); sub-register operands (SuperKills, SuperDefs, readsUndefSubreg) wait for C1 lanes on 2026-11-20, kill/dead flags and block live-ins and expandCopyBundle have no LIR counterpart (parcopy sequences copies). (premise below: start only where ours exceeds pin-with). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Stack Slot Coloring",
