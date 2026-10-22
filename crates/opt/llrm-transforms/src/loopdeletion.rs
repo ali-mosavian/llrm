@@ -252,6 +252,7 @@ pub(crate) fn contains_irreducible_cfg(
 fn is_loop_dead(
     run: &mut Run,
     analyzed: &Analyzed,
+    se: &mut ScalarEvolution,
     lp: Loop,
     exiting_blocks: &[BlockId],
     exit_block: Option<BlockId>,
@@ -318,7 +319,6 @@ fn is_loop_dead(
         return false;
     }
 
-    let mut se = ScalarEvolution::new();
     let cx = cx_of(run, analyzed);
     let mut work = vec![lp];
     while let Some(current) = work.pop() {
@@ -783,22 +783,22 @@ fn delete_dead_loop(
 fn break_backedge_if_not_taken(
     run: &mut Run,
     analyzed: &Analyzed,
+    se: &mut ScalarEvolution,
     lp: Loop,
 ) -> Result {
     if lp.get_loop_latch(run.function).is_none() {
         return Result::Unmodified;
     }
     let header = lp.get_header();
-    let mut se = ScalarEvolution::new();
     let (max_zero, btc_zero, non_zero) = {
         let cx = cx_of(run, analyzed);
         let is_zero = |se: &ScalarEvolution, s| se.as_constant(s).is_some_and(|value| value.is_zero());
         let btc_max = se.get_backedge_taken_count(&cx, header, ExitCountKind::ConstantMaximum);
-        if is_zero(&se, btc_max) {
+        if is_zero(se, btc_max) {
             (true, true, false)
         } else {
             let btc = se.get_backedge_taken_count(&cx, header, ExitCountKind::Exact);
-            let zero = is_zero(&se, btc);
+            let zero = is_zero(se, btc);
             let non_zero = !zero && !se.is_could_not_compute(btc) && se.is_known_non_zero(&cx, btc);
             (false, zero, non_zero)
         }
@@ -819,6 +819,7 @@ fn break_backedge_if_not_taken(
 fn delete_loop_if_dead(
     run: &mut Run,
     analyzed: &Analyzed,
+    se: &mut ScalarEvolution,
     lp: Loop,
 ) -> Result {
     // We can only remove the loop if there is a preheader that we can branch
@@ -864,7 +865,7 @@ fn delete_loop_if_dead(
 
     // Finally, we have to check that the loop really is dead.
     let mut changed = false;
-    if !is_loop_dead(run, analyzed, lp, &exiting_blocks, exit_block, &mut changed, preheader) {
+    if !is_loop_dead(run, analyzed, se, lp, &exiting_blocks, exit_block, &mut changed, preheader) {
         return if changed { Result::Modified } else { Result::Unmodified };
     }
     delete_dead_loop(run, lp, preheader);
@@ -884,7 +885,11 @@ pub fn delete_loops(run: &mut Run) -> bool {
         }
         let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
         let alone = lp.get_parent_loop().is_none() && lp.get_sub_loops().next().is_none();
-        let mut result = delete_loop_if_dead(run, &analyzed, lp);
+        // One SE for the loop's two questions while the function is as the
+        // first found it: a pass-manager SE would outlive both, a hoist
+        // makes the first one's answers stale.
+        let mut se = ScalarEvolution::new();
+        let mut result = delete_loop_if_dead(run, &analyzed, &mut se, lp);
         // If we can prove the backedge isn't taken, just break it and be done.
         // This leaves the loop structure in place which means it can handle
         // dispatching to the right exit based on whatever loop invariant
@@ -892,7 +897,10 @@ pub fn delete_loops(run: &mut Run) -> bool {
         let deleted = result == Result::Deleted;
         if !deleted {
             let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
-            result = merge(result, break_backedge_if_not_taken(run, &analyzed, lp));
+            if result != Result::Unmodified {
+                se = ScalarEvolution::new();
+            }
+            result = merge(result, break_backedge_if_not_taken(run, &analyzed, &mut se, lp));
         }
         if result == Result::Unmodified {
             continue;
