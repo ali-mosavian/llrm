@@ -210,6 +210,7 @@ pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
 pub mod jumpthreading;
+pub mod jumptableswitch;
 #[cfg(test)]
 mod jumpthreading_tests;
 pub mod knownpred;

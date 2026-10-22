@@ -793,6 +793,8 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
+                // JumpTableToSwitchPass, PassBuilderPipelines.cpp#L672.
+                slot("jumptableswitch@672", Box::new(crate::jumptableswitch::JumpTableToSwitch)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
