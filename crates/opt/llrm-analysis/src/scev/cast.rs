@@ -675,7 +675,7 @@ impl ScalarEvolution {
                     let min = self.get_signed_range(cx, step).get_signed_min();
                     let n = self.get_constant(Ap::all_ones(bit_width).sub(Ap::new(bit_width, min)));
                     if self.is_loop_backedge_guarded_by_cond_pred(cx, l, llrm_mir::opcode::IntPredicate::Ugt, ar, n)
-                        || self.is_known_on_every_iteration_pred(cx, llrm_mir::opcode::IntPredicate::Ugt, ar, n)
+                        || self.is_known_on_every_iteration(cx, llrm_mir::opcode::IntPredicate::Ugt, ar, n)
                     {
                         // Cache knowledge of AR NW, which is propagated to this
                         // AddRec. Negative step causes unsigned wrap, but it
