@@ -5987,6 +5987,13 @@ impl Compiler {
                 _ => None,
             }) {
                 let (operand, type_id) = self.expression(&arguments[0])?;
+                // BC hands the routine a LONG whose high word is zero for an
+                // INTEGER: HEX$(-1%) is FFFF, not FFFFFFFF.
+                let (operand, type_id) = if type_id == INTEGER {
+                    (self.convert(operand, INTEGER, UNSIGNED_INTEGER)?, UNSIGNED_INTEGER)
+                } else {
+                    (operand, type_id)
+                };
                 let operand = self.convert(operand, type_id, LONG)?;
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
