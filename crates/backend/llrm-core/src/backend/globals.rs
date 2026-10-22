@@ -231,7 +231,9 @@ impl Initializer<'_> {
             },
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
-            // which the guard never indexes; the asm printer writes zeros.
+            // which the guard never indexes. `emitGlobalConstantImpl` writes
+            // zeros for both:
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L4560
             ConstantKind::Null | ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison => {
                 self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize])
             }
