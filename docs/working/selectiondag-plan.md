@@ -201,10 +201,16 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
 | SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
 | SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
-| SD34 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
-| SD35 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD34 | sdag-c | address folds not translated: BEXTR, x32 `any_extend`, sign/zero-extend re-association | `llrm-dagisel/src/x86_addr.rs` |
+| SD35 | sdag-c | no 64-bit, x32, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
+| SD36 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
+| SD37 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
+| SD38 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
+| SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
+| SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
+| SD42 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
 
-Next free: **SD36**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
+Next free: **SD43**. A PR that takes numbers adds their rows and moves this line to one past its highest; `tests/selectiondag_registry.rs` fails on a number declared twice or without a row, and on a stale line.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941

@@ -15,7 +15,7 @@
 //! the nodes the action table makes Custom (integer types only here; floats
 //! are B1d).
 //!
-//! DEVIATE SD35: not translated yet, so the nodes are the plain forms: the
+//! DEVIATE SD42: not translated yet, so the nodes are the plain forms: the
 //! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
 //! `ADD`/`AND` as flags, the `SUB 0, x` and `XOR` forms of `EmitCmp`), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
