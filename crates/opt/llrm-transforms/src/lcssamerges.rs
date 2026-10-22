@@ -197,7 +197,8 @@ pub fn _merged(
 ) -> Result<bool, String> {
     // The phis that reach each block. A join stands for the exits behind it: a
     // block below one that sees nothing else needs no phi (SSAUpdater makes a
-    // phi only where the values differ).
+    // phi only where the values differ, as in `formLCSSAForInstructionsImpl`:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LCSSA.cpp#L169-L262
     let mut joins = exits.clone();
     let reaching = loop {
         let mut reaching = needed
@@ -241,7 +242,8 @@ pub fn _merged(
             }
             seen
         };
-        let Some(&first) = more.iter().find(|&&at| !above(at).iter().any(|up| more.contains(up))).or(more.first()) else {
+        let Some(&first) = more.iter().find(|&&at| !above(at).iter().any(|up| more.contains(up))).or(more.first())
+        else {
             break reaching;
         };
         joins.insert(first);

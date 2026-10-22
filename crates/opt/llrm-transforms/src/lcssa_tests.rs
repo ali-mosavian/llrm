@@ -381,6 +381,10 @@ b26:
 }
 ",
     );
-    assert_eq!(closed.lines().filter(|line| line.contains(".lcssa") && line.contains(" = phi ")).count(), 3, "{closed}");
+    assert_eq!(
+        closed.lines().filter(|line| line.contains(".lcssa") && line.contains(" = phi ")).count(),
+        3,
+        "{closed}"
+    );
     assert!(closed.contains("add i16 %s.lcssa2, 1"), "{closed}");
 }
