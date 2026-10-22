@@ -27,7 +27,7 @@ flock "$S/tgt-dist.lock" bash -c '
   git -C "$REPO" worktree add -q --detach "$W" "$FULL"
   at() { [ "$(git -C "$W" rev-parse HEAD)" = "$FULL" ] || { echo "pair_build: $W is at $(git -C "$W" rev-parse --short HEAD), not $FULL $1" >&2; exit 1; }; }
   at "before the build"
-  (cd "$W" && nice -n 10 env RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
+  (cd "$W" && nice -n 10 env SOURCE_DATE_EPOCH=0 RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
   at "after the build"
   mkdir -p $T/dist && cp -p $B/dist/llrm-c $B/dist/llrm-qb $B/dist/llrm-nib $B/dist/nibfront $B/dist/*.d $T/dist/ && for t in jwasm jwlink dosbox-x; do [ -e $B/dist/$t ] && cp -p $B/dist/$t $T/dist/; done
   { echo "sha: $FULL"; echo "cmd: build --profile dist --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront (${PAIR_CARGO:-buildslot cargo}, CARGO_TARGET_DIR=$B)"; (cd $T/dist && md5sum *); } > $T/ok.part
