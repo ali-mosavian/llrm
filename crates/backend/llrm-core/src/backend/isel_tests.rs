@@ -5982,9 +5982,10 @@ fn test_an_undef_initializer_is_zero_bytes() {
     assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }
 
-/// Old: a switch lookup table with `poison` holes (the pin's holes for cases the
-/// guard never reaches) was refused as "a poison initializer": item.c at every
-/// level once a conditional-branch chain became a `switch`. The holes are zero.
+/// Old: a switch lookup table with `poison` holes (the pin's holes for cases
+/// the guard never reaches) was refused as "a poison initializer": item.c at
+/// every level once a conditional-branch chain became a `switch`. The holes are
+/// zero.
 #[test]
 fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
     use crate::backend::masm::{Datum, Label};

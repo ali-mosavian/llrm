@@ -803,6 +803,15 @@ def parity_smoke_module():
     return parity_smoke
 
 
+def compute_head_qbrt_failures() -> set[str]:
+    """The tests/qbrt differential's failing results on the head itself (binaries built), once per head sha."""
+    stage("head-qbrt")
+    git("checkout", "-q", "--detach", BASE)
+    if stale := ensure_bins():
+        raise SystemExit(f"the head's own binaries: {stale}")
+    return parity_smoke_module().qbrt_failures(smoke_bins())
+
+
 def compute_head_group_failures() -> set[str]:
     """The tests/run groups' failing programs on the head itself (check origin/feat/parity out, build its binaries when stale), once per head sha."""
     stage("head-groups")
@@ -841,6 +850,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     whole = parity_smoke_module().runs_whole_groups(files)
     if whole:
         head_failed = head_failed | head_failures(tested_base, compute_head_group_failures, cache=HEAD_FAILURES / "groups")
+        head_failed = head_failed | head_failures(tested_base, compute_head_qbrt_failures, cache=HEAD_FAILURES / "qbrt")
     compiler = parity_smoke_module().touches_the_compiler(files)
     if compiler:
         head_failed = head_failed | head_failures(tested_base, compute_head_qcport_failures, cache=HEAD_FAILURES / "qcport")
@@ -857,7 +867,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     merged_failed, last = smoke_failures(known)
     print(last)
     if whole:
-        merged_failed = merged_failed | parity_smoke_module().group_failures(smoke_bins())
+        merged_failed = merged_failed | parity_smoke_module().group_failures(smoke_bins()) | parity_smoke_module().qbrt_failures(smoke_bins())
     if compiler:
         merged_failed = merged_failed | parity_smoke_module().qcport_failures(smoke_bins())
     if unit_tests_of(merged_failed - head_failed):
