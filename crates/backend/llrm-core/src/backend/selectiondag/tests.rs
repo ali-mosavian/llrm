@@ -408,7 +408,7 @@ mod builder {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 let name = format!("{}:{}", global.name.as_deref().unwrap(), function.block(block).name.as_deref().unwrap_or(""));
-                match build_block(&module, function, &layout, &target, &convention, &mut info, block) {
+                match build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block) {
                     Ok(done) => {
                         built.insert(name, normalized(&done.dag.dump()));
                     }
@@ -449,6 +449,43 @@ mod builder {
         for (name, dag) in &ours {
             assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
         }
+    }
+
+    /// A direct call: `callseq_start`, the stack stores, `X86ISD::CALL`,
+    /// `callseq_end` and the result copied from `$eax`, as in the pin. A call
+    /// is refused before this piece.
+    #[test]
+    fn calls_match_the_pins_initial_dag() {
+        let ll = include_str!("golden/calls.ll");
+        let pin = pin_blocks(include_str!("golden/calls.pin.txt"));
+        let (ours, refused) = our_blocks(ll);
+        assert_eq!(refused, Vec::<String>::new());
+        assert_eq!(ours.len(), 2);
+        for (name, dag) in &ours {
+            assert_eq!(dag, pin.get(name).expect("the pin has the block"), "block {name}");
+        }
+    }
+
+    /// A `watcallcc` call passes its first four word arguments in AX, DX, BX,
+    /// CX: the call's register copies are `CopyToReg` of those, in that order,
+    /// glued, each read back as an operand of `X86ISD::CALL`. A call that
+    /// left them on the stack would show `store` nodes instead.
+    #[test]
+    fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
+        let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+            declare watcallcc i16 @w(i16, i16, i16, i16)\n\
+            define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  %r = call watcallcc i16 @w(i16 %a, i16 %b, i16 %c, i16 %d)\n  ret i16 %r\n}\n";
+        let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let built = build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap()).unwrap_or_else(|why| panic!("{}", why.0));
+        let dump = built.dag.dump();
+        let copies: Vec<&str> = dump.lines().filter(|line| line.contains("CopyToReg") && line.contains(" $")).collect();
+        let registers: Vec<&str> = copies.iter().filter_map(|line| line.split("Register:i16 $").nth(1)?.split(',').next()).collect();
+        assert_eq!(registers, ["ax", "dx", "bx", "cx", "ax"], "four arguments, then the result:\n{dump}");
+        assert!(!dump.contains("store"), "{dump}");
     }
 }
 
@@ -711,5 +748,60 @@ mod expand_node {
         assert_eq!(dag.opcode(root), ISD::Rotl);
         let amount = dag.operand(root, 1);
         assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(8), EVT::I8));
+    }
+}
+
+mod setcc_result {
+    use super::super::legalize_types::TypeLegalizer;
+    use super::*;
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+
+    fn load(dag: &mut SelectionDAG, vt: EVT, slot: i32) -> SDValue {
+        let ptr = dag.get_register(EVT::I32, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot) };
+        dag.get_load(vt, chain, ptr, info)
+    }
+
+    /// `select (icmp slt a, b), x, y`: the compare is an `i1`, which no register
+    /// holds. 73 of 160 functions of the shadow corpus stopped here ("SetCC:
+    /// promote result"). After: an `i8` compare (the target's result type)
+    /// zero-extended-in-register into the select's condition, and nothing
+    /// illegal reachable.
+    #[test]
+    fn an_i1_compare_feeding_a_select_is_promoted_to_i8() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b, x, y) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I32, 3), load(&mut dag, EVT::I32, 4));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
+        let pick = dag.get_select(EVT::I32, test, x, y);
+        dag.set_root(pick);
+        let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+        assert!(!legalizer.all_legal());
+        assert_eq!(legalizer.run(), Ok(true));
+        assert!(legalizer.all_legal());
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::Select);
+        let cond = dag.operand(root, 0);
+        // `zext i8 (and (anyext (setcc i8)), 1)`: the `i1` was promoted to the setcc's own `i8`.
+        assert_eq!(dag.value_type(cond), EVT::I8);
+        let setcc = (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).find(|&v| dag.opcode(v) == ISD::SetCC && dag.value_type(v) == EVT::I8);
+        assert!(setcc.is_some(), "an i8 setcc exists");
+    }
+
+    /// A compare consumed as an `i1` and widened: `zext i32 (setcc i1)` is the
+    /// promoted compare masked to one bit.
+    #[test]
+    fn a_zero_extended_i1_compare_is_masked_to_one_bit() {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = dag();
+        let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+        let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
+        let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
+        dag.set_root(wide);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I32));
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
     }
 }

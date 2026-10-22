@@ -15,7 +15,7 @@ LLC = os.environ.get("LLC") or str(Path.home() / "scratch/llvm-build-assert/bin/
 
 def initial_dags(ll: Path) -> str:
     run = subprocess.run(
-        [LLC, "-O2", "-mattr=-sse", "-disable-cgp", "-disable-lsr", "-debug-only=isel", "-o", "/dev/null", str(ll)],
+        [LLC, "-O2", "-mattr=-sse", "-disable-cgp", "-disable-lsr", "-relocation-model=static", "-debug-only=isel", "-o", "/dev/null", str(ll)],
         capture_output=True, text=True, check=True,
     )
     keep, out = False, []

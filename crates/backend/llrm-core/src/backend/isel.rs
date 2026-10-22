@@ -457,22 +457,40 @@ pub(crate) fn convention(
 ) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
-    in_the_frame(&function.parameter_attrs)?;
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
         _ if interrupt => crate::backend::masm::interrupt_parameters(),
         _ => arch.first_argument_offset(far(global)?),
     };
-    let (_, _, variadic) = module.signature(function.ty);
-    let Passing { in_order, pops, registers } = passing(arch, function.calling_convention, variadic)?;
+    let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
+    convention_for(module, layout, arch, first, function.calling_convention, function.ty, &param_types, &function.parameter_attrs)
+}
+
+/// The convention of a function type's `types`, which is `function`'s
+/// parameters or, for a call, its arguments': where each arrives, where the
+/// result leaves, and what is popped. `first` is the displacement of the
+/// first stack argument.
+pub(crate) fn convention_for(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    function_type: TypeId,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    in_the_frame(parameter_attrs)?;
+    let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
+    let (_, _, variadic) = module.signature(function_type);
+    let Passing { in_order, pops, registers } = passing(arch, calling_convention, variadic)?;
     let types = &module.context.types;
-    let sizes = function
-        .parameters()
+    let sizes = param_types
         .iter()
         .enumerate()
-        .map(|(index, &one)| match byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
+        .map(|(index, &ty)| match byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
             Some(ty) => byval_bytes(module, layout, arch, ty),
-            None => size_of(module, layout, function.value(one).ty),
+            None => size_of(module, layout, ty),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut widths = sizes.iter().map(|&width| slot(arch, width)).collect::<Vec<_>>();
@@ -486,17 +504,16 @@ pub(crate) fn convention(
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
-        let classes: Vec<Option<&str>> = (0..function.parameters().len())
-            .map(|index| class_of(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+        let classes: Vec<Option<&str>> = (0..param_types.len())
+            .map(|index| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
             .collect();
-        let kinds: Vec<_> = function
-            .parameters()
+        let kinds: Vec<_> = param_types
             .iter()
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| {
-                entry.kind(argument_of(types, function.value(one).ty, size, *class), arch.stack_slot_bytes())
+            .map(|((&ty, &size), class)| {
+                entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes())
             })
             .collect();
         let placed = entry.place(&kinds);
@@ -540,17 +557,17 @@ pub(crate) fn convention(
     }
     for (index, parameter) in parameters.iter_mut().enumerate() {
         if let (Parameter::Cell(disp), Some(_)) =
-            (&*parameter, byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
+            (&*parameter, byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
         {
             *parameter = Parameter::Bytes(*disp);
         }
     }
-    let (result, _, _) = module.signature(function.ty);
+    let (result, _, _) = module.signature(function_type);
     if interrupt && !types.is_void(result) {
         return refuse("an interrupt handler that returns a value");
     }
     // A float leaves in st(0), which no register names.
-    let described = entry(arch, function.calling_convention, variadic);
+    let described = entry(arch, calling_convention, variadic);
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
         Vec::new()
     } else {
@@ -561,8 +578,8 @@ pub(crate) fn convention(
     let result_slot = described.is_some_and(|one| {
         hidden_slot_popped_by_callee(
             one,
-            (0..function.parameters().len()).map(|index| {
-                llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))
+            (0..param_types.len()).map(|index| {
+                llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))
             }),
         )
     });
