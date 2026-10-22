@@ -6883,12 +6883,18 @@ impl Selector<'_, '_, '_> {
     /// bytes it names are read; else `rep movsd` through es:di, the tail by
     /// `movsw` and `movsb`, as `memset` does its fill.
     ///
-    /// DEVIATE I1 (no number yet): beyond the moves the pin's
+    /// DEVIATE I1 (AM-I1, priced): beyond the moves the pin's
     /// `EmitTargetCodeForMemcpy` (X86SelectionDAGInfo.cpp#L328-L421) returns
     /// the generic path, a `memcpy` libcall, for a size over
     /// `getMaxInlineSizeThreshold` (128) and for an alignment under 4; ours is
-    /// `rep movsd` for both, the runtime having no `memcpy`. Exit: a runtime
-    /// `memcpy` (the C runtime's owner, runtime/c), then the libcall here.
+    /// `rep movsd` for both, the runtime having no `memcpy`. Price at -Os,
+    /// 2026-10-23: QCport 5 `rep movsd` copies, none over 128 bytes (0 modules
+    /// would change); tests/run/c and bench m16 16 copies, 5 over 128 bytes
+    /// (scroll 3840, 3840, 4000; es_across_copy 200; mem_length_boundaries_m32
+    /// 20000), m32 36 and 10 (those and huge_runs 65536 x2,
+    /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a libcall
+    /// would move. Exit: a runtime `_memcpy` in each C target and a target
+    /// "has memcpy" fact, then the libcall here, queued after the tuning phase.
     ///
     /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
     /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;
