@@ -158,11 +158,20 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
-| SD20 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD20 | sdag-c | matcher jumps count items; `ByHwMode` resolved at generation | `llrm-dagisel/src/interp.rs` |
+| SD21 | sdag-c | no `mayRaiseFPException`/`NoFPExcept` in the interpreter | `llrm-dagisel/src/interp.rs` |
+| SD22 | sdag-c | no `MatchStateUpdater` around complex patterns | `llrm-dagisel/src/interp.rs` |
+| SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
+| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD33 | sdag-c | address mask-and-shift folds and extension re-association not yet translated | `llrm-dagisel/src/x86_addr.rs` |
+| SD34 | sdag-c | no 64-bit, x32, 16-bit, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
+| SD35 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
+| SD36 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
+| SD37 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
 | SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
 
-Next free: **SD32**.
+Next free: **SD38**.
 
 [isel-run]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L599
 [isel-cg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L941
