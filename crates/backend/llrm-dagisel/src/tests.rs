@@ -497,3 +497,33 @@ mod address_folds {
         assert_eq!(constant_of_node(&dag, dag.nodes[index.node as usize].ops[1]), Some(3));
     }
 }
+
+mod select_without_cmov {
+    use super::*;
+    use crate::dag::Dag;
+    use crate::generated::ids::x86isd;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    /// `X86ISD::CMOV f, t, cc, (CMP a, b)` for a cpu without the instruction.
+    fn select(cpu: Cpu, vt: crate::matcher::Vt) -> (TestDag, u32) {
+        let mut dag = TestDag::new();
+        let a = dag.input(1, vt);
+        let b = dag.input(2, vt);
+        let (t, f) = (dag.input(3, vt), dag.input(4, vt));
+        let flags = SDValue::new(dag.node(x86isd::CMP, &[mvt::i32], &[a, b]), 0);
+        let cc = dag.target_constant(4, mvt::i8);
+        let cmov = dag.node(x86isd::CMOV, &[vt, mvt::i32], &[f, t, cc, flags]);
+        let mut hooks = X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true });
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
+        (dag, cmov)
+    }
+
+    #[test]
+    fn a_select_on_flags_is_the_branch_pseudo_not_the_instruction() {
+        for (vt, pseudo) in [(mvt::i32, "CMOV_GR32"), (mvt::i16, "CMOV_GR16"), (mvt::i8, "CMOV_GR8")] {
+            let (dag, cmov) = select(Cpu::I486, vt);
+            assert_eq!(selected(&dag, cmov), pseudo);
+        }
+    }
+}
