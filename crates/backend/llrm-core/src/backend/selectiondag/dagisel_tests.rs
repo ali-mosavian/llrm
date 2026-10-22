@@ -11,7 +11,7 @@ use super::mvt::EVT;
 use super::{DagConfig, SDValue, SelectionDAG};
 
 fn hooks() -> X86Hooks {
-    X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true })
+    X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32 })
 }
 
 fn mem_info() -> MemInfo {
