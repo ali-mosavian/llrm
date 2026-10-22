@@ -65,7 +65,8 @@ fn test_only_omax_searches_every_shape() {
 
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc
 /// 573-694) for the passes this compiler has: -O1 the scalar ones and the last
-/// call inlined, -O2 adds inlining, gcse and sibling calls, -O3
+/// call inlined and sibling calls (the pin's TailCallElim also runs at -O1:
+/// PassBuilderPipelines.cpp:1677, #3514), -O2 adds inlining and gcse, -O3
 /// peeling, unswitching, complete copies of loops that grow the code, and the
 /// larger inline threshold. Before, -O1 and -O2 differed by loop copies alone
 /// and -O2 let a complete copy grow the code. Pattern fill is the one
@@ -94,7 +95,7 @@ fn each_level_selects_gcc_s_passes() {
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
     // -O1 inlines as the pin's does (225, #3249).
-    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
+    assert_eq!(row("-O1"), (scalar, true, true, false, true, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));

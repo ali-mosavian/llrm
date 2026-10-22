@@ -508,3 +508,161 @@ b0:
     );
     assert!(!after.contains("call i32 @pure"), "{after}");
 }
+
+/// `-g` left the variables it declares to `mem2reg`, which promotes them in
+/// another order: the loop header's phis came out as `i` then `crc` where they
+/// are `crc` then `i` without `-g`, and the code of bench/crc (and ten more
+/// programs) differed with `-g` by the order of two `mov`s.
+#[test]
+fn test_a_declared_scalar_is_promoted_in_the_order_it_is_without_debug_info() {
+    let body = |declares: bool| {
+        let (d1, d2) =
+            if declares { ("  #dbg_declare(ptr %crc, !0)\n", "  #dbg_declare(ptr %i, !1)\n") } else { ("", "") };
+        format!(
+            "define i32 @f(i32 %s) {{
+b0:
+  %crc = alloca i32
+{d1}  %i = alloca i16
+{d2}  store i32 %s, ptr %crc
+  store i16 0, ptr %i
+  br label %b1
+b1:
+  %iv = load i16, ptr %i
+  %c = icmp slt i16 %iv, 9
+  br i1 %c, label %b2, label %b3
+b2:
+  %v = load i32, ptr %crc
+  %w = mul i32 %v, 3
+  store i32 %w, ptr %crc
+  %n = add i16 %iv, 1
+  store i16 %n, ptr %i
+  br label %b1
+b3:
+  %r = load i32, ptr %crc
+  ret i32 %r
+}}
+
+!0 = !{{!\"f\", !\"crc\", !2, i64 0}}
+!1 = !{{!\"f\", !\"i\", !3, i64 0}}
+!2 = !{{!\"long\"}}
+!3 = !{{!\"short\"}}
+"
+        )
+    };
+    let plain = sroa(&body(false));
+    let declared = sroa(&body(true));
+    let code = |text: &str| {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with("#dbg_") && !line.starts_with('!'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(code(&declared).trim_end(), code(&plain).trim_end(), "{declared}\n----\n{plain}");
+}
+
+/// A struct `-g` declares was left in memory (bench/nbody -O2: three phis
+/// where the build without `-g` had them reordered, and slots of different
+/// offsets): SROA splits and promotes it as it does without `-g`. The
+/// variable's location goes with the alloca, which is reported dropped.
+#[test]
+fn test_a_declared_struct_is_split_and_promoted_as_without_debug_info() {
+    let body = |declares: bool| {
+        let d = if declares { "  #dbg_declare(ptr %s, !0)\n" } else { "" };
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {{
+b0:
+  %s = alloca {{ i32, i32 }}
+{d}  %p0 = getelementptr {{ i32, i32 }}, ptr %s, i32 0, i32 0
+  %p1 = getelementptr {{ i32, i32 }}, ptr %s, i32 0, i32 1
+  store i32 %a, ptr %p0
+  store i32 %b, ptr %p1
+  %x = load i32, ptr %p0
+  %y = load i32, ptr %p1
+  %r = add i32 %x, %y
+  ret i32 %r
+}}
+
+!0 = !{{!\"f\", !\"s\", !1, i64 0}}
+!1 = !{{!\"pair\"}}
+"
+        )
+    };
+    let code = |text: &str| {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with("#dbg_") && !line.starts_with('!'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let (plain, declared) = (sroa(&body(false)), sroa(&body(true)));
+    assert!(!declared.contains("alloca"), "{declared}");
+    assert_eq!(code(&declared).trim_end(), code(&plain).trim_end(), "{declared}\n----\n{plain}");
+}
+
+/// QCport `_ent_lights_selftest@3`: the local is read and written through an
+/// `addrspacecast` (the far-data view of the stack). The pin's slice builder
+/// follows the cast (`visitAddrSpaceCastInst`, SROA.cpp#L1091); ours treated
+/// it as a use it could not follow, so 26 stores and 92 loads stayed.
+#[test]
+fn test_an_alloca_read_through_an_addrspacecast_is_split_and_promoted() {
+    let after = sroa(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  %s = alloca [8 x i8]
+  %p1 = getelementptr inbounds nuw i8, ptr %s, i16 4
+  store i16 %a, ptr %s
+  store i16 %b, ptr %p1
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  %q1 = getelementptr inbounds nuw i8, ptr addrspace(1) %c, i16 4
+  %x = load i16, ptr addrspace(1) %c
+  %y = load i16, ptr addrspace(1) %q1
+  %r = add i16 %x, %y
+  ret i16 %r
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("add i16 %a, %b"), "{after}");
+}
+
+/// The same with a store through the cast and a load through the alloca.
+#[test]
+fn test_a_store_through_an_addrspacecast_reaches_a_load_of_the_alloca() {
+    let after = sroa(
+        "define i16 @f(i16 %a) {
+b0:
+  %s = alloca i16
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  store i16 %a, ptr addrspace(1) %c
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("ret i16 %a"), "{after}");
+}
+
+/// Seeing through an `addrspacecast` makes an alloca splittable by a memcpy
+/// that takes the cast pointer: the rewritten call still takes the pointer
+/// type it declares (`getNewAllocaSlicePtr`'s
+/// `CreatePointerBitCastOrAddrSpaceCast`, SROA.cpp#L2042). The first version
+/// passed the new alloca's `ptr` where the callee wants `ptr addrspace(1)`:
+/// LLRM_VERIFY refused nib-examples-entries.
+#[test]
+fn test_a_memcpy_through_an_addrspacecast_keeps_its_pointer_type() {
+    let after = sroa(
+        "declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)
+
+define i16 @f(ptr addrspace(1) %src) {
+b0:
+  %s = alloca [8 x i8]
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %c, ptr addrspace(1) %src, i16 8, i1 false)
+  %v = load i16, ptr %s
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("= addrspacecast ptr %s.sroa.1 to ptr addrspace(1)"), "{after}");
+    assert!(!after.contains("memcpy.p1.p1.i16(ptr %"), "{after}");
+}

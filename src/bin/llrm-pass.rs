@@ -19,6 +19,9 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_core::support::version::asked(&arguments, "llrm-pass", env!("LLRM_BUILD_SHA"), env!("LLRM_BUILD_DIRTY")) {
+        return ExitCode::SUCCESS;
+    }
     let level = match arguments.first().filter(|one| one.starts_with("-O")) {
         Some(flag) => match llrm_core::driver::flags::Level::parse(&flag[2..]) {
             Ok(level) => {

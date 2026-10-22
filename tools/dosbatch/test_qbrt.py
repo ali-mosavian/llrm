@@ -16,6 +16,7 @@ import dosbatch  # noqa: E402
 import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
+from qbrt_programs import BC_KNOWN, real_bc_text, not_real_bc  # noqa: E402
 from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, KNOWN, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
 
 
@@ -88,3 +89,21 @@ def test_chunks_hold_every_program_once_in_order():
     for chunks in (1, 6, 7, 200):
         parts = qbruntime.chunked(names, chunks)
         assert sum(parts, []) == names and len(parts) <= chunks
+
+
+CHECKED_AGAINST_BC = sorted(name for name, path in SOURCES.items() if real_bc_text(path) is not None)
+
+
+@pytest.mark.parametrize("name", CHECKED_AGAINST_BC)
+def test_float_output_is_real_bcs_text(results, name: str):
+    """The differential's reference is our compiler on BC's runtime, so a LOG/EXP/^ digit wrong in our expansion is wrong in both arms and passes it (real_print_wide printed 9 lines
+    unlike BC with reference == candidate). The program's output is also compared with BC's own text."""
+    stored = real_bc_text(SOURCES[name])
+    problems = []
+    for target, result in results[name].items():
+        if why := not_real_bc(stored, result.reference.text, result.candidate.text) if target == qbbuild.REAL else None:
+            problems.append(f"{target}: {why}")
+    if name in BC_KNOWN:
+        assert problems, f"{name} now matches real BC: remove it from BC_KNOWN ({BC_KNOWN[name]})"
+        return
+    assert not problems, "; ".join(problems)

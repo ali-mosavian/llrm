@@ -433,7 +433,7 @@ b7:
     // The 64 stores are one memset of their 256 bytes (LoopIdiomRecognize
     // takes the loop nest, as LLVM's does).
     assert!(
-        out.contains("llvm.memset.p0.i64(ptr %0, i8 0, i64 256, i1 false)") && !out.contains("store i32 0"),
+        out.contains("llvm.memset.p0.i64(ptr align 4 %0, i8 0, i64 256, i1 false)") && !out.contains("store i32 0"),
         "{out}"
     );
 }

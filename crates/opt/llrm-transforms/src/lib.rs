@@ -116,6 +116,7 @@ pub mod combine_gep_phi;
 pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_loadstore;
+pub mod combine_memintrinsics;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
@@ -167,6 +168,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod extload;
 pub mod fixednarrow;
 pub mod float2int;
 pub mod floatfold;
@@ -229,6 +231,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
 #[cfg(test)]
@@ -259,6 +262,10 @@ mod narrowspace_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod codegen_slots_tests;
+#[cfg(test)]
+mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;

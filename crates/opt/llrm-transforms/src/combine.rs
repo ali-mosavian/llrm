@@ -156,6 +156,7 @@ fn prepare(
     let graph = llrm_analysis::cfg::graph(function);
     let order = llrm_support::graph::reverse_postorder(&graph, llrm_analysis::cfg::id(entry));
     let mut dead_edges = std::collections::BTreeSet::<(BlockId, BlockId)>::new();
+    let mut live = std::collections::BTreeSet::<BlockId>::new();
     let mut seeded: Vec<InstId> = Vec::new();
     for at in order {
         let block = llrm_analysis::cfg::block(at);
@@ -174,6 +175,7 @@ fn prepare(
                 continue;
             }
         }
+        live.insert(block);
         for inst in function.iter_block(block).collect::<Vec<_>>() {
             if function.parent(inst).is_none() {
                 continue;
@@ -197,6 +199,20 @@ fn prepare(
             }
             seeded.push(inst);
         }
+        // A branch or switch on undef or poison is UB: no successor is live.
+        if let Some(last) = function.terminator(block)
+            && matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch)
+            && let Some(&Operand::Constant(condition)) = function.instruction(last).operands.first()
+            && matches!(
+                context.get(condition).kind,
+                llrm_mir::context::ConstantKind::Undef | llrm_mir::context::ConstantKind::Poison
+            )
+        {
+            for succ in function.successors(block) {
+                handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, None, succ);
+            }
+            continue;
+        }
         // A branch on a number has one live successor.
         if let Some(branch) = function.terminator(block)
             && function.instruction(branch).opcode == Opcode::Br
@@ -206,6 +222,31 @@ fn prepare(
         {
             let (live, dead) = if bits & 1 == 1 { (taken, other) } else { (other, taken) };
             handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, Some(live), dead);
+        }
+    }
+    // Remove instructions inside unreachable blocks
+    // (`removeAllNonTerminatorAndEHPadInstructions`): this keeps the combine
+    // from the bad special cases, and reduces use counts.
+    for block in function.layout().to_vec() {
+        if live.contains(&block) {
+            continue;
+        }
+        let last = function.terminator(block);
+        for inst in function.iter_block(block).collect::<Vec<_>>().into_iter().rev() {
+            if Some(inst) == last || matches!(function.instruction(inst).opcode, Opcode::LandingPad { .. }) {
+                continue;
+            }
+            if let Some(result) = function.instruction(inst).result
+                && !function.users(result).is_empty()
+            {
+                let ty = function.instruction(inst).ty;
+                let poison = Operand::Constant(
+                    context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Poison }),
+                );
+                function.replace_value(result, poison);
+            }
+            let _ = function.erase(inst);
+            changed = true;
         }
     }
     // Pushed in reverse so the first instruction is the first popped, the dead
@@ -407,6 +448,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
+        Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
         _ => &[],
     }
 }

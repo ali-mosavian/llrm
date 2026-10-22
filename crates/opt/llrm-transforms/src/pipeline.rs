@@ -141,7 +141,7 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, fixednarrow,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, extload, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
     promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
@@ -151,6 +151,14 @@ use crate::{
 /// is -O2.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
+    /// The library routines the compile states the program links (the pin's
+    /// `TargetLibraryInfo`, which it reads from the triple: here the front
+    /// end's profile states them, as the ABI chosen by `-mabi` spells and
+    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// System V convention only, llrm-qb and llrm-nib none, so no other
+    /// compile forms a call of a library routine. Exit: a `Target::library`
+    /// of each target that states its routines. Owner w-6, review 2026-11-30.
+    pub library: Vec<llrm_mir::libfunc::Routine>,
     /// Off at -O0: no pass runs.
     pub optimize: bool,
     pub limits: Limits,
@@ -267,6 +275,7 @@ const ROUNDS: usize = 4;
 impl Default for Options {
     fn default() -> Self {
         Self {
+            library: Vec::new(),
             optimize: true,
             llvm_order: llvm_order_default(),
             rotate_slot: true,
@@ -707,7 +716,13 @@ pub(crate) fn llvm_order(
             // EarlyFPM's `SimplifyCFGPass()` (PassBuilderPipelines.cpp#L1178),
             // at the default options. The slot keeps the name
             // `decide@1178`.
-            vec![simplify_cfg("decide@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+            vec![
+                // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
+                slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
+                simplify_cfg("decide@1178"),
+                sroa("sroa@1179"),
+                earlycse("earlycse@1180"),
+            ]
         }
         Phase::Cleanup => vec![
             Box::new(Together {
@@ -835,7 +850,10 @@ pub(crate) fn llvm_order(
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
-                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
+                slot(
+                    "loopidiom@737",
+                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
@@ -1142,6 +1160,12 @@ pub fn recorded(
     // sinks.
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
+    }
+    // After addresssink, with the other passes that make the forms isel sees:
+    // the pin's DAGCombiner makes one extending load for a load and its
+    // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
+    if applied.options.wanted("extload") {
+        manager.add(extload::ExtLoad);
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
@@ -1780,6 +1804,7 @@ impl Run {
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || llrm_mir::passes::run_checked(&mut *pass, unit, analyses));
         drop(running);
+        analyses.declared(unit.context, unit.declared);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);

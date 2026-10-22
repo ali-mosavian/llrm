@@ -119,10 +119,27 @@ pub struct Unit<'a> {
     pub declared: &'a mut Declared,
 }
 
+/// What a library routine's declaration states: its convention, its
+/// attributes and, on each pointer parameter, `parameter`.
+fn routine_facts(
+    function: &mut crate::module::Function,
+    convention: u32,
+    attrs: &[crate::opcode::Attribute],
+    parameter: &[crate::opcode::Attribute],
+) {
+    function.calling_convention = convention;
+    function.attrs.extend(attrs.iter().cloned());
+    for at in 0..function.parameter_attrs.len() {
+        function.parameter_attrs[at].extend(parameter.iter().cloned());
+    }
+}
+
 /// A global a pass has declared and the module has yet to get.
 #[derive(Clone, Debug)]
 enum Pending {
     Function(String, crate::types::TypeId),
+    /// A library routine: its convention and what the library states of it.
+    Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
     Table(String, crate::module::GlobalVariable),
 }
 
@@ -193,6 +210,52 @@ impl Declared {
         })
     }
 
+    /// The declarations made and not yet placed, as the module will hold them
+    /// from global `from` on: what a pass after the one that declared them
+    /// sees, as LLVM's `getOrInsertFunction` has the callee in the module at
+    /// once.
+    pub fn since(
+        &self,
+        from: usize,
+        context: &Context,
+    ) -> Vec<GlobalValue> {
+        let first = self.next as usize - self.pending.len();
+        self.pending
+            .iter()
+            .skip(from.saturating_sub(first))
+            .map(|one| match one {
+                Pending::Function(name, ty) => GlobalValue {
+                    name: name.clone().into(),
+                    linkage: crate::module::Linkage::External,
+                    unnamed_addr: Default::default(),
+                    address_space: 0,
+                    kind: GlobalKind::Function(Box::new(
+                        crate::build::function_declaration(context, name, *ty).expect("a declaration that places"),
+                    )),
+                },
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let mut function =
+                        crate::build::function_declaration(context, name, *ty).expect("a declaration that places");
+                    routine_facts(&mut function, *convention, attrs, parameter);
+                    GlobalValue {
+                        name: name.clone().into(),
+                        linkage: crate::module::Linkage::External,
+                        unnamed_addr: Default::default(),
+                        address_space: 0,
+                        kind: GlobalKind::Function(Box::new(function)),
+                    }
+                }
+                Pending::Table(name, variable) => GlobalValue {
+                    name: name.clone().into(),
+                    linkage: crate::module::Linkage::Private,
+                    unnamed_addr: Default::default(),
+                    address_space: 0,
+                    kind: GlobalKind::Variable(variable.clone()),
+                },
+            })
+            .collect()
+    }
+
     /// The name of a function declared and not yet placed in the module.
     pub fn pending_name(
         &self,
@@ -200,7 +263,7 @@ impl Declared {
     ) -> Option<&str> {
         let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
         match self.pending.get(at)? {
-            Pending::Function(name, _) => Some(name),
+            Pending::Function(name, _) | Pending::Routine(name, ..) => Some(name),
             Pending::Table(..) => None,
         }
     }
@@ -246,6 +309,28 @@ impl Declared {
         self.next += 1;
         self.names().insert(name.to_owned(), id);
         self.pending.push(Pending::Function(name.to_owned(), ty));
+        id
+    }
+
+    /// A library routine `name` of type `ty`, declared where the module has
+    /// none (`getOrInsertFunction`): in calling convention `convention`, with
+    /// `attrs` on it and `parameter` on each pointer parameter, what the
+    /// library states of it (`inferNonMandatoryLibFuncAttrs`).
+    pub fn routine(
+        &mut self,
+        name: &str,
+        ty: crate::types::TypeId,
+        convention: u32,
+        attrs: Vec<crate::opcode::Attribute>,
+        parameter: Vec<crate::opcode::Attribute>,
+    ) -> GlobalId {
+        if let Some(&id) = self.names().get(name) {
+            return id;
+        }
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.names().insert(name.to_owned(), id);
+        self.pending.push(Pending::Routine(name.to_owned(), ty, convention, attrs, parameter));
         id
     }
 
@@ -295,6 +380,13 @@ impl Declared {
             let (name, id) = match one {
                 Pending::Function(name, ty) => {
                     let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    (name, id)
+                }
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
+                        routine_facts(function, convention, &attrs, &parameter);
+                    }
                     (name, id)
                 }
                 Pending::Table(name, variable) => {
@@ -397,6 +489,22 @@ pub trait Analysis: 'static {
         function: &Function,
     ) -> bool {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
+    }
+
+    /// Whether a held `old`, the result for the function as it stands, still
+    /// holds beyond `==` with a fresh one: for a result that compares equal to
+    /// any other (a cache of what was asked) the check of its entries.
+    /// `LLRM_CHECK_PRESERVED` and `verify_invalidation` ask it of every entry
+    /// a pass kept.
+    #[allow(unused_variables)]
+    fn consistent(
+        old: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        true
     }
 
     /// Whether `audit` runs on every result this analysis hands out, kept or
@@ -839,6 +947,35 @@ pub struct Outer {
 }
 
 impl Outer {
+    /// `self` with the declarations `added` after its globals: the callee table
+    /// and the declarations a pass reads include a function a pass of this
+    /// run declared, as they will once the module has it.
+    pub fn with_declared(
+        &self,
+        added: Vec<GlobalValue>,
+    ) -> Outer {
+        let first = self.globals.len();
+        let mut globals = (*self.globals).clone();
+        globals.extend(added.iter().cloned());
+        let globals = Rc::new(globals);
+        let mut modules = self.modules.clone();
+        modules.insert(TypeId::of::<Declarations>(), Rc::clone(&globals) as Rc<dyn Any>);
+        let key = TypeId::of::<CalleeEffects>();
+        if let Some(old) = modules.get(&key).and_then(|one| Rc::clone(one).downcast::<crate::memory::Callees>().ok()) {
+            let mut callees = (*old).clone();
+            for (at, one) in added.iter().enumerate() {
+                if let GlobalKind::Function(function) = &one.kind {
+                    callees.insert(
+                        GlobalId((first + at) as u32),
+                        crate::memory::global_summary(one.name.as_deref(), function),
+                    );
+                }
+            }
+            modules.insert(key, Rc::new(callees));
+        }
+        Outer { metadata: self.metadata.clone(), globals, program: Rc::clone(&self.program), modules }
+    }
+
     /// `module`'s, a program of its own for `target`, or a neutral one:
     /// for analyses asked outside a pass manager.
     pub fn of(
@@ -1028,7 +1165,9 @@ impl<A: Analysis> Cached for Entry<A> {
         function: &Function,
         outer: &Rc<Outer>,
     ) -> bool {
-        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        let mut fresh = Analyses::new(Rc::clone(outer));
+        *self.result == A::run(context, layout, function, &mut fresh)
+            && A::consistent(&self.result, context, layout, function, &mut fresh)
     }
 
     fn preserved(
@@ -1271,6 +1410,23 @@ impl Substitutions {
 }
 
 impl Analyses {
+    /// The functions `declared` holds that the outer facts lack, added to them:
+    /// the passes after the one that declared a function see its callee, and
+    /// what was derived from the outer facts is derived again.
+    pub fn declared(
+        &mut self,
+        context: &Context,
+        declared: &Declared,
+    ) {
+        let added = declared.since(self.outer.globals.len(), context);
+        if added.is_empty() {
+            return;
+        }
+        let outer = Rc::new(self.outer.with_declared(added));
+        self.drop_reading_outer();
+        self.outer = outer;
+    }
+
     /// Drops what was kept only as sound: a named point (the start of a round,
     /// after the interprocedural step) where the facts are worked out afresh,
     /// as gcc recomputes its alias results at a few fixed points.

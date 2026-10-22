@@ -74,13 +74,21 @@ def phases(llrm: str, level: str, args: list[str]) -> dict[str, float]:
 
 
 def main() -> int:
-    argv = sys.argv[1:]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import stamp
+
+    argv, named, allow = stamp.options(sys.argv[1:])
     if "--clang" not in argv or "QCPORT" not in os.environ:
         print(__doc__)
         return 2
     clang = argv[argv.index("--clang") + 1]
     levels = argv[argv.index("--levels") + 1].split(",") if "--levels" in argv else ["O1", "O2", "O3", "Os"]
     builds = [a.split("=", 1) for a in argv if "=" in a and not a.startswith("-")]
+    for name, llrm in builds:
+        # NAME=PATH@SHA names the commit that build must come from; --expect-sha names it for a lone build.
+        path, _, sha = llrm.partition("@")
+        stamp.check(path, sha or (named["sha"] if len(builds) == 1 else None), allow, name)
+    builds = [(name, llrm.partition("@")[0]) for name, llrm in builds]
     qc = Path(os.environ["QCPORT"])
     includes = [f for d in ("", "render", "game", "host", "qgl") for f in ("-I", str(qc / d))]
     source = str(qc / "render/d_faces.c")

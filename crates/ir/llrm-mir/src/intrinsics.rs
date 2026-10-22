@@ -82,6 +82,10 @@ pub enum Intrinsic {
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
+    /// `llvm.expect`: its first argument, which the second says it is expected
+    /// to be: a hint `lower-expect` turns into branch weights and removes
+    /// (LowerExpectIntrinsic.cpp); no code runs it.
+    Expect,
     /// `llrm.noalias`: its argument, which it, and what is based on it, is
     /// reached by no pointer that is not, while anything based on it is used:
     /// C's `restrict`, said of a loop's pointers by the pass that tested that
@@ -421,7 +425,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 50] = [
+const TABLE: [Spec; 51] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -505,6 +509,14 @@ const TABLE: [Spec; 50] = [
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
         parameters: &[Slot::Any(0), Slot::Any(1), Slot::Any(2), Slot::Int(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.expect",
+        intrinsic: Intrinsic::Expect,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
         own: None,
     },
     Spec {

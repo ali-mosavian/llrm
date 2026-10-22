@@ -212,3 +212,42 @@ fn deleting_loops_in_sequence_scans_in_proportion_to_their_number() {
     let (a, b, c) = (scanned(64), scanned(128), scanned(256));
     assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "64: {a}, 128: {b}, 256: {c}");
 }
+
+/// Every loop pass built its own `ScalarEvolution`: d_faces -O2 made 1774 SCEV
+/// expressions for 468 distinct values (the pin keeps one). `loopdeletion`
+/// asks the trip count `indvars` has just worked out and made it again.
+#[test]
+fn test_loopdeletion_reuses_the_expressions_indvars_made() {
+    use llrm_mir::counts::{Event, get};
+    let text = "define i16 @f(i16 %seed, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %carried = phi i16 [ %seed, %b0 ], [ %stepped, %b2 ]
+  %more = icmp ult i16 %carried, %n
+  br i1 %more, label %b2, label %b3
+
+b2:
+  %stepped = add i16 %carried, 3
+  br label %b1
+
+b3:
+  ret i16 %carried
+}
+";
+    let nodes = |loopdeletion: bool| {
+        let mut module = crate::testing::parsed(text);
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::indvars::IndVars { lftr: true });
+        if loopdeletion {
+            manager.add(super::LoopDeletion);
+        }
+        let before = get(Event::ScevNodes);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        get(Event::ScevNodes) - before
+    };
+    let (alone, both) = (nodes(false), nodes(true));
+    assert!(alone > 0);
+    assert_eq!(both, alone, "loopdeletion made {} expressions again", both - alone);
+}

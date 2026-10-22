@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:25628dc646bde15dbc1432804f4e72477b714c9bcc89128d56b071e1baac5fb2 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:2d1d689316468985ca2ac6b564de4d75edde39b72e1d9fb8df0e568dd30dd9ea -->
 
 # combine_xor
 
@@ -17,9 +17,9 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`, `foldUsingDistributiveLaws`,
+each named where it stood: `foldXorToXor`,
 `SimplifyDemandedInstructionBits` (`combine_demanded`), `foldNot`,
-`foldBinOpShiftWithShift`, `visitMaskedMerge`, the `ctlz`/`cttz` and
+`visitMaskedMerge`, the `ctlz`/`cttz` and
 `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
