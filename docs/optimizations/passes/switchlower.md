@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:3e2be9539dbb0b3b774c5f67f0ad65164e1ea193eb642a8ac81d215ea87e6c2d -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:6d37e27bf13ae926c7c5756faae3b00d9e755aaa2f01f9748eaa78fa2396949d -->
 
 # switchlower
 
@@ -50,6 +50,9 @@ which makes the lookup tables and so adds loads, and last of the function
 passes `switchlower` (`pass_lower_switch`), every level that optimizes,
 which adds no memory operation: the module analyses frozen at the end of the
 pipeline stand past it.
+
+DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at isel (`visitSwitch`), here MIR is
+lowered before selection (CG1); exit: isel lowers switches and this is deleted; owner w-6; review 2026-11-20).
 
 ## Example
 Before:

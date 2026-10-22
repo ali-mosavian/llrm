@@ -289,32 +289,43 @@ impl Walk<'_> {
         block: usize,
         index: usize,
     ) -> bool {
-        for later in &self.body.blocks[block].insns[index + 1..] {
-            let Some(effect) = liveness::effect(self.regs, self.body.bits, later) else {
-                // A load through virtual address registers has no effect
-                // table yet; a move leaves the flags alone.
-                if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
-                    continue;
-                }
-                return true;
-            };
-            let flags = |lanes: &crate::backend::lanes::Lanes| {
-                lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-            };
-            if flags(&effect.all_reads()) {
-                return true;
-            }
-            if flags(&effect.writes) {
-                return false;
-            }
-        }
-        false
+        flags_read_after(self.regs, self.body.bits, &self.body.blocks[block].insns, index)
     }
+}
+
+/// Whether the flags the instruction at `index` sets are read before anything
+/// sets them again, in `insns`.
+pub(crate) fn flags_read_after(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+    index: usize,
+) -> bool {
+    for later in &insns[index + 1..] {
+        let Some(effect) = liveness::effect(regs, bits, later) else {
+            // A load through virtual address registers has no effect
+            // table yet; a move leaves the flags alone.
+            if later.what.as_ref().is_some_and(|what| what.op == Operation::Move) {
+                continue;
+            }
+            return true;
+        };
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        if flags(&effect.all_reads()) {
+            return true;
+        }
+        if flags(&effect.writes) {
+            return false;
+        }
+    }
+    false
 }
 
 /// Whether `one` writes the flags (an operation with no effect table is
 /// taken to). A move and a load leave them alone.
-fn sets_flags(
+pub(crate) fn sets_flags(
     regs: llrm_lir::registers::Regs,
     bits: u32,
     one: &Insn,
@@ -409,7 +420,7 @@ fn hoisted(
     // `PREMap`: expression -> the block it was last seen in or hoisted to.
     let mut seen: HashMap<Semantics, usize> = HashMap::default();
     let mut put: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
-    let mut next = crate::backend::splitkit::_next_value_following(body);
+    let mut next = crate::backend::spiller::_next_value_following(body);
     let mut like: Vec<(u32, u32)> = Vec::new();
     let mut stack = vec![body.entry];
     while let Some(at) = stack.pop() {

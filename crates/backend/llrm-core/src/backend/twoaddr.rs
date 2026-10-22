@@ -62,7 +62,6 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::backend::coalesce;
-use crate::liveness::liveintervals::LiveIntervals;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -119,30 +118,39 @@ pub fn tied(
     let fixed = _fixed(body);
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
-    let mut lis = LiveIntervals::new(body);
-    crate::twoaddress::prepare(&mut lis, body);
+    let facts = crate::twoaddress::BodyFacts::of(body);
     let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
-        let mut walk = crate::twoaddress::Commuter::new(&lis, &fixed, at);
+        let mut walk = crate::twoaddress::Commuter::new(&facts, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for (place, one) in block.insns.iter().enumerate() {
-            let mut one = Arc::clone(one);
+        let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
+        let mut place = 0;
+        while place < work.len() {
+            let mut one = Arc::clone(&work[place]);
             let dist = walk.pass(&one);
-            if let Some(chosen) = walk.try_instruction_commute(&one, dist) {
+            let commuted = walk.try_instruction_commute(&one, dist);
+            if let Some(chosen) = &commuted {
                 changed = true;
-                one = chosen;
+                one = Arc::clone(chosen);
+            }
+            // `rescheduleMIBelowKill`: a tied instruction whose source dies in a later reader goes below it.
+            if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
+                changed = true;
+                continue;
             }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
-                && !walk.killed_at(&block.insns[place], base.value)
-                && crate::twoaddress::flags_dead_after(&block.insns, place, body.regs(), body.bits)
+                && !walk.killed_at(&work[place], base.value)
+                && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
             {
                 changed = true;
                 insns.push(three);
+                place += 1;
                 continue;
             }
+            place += 1;
             let Some(fix) = _untied(&one, &mut mint) else {
                 insns.push(one);
                 continue;
@@ -480,7 +488,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::{_untied, Fixed, tied};
-    use crate::liveness::liveintervals::LiveIntervals;
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -567,11 +574,10 @@ mod tests {
         fixed: &Fixed,
     ) -> Option<Arc<Insn>> {
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
-        let mut lis = LiveIntervals::new(&body);
-        crate::twoaddress::prepare(&mut lis, &body);
-        let mut walk = Commuter::new(&lis, fixed, 0);
+        let facts = crate::twoaddress::BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, fixed, 0);
         let mut found = None;
-        for (place, one) in lis.block_insns(0).iter().enumerate() {
+        for (place, one) in body.blocks[0].insns.iter().enumerate() {
             let dist = walk.pass(one);
             if place == at {
                 found = walk.try_instruction_commute(one, dist);
@@ -884,10 +890,9 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let mut lis = LiveIntervals::new(&body);
-        crate::twoaddress::prepare(&mut lis, &body);
+        let facts = crate::twoaddress::BodyFacts::of(&body);
         let fixed = Fixed::default();
-        let walk = Commuter::new(&lis, &fixed, 1);
+        let walk = Commuter::new(&facts, &fixed, 1);
         assert!(walk.is_rev_copy_chain(3, 5, 10));
     }
 
@@ -974,6 +979,57 @@ mod tests {
         let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
         assert!(lea(&tied(&of(live_source_add(-1, "add")), AddSub)));
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
+    }
+
+    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied instruction.
+    fn lea_of(
+        at: i64,
+        into: u32,
+        base: u32,
+    ) -> Arc<Insn> {
+        use crate::model::ir::Mem;
+        let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
+        let what = Semantics {
+            name: Some("lea".to_owned()),
+            dests: vec![held(into, 4)],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![base]))
+    }
+
+    fn position(
+        body: &LirBody,
+        name: &str,
+    ) -> usize {
+        names_of(body).iter().position(|one| one == name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more, by a `lea`, and dies
+    /// there: the add goes below the `lea`, so `v1` dies at the add and the copy it needs joins.
+    #[test]
+    fn test_a_tied_add_goes_below_the_one_reader_that_kills_its_source() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, lea_of(2, 5, 7), read(3, 8), read(4, 5)];
+        // `live_source_add` reads v7 and defines v8.
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// The pin's checks: a kill that is a copy, or a call between, leaves the add where it was.
+    #[test]
+    fn test_a_tied_add_stays_where_the_kill_is_a_copy_or_something_stands_between() {
+        let add = || live_source_add(5, "add")[1].clone();
+        let copy_kill = vec![imm_def(0, 7), add(), copy_insn(2, 5, 7), read(3, 8), read(4, 5)];
+        let got = tied(&of(copy_kill), Off);
+        assert!(position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2);
+        let call = {
+            let what = Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![], vec![]))
+        };
+        let blocked = vec![imm_def(0, 7), add(), call, lea_of(3, 5, 7), read(4, 8), read(5, 5)];
+        let got = tied(&of(blocked), Off);
+        assert!(position(&got, "add") < position(&got, "lea"), "{:?}", names_of(&got));
     }
 
     #[test]
@@ -1065,7 +1121,7 @@ mod tests {
     /// update in place asks only whether a value read once is read in its own
     /// block, which the use counts answer.
     #[test]
-    fn test_two_address_does_not_walk_the_body_for_liveness_rows() {
+    fn test_two_address_walks_the_body_for_liveness_once_and_builds_no_intervals() {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
@@ -1096,6 +1152,11 @@ mod tests {
         let got = tied(&input, Default::default());
         let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
+        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
+        // The pin shares one LiveIntervals with the coalescer; here the kills are one backward scan
+        // over the live-out rows and none is built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
+        let _ = tied(&input, Default::default());
+        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);
     }
 }

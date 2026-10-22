@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:21fc5cb11c18251dac3aa15c14bdeee118cd46f130103a23bad0d3ff03acb7ff -->
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:6ffa1788c32ff7c50bcd86b747c2471f1aba70c72d7b501ae27a7f709a62edc2 -->
 
 # ports
 
@@ -28,6 +28,10 @@ nothing.
  out 11, v     ; the 8237's mode: may start DMA
    => unchanged
 ```
+
+DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the intrinsic definition, ours asks the
+target per call; exit: the frontends declare the memory attribute on the `in`/`out` intrinsics and this pass is
+deleted; owner w-6; review 2026-11-13).
 
 ## Example
 Before:
