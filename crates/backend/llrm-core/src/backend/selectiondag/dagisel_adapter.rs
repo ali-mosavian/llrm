@@ -1,16 +1,19 @@
-//! [`SelectionDAG`] as the matcher interpreter's DAG (`llrm_dagisel::dag::Dag` and `AddrDag`).
+//! [`SelectionDAG`] as the matcher interpreter's DAG (`llrm_dagisel::dag::Dag`
+//! and `AddrDag`).
 //!
 //! # How it works
-//! `llrm-dagisel` numbers opcodes and value types as the pin does; [`pin_opcode`] and
-//! [`pin_vt`] translate ours. Nodes the selector makes are `ISD::Machine(pin opcode)`; a target
-//! constant or register is the node our DAG already has. The arena never frees a node, so
-//! [`DagisAdapter`] keeps the set of nodes that selection removed and every use query skips them.
+//! `llrm-dagisel` numbers opcodes and value types as the pin does;
+//! [`pin_opcode`] and [`pin_vt`] translate ours. Nodes the selector makes are
+//! `ISD::Machine(pin opcode)`; a target constant or register is the node our
+//! DAG already has. The arena never frees a node, so [`DagisAdapter`] keeps the
+//! set of nodes that selection removed and every use query skips them.
 //!
 //! Numbered deviations (reason / owner / exit / review):
-//! - **SD300** `have_no_common_bits_set`, `ConstantFP` to target form, memory operands on machine
-//!   nodes (kept in [`DagisAdapter::mem_refs`]) and extending loads are not in our DAG yet; the
-//!   adapter answers conservatively. Owner sdag-c. Exit: the combiner (sdag-b) brings known bits.
-//!   Review 2026-12-10.
+//! - **SD300** `have_no_common_bits_set`, `ConstantFP` to target form, memory
+//!   operands on machine nodes (kept in [`DagisAdapter::mem_refs`]) and
+//!   extending loads are not in our DAG yet; the adapter answers
+//!   conservatively. Owner sdag-c. Exit: the combiner (sdag-b) brings known
+//!   bits. Review 2026-12-10.
 //!
 //! # Used by
 //! The shadow harness (sdag-d) through `llrm_dagisel::interp::Selector`.
@@ -22,10 +25,10 @@ use llrm_dagisel::generated::ids::{isd as pin, mvt};
 use llrm_dagisel::matcher::Vt;
 use llrm_dagisel::x86_addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 
+use super::SelectionDAG;
 use super::dag::{NodeData, SDNodeFlags, SDValue};
 use super::isd::ISD;
 use super::mvt::{EVT, MVT};
-use super::SelectionDAG;
 
 /// Our opcode in the pin's numbering; `u16::MAX` for one no pattern names.
 pub fn pin_opcode(opcode: ISD) -> u16 {
@@ -96,7 +99,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Sra => pin::SRA,
         Rotl => pin::ROTL,
         Rotr => pin::ROTR,
-        // The double-width shifts are lowered before selection; no pattern names them.
+        // The double-width shifts are lowered before selection; no pattern
+        // names them.
         ShlParts | SraParts | SrlParts => u16::MAX,
         FShl => pin::FSHL,
         FShr => pin::FSHR,
@@ -149,6 +153,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
+        LifetimeStart => pin::LIFETIME_START,
+        LifetimeEnd => pin::LIFETIME_END,
         // The pin's X86ISD numbers.
         Target(code) => code,
         // A machine node reads as the pin's `~opcode`.
@@ -206,7 +212,8 @@ pub struct DagisAdapter<'a> {
     pub dag: &'a mut SelectionDAG,
     /// Nodes selection removed; the arena keeps them, no query sees them.
     dead: BTreeSet<u32>,
-    /// The memory operands each machine node got (`setNodeMemRefs`), as load/store node ids.
+    /// The memory operands each machine node got (`setNodeMemRefs`), as
+    /// load/store node ids.
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
 }
 
@@ -215,11 +222,17 @@ impl<'a> DagisAdapter<'a> {
         DagisAdapter { dag, dead: BTreeSet::new(), mem_refs: BTreeMap::new() }
     }
 
-    pub fn is_dead(&self, node: u32) -> bool {
+    pub fn is_dead(
+        &self,
+        node: u32,
+    ) -> bool {
         self.dead.contains(&node)
     }
 
-    fn live_users(&self, value: PinValue) -> Vec<(u32, usize)> {
+    fn live_users(
+        &self,
+        value: PinValue,
+    ) -> Vec<(u32, usize)> {
         let mut out = Vec::new();
         for (user, data) in self.dag.nodes().iter().enumerate() {
             if self.dead.contains(&(user as u32)) {
@@ -234,13 +247,22 @@ impl<'a> DagisAdapter<'a> {
         out
     }
 
-    fn live_node_users(&self, node: u32) -> impl Iterator<Item = SDValue> + '_ {
-        self.dag.nodes().iter().enumerate().filter(move |(user, _)| !self.dead.contains(&(*user as u32))).flat_map(move |(_, data)| {
-            data.ops.iter().copied().filter(move |op| op.node == node)
-        })
+    fn live_node_users(
+        &self,
+        node: u32,
+    ) -> impl Iterator<Item = SDValue> + '_ {
+        self.dag
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter(move |(user, _)| !self.dead.contains(&(*user as u32)))
+            .flat_map(move |(_, data)| data.ops.iter().copied().filter(move |op| op.node == node))
     }
 
-    fn remove(&mut self, node: u32) {
+    fn remove(
+        &mut self,
+        node: u32,
+    ) {
         if !self.dead.insert(node) {
             return;
         }
@@ -255,114 +277,199 @@ impl<'a> DagisAdapter<'a> {
 }
 
 impl Dag for DagisAdapter<'_> {
-    fn opcode(&self, node: u32) -> u16 {
+    fn opcode(
+        &self,
+        node: u32,
+    ) -> u16 {
         pin_opcode(self.dag.nodes()[node as usize].opcode)
     }
-    fn is_machine(&self, node: u32) -> bool {
+    fn is_machine(
+        &self,
+        node: u32,
+    ) -> bool {
         matches!(self.dag.nodes()[node as usize].opcode, ISD::Machine(_))
     }
-    fn num_operands(&self, node: u32) -> usize {
+    fn num_operands(
+        &self,
+        node: u32,
+    ) -> usize {
         self.dag.nodes()[node as usize].ops.len()
     }
-    fn operand(&self, node: u32, index: usize) -> PinValue {
+    fn operand(
+        &self,
+        node: u32,
+        index: usize,
+    ) -> PinValue {
         theirs(self.dag.nodes()[node as usize].ops[index])
     }
-    fn num_values(&self, node: u32) -> usize {
+    fn num_values(
+        &self,
+        node: u32,
+    ) -> usize {
         self.dag.nodes()[node as usize].values.len()
     }
-    fn value_type(&self, value: PinValue) -> Vt {
+    fn value_type(
+        &self,
+        value: PinValue,
+    ) -> Vt {
         pin_vt(self.dag.value_type(ours(value)))
     }
-    fn has_one_use(&self, value: PinValue) -> bool {
+    fn has_one_use(
+        &self,
+        value: PinValue,
+    ) -> bool {
         self.live_users(value).len() == 1
     }
-    fn count_non_chain_uses(&self, node: u32, limit: usize) -> usize {
+    fn count_non_chain_uses(
+        &self,
+        node: u32,
+        limit: usize,
+    ) -> usize {
         self.live_node_users(node).filter(|u| self.dag.value_type(*u) != EVT::OTHER).take(limit + 1).count()
     }
-    fn use_empty(&self, node: u32) -> bool {
+    fn use_empty(
+        &self,
+        node: u32,
+    ) -> bool {
         self.live_node_users(node).next().is_none()
     }
-    fn node_has_one_use(&self, node: u32) -> bool {
+    fn node_has_one_use(
+        &self,
+        node: u32,
+    ) -> bool {
         self.live_node_users(node).count() == 1
     }
-    fn users(&self, value: PinValue) -> Vec<(u32, usize)> {
+    fn users(
+        &self,
+        value: PinValue,
+    ) -> Vec<(u32, usize)> {
         self.live_users(value)
     }
-    fn glued_user(&self, node: u32) -> Option<u32> {
+    fn glued_user(
+        &self,
+        node: u32,
+    ) -> Option<u32> {
         let last = self.dag.nodes()[node as usize].values.len() - 1;
         if self.dag.nodes()[node as usize].values[last] != EVT::GLUE {
             return None;
         }
         self.live_users(PinValue::new(node, last as u8)).first().map(|u| u.0)
     }
-    fn is_only_user_of(&self, node: u32, def: u32) -> bool {
+    fn is_only_user_of(
+        &self,
+        node: u32,
+        def: u32,
+    ) -> bool {
         self.dag.nodes().iter().enumerate().all(|(user, data)| {
             user as u32 == node || self.dead.contains(&(user as u32)) || data.ops.iter().all(|o| o.node != def)
         })
     }
-    fn has_n_uses_of_value(&self, value: PinValue, n: usize) -> bool {
+    fn has_n_uses_of_value(
+        &self,
+        value: PinValue,
+        n: usize,
+    ) -> bool {
         self.live_users(value).len() == n
     }
-    fn constant(&self, value: PinValue) -> Option<i64> {
+    fn constant(
+        &self,
+        value: PinValue,
+    ) -> Option<i64> {
         let v = ours(value);
         let bits = self.dag.constant(v)?;
         let width = self.dag.value_type(v).size_in_bits();
         let shift = 128 - width;
         Some((((bits << shift) as i128) >> shift) as i64)
     }
-    fn cond_code(&self, value: PinValue) -> Option<u8> {
+    fn cond_code(
+        &self,
+        value: PinValue,
+    ) -> Option<u8> {
         match self.dag.node(ours(value)).data {
             NodeData::CondCode(cc) => Some(cc as u8),
             _ => None,
         }
     }
-    fn value_type_node(&self, value: PinValue) -> Option<Vt> {
+    fn value_type_node(
+        &self,
+        value: PinValue,
+    ) -> Option<Vt> {
         match self.dag.node(ours(value)).data {
             NodeData::ValueType(vt) => Some(pin_vt(vt)),
             _ => None,
         }
     }
-    fn is_undef(&self, value: PinValue) -> bool {
+    fn is_undef(
+        &self,
+        value: PinValue,
+    ) -> bool {
         self.dag.is_undef(ours(value))
     }
-    fn mem_operands(&self, node: u32) -> Option<Vec<MemRef>> {
+    fn mem_operands(
+        &self,
+        node: u32,
+    ) -> Option<Vec<MemRef>> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
     }
-    fn load_ext_type(&self, node: u32) -> Option<LoadExt> {
+    fn load_ext_type(
+        &self,
+        node: u32,
+    ) -> Option<LoadExt> {
         // Our `Load` never extends (SD300).
         (self.dag.nodes()[node as usize].opcode == ISD::Load).then_some(LoadExt::NonExt)
     }
-    fn is_indexed(&self, _: u32) -> bool {
+    fn is_indexed(
+        &self,
+        _: u32,
+    ) -> bool {
         false
     }
-    fn is_truncating_store(&self, _: u32) -> bool {
+    fn is_truncating_store(
+        &self,
+        _: u32,
+    ) -> bool {
         false
     }
-    fn memory_vt(&self, node: u32) -> Vt {
+    fn memory_vt(
+        &self,
+        node: u32,
+    ) -> Vt {
         match self.dag.nodes()[node as usize].data {
             NodeData::Mem(info) => pin_vt(info.mem_vt),
             _ => panic!("node {node} has no memory operand"),
         }
     }
-    fn memory_store_size(&self, node: u32) -> u64 {
+    fn memory_store_size(
+        &self,
+        node: u32,
+    ) -> u64 {
         match self.dag.nodes()[node as usize].data {
             NodeData::Mem(info) => u64::from(info.mem_vt.size_in_bits().div_ceil(8)),
             _ => panic!("node {node} has no memory operand"),
         }
     }
-    fn alignment(&self, node: u32) -> u64 {
+    fn alignment(
+        &self,
+        node: u32,
+    ) -> u64 {
         match self.dag.nodes()[node as usize].data {
             NodeData::Mem(info) => u64::from(info.align),
             _ => panic!("node {node} has no memory operand"),
         }
     }
-    fn is_simple(&self, node: u32) -> bool {
+    fn is_simple(
+        &self,
+        node: u32,
+    ) -> bool {
         match self.dag.nodes()[node as usize].data {
             NodeData::Mem(info) => !info.volatile,
             _ => false,
         }
     }
-    fn fp_class(&self, value: PinValue) -> Option<FpClass> {
+    fn fp_class(
+        &self,
+        value: PinValue,
+    ) -> Option<FpClass> {
         let NodeData::ConstFp { bits } = self.dag.node(ours(value)).data else { return None };
         let (zero, neg_zero, one, minus_one) = match self.dag.value_type(ours(value)) {
             EVT::Simple(MVT::F32) => (0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000),
@@ -381,29 +488,53 @@ impl Dag for DagisAdapter<'_> {
             FpClass::Other
         })
     }
-    fn has_disjoint_flag(&self, node: u32) -> bool {
+    fn has_disjoint_flag(
+        &self,
+        node: u32,
+    ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
     }
-    fn have_no_common_bits_set(&self, _: PinValue, _: PinValue) -> bool {
+    fn have_no_common_bits_set(
+        &self,
+        _: PinValue,
+        _: PinValue,
+    ) -> bool {
         false
     }
-    fn mem_ref_is_load(&self, mem: MemRef) -> bool {
+    fn mem_ref_is_load(
+        &self,
+        mem: MemRef,
+    ) -> bool {
         self.dag.nodes()[mem as usize].opcode == ISD::Load
     }
-    fn mem_ref_is_store(&self, mem: MemRef) -> bool {
+    fn mem_ref_is_store(
+        &self,
+        mem: MemRef,
+    ) -> bool {
         self.dag.nodes()[mem as usize].opcode == ISD::Store
     }
-    fn set_node_mem_refs(&mut self, node: u32, mems: &[MemRef]) {
+    fn set_node_mem_refs(
+        &mut self,
+        node: u32,
+        mems: &[MemRef],
+    ) {
         self.mem_refs.insert(node, mems.to_vec());
     }
 
     fn entry_node(&mut self) -> PinValue {
         theirs(self.dag.entry_node())
     }
-    fn target_constant(&mut self, value: i64, vt: Vt) -> PinValue {
+    fn target_constant(
+        &mut self,
+        value: i64,
+        vt: Vt,
+    ) -> PinValue {
         theirs(self.dag.get_constant_with(value as u128, our_vt(vt), true, false))
     }
-    fn convert_to_target(&mut self, value: PinValue) -> PinValue {
+    fn convert_to_target(
+        &mut self,
+        value: PinValue,
+    ) -> PinValue {
         let v = ours(value);
         if self.dag.opcode(v) == ISD::Constant {
             let bits = self.dag.constant(v).expect("a constant");
@@ -412,52 +543,100 @@ impl Dag for DagisAdapter<'_> {
         }
         value
     }
-    fn register(&mut self, register: u16, vt: Vt) -> PinValue {
+    fn register(
+        &mut self,
+        register: u16,
+        vt: Vt,
+    ) -> PinValue {
         theirs(self.dag.get_register(our_vt(vt), u32::from(register)))
     }
-    fn copy_to_reg(&mut self, chain: PinValue, register: u16, value: PinValue, glue: Option<PinValue>) -> u32 {
+    fn copy_to_reg(
+        &mut self,
+        chain: PinValue,
+        register: u16,
+        value: PinValue,
+        glue: Option<PinValue>,
+    ) -> u32 {
         let vt = self.dag.value_type(ours(value));
         let reg = self.dag.get_register(vt, u32::from(register));
         let mut ops = vec![ours(chain), reg, ours(value)];
         ops.extend(glue.map(ours));
         self.dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops).node
     }
-    fn token_factor(&mut self, chains: &[PinValue]) -> PinValue {
+    fn token_factor(
+        &mut self,
+        chains: &[PinValue],
+    ) -> PinValue {
         let chains: Vec<SDValue> = chains.iter().copied().map(ours).collect();
         theirs(self.dag.get_token_factor(&chains))
     }
-    fn machine_node(&mut self, opcode: u16, vts: &[Vt], operands: &[PinValue]) -> u32 {
+    fn machine_node(
+        &mut self,
+        opcode: u16,
+        vts: &[Vt],
+        operands: &[PinValue],
+    ) -> u32 {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         self.dag.intern(ISD::Machine(u32::from(opcode)), &vts, &ops, SDNodeFlags::default(), NodeData::None).node
     }
-    fn morph_node_to(&mut self, node: u32, opcode: u16, vts: &[Vt], operands: &[PinValue]) -> (u32, Vec<u32>) {
+    fn morph_node_to(
+        &mut self,
+        node: u32,
+        opcode: u16,
+        vts: &[Vt],
+        operands: &[PinValue],
+    ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         (self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops), Vec::new())
     }
-    fn update_node_operands(&mut self, node: u32, operands: &[PinValue]) -> u32 {
+    fn update_node_operands(
+        &mut self,
+        node: u32,
+        operands: &[PinValue],
+    ) -> u32 {
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         self.dag.update_node_operands(node, &ops)
     }
-    fn replace_uses(&mut self, from: PinValue, to: PinValue) {
+    fn replace_uses(
+        &mut self,
+        from: PinValue,
+        to: PinValue,
+    ) {
         self.dag.replace_all_uses_with(ours(from), ours(to));
     }
-    fn replace_node(&mut self, from: u32, to: u32) {
+    fn replace_node(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
         for res in 0..self.dag.nodes()[from as usize].values.len() as u8 {
             self.dag.replace_all_uses_with(SDValue { node: from, res }, SDValue { node: to, res });
         }
         self.remove(from);
     }
-    fn remove_dead_node(&mut self, node: u32) {
+    fn remove_dead_node(
+        &mut self,
+        node: u32,
+    ) {
         self.remove(node);
     }
-    fn remove_dead_nodes(&mut self, nodes: &[u32]) {
+    fn remove_dead_nodes(
+        &mut self,
+        nodes: &[u32],
+    ) {
         for &node in nodes {
             self.remove(node);
         }
     }
-    fn has_predecessor_helper(&self, node: u32, visited: &mut Vec<u32>, worklist: &mut Vec<u32>, max: usize) -> bool {
+    fn has_predecessor_helper(
+        &self,
+        node: u32,
+        visited: &mut Vec<u32>,
+        worklist: &mut Vec<u32>,
+        max: usize,
+    ) -> bool {
         if visited.contains(&node) {
             return true;
         }
@@ -480,7 +659,10 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
-    fn is_add_like(&self, value: PinValue) -> bool {
+    fn is_add_like(
+        &self,
+        value: PinValue,
+    ) -> bool {
         let node = &self.dag.nodes()[value.node as usize];
         match node.opcode {
             ISD::Or => node.flags.has(SDNodeFlags::DISJOINT),
@@ -493,13 +675,19 @@ impl AddrDag for DagisAdapter<'_> {
             _ => false,
         }
     }
-    fn frame_index(&self, value: PinValue) -> Option<i32> {
+    fn frame_index(
+        &self,
+        value: PinValue,
+    ) -> Option<i32> {
         match self.dag.node(ours(value)).data {
             NodeData::FrameIndex(i) => Some(i),
             _ => None,
         }
     }
-    fn wrapped_symbol(&self, operand: PinValue) -> Option<Wrapped> {
+    fn wrapped_symbol(
+        &self,
+        operand: PinValue,
+    ) -> Option<Wrapped> {
         match self.dag.node(ours(operand)).data {
             NodeData::Global { symbol, offset } => {
                 Some(Wrapped { symbol: Symbol { kind: SymbolKind::Global, id: symbol }, offset, flags: 0 })
@@ -510,13 +698,25 @@ impl AddrDag for DagisAdapter<'_> {
             _ => None,
         }
     }
-    fn has_materializing_use(&self, value: PinValue) -> bool {
-        self.live_users(value).iter().any(|&(user, at)| {
-            let node = &self.dag.nodes()[user as usize];
-            node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
-        })
+    fn has_materializing_use(
+        &self,
+        value: PinValue,
+    ) -> bool {
+        self.live_users(value)
+            .iter()
+            .any(
+                |&(user, at)| {
+                    let node = &self.dag.nodes()[user as usize];
+                    node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
+                },
+            )
     }
-    fn get_node(&mut self, opcode: u16, vt: Vt, ops: &[PinValue]) -> PinValue {
+    fn get_node(
+        &mut self,
+        opcode: u16,
+        vt: Vt,
+        ops: &[PinValue],
+    ) -> PinValue {
         let ops: Vec<SDValue> = ops.iter().copied().map(ours).collect();
         let isd = match opcode {
             pin::ADD => ISD::Add,
@@ -533,13 +733,24 @@ impl AddrDag for DagisAdapter<'_> {
         };
         theirs(self.dag.get_node(isd, our_vt(vt), &ops))
     }
-    fn get_constant(&mut self, value: i64, vt: Vt) -> PinValue {
+    fn get_constant(
+        &mut self,
+        value: i64,
+        vt: Vt,
+    ) -> PinValue {
         theirs(self.dag.get_constant(value as u128, our_vt(vt)))
     }
-    fn is_non_temporal(&self, _: u32) -> bool {
+    fn is_non_temporal(
+        &self,
+        _: u32,
+    ) -> bool {
         false
     }
-    fn target_frame_index(&mut self, index: i32, vt: Vt) -> PinValue {
+    fn target_frame_index(
+        &mut self,
+        index: i32,
+        vt: Vt,
+    ) -> PinValue {
         theirs(self.dag.intern(
             ISD::TargetFrameIndex,
             &[our_vt(vt)],
@@ -548,9 +759,16 @@ impl AddrDag for DagisAdapter<'_> {
             NodeData::FrameIndex(index),
         ))
     }
-    fn target_symbol(&mut self, symbol: Symbol, disp: i32, _flags: u8) -> PinValue {
+    fn target_symbol(
+        &mut self,
+        symbol: Symbol,
+        disp: i32,
+        _flags: u8,
+    ) -> PinValue {
         let (opcode, data) = match symbol.kind {
-            SymbolKind::Global => (ISD::TargetGlobalAddress, NodeData::Global { symbol: symbol.id, offset: i64::from(disp) }),
+            SymbolKind::Global => {
+                (ISD::TargetGlobalAddress, NodeData::Global { symbol: symbol.id, offset: i64::from(disp) })
+            }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
