@@ -10,6 +10,7 @@
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial());
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial_for(Some(0x100)));
 //! assert!(!Plain.is_truncate_free(32, 16));
+//! assert!(!Plain.is_operation_legal_or_custom(llrm_mir::lowering::Isd::Add, 32));
 //! assert!(Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 8));
 //! assert!(!Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 24));
 //! assert!(!Plain.is_ext_free(llrm_mir::lowering::Ext::ZExt, 32, 64));
@@ -24,6 +25,30 @@ pub enum Ext {
     ZExt,
     SExt,
     FpExt,
+}
+
+/// The operations of `ISD` that an IR instruction becomes
+/// (`TargetLowering::InstructionOpcodeToISD`), for the legality hook.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Isd {
+    Add,
+    Sub,
+    Mul,
+    UDiv,
+    SDiv,
+    URem,
+    SRem,
+    Shl,
+    Srl,
+    Sra,
+    And,
+    Or,
+    Xor,
+    Select,
+    SetCc,
+    Truncate,
+    ZeroExtend,
+    SignExtend,
 }
 
 /// The kind of extending load (`ISD::LoadExtType`).
@@ -42,6 +67,24 @@ fn simple_int(bits: u32) -> bool {
 
 /// `TargetLowering`'s hooks. Each default is the base class's.
 pub trait Lowering {
+    /// `isOperationLegalOrCustom(op, EVT(iN))`
+    /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// whether the type is legal and the target does `op` on it itself or by a
+    /// node of its own. The base class has no registers: nothing is.
+    ///
+    /// DEVIATE TL1: a target answers from a table of its own (x86: a reduced
+    /// copy of `X86TargetLowering`'s scalar integer arms) until the DAG's
+    /// `TargetLowering` is the one `Lowering` the passes ask (the
+    /// `--isel=dag` switch). Owner w-4, 2027-02-04.
+    fn is_operation_legal_or_custom(
+        &self,
+        op: Isd,
+        bits: u32,
+    ) -> bool {
+        let _ = (op, bits);
+        false
+    }
+
     /// `isLoadExtLegal` (`getLoadExtAction(..) == Legal`,
     /// [TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
     /// whether a load of `memory_bits` extended to `value_bits` is one

@@ -3,7 +3,7 @@
 //!
 //! # Example
 //! ```
-//! use llrm_mir::lowering::{LoadExt, Lowering};
+//! use llrm_mir::lowering::{Isd, LoadExt, Lowering};
 //! use llrm_x86::lowering::X86;
 //! assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
 //! assert!(X86 { is_64bit: false }.is_truncate_free(32, 16));
@@ -14,7 +14,7 @@
 //! # Runs
 //! `cargo test -p llrm-x86 lowering`.
 
-use llrm_mir::lowering::{LoadExt, Lowering};
+use llrm_mir::lowering::{Isd, LoadExt, Lowering};
 
 /// The x86 family's answers. `is_64bit` is `Subtarget.is64Bit()`.
 pub struct X86 {
@@ -25,6 +25,18 @@ impl Lowering for X86 {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3807-L3810
     fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
         true
+    }
+
+    // The registers: i8, i16 and i32 (i64 on a 64-bit target). Divide and
+    // remainder are `Expand` (L327: `SDIVREM` does them), every other scalar
+    // operation here is `Legal` or `Custom` (`Select` and `SetCC` L361).
+    fn is_operation_legal_or_custom(
+        &self,
+        op: Isd,
+        bits: u32,
+    ) -> bool {
+        let legal_type = matches!(bits, 8 | 16 | 32) || (bits == 64 && self.is_64bit);
+        legal_type && !matches!(op, Isd::UDiv | Isd::SDiv | Isd::URem | Isd::SRem)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L186-L187
@@ -71,6 +83,20 @@ mod tests {
     #[test]
     fn test_x86_folds_a_mask_and_compare_with_zero() {
         assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
+    }
+
+    /// A promoted add is legal at 8, 16 and 32 bits, at 64 on a 64-bit target
+    /// only, a divide at none, and the base class has nothing legal.
+    #[test]
+    fn test_x86_operations_are_legal_on_its_register_types() {
+        let (narrow, wide) = (X86 { is_64bit: false }, X86 { is_64bit: true });
+        assert!(
+            narrow.is_operation_legal_or_custom(Isd::Add, 16) && narrow.is_operation_legal_or_custom(Isd::SetCc, 8)
+        );
+        assert!(!narrow.is_operation_legal_or_custom(Isd::Add, 64) && wide.is_operation_legal_or_custom(Isd::Add, 64));
+        assert!(
+            !wide.is_operation_legal_or_custom(Isd::UDiv, 32) && !narrow.is_operation_legal_or_custom(Isd::Add, 24)
+        );
     }
 
     /// An extending load of 8, 16 or 32 bits is one operation, a sign
