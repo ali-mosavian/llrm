@@ -238,6 +238,15 @@ pub trait Dag {
         vt: Vt,
         glue: SDValue,
     ) -> u32;
+    /// `getCopyFromReg` of a `Register` node already in the DAG: the value is
+    /// result 0, the chain 1, and with `glue` the glue 2.
+    fn copy_from_reg_node(
+        &mut self,
+        chain: SDValue,
+        register: SDValue,
+        vt: Vt,
+        glue: Option<SDValue>,
+    ) -> u32;
     fn token_factor(
         &mut self,
         chains: &[SDValue],

@@ -52,6 +52,37 @@ thread_local! {
     pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// The `LiveIntervals` a pass leaves for the next one (the pin's analysis,
+// preserved across TwoAddress and the register coalescer), with the
+// instructions of the body it was made for: the next pass takes it only for
+// that body. One per thread, since the slot indexes of a thread share an arena.
+thread_local! {
+    static HANDED_OVER: std::cell::RefCell<Option<(Vec<Vec<InstrKey>>, u64, LiveIntervals)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn instructions_of(body: &LirBody) -> Vec<Vec<InstrKey>> {
+    body.blocks.iter().map(|block| block.insns.iter().map(|one| one.id()).collect()).collect()
+}
+
+/// `lis` is left for the next pass, which has `body`.
+pub fn hand_over(
+    lis: LiveIntervals,
+    body: &LirBody,
+) {
+    HANDED_OVER.with(|slot| *slot.borrow_mut() = Some((instructions_of(body), super::slotindex::analysed(), lis)));
+}
+
+/// The `LiveIntervals` handed over for exactly this `body`, if there is one.
+pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
+    HANDED_OVER.with(|slot| {
+        let held = slot.borrow_mut().take()?;
+        // Taken only if no other body was numbered since: its entries are the
+        // arena's.
+        (held.0 == instructions_of(body) && held.1 == super::slotindex::analysed()).then_some(held.2)
+    })
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -140,7 +171,7 @@ impl LiveIntervals {
         one: &Insn,
     ) {
         let instr = one.id();
-        for &value in one.defines.iter().chain(&one.uses) {
+        for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
             let Some(mut mine) = self.slots.remove(&(value, instr)) else { continue };
             let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
@@ -1075,6 +1106,19 @@ mod tests {
         let mut one = Insn::new(0, None, None, defines.to_vec(), Vec::new());
         one.undefs = undefs.to_vec();
         Arc::new(one)
+    }
+
+    /// An instruction taken out of the maps took its undef operands with it:
+    /// the operand of a value read as undef stayed listed, and the
+    /// coalescer asked the maps for an instruction that was gone
+    /// ("Instruction not found in maps").
+    #[test]
+    fn test_removing_an_instruction_removes_its_undef_operands() {
+        let (def, reader) = (insn(&[1], &[]), undef_reader(&[2], &[9]));
+        let mut lis = LiveIntervals::new(&body(&[Arc::clone(&def), Arc::clone(&reader)]));
+        assert_eq!(lis.operands(9).len(), 1);
+        lis.remove_instr(0, reader.id());
+        assert!(lis.operands(9).is_empty(), "an operand of a removed instruction is still listed");
     }
 
     /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and

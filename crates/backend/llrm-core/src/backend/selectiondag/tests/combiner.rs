@@ -10,7 +10,7 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
+    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -120,4 +120,21 @@ fn multiply_by_other_constants_is_leas_shifts_and_adds() {
     assert_eq!(shape(11), (ISD::Add, ISD::Shl));
     assert_eq!(shape(-5).0, ISD::Sub);
     assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+}
+
+/// A lowering that returns two values (a double-width shift) leaves them as one
+/// `MERGE_VALUES`; nothing selects it, so 17 execution programs stopped at
+/// "unselected node MergeValues". `visitMERGE_VALUES` makes each user read the
+/// operands.
+#[test]
+fn a_merge_values_is_replaced_by_its_operands() {
+    let mut dag = dag();
+    let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+    let pair = dag.get_node_multi(ISD::MergeValues, &[EVT::I32, EVT::I32], &[a, b]);
+    let sum =
+        dag.get_node(ISD::Add, EVT::I32, &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }]);
+    dag.set_root(sum);
+    generic(&mut dag);
+    let root = dag.get_root();
+    assert_eq!((dag.operand(root, 0), dag.operand(root, 1)), (a, b));
 }

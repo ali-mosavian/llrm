@@ -17,12 +17,11 @@
 //! instruction (`isPlainlyKilled`); looking through the copies that define it
 //! gives `isKilled`.
 //!
-//! DEVIATE TA-1 (exit: `processCopy`/`scanUses` translated, piece 4 of
-//! docs/working/twoaddress-translation-plan.md): `SrcRegMap` and `DstRegMap`
-//! are not built by walking copies from and to physical registers. LIR says
-//! which register a value arrives in (`delivers`) and must end in (`requires`)
-//! on the instruction; `backend::twoaddr::Fixed` reads them, and a value read
-//! once by a sum that ends in a register ends in it too.
+//! `SrcRegMap` and `DstRegMap` are made as the walk passes the copies from and
+//! to registers (`processCopy`, `scanUses`, `removeClobberedSrcRegMap`). LIR
+//! says which register a value arrives in (`delivers`) and must end in
+//! (`requires`) on the instruction, where the pin has a COPY beside it (DEVIATE
+//! TA-1: the copies are those fields, at the instruction carrying them).
 //!
 //! `hasCommutePreference` (X86InstrInfo.cpp#L3152): an `add` fed by an LEA that
 //! this pass made takes the LEA's result as its second source, so X86FixupLEAs
@@ -63,13 +62,10 @@
 //! does in the pin): a value a load defines is not the operand that is tied
 //! (`is_profitable_to_commute`).
 //!
-//! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
-//! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
-//! 2026-11-14): the kills come from one backward scan of each block over the
-//! live-out rows (`BodyFacts`), not from `LiveIntervals`. The pin builds them
-//! once and shares them with the coalescer; ours built a second set here (+3.0
-//! M Ir on d_faces -O2 at m32, `LiveIntervals::new`), and the scan answers the
-//! same question for a use: no later read, or a redefinition.
+//! The kills are `isPlainlyKilled` on one `LiveIntervals` the pass edits
+//! (`handleMove`, `rewrite_instr`, the intervals of a tied copy made afresh)
+//! and hands to the coalescer (DEVIATE TA-6 retired: a backward scan of the
+//! live-out rows stood in for it).
 //!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
@@ -81,10 +77,9 @@
 
 use std::sync::Arc;
 
-use crate::backend::twoaddr::Fixed;
 use crate::model::ir::{self, Loc, Semantics};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::{HashMap, HashSet};
+use crate::support::hash::HashMap;
 
 /// An instruction by identity (`Insn::id`).
 pub type InstrKey = u64;
@@ -93,63 +88,145 @@ pub type InstrKey = u64;
 /// definitions `isRevCopyChain` walks through.
 pub const MAX_DATA_FLOW_EDGE: usize = 10;
 
-/// What the walks ask of a body: who reads and writes each value, which block
-/// each instruction is in, and where a value dies (`isPlainlyKilled`). The pin
-/// reads the kills off `LiveIntervals`; here one backward scan of each block
-/// from the live-out rows gives them, without the intervals, the slot indexes
-/// and the trees that `LiveIntervals::new` builds (DEVIATE TA-6: the same
-/// answer for a use, from less).
+/// What the walks ask of a body, as the pin asks it of `LiveIntervals`: who
+/// names each value, which block each instruction is in, and where a value dies
+/// (`isPlainlyKilled`). The one `LiveIntervals` of the function, which the
+/// pass edits as it moves, rewrites and inserts instructions.
 pub struct BodyFacts {
-    /// By value: each instruction that names it and whether it defines it.
-    refs: HashMap<u32, Vec<(InstrKey, bool)>>,
-    block_of: HashMap<InstrKey, usize>,
-    insn: HashMap<InstrKey, Arc<Insn>>,
-    /// (instruction, value): the use is the value's last, nothing after reads
-    /// it.
-    killed: std::cell::RefCell<HashSet<(InstrKey, u32)>>,
+    lis: std::cell::RefCell<crate::liveness::liveintervals::LiveIntervals>,
 }
 
 impl BodyFacts {
+    /// `LiveIntervals` of `body`, every value's interval computed
+    /// (`LiveIntervals::runOnMachineFunction`).
     pub fn of(body: &LirBody) -> Self {
-        use crate::backend::allocate::LiveAt;
-        let rows = crate::backend::allocate::live_rows(body);
-        let mut facts = Self {
-            refs: HashMap::default(),
-            block_of: HashMap::default(),
-            insn: HashMap::default(),
-            killed: Default::default(),
-        };
-        for (at, block) in body.blocks.iter().enumerate() {
-            // Whether each value read in this block is live after the point the
-            // scan has reached: asked of the rows the first time,
-            // then kept up.
-            let mut live: HashMap<u32, bool> = HashMap::default();
-            for one in block.insns.iter().rev() {
-                let key = one.id();
-                facts.block_of.insert(key, at);
-                facts.insn.insert(key, Arc::clone(one));
-                for &value in &one.defines {
-                    facts.refs.entry(value).or_default().push((key, true));
-                    live.insert(value, false);
-                }
-                for &value in &one.uses {
-                    facts.refs.entry(value).or_default().push((key, false));
-                    let after = *live.entry(value).or_insert_with(|| rows.live_out(block.at, value));
-                    if !after {
-                        facts.killed.get_mut().insert((key, value));
-                    }
-                    live.insert(value, true);
-                }
-            }
-        }
-        facts
+        // An interval is made when it is first asked, as the coalescer's was:
+        // the pin computes every one, which no value that is never a
+        // source or a copy needs.
+        Self { lis: std::cell::RefCell::new(crate::liveness::liveintervals::LiveIntervals::new(body)) }
     }
 
+    /// The instructions that define or read `value`, and whether each defines
+    /// it (an operand read as undef is no reference).
     fn refs(
         &self,
         value: u32,
-    ) -> &[(InstrKey, bool)] {
-        self.refs.get(&value).map_or(&[], Vec::as_slice)
+    ) -> Vec<(InstrKey, bool)> {
+        let lis = self.lis.borrow();
+        lis.operands(value).iter().filter(|op| op.is_def || op.reads_reg).map(|op| (op.instr, op.is_def)).collect()
+    }
+
+    fn block_of(
+        &self,
+        key: InstrKey,
+    ) -> Option<usize> {
+        let lis = self.lis.borrow();
+        let at = lis.indexes.get_instruction_index(key);
+        Some(lis.indexes.get_mbb_from_index(&at))
+    }
+
+    fn insn(
+        &self,
+        key: InstrKey,
+    ) -> Arc<Insn> {
+        Arc::clone(self.lis.borrow().instr(key))
+    }
+
+    /// `isPlainlyKilled(MI, Reg)`: the interval of `value` ends at the
+    /// instruction (TwoAddressInstructionPass.cpp#L394-L483).
+    pub fn killed(
+        &self,
+        key: InstrKey,
+        value: u32,
+    ) -> bool {
+        let mut lis = self.lis.borrow_mut();
+        let li = lis.interval_rc(value);
+        // An undef read has no value to kill.
+        if !li.has_at_least_one_value() {
+            return false;
+        }
+        let at = lis.indexes.get_instruction_index(key);
+        let i = li.find(&at);
+        i != li.segments.len()
+            && !li.segments[i].end.is_block()
+            && crate::liveness::slotindex::SlotIndex::is_same_instr(&li.segments[i].end, &at)
+    }
+
+    /// `replaceMachineInstrInMaps`: `new` takes the place of `old` in `block`.
+    pub fn rewrite(
+        &self,
+        block: usize,
+        old: InstrKey,
+        new: Arc<Insn>,
+    ) {
+        self.lis.borrow_mut().rewrite_instr(block, old, new);
+    }
+
+    /// `LiveIntervals::handleMove`: `key` goes before `before` (the end of the
+    /// block without one).
+    pub fn move_before(
+        &self,
+        block: usize,
+        key: InstrKey,
+        before: Option<InstrKey>,
+    ) {
+        self.lis.borrow_mut().handle_move(block, key, before);
+    }
+
+    /// `one` replaced by `made`, in order (the copy of a tied pair and the
+    /// instruction that reads it): the last takes the place and the index of
+    /// `one`, the others go before it. Only the intervals of the values the
+    /// others name, and of those `one` and the last name differently, are made
+    /// afresh (`processTiedPairs`: `removeInterval`,
+    /// `createAndComputeVirtRegInterval`).
+    pub fn replace(
+        &self,
+        block: usize,
+        one: &Insn,
+        made: &[Arc<Insn>],
+    ) {
+        use std::collections::BTreeSet;
+        let named =
+            |one: &Insn| -> BTreeSet<u32> { one.defines.iter().chain(&one.uses).chain(&one.undefs).copied().collect() };
+        let (last, rest) = made.split_last().expect("an instruction replaced by none");
+        let mut lis = self.lis.borrow_mut();
+        lis.rewrite_instr(block, one.id(), Arc::clone(last));
+        let mut changed: BTreeSet<u32> = named(one).symmetric_difference(&named(last)).copied().collect();
+        for new in rest {
+            lis.insert_instr_before(block, Some(last.id()), Arc::clone(new));
+            changed.extend(named(new));
+        }
+        // Only an interval already made is redone; the others are made from the
+        // body as it is.
+        let held: Vec<u32> = changed.into_iter().filter(|value| lis.has_interval(*value)).collect();
+        for value in held {
+            lis.remove_interval(value);
+            lis.interval(value);
+        }
+    }
+
+    /// The function as edited, and its intervals left for the coalescer.
+    pub fn finish(
+        self,
+        body: &LirBody,
+    ) -> LirBody {
+        let lis = self.lis.into_inner();
+        let done = lis.body_like(body);
+        if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
+            // The premise: the intervals the edits left are the ones made
+            // afresh.
+            lis.assert_intervals_equal_afresh(&done);
+        }
+        crate::liveness::liveintervals::hand_over(lis, &done);
+        done
+    }
+
+    /// The function as edited so far.
+    pub fn body_like(
+        &self,
+        body: &LirBody,
+    ) -> LirBody {
+        self.lis.borrow().body_like(body)
     }
 }
 
@@ -326,15 +403,31 @@ pub fn flags_dead_after(
     false
 }
 
-/// The state of one block's walk: the intervals, the registers values are
-/// fixed to and the instructions passed so far.
+/// What `SrcRegMap` and `DstRegMap` map a value to: another value, or a
+/// register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mapped {
+    Value(u32),
+    Register(llrm_lir::registers::RegId),
+}
+
+/// The state of one block's walk: the intervals, the maps of values to the
+/// registers they may end up in (`SrcRegMap`, `DstRegMap`, made as the walk
+/// passes the copies, `processCopy`) and the instructions passed so far.
 pub struct Commuter<'a> {
     facts: &'a BodyFacts,
-    fixed: &'a Fixed,
     block: usize,
     /// `DistanceMap`: the position of each instruction passed in this block.
     distance: HashMap<InstrKey, u32>,
     dist: u32,
+    /// `SrcRegMap`: a value to the register it arrives in, or the value it is
+    /// tied to a use of.
+    src: HashMap<u32, Mapped>,
+    /// `DstRegMap`: a value to the register it ends in, or the value it dies
+    /// into.
+    dst: HashMap<u32, Mapped>,
+    /// `Processed`: the instructions whose copies are in the maps.
+    processed: std::collections::HashSet<InstrKey>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: std::collections::HashSet<u32>,
@@ -344,10 +437,219 @@ impl<'a> Commuter<'a> {
     /// The walk of `block`, at its first instruction.
     pub fn new(
         facts: &'a BodyFacts,
-        fixed: &'a Fixed,
         block: usize,
     ) -> Self {
-        Self { facts, fixed, block, distance: HashMap::default(), dist: 0, leas: Default::default() }
+        Self {
+            facts,
+            block,
+            distance: HashMap::default(),
+            dist: 0,
+            src: HashMap::default(),
+            dst: HashMap::default(),
+            processed: Default::default(),
+            leas: Default::default(),
+        }
+    }
+
+    /// `getMappedReg`: the register `value` may be mapped to, following the
+    /// values.
+    fn mapped(
+        map: &HashMap<u32, Mapped>,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        let mut at = Mapped::Value(value);
+        // A cycle of values maps to no register.
+        for _ in 0..=map.len() {
+            match at {
+                Mapped::Register(register) => return Some(register),
+                Mapped::Value(value) => at = *map.get(&value)?,
+            }
+        }
+        None
+    }
+
+    /// `getMappedReg(value, SrcRegMap)`: the register `value` arrives in.
+    pub fn src_register(
+        &self,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        Self::mapped(&self.src, value)
+    }
+
+    /// `getMappedReg(value, DstRegMap)`: the register `value` ends in.
+    pub fn dst_register(
+        &self,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        Self::mapped(&self.dst, value)
+    }
+
+    /// `processCopy`: the copies of `one` from and to a register (`delivers`
+    /// and `requires`), once.
+    pub fn process_copy(
+        &mut self,
+        one: &Insn,
+    ) {
+        if !self.processed.insert(one.id()) {
+            return;
+        }
+        // The copy to a register, before the instruction.
+        for (held, register) in &one.requires {
+            self.dst.entry(held.value).or_insert(Mapped::Register(*register));
+        }
+        // The copy from a register, after it: the value's uses are followed.
+        for (held, register) in &one.delivers {
+            self.src.entry(held.value).or_insert(Mapped::Register(*register));
+            self.scan_uses(held.value);
+        }
+    }
+
+    /// `findOnlyInterestingUse`: where all of `reg`'s uses are in this block,
+    /// the one that kills it when it is a copy to a register or another
+    /// value, or a tied use: that instruction, whether it is a copy, and
+    /// where `reg` goes.
+    fn find_only_interesting_use(
+        &self,
+        reg: u32,
+    ) -> Option<(Arc<Insn>, bool, Mapped)> {
+        let mut killing = None;
+        for (key, is_def) in self.facts.refs(reg) {
+            if is_def {
+                continue;
+            }
+            if self.facts.block_of(key) != Some(self.block) {
+                return None;
+            }
+            if self.facts.killed(key, reg) {
+                killing = Some(key);
+            }
+        }
+        let one = self.facts.insn(killing?);
+        // A copy to a register (the requirement that `reg` is in it).
+        if let Some(register) = one.requires.iter().find(|(held, _)| held.value == reg).map(|(_, register)| *register) {
+            return Some((one, true, Mapped::Register(register)));
+        }
+        // A copy to another value.
+        if let Some((dst, src)) = crate::coalescer::pair::full_copy(&one)
+            && src.value == reg
+        {
+            return Some((one, true, Mapped::Value(dst.value)));
+        }
+        // A tied use: the result is the first source's register.
+        if let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))
+            && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
+            && first.value == reg
+        {
+            let into = into.value;
+            return Some((one, false, Mapped::Value(into)));
+        }
+        // The other operand of a commutative instruction is the tied one.
+        if let Some((into, first, second)) = crate::backend::twoaddr::swappable_held(&one)
+            && second.value == reg
+            && first.value != reg
+        {
+            let into = into.value;
+            return Some((one, false, Mapped::Value(into)));
+        }
+        None
+    }
+
+    /// `scanUses`: the chain of copies and tied uses `dst_reg` goes through,
+    /// into `SrcRegMap` (each to the value before it) and `DstRegMap` (each
+    /// to where the chain ends).
+    fn scan_uses(
+        &mut self,
+        dst_reg: u32,
+    ) {
+        let mut pairs: Vec<Mapped> = Vec::new();
+        let mut reg = dst_reg;
+        while let Some((one, is_copy, next)) = self.find_only_interesting_use(reg) {
+            if is_copy && !self.processed.insert(one.id()) {
+                break;
+            }
+            // Earlier in this block, reached by a back edge.
+            if self.distance.contains_key(&one.id()) {
+                break;
+            }
+            let Mapped::Value(next_value) = next else {
+                pairs.push(next);
+                break;
+            };
+            self.src.insert(next_value, Mapped::Value(reg));
+            pairs.push(next);
+            reg = next_value;
+        }
+        let Some(mut to) = pairs.pop() else { return };
+        while let Some(from) = pairs.pop() {
+            let Mapped::Value(from_value) = from else { break };
+            self.dst.entry(from_value).or_insert(to);
+            to = from;
+        }
+        self.dst.entry(dst_reg).or_insert(to);
+    }
+
+    /// `tryInstructionTransform`'s `scanUses(regA)`: where `value`, the result
+    /// of a tied instruction, goes.
+    pub fn scan_uses_of(
+        &mut self,
+        value: u32,
+    ) {
+        self.scan_uses(value);
+    }
+
+    /// `processTiedPairs`, after the copy `into := mov first` was put before
+    /// `mi`: the copy takes the distance `mi` had and `mi` the next
+    /// (`DistanceMap`), and where `first` died at `mi` and `mi` reads it no
+    /// more, `into` arrives as `first` did (`SrcRegMap[LastCopiedReg] =
+    /// RegB`).
+    pub fn tied_pair_processed(
+        &mut self,
+        copy: InstrKey,
+        mi: InstrKey,
+        into: u32,
+        first: u32,
+        first_dies_here: bool,
+    ) {
+        self.distance.insert(copy, self.dist);
+        self.dist += 1;
+        self.distance.insert(mi, self.dist);
+        if first_dies_here {
+            self.src.insert(into, Mapped::Value(first));
+        }
+    }
+
+    /// `DistanceMap[key]`.
+    pub fn distance_of(
+        &self,
+        key: InstrKey,
+    ) -> Option<u32> {
+        self.distance.get(&key).copied()
+    }
+
+    /// `removeClobberedSrcRegMap`: after `one`, a register it writes no longer
+    /// holds what the entries mapped to it arrived as.
+    pub fn remove_clobbered_src_reg_map(
+        &mut self,
+        one: &Insn,
+    ) {
+        // A copy from a register into a value writes no register (the pin
+        // returns early for it); one to a register writes it, unless
+        // the value was mapped to it already (`%100 = COPY $r8 ... $r8
+        // = COPY %100` keeps the entry).
+        let mut written: Vec<llrm_lir::registers::RegId> =
+            one.clobbers.iter().chain(&one.clobbers_high).copied().collect();
+        for (held, register) in &one.requires {
+            if !self.src_register(held.value).is_some_and(|mapped| Self::compatible(*register, mapped)) {
+                written.push(*register);
+            }
+        }
+        if written.is_empty() {
+            return;
+        }
+        self.src.retain(|_, to| match to {
+            Mapped::Register(register) => !written.iter().any(|clobbered| Self::compatible(*clobbered, *register)),
+            Mapped::Value(_) => true,
+        });
     }
 
     /// `DistanceMap.insert(MI, ++Dist)`: the instruction is passed; its
@@ -369,10 +671,10 @@ impl<'a> Commuter<'a> {
         reg: u32,
     ) -> Option<InstrKey> {
         let mut found = None;
-        for &(instr, is_def) in self.facts.refs(reg) {
+        for (instr, is_def) in self.facts.refs(reg) {
             // A definition in another block is not counted (`DefMI.getParent()
             // != BB`).
-            if !is_def || self.facts.block_of.get(&instr) != Some(&self.block) {
+            if !is_def || self.facts.block_of(instr) != Some(self.block) {
                 continue;
             }
             if found.is_some_and(|key| key != instr) {
@@ -388,7 +690,7 @@ impl<'a> Commuter<'a> {
         &self,
         key: InstrKey,
     ) -> Option<(u32, u32)> {
-        crate::coalescer::pair::full_copy(&self.facts.insn[&key]).map(|(dst, src)| (src.value, dst.value))
+        crate::coalescer::pair::full_copy(&self.facts.insn(key)).map(|(dst, src)| (src.value, dst.value))
     }
 
     /// `getTiedUse`: the value the instruction's definition of `def` is tied
@@ -398,7 +700,8 @@ impl<'a> Commuter<'a> {
         key: InstrKey,
         def: u32,
     ) -> Option<u32> {
-        let what = self.facts.insn[&key].what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
+        let one = self.facts.insn(key);
+        let what = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
         match (&what.dests[0], &what.sources[0]) {
             (Loc::Held(dst), Loc::Held(src)) if dst.value == def => Some(src.value),
             _ => None,
@@ -412,7 +715,7 @@ impl<'a> Commuter<'a> {
         reg: u32,
     ) -> bool {
         let Some(key) = self.single_def(reg) else { return false };
-        let one = &self.facts.insn[&key];
+        let one = self.facts.insn(key);
         !one.volatile
             && one.what.as_ref().is_some_and(|what| {
                 what.op == crate::model::ir::Operation::Move
@@ -465,7 +768,7 @@ impl<'a> Commuter<'a> {
     ) -> (bool, u32) {
         let mut last_def = 0;
         let mut last_use = dist;
-        for &(instr, is_def) in self.facts.refs(reg) {
+        for (instr, is_def) in self.facts.refs(reg) {
             let Some(&at) = self.distance.get(&instr) else { continue };
             if !is_def && at < last_use {
                 last_use = at;
@@ -483,7 +786,7 @@ impl<'a> Commuter<'a> {
         key: InstrKey,
         reg: u32,
     ) -> bool {
-        self.facts.killed.borrow().contains(&(key, reg))
+        self.facts.killed(key, reg)
     }
 
     /// `isKilled`: whether `reg`, used by the instruction, dies there, looking
@@ -500,8 +803,8 @@ impl<'a> Commuter<'a> {
                 return false;
             }
             // Several definitions: go with what the kill says.
-            let mut defs = self.facts.refs(reg).iter().filter(|(_, is_def)| *is_def);
-            let (Some(&(def, _)), None) = (defs.next(), defs.next()) else { return true };
+            let defs: Vec<_> = self.facts.refs(reg).into_iter().filter(|(_, is_def)| *is_def).collect();
+            let [(def, _)] = defs[..] else { return true };
             at = def;
             // A definition that is no copy is not going to be coalesced.
             let Some((source, _)) = self.copy_to_reg(at) else { return true };
@@ -543,9 +846,9 @@ impl<'a> Commuter<'a> {
             (true, false) => return true,
             _ => {}
         }
-        if let Some(&to_a) = self.fixed.to.get(&a) {
-            let from_b = self.fixed.from.get(&b).copied();
-            let from_c = self.fixed.from.get(&c).copied();
+        if let Some(to_a) = self.dst_register(a) {
+            let from_b = self.src_register(b);
+            let from_c = self.src_register(c);
             let comp_b = from_b.is_some_and(|register| Self::compatible(register, to_a));
             let comp_c = from_c.is_some_and(|register| Self::compatible(register, to_a));
             // B is not tied to a register and C agrees with A, or B is tied to
@@ -649,9 +952,7 @@ impl<'a> Commuter<'a> {
         let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
             return false;
         };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg))
-            || !self.facts.killed.borrow().contains(&(work[last].id(), reg))
-        {
+        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
             return false;
         }
         let kill = Arc::clone(&work[last]);
@@ -705,7 +1006,7 @@ impl<'a> Commuter<'a> {
                 if defs.contains(&value) {
                     return false;
                 }
-                let kills_here = self.facts.killed.borrow().contains(&(other.id(), value));
+                let kills_here = self.facts.killed(other.id(), value);
                 if value != reg && ((kills_here && uses.contains(&value)) || kills.contains(&value)) {
                     return false;
                 }
@@ -719,9 +1020,15 @@ impl<'a> Commuter<'a> {
         for (place, one) in moved.into_iter().enumerate() {
             work.insert(after + place, one);
         }
-        let mut killed = self.facts.killed.borrow_mut();
-        killed.remove(&(kill.id(), reg));
-        killed.insert((mi.id(), reg));
+        // `LIS->handleMove` of the copies and then the instruction, each
+        // below what it reads: the last copy first, before what follows them,
+        // so the block is well-formed (a def moved below its reader) at each
+        // move (TwoAddressInstructionPass.cpp#L1066).
+        let mut before = work.get(after + (end - at)).map(|one| one.id());
+        for one in work[after..after + (end - at)].iter().rev() {
+            self.facts.move_before(self.block, one.id(), before);
+            before = Some(one.id());
+        }
         self.distance.remove(&mi.id());
         true
     }
@@ -737,12 +1044,12 @@ impl<'a> Commuter<'a> {
         dist: u32,
         mi: &Insn,
     ) -> bool {
-        for &(instr, is_def) in self.facts.refs(reg) {
-            if !is_def || self.facts.block_of.get(&instr) != Some(&self.block) {
+        for (instr, is_def) in self.facts.refs(reg) {
+            if !is_def || self.facts.block_of(instr) != Some(self.block) {
                 continue;
             }
-            let def = &self.facts.insn[&instr];
-            if crate::coalescer::pair::full_copy(def).is_some() {
+            let def = self.facts.insn(instr);
+            if crate::coalescer::pair::full_copy(&def).is_some() {
                 continue;
             }
             if instr == mi.id() {
@@ -786,9 +1093,7 @@ impl<'a> Commuter<'a> {
         let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
             return false;
         };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg))
-            || !self.facts.killed.borrow().contains(&(work[last].id(), reg))
-        {
+        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
             return false;
         }
         let kill = Arc::clone(&work[last]);
@@ -812,7 +1117,7 @@ impl<'a> Commuter<'a> {
             if self.def_too_close(value, dist, &mi) {
                 return false;
             }
-            let killed = self.facts.killed.borrow().contains(&(kill.id(), value));
+            let killed = self.facts.killed(kill.id(), value);
             if value == reg && !killed {
                 return false;
             }
@@ -838,7 +1143,7 @@ impl<'a> Commuter<'a> {
                 if kills.contains(&value) {
                     return false;
                 }
-                if other.id() != mi.id() && value == reg && !self.facts.killed.borrow().contains(&(other.id(), value)) {
+                if other.id() != mi.id() && value == reg && !self.facts.killed(other.id(), value) {
                     return false;
                 }
             }
@@ -848,9 +1153,8 @@ impl<'a> Commuter<'a> {
         }
         let moved = work.remove(last);
         work.insert(at, moved);
-        let mut killed = self.facts.killed.borrow_mut();
-        killed.remove(&(kill.id(), reg));
-        killed.insert((mi.id(), reg));
+        // `LIS->handleMove(*KillMI)`: above the tied instruction.
+        self.facts.move_before(self.block, kill.id(), Some(mi.id()));
         self.distance.remove(&mi.id());
         true
     }

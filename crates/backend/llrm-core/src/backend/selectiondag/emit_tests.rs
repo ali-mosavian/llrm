@@ -84,6 +84,8 @@ fn context_in(
     let no_blocks = HashMap::new();
     f(&EmitContext {
         caller_saved: &Default::default(),
+        conventions: &super::emit::NoConventions,
+        constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &no_blocks,
@@ -256,4 +258,33 @@ fn real_mode_address_components_are_confined_to_their_classes() {
             assert_eq!(got, want, "{mode:?} {}", value(&Loc::Held(cell.base.unwrap())));
         });
     }
+}
+
+/// `SHL32rCL` reads `CL` with no operand: the amount is copied to `CL` by
+/// the `CopyToReg` glued to it. The emitter looked for a second source in the
+/// node's operands and stopped at "SHL32rCL: missing source" (9 m32 programs).
+#[test]
+fn a_shift_by_cl_reads_cl() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let value = copy_from(&mut dag, entry, 10);
+    let register = dag.get_register(EVT::I8, 11);
+    let amount = dag.get_node_multi(ISD::CopyFromReg, &[EVT::I8, EVT::OTHER], &[entry, register]);
+    let cl = dag.get_phys_register(EVT::I8, RegId::CL);
+    let set = dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &[entry, cl, amount]);
+    let glue = SDValue { node: set.node, res: 1 };
+    let shifted = machine(&mut dag, "SHL32rCL", &[EVT::I32, EVT::I32], &[value, glue]);
+    let root = copy_to(&mut dag, entry, 12, shifted);
+    context(|ctx| {
+        let units = schedule(&dag, root, &Info);
+        let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
+        let lines = text(&blocks[0].insns);
+        let shl =
+            blocks[0].insns.iter().find(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shl")));
+        let shl = shl.unwrap_or_else(|| panic!("{lines:?}")).what.as_ref().unwrap();
+        // the amount is a value the form pins to `cx`, not a physical register
+        // nobody defines (the LIR verifier: "value defined N times")
+        assert!(matches!(shl.sources.last(), Some(Loc::Held(_))), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
+    });
 }

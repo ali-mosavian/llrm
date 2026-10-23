@@ -1,5 +1,6 @@
 use super::super::legalize_types::TypeLegalizer;
 use super::*;
+use crate::backend::selectiondag::x86_lowering::x86isd;
 
 fn legalized(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
@@ -64,4 +65,54 @@ fn wide_bitcast_from_a_word_splits_low_and_high() {
     TypeLegalizer::new(&mut dag, &tli).run().unwrap();
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::Truncate, word));
+}
+
+/// A huge pointer plus a dword carries into the selector: offset low word
+/// of the dword sum, selector stepped by the sum's high word times the DOS
+/// stride (shift 12). Without the expansion the node stayed unexpanded and
+/// the function was not selected.
+#[test]
+fn huge_add_steps_the_selector_by_the_carry() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
+    let delta = dag.get_register(EVT::I32, 9);
+    let moved = dag.get_node(x86isd::HUGE_ADD, MVT::Far.into(), &[far, delta]);
+    let pair = dag.get_node(ISD::BitCast, EVT::I32, &[moved]);
+    dag.set_root(pair);
+    TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m16::M16).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::BuildPair);
+    let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
+    let sum = dag.operand(low, 0);
+    assert_eq!((dag.opcode(low), dag.opcode(sum)), (ISD::Truncate, ISD::Add));
+    assert_eq!((dag.opcode(high), dag.operand(high, 0)), (ISD::Add, selector));
+    let shl = dag.operand(dag.operand(high, 1), 0);
+    assert_eq!((dag.opcode(shl), dag.constant(dag.operand(shl, 1))), (ISD::Shl, Some(12)));
+    assert_eq!(dag.opcode(dag.operand(shl, 0)), ISD::Sra);
+}
+
+/// A `poison` or `undef` far pointer (a null-ish default of a far argument)
+/// stopped the type legalizer: "Poison: expand result" (c/fsgs_call.c of the
+/// m32 run). It is a poison of each half.
+#[test]
+fn an_undef_or_poison_wide_value_expands_to_undef_halves() {
+    for (make, op) in [
+        (SelectionDAG::get_undef as fn(&mut SelectionDAG, EVT) -> SDValue, ISD::Undef),
+        (SelectionDAG::get_poison, ISD::Poison),
+    ] {
+        for (tli, wide, half) in [
+            (TargetLowering::empty(TargetLoweringInfo::x86_16()), EVT::from(MVT::Far), EVT::I16),
+            (TargetLowering::x86_32(Features::default(), MVT::I32), EVT::I64, EVT::I32),
+        ] {
+            let mut dag = dag();
+            let value = make(&mut dag, wide);
+            let low = dag.get_node(ISD::Truncate, half, &[value]);
+            dag.set_root(low);
+            let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+            legalizer.run().unwrap();
+            assert!(legalizer.all_legal(), "{op:?} {wide:?}");
+        }
+    }
 }

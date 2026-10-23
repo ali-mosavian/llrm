@@ -264,6 +264,9 @@ impl TargetLowering {
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
             self.set_ops(&[UAddOCarry, USubOCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
+            // A pair that is a legal register type (an i32 at m16) is built by
+            // shifts and an or.
+            self.set_ops(&[BuildPair], &[vt], Action::Expand);
         }
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
@@ -350,6 +353,10 @@ impl TargetLowering {
         t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
         // L337..L370
         t.set_ops(&[MulHS, MulHU, SDiv, UDiv, SRem, URem], &ints64, Expand);
+        // The pin divides an i8 or i16 by a constant with a widened multiply
+        // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
+        // has the two-result multiply (`MUL32r`).
+        t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
         t.set_operation_action(BrJT, MVT::Other, Expand);
         t.set_operation_action(BrCond, MVT::Other, Custom);
         t.set_ops(&[BrCC, SelectCC], &[MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64], Expand);
@@ -384,7 +391,7 @@ impl TargetLowering {
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
         t.set_ops(&[Select, SetCC], &ints, Custom);
-        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[ptr], Custom);
+        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], &[ptr], Custom);
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // L559..L566: 32-bit va_list is a pointer

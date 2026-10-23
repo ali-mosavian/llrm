@@ -7,7 +7,7 @@ F = "-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-p
 def cmds(p):
     s = R / "bench" / p / f"{p}.c"; g = O / "b" / f"{p}.c"
     ll = [str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-march=i486", "-fno-inline-functions"]
-    return {"llrm O2": ll + ["-O2", "-o", "/dev/null", str(s)], "llrm Os": ll + ["-Os", "-o", "/dev/null", str(s)],
+    return {"llrm O2": ll + ["-O2", "-o", llrmbin.OBJECT, str(s)], "llrm Os": ll + ["-Os", "-o", llrmbin.OBJECT, str(s)],
             "gcc O2": ["gcc", *F, "-O2", "-c", "-o", "/dev/null", str(g)], "gcc Os": ["gcc", *F, "-Os", "-c", "-o", "/dev/null", str(g)],
             "clang O2": ["clang", *F, "-O2", "-c", "-o", "/dev/null", str(g)], "clang Os": ["clang", *F, "-Os", "-c", "-o", "/dev/null", str(g)]}
 res = {}
@@ -15,6 +15,7 @@ for p in progs:
     for k, c in cmds(p).items():
         best = 1e9
         for _ in range(5):
-            t = time.perf_counter(); subprocess.run(c, check=True, capture_output=True); best = min(best, time.perf_counter() - t)
+            with llrmbin.with_object(c) as run:
+                t = time.perf_counter(); subprocess.run(run, check=True, capture_output=True); best = min(best, time.perf_counter() - t)
         res.setdefault(p, {})[k] = best * 1000
 json.dump(res, open(O / "ctime.json", "w"))

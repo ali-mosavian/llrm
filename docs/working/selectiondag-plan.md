@@ -210,7 +210,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
 
-| SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD200 | sdag-b | condition lowering without the bit-test and carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
@@ -218,9 +218,15 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
 | SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
+| SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form), no DIVREM merge | `selectiondag/div_combine.rs` |
+| SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
+| SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
+| SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
+| SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
+| SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | DIVREM selects i16 and i32 only; i8 (AL/AH) and i64 (RAX/CQO) stay unselected | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
@@ -228,7 +234,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD304 | sdag-c | `isKnownNeverZero` is the known-bits part only (a known set bit); the cttz `cmov` stays for values the pin proves non-zero by other means | `selectiondag/x86_lowering.rs` |
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
 | SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
-| SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
+| SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010, `SEGMENT_OF` as 30011 and `LLRM_FARCALL` (24584) as 30012; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.
 

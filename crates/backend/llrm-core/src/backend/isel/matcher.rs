@@ -52,7 +52,7 @@
 use std::sync::Arc;
 
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::{CastOp, ConstantKind, Opcode, TypeId};
+use llrm_mir::{BinaryOp, CastOp, ConstantKind, Opcode, TypeId};
 
 use super::{
     Convention, FLOAT, Pointer, Selector, Test, TypeClass, Unselected, float_conditions, insn, insn_of, refuse,
@@ -799,26 +799,38 @@ impl Selector<'_, '_, '_> {
         )
     }
 
-    /// Whether a `getelementptr` takes the root's result: the address reads the
-    /// sum's parts, not the sum, so a load covered by the sum is never
-    /// selected.
+    /// Whether a `getelementptr` takes the root's result, directly or through
+    /// the constants added to it (`peeled`: `x + y - 1` is an address's
+    /// displacement): the address reads the sum's parts, not the sum, so a load
+    /// covered by the sum is never selected.
     pub fn is_indexing(
         &self,
         m: &Match,
     ) -> bool {
         let function = self.function;
-        function
-            .instruction(m.inst)
-            .result
-            .is_some_and(
-                |result| function
-                    .users(result)
-                    .iter()
-                    .any(|one| matches!(
-                        function.instruction(one.user).opcode,
-                        Opcode::GetElementPtr { .. }
-                    )),
-            )
+        let mut at = function.instruction(m.inst).result;
+        while let Some(result) = at {
+            if function
+                .users(result)
+                .iter()
+                .any(|one| matches!(
+                    function.instruction(one.user).opcode,
+                    Opcode::GetElementPtr { .. }
+                ))
+            {
+                return true;
+            }
+            // One reader that adds or subtracts a constant: the chain goes on
+            // there.
+            at = function.users(result).only().and_then(|one| {
+                let reading = function.instruction(one.user);
+                let constant = matches!(&reading.operands[..], [_, by] if self.literal(*by).is_some());
+                (matches!(reading.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) && one.index == 0 && constant)
+                    .then_some(reading.result)
+                    .flatten()
+            });
+        }
+        false
     }
 
     pub fn is_nonvolatile(

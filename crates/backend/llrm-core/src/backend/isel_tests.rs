@@ -1113,6 +1113,31 @@ define i16 @f() addrspace(1) {
     assert!(!lines.iter().any(|one| one.starts_with("sub si") || one.starts_with("sub di")), "{lines:?}");
 }
 
+/// `to[off + n - 1]`: the address reads the two loads and the sum less one is
+/// its displacement. `arithmetic_cell` took the second load for the add's
+/// memory operand, looking only at a direct `getelementptr` reader, and the
+/// address then read a value nothing defined: "a unique value" panic in the
+/// allocator (#2705, bintree.bas at -O0, -O1 in QCport).
+#[test]
+fn test_a_sum_less_a_constant_that_is_an_address_keeps_its_loads() {
+    let text = "@to = internal global [300 x i8] zeroinitializer
+@n = internal global i16 150
+@off = internal global i16 1
+define i8 @f() addrspace(1) {
+  %a = load i16, ptr @off
+  %b = load i16, ptr @n
+  %s = add i16 %a, %b
+  %i = sub i16 %s, 1
+  %p = getelementptr inbounds i8, ptr @to, i16 %i
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+";
+    let lines = listing(text, "f");
+    let loads = lines.iter().filter(|one| one.starts_with("mov") && one.contains("word ptr")).count();
+    assert_eq!(loads, 2, "both words are loaded for the address: {lines:?}");
+}
+
 /// Every near string op saved ES, set it to DS and restored it
 /// (`push es / push ds / pop es / ... / pop es`), 16 instructions a trip of
 /// scroll's loop. DGROUP is a constant any op reads: set once ahead of the
@@ -1266,9 +1291,9 @@ b1:
             "div ebx",
             "mov eax, ecx",
             "div ebx",
-            "xor esi, edi",
-            "xor eax, esi",
-            "sub eax, esi",
+            "xor edi, esi",
+            "xor eax, edi",
+            "sub eax, edi",
             "shld edx, eax, 16",
             "pop di",
             "pop si",
@@ -1303,7 +1328,6 @@ define i16 @f() addrspace(1) {
 /// from the pool in its narrowest exact format, as LLVM's does.
 #[test]
 fn test_a_constant_condition_and_a_float_constant_select() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f() addrspace(1) {
 b1:
   br i1 true, label %b2, label %b3
@@ -1325,9 +1349,8 @@ b3:
             "sub sp, 6",
             "L0_0:",
             "fnstcw word ptr [bp-4]",
-            "mov ax, word ptr [bp-4]",
-            "or ax, 3072",
-            "mov word ptr [bp-6], ax",
+            "fnstcw word ptr [bp-6]",
+            "or word ptr [bp-6], 3072",
             "fld dword ptr $K1",
             "fadd dword ptr $K2",
             "fldcw word ptr [bp-6]",
@@ -1441,7 +1464,6 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
 /// through memory, and an ordered compare is fcom, sahf and ja.
 #[test]
 fn test_floats_are_x87_values() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@k = internal global double 1.5
 @out = internal global float 0.0
 declare cc1000 void @show(float) addrspace(1)
@@ -1486,37 +1508,39 @@ small:
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 32",
+            "sub sp, 36",
             "L1_0:",
             "mov ax, word ptr [bp+6]",
             "mov word ptr [bp-2], ax",
             "fild word ptr [bp-2]",
+            "fst qword ptr [bp-26]",
             "fst qword ptr [bp-8]",
             "push dword ptr [bp-4]",
             "push dword ptr [bp-8]",
-            "fst qword ptr [bp-16]",
+            "fstp qword ptr [bp-16]",
             "push dword ptr [bp-12]",
             "push dword ptr [bp-16]",
-            "fstp qword ptr [bp-24]",
             "call far ptr scale",
+            "fst qword ptr [bp-36]",
             "add sp, 16",
             "fst dword ptr out",
-            "fst dword ptr [bp-4]",
+            "fstp dword ptr [bp-4]",
             "push dword ptr [bp-4]",
-            "fstp qword ptr [bp-32]",
             "call far ptr show",
-            "fld qword ptr [bp-32]",
-            "fcomp qword ptr [bp-24]",
+            "fld qword ptr [bp-26]",
+            "fld qword ptr [bp-36]",
+            "fcompp",
             "fnstsw ax",
             "sahf",
+            "fld qword ptr [bp-36]",
             "jbe L1_10",
             "L1_8:",
-            "fld qword ptr [bp-32]",
             "fistp word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "leave",
             "retf",
             "L1_10:",
+            "fstp st(0)",
             "xor ax, ax",
             "leave",
             "retf",
@@ -1563,7 +1587,6 @@ define double @f(double %x) addrspace(1) {
 /// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
 #[test]
 fn test_a_float_to_an_integer_is_stored_toward_zero() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i16 @f(double %x) addrspace(1) {
   %s = fptosi double %x to i16
   %u = fptoui double %x to i16
@@ -1579,9 +1602,8 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "sub sp, 8",
             "L0_0:",
             "fnstcw word ptr [bp-6]",
-            "mov ax, word ptr [bp-6]",
-            "or ax, 3072",
-            "mov word ptr [bp-8], ax",
+            "fnstcw word ptr [bp-8]",
+            "or word ptr [bp-8], 3072",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
@@ -1720,7 +1742,6 @@ fn test_a_far_pointer_as_a_word_is_its_offset() {
 /// equal with PF set, so oeq is `sete` and `setnp`, une `setne` or `setp`.
 #[test]
 fn test_float_equality_is_equal_and_ordered() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @eq(double %a, double %b) addrspace(1) {
   %c = fcmp oeq double %a, %b
   ret i1 %c
@@ -1730,11 +1751,13 @@ define i1 @ne(double %a, double %b) addrspace(1) {
   ret i1 %c
 }
 ";
-    let compared = ["push bp", "mov bp, sp", "fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "fnstsw ax", "sahf"];
+    let compared = ["push bp", "mov bp, sp", "fnstsw ax", "sahf"];
+    // The compare, however the operands reach it: loads, an exchange, `fcom`.
+    let compares = |line: &str| line.starts_with("fld ") || line.starts_with("fxch") || line.starts_with("fcomp");
     let answered = |name: &str| {
         listing(text, name)
             .into_iter()
-            .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':'))
+            .filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
     assert_eq!(answered("eq"), ["sete cl", "setnp al", "and al, cl", "pop bp", "retf"]);
@@ -1746,7 +1769,6 @@ define i1 @ne(double %a, double %b) addrspace(1) {
 /// was refused.
 #[test]
 fn test_float_unordered_predicates_are_below() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "define i1 @ult(double %a, double %b) addrspace(1) {
   %c = fcmp ult double %a, %b
   ret i1 %c
@@ -1757,14 +1779,16 @@ define i1 @uge(double %a, double %b) addrspace(1) {
 }
 ";
     let prologue = ["push bp", "mov bp, sp", "fnstsw ax", "sahf", "pop bp", "retf"];
+    // The compare, however the operands reach it: loads, an exchange, `fcom`.
+    let compares = |line: &str| line.starts_with("fld ") || line.starts_with("fxch") || line.starts_with("fcomp");
     let answered = |name: &str| {
         listing(text, name)
             .into_iter()
-            .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':'))
+            .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("ult"), ["fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "setb al"]);
-    assert_eq!(answered("uge"), ["fld qword ptr [bp+14]", "fcomp qword ptr [bp+6]", "setbe al"]);
+    assert_eq!(answered("ult"), ["setb al"]);
+    assert_eq!(answered("uge"), ["setbe al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.
@@ -2138,7 +2162,6 @@ fn test_a_volatile_load_is_not_an_x87_operand() {
 /// fptosi, lrint and fptrunc each went through a frame temporary.
 #[test]
 fn test_a_conversion_only_a_store_reads_is_stored_by_x87() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@b = internal global i16 0
 @o = internal global float 0.0
 declare i16 @llvm.lrint.i16.f64(double)
@@ -2160,9 +2183,8 @@ define void @f(double %x) addrspace(1) {
             "sub sp, 4",
             "L0_0:",
             "fnstcw word ptr [bp-2]",
-            "mov ax, word ptr [bp-2]",
-            "or ax, 3072",
-            "mov word ptr [bp-4], ax",
+            "fnstcw word ptr [bp-4]",
+            "or word ptr [bp-4], 3072",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-4]",
             "fist word ptr b",
@@ -3700,7 +3722,6 @@ fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
 /// isel's calls listed nothing, and floatassign read the cell again.
 #[test]
 fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "@out = internal global double 0.0
 declare void @g(ptr) addrspace(1)
 define void @f(double %a) addrspace(1) {
@@ -4391,7 +4412,6 @@ b2:
 /// frame where one cell served them all.
 #[test]
 fn test_stack_temporaries_share_one_cell() {
-    let _old = crate::backend::allocate::RfpOn::off();
     let text = "declare void @g(double) addrspace(1)
 define void @f(double %a, double %b) addrspace(1) {
   %x = fadd double %a, %b
@@ -6573,7 +6593,6 @@ r:
 /// reader, so both arguments were loaded first and spilled across the call.
 #[test]
 fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
-    let _on = crate::backend::allocate::RfpOn::set();
     let text = "declare void @g() addrspace(1)
 define float @f(float %x, float %y) addrspace(1) {
   call addrspace(1) void @g()
@@ -6595,7 +6614,6 @@ define float @f(float %x, float %y) addrspace(1) {
 /// is stored and loaded back from its spill cell.
 #[test]
 fn test_a_float_converted_from_a_local_cell_is_not_made_again_from_it() {
-    let _on = crate::backend::allocate::RfpOn::set();
     let text = "@g = global x86_fp80 zeroinitializer
 @k = global i32 0
 declare void @h(i32) addrspace(1)

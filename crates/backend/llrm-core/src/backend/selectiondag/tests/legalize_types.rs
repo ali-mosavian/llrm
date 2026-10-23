@@ -9,7 +9,7 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
+    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -95,4 +95,24 @@ fn an_unhandled_node_is_refused_by_name() {
     dag.set_root(byte);
     let error = legalize(&mut dag, &tli).unwrap_err();
     assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
+}
+
+/// A zero-extending `i64` load from a dword expanded as two dword loads (the
+/// second from +4), so the high half was memory instead of zero: a wrong value
+/// (bitfield_long_long, 7 m16/m32 execution programs) and a degenerate load
+/// `zext from i32` of an `i32`.
+#[test]
+fn a_zero_extending_i64_load_from_a_dword_has_a_zero_high_half() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
+    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 };
+    let wide = dag.get_ext_load(super::super::actions::LoadExt::ZExtLoad, EVT::I64, chain, ptr, info);
+    let thirty_two = dag.get_constant(32, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I64, &[wide, thirty_two]);
+    let high = dag.get_node(ISD::Truncate, EVT::I32, &[shifted]);
+    dag.set_root(high);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let root = dag.get_root();
+    assert_eq!(dag.constant(root), Some(0), "the high dword is zero");
 }

@@ -645,7 +645,13 @@ pub(crate) fn _keeps(
         } else {
             // The optimizer's proof of the pair answers a write whose address
             // LIR cannot place.
-            let overlaps = crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width);
+            // A register in a data address reaches the whole object, whatever
+            // its `addr` says of the bytes it starts at (a frame address says
+            // it by its `base`, in `overlap`).
+            let reaches = (dest.base.is_some() || dest.index.is_some())
+                && dest.addr.is_some_and(|addr| addr.space != Space::Frame);
+            let overlaps =
+                reaches || crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width);
             match (apart, cell.addr, dest.addr) {
                 (false, _, _) => dest.addr.is_none() || overlaps,
                 // What it proved is the MIR write's own: a far or unplaced
@@ -1073,4 +1079,59 @@ pub(crate) fn _renamed(
     rename: &IndexMap<u32, u32>,
 ) -> Arc<Insn> {
     one.renamed(&|value| rename.get(&value).copied().unwrap_or(value))
+}
+
+#[cfg(test)]
+mod keeps_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Addr, Held, Imm, Operation, Semantics};
+
+    /// A store through a register to `_a` reaches all of `_a`, whatever byte
+    /// its `addr` starts at: `_a[v+v] = 7` was taken to keep the cell `_a+2`,
+    /// so a load of it was made again after the loop (loop_fusion -Omax read
+    /// the value the loop had stored).
+    #[test]
+    fn test_a_store_through_a_register_does_not_keep_a_cell_of_its_symbol() {
+        let symbol = |disp| Addr { index: 3, ..Addr::new(Space::Segment, disp) };
+        let held = |value| Held { value, width: 4 };
+        let cell = Mem::new(Some(symbol(2)), 2);
+        let load = Arc::new(Insn::new(
+            1,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                sources: vec![Loc::Mem(cell.clone())],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![9],
+            vec![],
+        ));
+        let through = Mem { base: Some(held(5)), index: Some(held(5)), ..Mem::new(Some(symbol(0)), 2) };
+        let store = Arc::new(Insn::new(
+            2,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Mem(through)],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 2, address: None })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![],
+            vec![5, 5],
+        ));
+        let body = LirBody::new(
+            "k",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(
+                0,
+                vec![Arc::clone(&load), Arc::clone(&store)],
+            ))],
+            Default::default(),
+            Default::default(),
+        );
+        assert!(!_keeps(&store, &load, &cell, true, &body));
+    }
 }

@@ -18,8 +18,8 @@
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
 //! DEVIATE SD200: not translated yet, so the nodes are the plain forms: the
-//! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
-//! `ADD`/`AND` as flags, the `SUB 0, x` and `XOR` forms of `EmitCmp`), the
+//! bit-test fold (`LowerAndToBT`), the `SUB 0, x` and `XOR` forms of
+//! `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
@@ -60,6 +60,18 @@ pub mod x86isd {
     /// chain; the segment is read back from `ES`/`DS`.
     pub const LES: ISD = ISD::Target(24576);
     pub const LDS: ISD = ISD::Target(24577);
+    /// A huge pointer plus an `i32` byte delta (a GEP the builder cannot
+    /// prove stays in its segment): `(far, i32) -> far`. Expanded by the
+    /// type legalizer, never selected.
+    pub const HUGE_ADD: ISD = ISD::Target(24590);
+    /// `llrm.ia16.window.p1.p3` as a node: a huge pointer with whole selector
+    /// steps of its offset moved into the selector, `far -> far`. Expanded by
+    /// the type legalizer, never selected (24578..24580 are the asm
+    /// pass-through nodes).
+    pub const LLRM_WINDOW: ISD = ISD::Target(24581);
+    /// `llrm.ia16.ptrdiff`: the bytes between two carried huge pointers,
+    /// `(far, far) -> i32`. Expanded by the type legalizer, never selected.
+    pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);
@@ -69,6 +81,9 @@ pub mod x86isd {
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
     pub const FILD: ISD = ISD::Target(586);
+    /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
+    /// `sahf` on a 486).
+    pub const FCMP: ISD = ISD::Target(576);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -77,6 +92,8 @@ pub const ES: u32 = 31;
 
 /// `X86::CondCode`.
 pub mod cond {
+    pub const O: u128 = 0;
+    pub const NO: u128 = 1;
     pub const B: u128 = 2;
     pub const AE: u128 = 3;
     pub const E: u128 = 4;
@@ -85,6 +102,7 @@ pub mod cond {
     pub const A: u128 = 7;
     pub const S: u128 = 8;
     pub const NS: u128 = 9;
+    pub const P: u128 = 10;
     pub const NP: u128 = 11;
     pub const L: u128 = 12;
     pub const GE: u128 = 13;
@@ -135,6 +153,7 @@ impl Hooks for X86Lowering {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
@@ -202,13 +221,137 @@ fn translate_cc(
     }
 }
 
-/// `EmitTest`, without the arithmetic-flag reuse (SD35): `cmp x, 0`.
+/// `isNON_EXTLoad`.
+fn is_non_ext_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::Load
+        && matches!(
+            dag.node(value).data,
+            super::dag::NodeData::Mem(info) if info.ext.is_none()
+        )
+}
+
+/// `TranslateX86CC` for floats: the code and the operands, swapped where the
+/// flags want the other order. `None` for `oeq` and `une`, which the
+/// legalizer has already expanded to two compares.
+fn translate_fp_cc(
+    dag: &SelectionDAG,
+    mut cc: CondCode,
+    lhs: &mut SDValue,
+    rhs: &mut SDValue,
+) -> Option<u128> {
+    if is_non_ext_load(dag, *lhs) && !is_non_ext_load(dag, *rhs) {
+        cc = cc.swapped_operands();
+        std::mem::swap(lhs, rhs);
+    }
+    if matches!(
+        cc,
+        CondCode::SetOLt | CondCode::SetOLe | CondCode::SetUGt | CondCode::SetUGe
+    ) {
+        std::mem::swap(lhs, rhs);
+    }
+    // ZF PF CF: greater 0 0 0, less 0 0 1, equal 1 0 0, unordered 1 1 1.
+    Some(match cc {
+        CondCode::SetUEq | CondCode::SetEq => cond::E,
+        CondCode::SetOLt | CondCode::SetOGt | CondCode::SetGt => cond::A,
+        CondCode::SetOLe | CondCode::SetOGe | CondCode::SetGe => cond::AE,
+        CondCode::SetUGt | CondCode::SetULt | CondCode::SetLt => cond::B,
+        CondCode::SetUGe | CondCode::SetULe | CondCode::SetLe => cond::BE,
+        CondCode::SetONe | CondCode::SetNe => cond::NE,
+        CondCode::SetUo => cond::P,
+        CondCode::SetO => cond::NP,
+        _ => return None,
+    })
+}
+
+/// A float compare's flags and condition code (`LowerSETCC`, floating point).
+fn float_flags(
+    dag: &mut SelectionDAG,
+    setcc: SDValue,
+) -> Option<(SDValue, SDValue)> {
+    let (mut lhs, mut rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
+    let code = translate_fp_cc(dag, cond_of(dag, dag.operand(setcc, 2)), &mut lhs, &mut rhs)?;
+    let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+    Some((flags, cond_code(dag, code)))
+}
+
+/// `hasNonFlagsUse`: whether `op` has a reader other than a branch, a compare
+/// or a select condition (looking past a truncate nothing else reads).
+fn has_non_flags_use(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    dag.users(op).any(|user| {
+        let mut user = SDValue { node: user, res: 0 };
+        let mut through = op;
+        if dag.opcode(user) == ISD::Truncate {
+            let mut readers = dag.users(user);
+            if let (Some(only), None) = (readers.next(), readers.next()) {
+                through = user;
+                user = SDValue { node: only, res: 0 };
+            }
+        }
+        let condition = dag.opcode(user) == ISD::Select && dag.operand(user, 0) == through;
+        !matches!(dag.opcode(user), ISD::BrCond | ISD::SetCC) && !condition
+    })
+}
+
+/// `isProfitableToUseFlagOp`: every reader of `op` is a register copy, a
+/// compare or a store.
+fn is_profitable_to_use_flag_op(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    dag.users(op)
+        .all(|user| matches!(
+            dag.opcode(SDValue { node: user, res: 0 }),
+            ISD::CopyToReg | ISD::SetCC | ISD::Store
+        ))
+}
+
+/// `EmitTest`: the flags of `op` against zero. An arithmetic result that only
+/// feeds registers, stores and compares is made by the flag-setting x86 form
+/// and the compare reads its flags, when the condition needs neither the carry
+/// nor the overflow flag (a `test` clears them).
 fn emit_test(
     dag: &mut SelectionDAG,
     op: SDValue,
+    code: u128,
 ) -> SDValue {
-    let zero = dag.get_constant(0, dag.value_type(op));
-    dag.get_node(x86isd::CMP, EVT::I32, &[op, zero])
+    let vt = dag.value_type(op);
+    let zero = dag.get_constant(0, vt);
+    let test = |dag: &mut SelectionDAG| dag.get_node(x86isd::CMP, EVT::I32, &[op, zero]);
+    let need_carry = matches!(code, cond::A | cond::AE | cond::B | cond::BE);
+    let wraps = !matches!(dag.opcode(op), ISD::Add | ISD::Sub | ISD::Mul | ISD::Shl)
+        || dag.node(op).flags.0 & SDNodeFlags::NO_SIGNED_WRAP.0 == 0;
+    let need_overflow = matches!(
+        code,
+        cond::G | cond::GE | cond::L | cond::LE | cond::O | cond::NO
+    ) && wraps;
+    if op.res != 0 || need_carry || need_overflow {
+        return test(dag);
+    }
+    let opcode = match dag.opcode(op) {
+        ISD::And if !has_non_flags_use(dag, op) => return test(dag),
+        ISD::And => x86isd::AND,
+        ISD::Add => x86isd::ADD,
+        ISD::Sub => x86isd::SUB,
+        ISD::Or => x86isd::OR,
+        ISD::Xor => x86isd::XOR,
+        x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
+            return SDValue { node: op.node, res: 1 };
+        }
+        _ => return test(dag),
+    };
+    if !is_profitable_to_use_flag_op(dag, op) {
+        return test(dag);
+    }
+    let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+    let new = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    dag.replace_all_uses_with(op, SDValue { node: new.node, res: 0 });
+    SDValue { node: new.node, res: 1 }
 }
 
 /// `EmitCmp`: the flags of `op0 - op1`.
@@ -216,9 +359,10 @@ fn emit_cmp(
     dag: &mut SelectionDAG,
     op0: SDValue,
     op1: SDValue,
+    code: u128,
 ) -> SDValue {
     if dag.is_null_constant(op1) {
-        return emit_test(dag, op0);
+        return emit_test(dag, op0, code);
     }
     let vt = dag.value_type(op0);
     let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[op0, op1]);
@@ -244,7 +388,7 @@ fn emit_flags_for_setcc(
     }
     let mut rhs = op1;
     let code = translate_cc(dag, cc, &mut rhs);
-    let flags = emit_cmp(dag, op0, rhs);
+    let flags = emit_cmp(dag, op0, rhs, code);
     (flags, cond_code(dag, code))
 }
 
@@ -254,6 +398,10 @@ fn lower_setcc(
     node: SDValue,
 ) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(op0).is_floating_point() {
+        let (flags, code) = float_flags(dag, node)?;
+        return Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]));
+    }
     if !dag.value_type(op0).is_integer() {
         return None;
     }
@@ -288,6 +436,7 @@ fn is_logical_cmp(
 ) -> bool {
     let op = dag.opcode(flags);
     op == x86isd::CMP
+        || op == x86isd::FCMP
         || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
 }
 
@@ -306,7 +455,7 @@ fn lower_select(
     can_cmov: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if !vt.is_integer() {
+    if !vt.is_integer() && !vt.is_floating_point() {
         return None;
     }
     let (mut cond, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
@@ -321,7 +470,7 @@ fn lower_select(
         flags = dag.operand(cond, 1);
     } else {
         code = cond_code(dag, cond::NE);
-        flags = emit_test(dag, cond);
+        flags = emit_test(dag, cond, cond::NE);
     }
     let (op1, op2, result_vt) =
         if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
@@ -339,13 +488,16 @@ fn lower_brcond(
     node: SDValue,
 ) -> Option<SDValue> {
     let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_floating_point() {
+        if let Some(branches) = lower_float_brcond(dag, node, cond) {
+            return Some(branches);
+        }
+    }
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
         let cc = cond_of(dag, dag.operand(cond, 2));
         let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc);
         (code, flags)
-    } else if dag.opcode(cond) == ISD::SetCC {
-        return None;
     } else {
         // Anything else is tested: `and cond, 1`, then `!= 0`.
         let vt = dag.value_type(cond);
@@ -360,6 +512,48 @@ fn lower_brcond(
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `LowerBRCOND` of a float compare. `une` is two branches to the target
+/// (not equal, or unordered); `oeq` followed by a `br` is two branches to the
+/// other successor and the `br` to this one. Other codes are one branch on
+/// the compare's flags; `oeq` with no `br` after it is left to the generic
+/// path (the compare expands to two).
+fn lower_float_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    cond: SDValue,
+) -> Option<SDValue> {
+    let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 2));
+    let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
+    let branch = |dag: &mut SelectionDAG, chain, dest, code, flags| {
+        let code = cond_code(dag, code);
+        dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
+    };
+    match cond_of(dag, dag.operand(cond, 2)) {
+        CondCode::SetUNe => {
+            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+            let first = branch(dag, chain, dest, cond::NE, flags);
+            Some(branch(dag, first, dest, cond::P, flags))
+        }
+        CondCode::SetOEq => {
+            let users: Vec<u32> = dag.users(node).collect();
+            let [user] = users[..] else { return None };
+            let user = SDValue { node: user, res: 0 };
+            if dag.opcode(user) != ISD::Br {
+                return None;
+            }
+            let false_block = dag.operand(user, 1);
+            dag.update_node_operands(user.node, &[dag.operand(user, 0), dest]);
+            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+            let first = branch(dag, chain, false_block, cond::NE, flags);
+            Some(branch(dag, first, false_block, cond::P, flags))
+        }
+        _ => {
+            let (flags, code) = float_flags(dag, cond)?;
+            Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+        }
+    }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
@@ -396,6 +590,17 @@ fn lower_constant_pool(
     let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+}
+
+/// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
     Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
 }
 
@@ -475,7 +680,8 @@ fn lower_fp_to_int(
         let offset = dag.get_select(value_vt, at_least, threshold, zero);
         value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
     }
-    let info = MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+    let info =
+        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -527,6 +733,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::Stack(index),
         ext: None,
+        space: 0,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -566,6 +773,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
+        space: 0,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -592,7 +800,8 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    let info = MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None };
+    let info =
+        MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
     Some(dag.get_store(chain, first, list, info))
 }
 

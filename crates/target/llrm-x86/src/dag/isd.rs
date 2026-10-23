@@ -31,6 +31,7 @@ pub enum ISD {
     TargetFrameIndex,
     ConstantPool,
     TargetConstantPool,
+    TargetJumpTable,
     BasicBlock,
     ValueType,
     CondCodeNode,
@@ -122,6 +123,12 @@ pub enum ISD {
     FSqrt,
     /// `FREEZE`: stops undef and poison propagating.
     Freeze,
+    SCmp,
+    UCmp,
+    SMulFix,
+    SDivFix,
+    StackSave,
+    StackRestore,
     FSin,
     FCos,
     FAtan,
@@ -183,6 +190,7 @@ impl ISD {
             TargetFrameIndex => "TargetFrameIndex",
             ConstantPool => "ConstantPool",
             TargetConstantPool => "TargetConstantPool",
+            TargetJumpTable => "TargetJumpTable",
             BasicBlock => "BasicBlock",
             ValueType => "ValueType",
             CondCodeNode => "CONDCODE",
@@ -270,6 +278,12 @@ impl ISD {
             FAbs => "fabs",
             FSqrt => "fsqrt",
             Freeze => "freeze",
+            SCmp => "scmp",
+            UCmp => "ucmp",
+            SMulFix => "smulfix",
+            SDivFix => "sdivfix",
+            StackSave => "stacksave",
+            StackRestore => "stackrestore",
             FSin => "fsin",
             FCos => "fcos",
             FAtan => "fatan",
@@ -374,6 +388,61 @@ impl CondCode {
 
     fn from_bits(bits: u8) -> CondCode {
         CondCode::ALL[bits as usize]
+    }
+
+    /// `ISD::isSignedOp` of an integer code: bit 0 signed, bit 1 unsigned.
+    fn signedness(self) -> u8 {
+        match self {
+            CondCode::SetLt | CondCode::SetLe | CondCode::SetGt | CondCode::SetGe => 1,
+            CondCode::SetULt | CondCode::SetULe | CondCode::SetUGt | CondCode::SetUGe => 2,
+            _ => 0,
+        }
+    }
+
+    /// `ISD::getSetCCOrOperation`: the code true when either is; `None` is
+    /// `SETCC_INVALID`.
+    pub fn or_operation(
+        self,
+        other: CondCode,
+        integer: bool,
+    ) -> Option<CondCode> {
+        if integer && (self.signedness() | other.signedness()) == 3 {
+            return None;
+        }
+        let mut bits = self as u8 | other as u8;
+        if bits > CondCode::SetTrue2 as u8 {
+            bits &= !16;
+        }
+        if integer && bits == CondCode::SetUNe as u8 {
+            bits = CondCode::SetNe as u8;
+        }
+        Some(CondCode::from_bits(bits))
+    }
+
+    /// `ISD::getSetCCAndOperation`: the code true when both are.
+    pub fn and_operation(
+        self,
+        other: CondCode,
+        integer: bool,
+    ) -> Option<CondCode> {
+        if integer && (self.signedness() | other.signedness()) == 3 {
+            return None;
+        }
+        let mut bits = self as u8 & other as u8;
+        if bits > CondCode::SetTrue2 as u8 {
+            bits &= !16;
+        }
+        let mut code = CondCode::from_bits(bits);
+        if integer {
+            code = match code {
+                CondCode::SetUo => CondCode::SetFalse,
+                CondCode::SetOEq | CondCode::SetUEq => CondCode::SetEq,
+                CondCode::SetOLt => CondCode::SetULt,
+                CondCode::SetOGt => CondCode::SetUGt,
+                other => other,
+            };
+        }
+        Some(code)
     }
 
     /// `ISD::isTrueWhenEqual`.

@@ -24,6 +24,11 @@
 //! (`sbb`) form the X86 target prefers. Exit: x86 `SETCCCARRY` lowering.
 //! Owner sdag-b. Review 2026-11-27.
 //!
+//! DEVIATE SD209: a load or store through a far pointer sets `ES` with a
+//! `CopyToReg` before it, ordered by the chain only: the access has no glue
+//! operand, so two far accesses unordered by the chain could interleave their
+//! `ES` writes. Exit: a glued far-access node. Owner sdag-b. Review 2026-12-10.
+//!
 //! DEVIATE SD33: no `NodeUpdateListener`:
 //! [`SelectionDAG::replace_all_uses_with`] returns what it did to each user
 //! ([`Rauw`]). Nodes replaced stay in the arena with no users (no
@@ -254,23 +259,26 @@ impl<'a> TypeLegalizer<'a> {
         users.sort_unstable();
         users.dedup();
         for user in users {
+            // One operand slot per read of `n`, whichever of its results.
+            let slots =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
                 NodeId::Pending(count) => {
-                    if count == 1 {
+                    if count <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(count - 1));
+                        self.set_id(user, NodeId::Pending(count - slots));
                     }
                 }
                 NodeId::New => {}
                 NodeId::Unanalyzed => {
                     let operands = self.dag.node(SDValue { node: user, res: 0 }).ops.len() as u32;
-                    if operands == 1 {
+                    if operands <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(operands - 1));
+                        self.set_id(user, NodeId::Pending(operands - slots));
                     }
                 }
                 NodeId::Ready | NodeId::Processed => {}
@@ -434,6 +442,15 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::Select => {
+                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+                // is.
+                let (cond, then, other) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
+                let wide = self.dag.value_type(then);
+                self.dag.get_node(ISD::Select, wide, &[cond, then, other])
+            }
             ISD::SetCC => {
                 // Compare into the target's own result type, then sign extend
                 // or truncate to the promoted type.
@@ -528,6 +545,24 @@ impl<'a> TypeLegalizer<'a> {
                 let mask = super::fold::mask(self.dag.value_type(src).size_in_bits());
                 let mask = self.dag.get_constant(mask, vt);
                 self.dag.get_node(ISD::And, vt, &[wide, mask])
+            }
+            ISD::AnyExtend => {
+                // `PromoteIntOp_ANY_EXTEND`.
+                let promoted = self.promoted_integer(self.dag.operand(node, 0));
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::AnyExtend, vt, &[promoted])
+            }
+            ISD::SignExtend => {
+                // `PromoteIntOp_SIGN_EXTEND`: `getNode(ISD::SIGN_EXTEND_INREG)`
+                // as a shift left and an arithmetic one right.
+                let src = self.dag.operand(node, 0);
+                let promoted = self.promoted_integer(src);
+                let vt = self.dag.value_type(node);
+                let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
+                let unused = vt.size_in_bits() - self.dag.value_type(src).size_in_bits();
+                let amount = self.dag.get_constant(u128::from(unused), EVT::I8);
+                let high = self.dag.get_node(ISD::Shl, vt, &[wide, amount]);
+                self.dag.get_node(ISD::Sra, vt, &[high, amount])
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
@@ -634,7 +669,15 @@ impl<'a> TypeLegalizer<'a> {
                 (les, selector)
             }
             ISD::Load => self.expand_load(value, half),
+            x86isd::HUGE_ADD if vt == EVT::Simple(MVT::Far) => self.expand_huge_add(value, half)?,
+            x86isd::LLRM_WINDOW if vt == EVT::Simple(MVT::Far) => self.expand_window(value, half)?,
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
+            op @ (ISD::Undef | ISD::Poison) => {
+                // `ExpandIntRes_UNDEF`: an undef (poison) of each half.
+                let make =
+                    |dag: &mut SelectionDAG| if op == ISD::Undef { dag.get_undef(half) } else { dag.get_poison(half) };
+                (make(self.dag), make(self.dag))
+            }
             ISD::Select => {
                 // `ExpandIntRes_SELECT`: one select per half.
                 let (cond, then, other) =
@@ -650,6 +693,24 @@ impl<'a> TypeLegalizer<'a> {
                 let shift = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
                 let high = self.dag.get_node(ISD::Srl, svt, &[src, shift]);
                 (self.dag.get_node(ISD::Truncate, half, &[src]), self.dag.get_node(ISD::Truncate, half, &[high]))
+            }
+            ISD::CopyFromReg if vt == EVT::Simple(MVT::Far) => {
+                // A far pointer a call returns in the register pair (`dx:ax`,
+                // named by the dword register): read it as the dword and take
+                // it apart as a bitcast does.
+                let mut values = self.dag.node(value).values.clone();
+                values[0] = EVT::I32;
+                let mut ops = self.dag.node(value).ops.clone();
+                if let NodeData::PhysReg(reg) = self.dag.node(ops[1]).data {
+                    ops[1] = self.dag.get_phys_register(EVT::I32, reg);
+                }
+                let dword = self.dag.get_node_multi(ISD::CopyFromReg, &values, &ops);
+                for res in 1..values.len() as u8 {
+                    self.replace_value_with(SDValue { node: value.node, res }, SDValue { node: dword.node, res });
+                }
+                let shift = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
+                let high = self.dag.get_node(ISD::Srl, EVT::I32, &[dword, shift]);
+                (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
             ISD::CtPop => self.expand_ctpop(value, half),
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
@@ -1041,6 +1102,26 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue) {
         let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        if let Some(ext) = info.ext {
+            // `ExpandIntRes_LOAD`, an extending load from memory no wider than
+            // the half: the low half is the (extending) load of
+            // that memory; the high is zero, the sign, or undefined.
+            let lo = if info.mem_vt == half {
+                self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, ..info })
+            } else {
+                self.dag.get_ext_load(ext, half, chain, ptr, info)
+            };
+            let hi = match ext {
+                super::actions::LoadExt::ZExtLoad => self.dag.get_constant(0, half),
+                super::actions::LoadExt::SExtLoad => {
+                    let sign = self.dag.get_constant(u128::from(half.size_in_bits() - 1), EVT::I8);
+                    self.dag.get_node(ISD::Sra, half, &[lo, sign])
+                }
+                super::actions::LoadExt::ExtLoad => self.dag.get_undef(half),
+            };
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: lo.node, res: 1 });
+            return (lo, hi);
+        }
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
         let pointer = self.dag.value_type(ptr);
@@ -1070,6 +1151,156 @@ impl<'a> TypeLegalizer<'a> {
         let low_store = self.dag.get_store(chain, lo, ptr, info);
         let high_store = self.dag.get_store(chain, hi, high_ptr, info);
         self.dag.get_token_factor(&[low_store, high_store])
+    }
+
+    /// A huge pointer plus a dword: the offset widened and added as a
+    /// dword, the offset the sum's low word, the selector stepped by its high
+    /// word at the machine's stride (`Machine::huge_shift`).
+    fn expand_huge_add(
+        &mut self,
+        node: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::HUGE_ADD,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
+        let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (offset, selector) = self.expanded_integer(far);
+        let dword = self.dag.value_type(delta);
+        let wide = self.dag.get_node(ISD::ZeroExtend, dword, &[offset]);
+        let sum = self.dag.get_node(ISD::Add, dword, &[wide, delta]);
+        let (width, stride_shift) = (
+            self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8),
+            self.dag.get_constant(u128::from(shift), EVT::I8),
+        );
+        let carry = self.dag.get_node(ISD::Sra, dword, &[sum, width]);
+        let stride = self.dag.get_node(ISD::Shl, dword, &[carry, stride_shift]);
+        let stride = self.dag.get_node(ISD::Truncate, half, &[stride]);
+        Ok((self.dag.get_node(ISD::Truncate, half, &[sum]), self.dag.get_node(ISD::Add, half, &[selector, stride])))
+    }
+
+    /// A huge pointer normalized: the offset's whole selector steps move into
+    /// the selector, leaving an offset below one step. A step is
+    /// `2^(bits - huge_shift)` bytes (16 on DOS), the selector counts steps.
+    fn expand_window(
+        &mut self,
+        node: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_WINDOW,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
+        let below = half.size_in_bits() - shift;
+        let (offset, selector) = self.expanded_integer(self.dag.operand(node, 0));
+        let by = self.dag.get_constant(u128::from(below), EVT::I8);
+        let steps = self.dag.get_node(ISD::Srl, half, &[offset, by]);
+        let mask = self.dag.get_constant((1u128 << below) - 1, half);
+        Ok((self.dag.get_node(ISD::And, half, &[offset, mask]), self.dag.get_node(ISD::Add, half, &[selector, steps])))
+    }
+
+    /// The bytes between two carried huge pointers into one object: both are
+    /// canonical, so the selectors differ by whole strides and the offsets by
+    /// the rest: `((sel_a - sel_b) >> huge_shift << 16) + (off_a - off_b)`,
+    /// each difference taken as a zero-extended dword.
+    fn expand_ptrdiff(
+        &mut self,
+        node: SDValue,
+    ) -> Result<SDValue, LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_PTRDIFF,
+                    ty: self.dag.value_type(node),
+                    what: "expand operand: no selector stride",
+                },
+            )?;
+        let vt = self.dag.value_type(node);
+        let ((a_off, a_sel), (b_off, b_sel)) =
+            (self.expanded_integer(self.dag.operand(node, 0)), self.expanded_integer(self.dag.operand(node, 1)));
+        let half = self.dag.value_type(a_off);
+        let widen = |dag: &mut SelectionDAG, value| dag.get_node(ISD::ZeroExtend, vt, &[value]);
+        let (offsets, selectors) =
+            ((widen(self.dag, a_off), widen(self.dag, b_off)), (widen(self.dag, a_sel), widen(self.dag, b_sel)));
+        let within = self.dag.get_node(ISD::Sub, vt, &[offsets.0, offsets.1]);
+        let between = self.dag.get_node(ISD::Sub, vt, &[selectors.0, selectors.1]);
+        let (by_stride, by_offset) = (
+            self.dag.get_constant(u128::from(shift), EVT::I8),
+            self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8),
+        );
+        let strides = self.dag.get_node(ISD::Sra, vt, &[between, by_stride]);
+        let high = self.dag.get_node(ISD::Shl, vt, &[strides, by_offset]);
+        Ok(self.dag.get_node(ISD::Add, vt, &[within, high]))
+    }
+
+    /// A load or store through a far pointer: the access is at the offset
+    /// word, and `ES` is set to the selector before it (`MemInfo::space` 259
+    /// makes the access `es:`-relative). Ordered by the chain only (SD209).
+    fn expand_far_address(
+        &mut self,
+        access: SDValue,
+        at: usize,
+    ) -> SDValue {
+        let (offset, selector) = self.expanded_integer(self.dag.operand(access, at));
+        let chain = self.dag.get_copy_to_reg(self.dag.operand(access, 0), ES, selector);
+        let mut ops = self.dag.node(access).ops.clone();
+        ops[0] = chain;
+        ops[at] = offset;
+        // The unindexed access's offset operand is a poison of the pointer
+        // type.
+        let last = ops.len() - 1;
+        ops[last] = self.dag.get_poison(self.dag.value_type(offset));
+        let updated = self.dag.update_node_operands(access.node, &ops);
+        SDValue { node: updated, res: 0 }
+    }
+
+    /// A call through a far pointer: offset then selector stored to a 4-byte
+    /// stack cell, and the call reads the cell (`LLRM_FARCALL`, SD208).
+    fn expand_far_call(
+        &mut self,
+        call: SDValue,
+    ) -> SDValue {
+        let (chain, callee) = (self.dag.operand(call, 0), self.dag.operand(call, 1));
+        let (offset, selector) = self.expanded_integer(callee);
+        let pointer = self.dag.config().pointer;
+        let cell = self.dag.create_stack_temporary(4, 2);
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let high = self.dag.get_constant(2, pointer);
+        let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, high]);
+        let info = super::dag::MemInfo {
+            mem_vt: EVT::I16,
+            align: 2,
+            volatile: false,
+            base: super::dag::MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+        };
+        let low_store = self.dag.get_store(chain, offset, slot, info);
+        let high_store = self.dag.get_store(chain, selector, high_slot, info);
+        let stores = self.dag.get_token_factor(&[low_store, high_store]);
+        let target = self.dag.get_target_frame_index(pointer, cell);
+        let mut ops = self.dag.node(call).ops.clone();
+        ops[0] = stores;
+        ops[1] = target;
+        let values = self.dag.node(call).values.clone();
+        let far_call = self.dag.get_node_multi(super::x86isd::LLRM_FARCALL, &values, &ops);
+        self.replace_value_with(SDValue { node: call.node, res: 1 }, SDValue { node: far_call.node, res: 1 });
+        far_call
     }
 
     /// `IntegerExpandSetCCOperands`: equality is the halves' xors or-ed
@@ -1142,6 +1373,10 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
             }
             ISD::Store if at == 1 => self.expand_store(node),
+            ISD::Load if at == 1 => self.expand_far_address(node, at),
+            ISD::Store if at == 2 => self.expand_far_address(node, at),
+            super::x86isd::CALL if at == 1 => self.expand_far_call(node),
+            x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
             ISD::BitCast => {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
                 // joined.

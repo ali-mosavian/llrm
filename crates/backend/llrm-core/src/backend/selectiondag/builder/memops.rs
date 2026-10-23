@@ -35,7 +35,48 @@ impl Builder<'_> {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
-            Intrinsic::MinMax { .. }
+            Intrinsic::PtrDiff => {
+                let (a, b) = (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(super::super::x86isd::LLRM_PTRDIFF, vt, &[a, b]);
+                self.set_value(instruction.result.ok_or(Refused("a pointer difference without a result"))?, node);
+                Ok(())
+            }
+            Intrinsic::Window => {
+                let pointer = self.get_value(instruction.operands[0])?;
+                let node = self
+                    .dag
+                    .get_node(super::super::x86isd::LLRM_WINDOW, EVT::Simple(super::super::mvt::MVT::Far), &[pointer]);
+                self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
+                Ok(())
+            }
+            Intrinsic::Assume => Ok(()),
+            // a hint the passes read: its value is its argument
+            Intrinsic::Expect | Intrinsic::Restrict => {
+                let value = self.get_value(instruction.operands[0])?;
+                self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
+                Ok(())
+            }
+            Intrinsic::StackSave => {
+                let vt = self.target.dag.pointer;
+                let root = self.root();
+                let node = self.dag.get_node_multi(ISD::StackSave, &[vt, EVT::OTHER], &[root]);
+                self.dag.set_root(SDValue { node: node.node, res: 1 });
+                self.set_value(instruction.result.ok_or(Refused("a stacksave without a result"))?, node);
+                Ok(())
+            }
+            Intrinsic::StackRestore => {
+                let saved = self.get_value(instruction.operands[0])?;
+                let root = self.root();
+                let node = self.dag.get_node(ISD::StackRestore, EVT::OTHER, &[root, saved]);
+                self.dag.set_root(node);
+                Ok(())
+            }
+            Intrinsic::Compare { .. } | Intrinsic::FMulAdd | Intrinsic::Fixed { .. } => {
+                self.visit_math(instruction, intrinsic)
+            }
+            Intrinsic::WithOverflow { .. }
+            | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
             | Intrinsic::Abs
@@ -176,6 +217,15 @@ impl Builder<'_> {
         Some(ops)
     }
 
+    /// The address space an access through `ptr` is in: a far pointer's
+    /// offset half is read through `ES` after `LES` (llrm's space 259).
+    fn space_of(
+        &self,
+        ptr: SDValue,
+    ) -> u32 {
+        if self.dag.value_type(ptr) == EVT::Simple(super::super::mvt::MVT::Far) { 259 } else { 0 }
+    }
+
     fn ptr_plus(
         &mut self,
         base: SDValue,
@@ -225,6 +275,7 @@ impl Builder<'_> {
                     volatile: false,
                     base: MemBase::Unknown,
                     ext: None,
+                    space: self.space_of(dst),
                 };
                 chains.push(self.dag.get_store(chain, value, to, info));
                 src_off += width;
@@ -239,6 +290,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
+                space: self.space_of(src),
             };
             let value = self.dag.get_load(vt, chain, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -248,6 +300,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
+                space: self.space_of(dst),
             };
             let store = self.dag.get_store(chain, value, to, info);
             chains.push(SDValue { node: value.node, res: 1 });
@@ -288,6 +341,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
+                space: self.space_of(src),
             };
             let value = self.dag.get_load(vt, chain, from, info);
             placed.push((value, off, vt));
@@ -305,6 +359,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
+                space: self.space_of(dst),
             };
             stores.push(self.dag.get_store(joined, value, to, info));
         }
@@ -342,6 +397,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
+                space: self.space_of(dst),
             };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;
@@ -459,6 +515,11 @@ impl Builder<'_> {
         which: &Intrinsic,
     ) -> Result<(), Refused> {
         let operands = &instruction.operands;
+        // A memmove a pass proved to run forward is a memcpy (the old
+        // selector's `llrm.forward`): no routine moves overlapping bytes.
+        let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
+        let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
+        let which = if forward && matches!(which, Intrinsic::MemMove) { &Intrinsic::MemCpy } else { which };
         let volatile = match operands.get(3) {
             Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
             _ => return Err(Refused("memory intrinsic with a variable volatile flag")),
@@ -497,6 +558,15 @@ impl Builder<'_> {
                     (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => {
                         self.rep_movs(root, dst, other, bytes, alignment.min(4), dst_align, src_align)?
                     }
+                    _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                        self.rep_movsb(root, dst, other, size)
+                    }
+                    _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
+                        // the old selector refuses it too: no instruction moves
+                        // overlapping bytes, and a call of a routine the
+                        // runtime lacks would not link
+                        return Err(Refused("memmove with no memmove in the runtime"));
+                    }
                     _ => self.mem_libcall(
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
@@ -518,12 +588,79 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
+                    _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
             }
         };
         self.dag.set_root(chain);
         Ok(())
+    }
+
+    /// Whether the target's runtime has the library routine `name`: its
+    /// `c.toml`'s `libcalls`, the fact the old selector and `memcpycall` read.
+    fn runtime_has(
+        &self,
+        name: &str,
+    ) -> bool {
+        if let Some(names) = &self.target.libcalls {
+            return names.iter().any(|(one, ..)| one == name);
+        }
+        self.arch
+            .runtime("c")
+            .and_then(|description| description.table().ok())
+            .and_then(|table| table.get("libcalls").and_then(|calls| calls.as_array()).cloned())
+            .is_some_and(|calls| calls.iter().any(|one| one.as_str() == Some(name)))
+    }
+
+    /// `rep movsb` of a size not known at compile time: `cx` bytes from `si`
+    /// to `di`, as the old selector copies when there is no `memcpy` to call.
+    fn rep_movsb(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        let pointer = self.target.dag.pointer;
+        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(di, dst), (si, src)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let byte = self.dag.get_value_type_node(EVT::I8);
+        let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        SDValue { node: rep.node, res: 0 }
+    }
+
+    /// `rep stosb` of a size not known at compile time.
+    fn rep_stosb(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        let pointer = self.target.dag.pointer;
+        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let al = self.arch.register_named("al");
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(cx, count), (di, dst)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let byte = self.dag.get_value_type_node(EVT::I8);
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        SDValue { node: rep.node, res: 0 }
     }
 
     /// `getMemcpy`'s libcall: `name(dst, src, size)` for a copy, `name(dst,
@@ -535,18 +672,34 @@ impl Builder<'_> {
         first_two: &[SDValue],
         size: SDValue,
     ) -> Result<SDValue, Refused> {
+        // The routine's symbol and calling convention are the target fact's
+        // (`options.libcalls`), as `memcpycall` applies them to a `memcpy`.
+        let Some((_, convention, routine_symbol)) =
+            self.target.libcalls.as_ref().and_then(|calls| calls.iter().find(|(routine, ..)| routine == name)).cloned()
+        else {
+            return Err(Refused("library call whose symbol and convention are the target fact's"));
+        };
         let types = &self.module.context.types;
         let pointer_type = types.ptr(0);
         let word = types.int(self.target.dag.pointer.size_in_bits());
-        let symbol = self.dag.get_external_symbol(self.target.dag.pointer, name);
+        let symbol = self.dag.get_external_symbol(self.target.dag.pointer, &routine_symbol);
         let value_type =
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
         let first = self.arch.first_argument_offset(false);
-        let plan: Convention =
-            convention_for(self.module, self.layout, self.arch, first, 0, pointer_type, false, &arg_types, &[])
-                .map_err(|_| Refused("libcall the convention does not describe"))?;
-        let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, name);
+        let plan: Convention = convention_for(
+            self.module,
+            self.layout,
+            self.arch,
+            first,
+            convention,
+            pointer_type,
+            false,
+            &arg_types,
+            &[],
+        )
+        .map_err(|_| Refused("libcall the convention does not describe"))?;
+        let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, &routine_symbol);
         let _ = symbol;
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);

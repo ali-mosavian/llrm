@@ -141,7 +141,7 @@ pub fn assembled(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
 ) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16)
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16, &[])
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
@@ -154,6 +154,7 @@ pub fn assembled_by(
     selection: &'static isel::Compiled,
     selector: Selector,
     arch: &dyn llrm_target::Target,
+    libcalls: &[(String, u32, String)],
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
@@ -177,6 +178,7 @@ pub fn assembled_by(
         runtime: "",
         basic: false,
         zeroed: false,
+        libcalls,
     };
     // Callees first, so what a function that takes part writes is known when
     // its callers are selected.
@@ -324,7 +326,7 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    masm::Procedure { body, ..procedure }
+                    masm::saved_first(masm::Procedure { body, ..procedure })
                 };
                 procedures.push(procedure);
             }
@@ -490,6 +492,9 @@ pub struct Target<'t> {
     pub basic: bool,
     /// A framed function's locals start zeroed: B$ENRA zero-fills them.
     pub zeroed: bool,
+    /// The library routines the runtime has, with the calling convention and
+    /// symbol a call of each uses (`options.libcalls`).
+    pub libcalls: &'t [(String, u32, String)],
 }
 
 /// A function selected and through the machine phases, as llc's
@@ -828,12 +833,29 @@ fn staged(
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let dag = match target.selector {
         Selector::Old => None,
+        // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
+        // selector for the rest -- to bisect a wrong result to a function
+        Selector::Dag | Selector::Shadow if !shadow::only(name) => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+            crate::backend::selectiondag::dag_function::selected_in_pool(
+                module,
+                name,
+                target.arch,
+                target.cpu,
+                target.libcalls,
+                &mut pool.borrow_mut(),
+            )
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+                crate::backend::selectiondag::dag_function::selected_in_pool(
+                    module,
+                    name,
+                    target.arch,
+                    target.cpu,
+                    target.libcalls,
+                    &mut pool.borrow_mut(),
+                )
             }) {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {
@@ -844,8 +866,12 @@ fn staged(
         }
     };
     let selected = if let Some(done) = dag {
+        if done.is_ok() {
+            shadow::record(name, Selector::Dag);
+        }
         done
     } else {
+        shadow::record(name, Selector::Old);
         timed("isel", || {
             isel::selected_with(
                 module,

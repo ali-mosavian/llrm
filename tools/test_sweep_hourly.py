@@ -147,3 +147,32 @@ def test_a_qcport_kind_is_asked_by_its_first_program_and_a_missing_job_is_not_ca
     assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is True
     assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "gone.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is None
     assert calls[0][1].endswith("tools/qcport_probe.py")
+
+
+def test_a_qbrt_probe_is_given_its_work_directory_and_a_usage_error_is_not_red(tmp_path, monkeypatch):
+    """The 15:00 sweep blamed a docs-only PR (#4021) for 35 wrong outputs: the qbrt probe ran `qbrt_run.py --only NAME` with no work directory, which is a usage
+    error (exit 2), every probe read red, and the bisect named the oldest merge of the range."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return type("Done", (), {"returncode": 2 if argv[2].startswith("--") else 0, "stdout": "RESULT 1 of 1 pass", "stderr": ""})()
+
+    binaries = tmp_path / "sbp-abcdefghi" / "release"
+    binaries.mkdir(parents=True)
+    (binaries / "llrm-c").write_text("")
+    monkeypatch.setattr(s, "SCRATCH", tmp_path)
+    monkeypatch.setattr(s.subprocess, "run", run)
+    red = s.Red("qbrt:arena_type:x86-m32", s.WRONG, ["dosbatch/qbrt_run.py", "--only", "arena_type"])
+    assert s.ask_at(red, "abcdefghi" + "0" * 31) is False, "a passing probe is green"
+    assert not calls[0][2].startswith("--") and calls[0][3:] == ["--only", "arena_type"]
+
+
+def test_a_program_that_did_not_link_is_a_build_failure_not_wrong_output():
+    """qbrt 183/218 on 50387f114 was `jwlink: memcpy_ is an undefined reference` for 35 programs, reported as 35 WRONG OUTPUTs."""
+    text = "NOTPASS arena_type x86-m32 ok not built jwlink: Error! E2028: memcpy_ is an undefined reference\nNOTPASS bc_draw x86-m16 ok DIFF 3 lines\n"
+    reds, _ = s.parse_qbrt(text)
+    assert [(one.name, one.kind) for one in reds] == [("qbrt:arena_type:x86-m32", s.BUILD), ("qbrt:bc_draw:x86-m16", s.WRONG)]
+    report = s.line("t" * 40, "t" * 40, "", {}, reds, reds, {})
+    assert "BUILD FAILURE qbrt:arena_type:x86-m32" in report and "WRONG OUTPUT qbrt:bc_draw:x86-m16" in report
+    assert "WRONG OUTPUT qbrt:arena_type" not in report

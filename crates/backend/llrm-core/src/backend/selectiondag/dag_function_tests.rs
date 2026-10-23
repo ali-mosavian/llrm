@@ -1,4 +1,5 @@
 use super::dag_function::selected;
+use crate::model::ir::Operation;
 
 const SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %b) {
@@ -10,7 +11,7 @@ entry:
 
 fn names(text: &str) -> Result<Vec<String>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .map_err(|e| e.0)?;
     Ok(done
         .body
@@ -24,7 +25,7 @@ fn names(text: &str) -> Result<Vec<String>, String> {
 /// two stack arguments comes out as the instructions the pin selects.
 #[test]
 fn a_function_of_one_block_is_selected_to_lir() {
-    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", "ret"]);
+    assert_eq!(names(SUM).unwrap(), ["mov", "add", ""]);
 }
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -53,7 +54,7 @@ done:
 #[test]
 fn a_loop_is_blocks_with_phis_and_branches() {
     let module = llrm_mir::parse::module(LOOP).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let blocks = &done.body.blocks;
     assert_eq!(blocks.len(), 4, "{blocks:#?}");
@@ -90,7 +91,7 @@ entry:
 #[test]
 fn a_load_of_a_global_names_its_symbol() {
     let module = llrm_mir::parse::module(GLOBAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let first = done.body.insns()[0].what.clone().expect("semantics");
     // The symbol is the operand's address: folded into the load's cell, or (as
@@ -140,7 +141,7 @@ entry:
 #[test]
 fn a_subregister_is_the_same_value_viewed_narrower() {
     let module = llrm_mir::parse::module(BYTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let add = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("add"))).expect("an add");
@@ -172,7 +173,7 @@ entry:
 #[test]
 fn a_call_is_a_sequence_around_a_call_instruction() {
     let module = llrm_mir::parse::module(CALL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let call = insns
@@ -210,7 +211,7 @@ entry:
 #[test]
 fn an_indirect_call_names_its_target() {
     let module = llrm_mir::parse::module(INDIRECT).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let call = done
         .body
@@ -236,7 +237,7 @@ entry:
 #[test]
 fn an_absolute_address_has_a_four_byte_displacement() {
     let module = llrm_mir::parse::module(ABSOLUTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let cell =
         done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
@@ -267,7 +268,7 @@ entry:
 #[test]
 fn a_local_is_a_frame_cell_below_bp() {
     let module = llrm_mir::parse::module(LOCAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let cells: Vec<i64> = done
         .body
@@ -301,7 +302,7 @@ entry:
 #[test]
 fn the_type_legalizer_has_the_targets_hooks() {
     let module = llrm_mir::parse::module(FLOAT64).expect("parses");
-    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .err()
         .map_or_else(String::new, |e| e.0);
     assert!(!why.contains("expand operand"), "{why}");
@@ -321,7 +322,7 @@ entry:
 #[test]
 fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
     let module = llrm_mir::parse::module(DIVIDE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> = done
         .body
@@ -341,4 +342,736 @@ fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
         divide.dests.iter().chain(&divide.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))),
         "idiv operands are held values: {divide:?}"
     );
+}
+
+const SETCC_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@flag = global i8 0
+define void @f(i32 %a, i32 %b) {
+entry:
+  %c = icmp slt i32 %a, %b
+  %z = zext i1 %c to i8
+  store i8 %z, ptr @flag
+  ret void
+}
+";
+
+/// A comparison stored to a byte is `SETCCm`, which the emitter did not know.
+#[test]
+fn a_comparison_stored_to_a_byte_is_a_setcc_on_memory() {
+    let module = llrm_mir::parse::module(SETCC_STORE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let set = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("setl")).expect("a setl");
+    assert!(matches!(set.dests[0], crate::model::ir::Loc::Mem(_)), "{set:?}");
+}
+
+const REGISTER_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @g(i32)
+define i32 @main() {
+entry:
+  %r = call cc 1002 i32 @g(i32 7)
+  ret i32 %r
+}
+";
+
+/// A call that takes its arguments in registers must name them: the copies
+/// into EAX, EDX and EBX were plain moves to physical registers, so the
+/// allocator saw no use of the third, left EBX unset and the program hung
+/// (`es_across_copy`).
+#[test]
+fn a_call_names_the_registers_it_takes_arguments_in() {
+    let module = llrm_mir::parse::module(REGISTER_CALL).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    assert!(call.requires.len() == 1, "{:?} {:?} {:?}", call.requires, call.clobbers, call.what);
+    assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
+}
+
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
+entry:
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+
+/// At m16 the arguments arrive in registers and the procedure is far. The
+/// driver refused every m16 function ("only m32"); once it took them, the
+/// return was named `ret` and printed as a near return in a far procedure.
+#[test]
+fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
+    let module = llrm_mir::parse::module(M16_SUM).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let arrival = insns.iter().find(|i| !i.delivers.is_empty()).expect("an arrival instruction");
+    assert_eq!(arrival.delivers.len(), 2, "both arguments arrive in registers");
+    assert!(arrival.delivers.iter().all(|(held, _)| held.width == 2), "as 16-bit views");
+    let last = insns.last().and_then(|i| i.what.as_ref()).expect("a return");
+    assert_eq!((last.op, last.name.as_deref()), (crate::model::ir::Operation::Return, Some("")));
+}
+
+const BOTH_CALLS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32)
+declare i32 @c(i32)
+define i32 @main() {
+entry:
+  %a = call cc 1002 i32 @w(i32 7)
+  %b = call i32 @c(i32 %a)
+  ret i32 %b
+}
+";
+
+/// A call destroys what its callee's convention says: the DAG path gave every
+/// call the target-wide set, EAX alone, so a value held in ECX or EDX across a
+/// cdecl call was destroyed (`es_across_copy` looped forever).
+#[test]
+fn a_call_destroys_what_its_conventions_says() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(BOTH_CALLS).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let calls: Vec<_> = insns.iter().filter(|i| i.call.is_some()).collect();
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].clobbers.contains(&named("ecx")), "watcall keeps ECX: {:?}", calls[0].clobbers);
+    assert!(
+        calls[1].clobbers.contains(&named("ecx")) && calls[1].clobbers.contains(&named("edx")),
+        "{:?}",
+        calls[1].clobbers
+    );
+}
+
+const BIG_COPY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [200 x i8] zeroinitializer
+@b = global [200 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr @a, ptr @b, i32 200, i1 false)
+  call void @llvm.memset.p0.i32(ptr @a, i8 1, i32 200, i1 false)
+  ret void
+}
+";
+
+/// A long copy or fill is `rep movs` / `rep stos` with ECX, ESI and EDI set by
+/// the glued copies: the emitter refused `REP_MOVSB_32` and `REP_STOSB_32` in
+/// 14 programs of the m32 execution run.
+#[test]
+fn a_long_copy_and_fill_are_rep_string_operations() {
+    let module = llrm_mir::parse::module(BIG_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let strings: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(
+            w.op,
+            crate::model::ir::Operation::Copy | crate::model::ir::Operation::Fill
+        ))
+        .collect();
+    assert_eq!(strings.len(), 2, "{strings:?}");
+    assert!(strings.iter().all(|w| w.sources.len() == 3), "count, source and destination are operands: {strings:?}");
+}
+
+const FRAME_PLUS_ONE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  %l = alloca [8 x i8], align 4
+  store i32 5, ptr %l
+  %p = getelementptr i8, ptr %l, i32 1
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+
+/// A load at a frame object plus one was `[esp]`: the displacement was added to
+/// an `offset` the cell's `addr` overrides (bitfield_overhang_init and four
+/// more programs printed wrong values).
+#[test]
+fn a_frame_object_plus_a_displacement_keeps_the_displacement() {
+    let module = llrm_mir::parse::module(FRAME_PLUS_ONE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let disps: Vec<i64> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.dests.iter().chain(&w.sources))
+        .filter_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) => m.addr.map(|a| a.disp),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(disps.len(), 2, "{disps:?}");
+    assert_eq!(disps[1] - disps[0], 1, "the load is one byte past the store: {disps:?}");
+}
+
+const INDEXED_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(ptr %s, i32 %n) {
+entry:
+  %a = getelementptr i8, ptr %s, i32 %n
+  %b = getelementptr i8, ptr %a, i32 1
+  %v = load i8, ptr %b
+  ret i8 %v
+}
+";
+
+/// A based cell with an index must carry a literal address: without one the
+/// later passes read `[base]` and dropped the index, so `strlen_idiom` looped
+/// forever.
+#[test]
+fn an_indexed_cell_carries_a_literal_address() {
+    let module = llrm_mir::parse::module(INDEXED_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let cell = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .find_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) if m.index.is_some() => Some(m.clone()),
+            _ => None,
+        })
+        .expect("an indexed load");
+    assert!(cell.base.is_some() && cell.addr.is_some(), "{cell:?}");
+    assert_eq!(cell.offset, 1);
+}
+
+/// An index that makes up the rest of a displacement past the object
+/// (`[ebp+ecx+126]` for 8192 bytes below BP) is no frame position: the layout
+/// takes a positive one for the arguments' and left it unmoved, so fill_nest
+/// read 12 bytes off. The object's address is made and the cell based on it.
+#[test]
+fn a_displacement_past_a_frame_object_is_based_on_its_address() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+b1:
+  %o = alloca [8192 x i8]
+  br label %b10
+b9:
+  ret i32 %s2
+b10:
+  %n = phi i32 [ -8192, %b1 ], [ %nx, %b10 ]
+  %acc = phi i32 [ %s2, %b10 ], [ 0, %b1 ]
+  %g1 = getelementptr i8, ptr %o, i32 %n
+  %g2 = getelementptr i8, ptr %g1, i32 8192
+  %l1 = load i16, ptr %g2
+  %g3 = getelementptr i8, ptr %o, i32 %n
+  %g4 = getelementptr i8, ptr %g3, i32 8318
+  %l2 = load i16, ptr %g4
+  %x1 = sext i16 %l1 to i32
+  %x2 = sext i16 %l2 to i32
+  %s1 = add i32 %acc, %x1
+  %s2 = add i32 %s1, %x2
+  %nx = add nsw i32 %n, 128
+  %exitcond = icmp ne i32 %nx, 0
+  br i1 %exitcond, label %b10, label %b9
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    assert!(whats.iter().any(|w| w.op == crate::model::ir::Operation::Address), "the object's address is made");
+    let past = whats
+        .iter()
+        .flat_map(|w| w.sources.iter())
+        .find_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) if m.offset == 8318 => Some(m.clone()),
+            _ => None,
+        })
+        .expect("the cell past the object");
+    assert!(past.base.is_some() && past.index.is_some(), "{past:?}");
+}
+
+const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @bar(ptr)
+define void @f(ptr %z, ptr byval([20 x i8]) %x, ptr %y) {
+entry:
+  call void @bar(ptr %x)
+  ret void
+}
+";
+
+/// The builder numbers a byval parameter's fixed object like any other; the
+/// frame left it out, so the address of `x` was the next parameter's, 20 bytes
+/// up (byvalue_struct_address passed `y`'s place to `bar`).
+#[test]
+fn a_byval_parameter_is_a_fixed_object_of_its_own() {
+    let module = llrm_mir::parse::module(BYVAL_ADDRESS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let lea = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Address)
+        .expect("the address of x");
+    let crate::model::ir::Loc::Address(a) = &lea.sources[0] else { panic!("{lea:?}") };
+    assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
+}
+
+const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ]
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+";
+
+/// A `switch` lowers to compare-and-branch blocks the builder makes after the
+/// switch's own; they were refused ("a switch lowering", 5 programs of the
+/// m32 execution run). Each is emitted after the block that made it and every
+/// branch names one.
+#[test]
+fn a_switch_is_a_chain_of_compare_and_branch_blocks() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = done.body.blocks.len();
+    assert!(blocks > 5, "the switch's blocks and its four targets: {blocks}");
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in done.body.blocks.iter() {
+        assert!(block.succ.iter().all(|s| at.contains(s)), "{:?} leaves for a block that is not there", block.succ);
+    }
+}
+
+const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+";
+
+/// An `i64` divide is a call to the target's inline routine; the DAG path left
+/// the call without the routine's bytes, so the object had an undefined
+/// `divN_s` (link failures in c/int64_division.c, c/data_int64.c of the m32
+/// run). The routine's code must travel with the selected function, at the
+/// call.
+#[test]
+fn an_i64_divide_carries_the_routines_code_at_its_call() {
+    let module = llrm_mir::parse::module(DIV64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let routine = llrm_target::Target::divide_routine(&llrm_x86_m32::M32, true, true).expect("a routine");
+    let at = done.calls.iter().find(|(_, name)| name.as_str() == routine.name).map(|(at, _)| *at).expect("a call");
+    assert_eq!(done.inline.get(&at), Some(&routine.code));
+}
+
+const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to float
+  ret float %r
+}
+";
+
+/// A legalizer's scratch slot (an integer stored to convert it) is a frame
+/// object the driver makes: the emitter refused its index as "frame index 6"
+/// in 11 programs of the m32 execution run. Until x87 is emitted the function
+/// is refused for its load, not for the slot.
+#[test]
+fn a_legalizers_stack_slot_is_a_frame_object() {
+    let module = llrm_mir::parse::module(INT_TO_FLOAT).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.as_deref().is_none_or(|why| !why.contains("frame index")), "{why:?}");
+}
+
+const VARIADIC: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f(i32 %n, ...) {
+entry:
+  %ap = alloca ptr, align 4
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 %n
+}
+";
+
+/// `va_start` stores the address of the next fixed object, the first variadic
+/// argument; the frame had no cell for it ("frame index -2" in the variadic
+/// programs).
+#[test]
+fn va_start_finds_the_first_variadic_argument() {
+    let module = llrm_mir::parse::module(VARIADIC).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.is_none(), "{why:?}");
+}
+
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16)
+define cc 1005 i16 @f(i16 %a) addrspace(1) {
+entry:
+  %r = call cc 1005 i16 @g(i16 %a)
+  ret i16 %r
+}
+";
+
+/// At m16 a call of a symbol is `CALL16r` of its address; it was emitted as a
+/// call through an immediate (`call offset _report`), the biggest cause in the
+/// m16 execution run (79 programs).
+#[test]
+fn an_m16_call_of_a_symbol_is_a_direct_call() {
+    let module = llrm_mir::parse::module(M16_DIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
+    let insns = done.body.insns();
+    let call =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == crate::model::ir::Operation::Call).unwrap();
+    assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
+}
+
+const VARIABLE_SHIFT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %n) {
+entry:
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+";
+
+/// The matcher copies the shift amount to `CL` with a glued `CopyToReg`, which
+/// the adapter turned into a copy to a virtual register (`CL` had no physical
+/// id): the shift read a `CL` nothing defined, and the LIR verifier said
+/// "value defined N times" (about 20 m32 programs once #4074 let them past
+/// "missing source").
+#[test]
+fn a_variable_shift_reads_the_amount_the_matcher_copied_to_cl() {
+    let module = llrm_mir::parse::module(VARIABLE_SHIFT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let shl = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("shl")).expect("a shl");
+    assert!(shl.sources.iter().all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "held values: {shl:?}");
+}
+
+const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare i16 @g(i16, i16)
+define i16 @f(i16 %a) {
+entry:
+  %r = call i16 @g(i16 %a, i16 233)
+  ret i16 %r
+}
+";
+
+/// Real mode has no `[sp+k]`: the outgoing arguments are pushed. The stores
+/// into the area stopped 32 QCport modules from assembling.
+#[test]
+fn an_m16_call_pushes_its_stack_arguments() {
+    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Push).count();
+    assert_eq!(pushes, 2);
+    let through_sp = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.dests
+                .iter()
+                .any(
+                    |l| matches!(
+                        l,
+                        crate::model::ir::Loc::Mem(m) if m.through == llrm_lir::registers::RegId::SP
+                    ),
+                ),
+        );
+    assert!(!through_sp, "no store through SP");
+}
+
+const BYTE_MULTIPLY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i8 @f(i8 zeroext %a, i8 zeroext %b) {
+entry:
+  %r = mul i8 %a, %b
+  ret i8 %r
+}
+";
+
+/// A byte multiply is `mul r8`: AL times the operand into AX. The copy of AL
+/// the matcher makes was invisible to the emitter (its glue users came from
+/// the DAG's use lists, which the matcher's nodes are not in, and its register
+/// was a pin number), so idiom_edges and byte_multiply's `main` were refused.
+#[test]
+fn a_byte_multiply_is_mul_on_al() {
+    let module = llrm_mir::parse::module(BYTE_MULTIPLY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let mul = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("mul")).expect("a mul");
+    assert!(mul.dests.iter().chain(&mul.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "{mul:?}");
+}
+
+const SHIFT_PARTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %2 = alloca i64
+  %3 = alloca i32
+  %4 = alloca i64
+  store i64 %0, ptr %2
+  store i32 %1, ptr %3
+  %5 = load i64, ptr %2
+  %6 = load i32, ptr %3
+  %7 = zext i32 %6 to i64
+  %8 = lshr i64 %5, %7
+  store i64 %8, ptr %4
+  %9 = load i64, ptr %4
+  ret i64 %9
+}
+";
+
+/// The pin's scheduler keeps a unit that defines a physical register from
+/// going between that register's definition and the unit that reads it
+/// (`DelayForLiveRegsBottomUp`). The `shrd` of a 64-bit shift went between the
+/// `test` and the second `jne`, which read the `shrd`'s flags
+/// (shift_int64_variable printed wrong values).
+#[test]
+fn nothing_that_sets_flags_goes_between_a_test_and_the_branches_that_read_it() {
+    let module = llrm_mir::parse::module(SHIFT_PARTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let test = names.iter().position(|n| n == "test").expect("a test");
+    let last_branch = names.iter().rposition(|n| n == "jne" || n == "je").expect("a branch");
+    for name in &names[test + 1..last_branch] {
+        assert!(
+            matches!(name.as_str(), "mov" | "jne" | "je" | "jmp"),
+            "{name} between the test and the branches: {names:?}"
+        );
+    }
+}
+
+const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @far() addrspace(1)
+declare void @near()
+define void @f() {
+entry:
+  call addrspace(1) void @far()
+  call void @near()
+  ret void
+}
+";
+
+/// A call of far code is a far call: the call sites are marked in `far`, as
+/// the old selector marks them. The DAG path left the set empty, so every
+/// call was a near `call` of a far routine and the program crashed at once
+/// (99 real-mode programs under `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_far_code_is_marked_far() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(i64, String)> = done.calls.iter().map(|(at, name)| (*at, name.clone())).collect();
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let far: Vec<&str> = sites.iter().filter(|(at, _)| done.far.contains(at)).map(|(_, name)| name.as_str()).collect();
+    assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
+}
+
+/// A call of a 16-bit callee destroys the upper half of `esi` and `edi` (it
+/// pushes only `si` and `di`). The DAG path left `clobbers_high` empty, so a
+/// 32-bit value kept in `esi` across a call came back with a stale upper half
+/// (call_keeps, frameless, div_constants_*, phi_slot_unknown_arm under
+/// `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let high: Vec<_> = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.call.is_some())
+        .map(|one| one.clobbers_high.clone())
+        .collect();
+    let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
+    assert_eq!(high, [expected.clone(), expected]);
+}
+
+const FLOAT_RESULT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(double %x) {
+entry:
+  %m = fmul double %x, 2.5
+  %r = fadd double %m, 1.0
+  ret double %r
+}
+";
+
+/// A floating result is the x87 stack's top at the return, which the stackifier
+/// reads as an unnamed store of the value: it was popped and dropped
+/// (`fstp st(0)`) once loads and arithmetic were emitted. The constant 2.5 is a
+/// pool cell, 1.0 is `fld1`.
+#[test]
+fn a_floating_result_is_stored_unnamed_before_the_return() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(FLOAT_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<(Operation, String)> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| (w.op, w.name.as_deref().unwrap_or("").to_owned()))
+        .collect();
+    let names: Vec<&str> = seen.iter().map(|(_, name)| name.as_str()).collect();
+    assert!(
+        names.contains(&"fld") && names.contains(&"fmul") && names.contains(&"fld1") && names.contains(&"fadd"),
+        "{names:?}"
+    );
+    let ret = seen.len() - 1;
+    assert_eq!(seen[ret - 1], (Operation::FloatStore, String::new()), "{names:?}");
+    let pooled = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .any(
+            |l| matches!(
+                l,
+                crate::model::ir::Loc::Mem(m) if m.width == 8 && m.addr.is_some()
+            ),
+        );
+    assert!(pooled, "the 2.5 is a cell of the pool: {names:?}");
+}
+
+const SHIFTS_ON_ONE_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %x, i64 %y, i32 %n) {
+entry:
+  %c = zext i32 %n to i64
+  %a = lshr i64 %x, %c
+  %b = shl i64 %y, %c
+  %m = mul i64 %b, 7
+  %r = add i64 %a, %m
+  ret i64 %r
+}
+";
+
+/// Two selects on one compare, the second in the sink block of the first: a
+/// flag-writing unit between them (the pin's scheduler allows it, its EFLAGS
+/// live-in covers it) left the second branch on the flags of a `sub`
+/// (shift_int64_variable -O2). Each branch is preceded by the compare that
+/// made its flags.
+#[test]
+fn a_branch_on_flags_follows_the_compare_that_made_them() {
+    let module = llrm_mir::parse::module(SHIFTS_ON_ONE_COUNT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    for (at, name) in names.iter().enumerate() {
+        if !matches!(name.as_str(), "jne" | "je") {
+            continue;
+        }
+        let before = names[..at].iter().rev().find(|n| !matches!(n.as_str(), "mov" | "jmp" | "jne" | "je" | ""));
+        assert!(
+            matches!(before.map(String::as_str), Some("test" | "cmp" | "and")),
+            "{name} after {before:?}: {names:?}"
+        );
+    }
+}
+
+const PAIR: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) {
+entry:
+  %hi = zext i32 %a to i64
+  %sh = shl i64 %hi, 32
+  %lo = zext i32 %b to i64
+  %r = or i64 %sh, %lo
+  ret i64 %r
+}
+";
+
+const SHIFT_OPTIMIZED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %c = zext i32 %1 to i64
+  %r = lshr i64 %0, %c
+  ret i64 %r
+}
+";
+
+/// `pair(a, b)` returned `(b << 32) | b`: the low half was copied to EAX, where
+/// `a` was held for the high half, and the `ret` required nothing, so the
+/// allocator saw no claim on EAX. The `ret` requires both return registers.
+#[test]
+fn a_ret_requires_the_registers_it_returns_in() {
+    let module = llrm_mir::parse::module(PAIR).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let ret = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Return)).expect("a ret");
+    let mut registers: Vec<_> = ret.requires.iter().map(|(_, register)| *register).collect();
+    registers.sort_by_key(|r| r.index());
+    assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{ret:?}");
+}
+
+/// The two selects of a 64-bit shift read one compare: the pin cascades the
+/// second into the first's sink block (`EmitLoweredSelect`), one branch with
+/// two phis. Two branches, the second with an empty arm, reached the
+/// allocator as a shape that lost the zero of the high word (shr -O2 printed
+/// the low word's bits there).
+#[test]
+fn two_selects_on_one_compare_are_one_branch() {
+    let module = llrm_mir::parse::module(SHIFT_OPTIMIZED).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let branches =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Branch).count();
+    assert_eq!(branches, 1);
+    let phis: Vec<usize> = done.body.blocks.iter().map(|b| b.phis.len()).collect();
+    assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
+}
+
+const FLOAT_TO_INT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = fptosi double %x to i32
+  ret i32 %r
+}
+";
+
+/// A float truncated to an integer is a `fistt` of the value to a cell (the
+/// pin's `FP64_TO_INT32_IN_MEM`, whose control-word dance `floatalloc` makes);
+/// 22 programs stopped at `Unmapped(FP*_TO_INT*_IN_MEM)`.
+#[test]
+fn a_float_to_int_conversion_is_a_truncating_store() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_TO_INT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let store = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fistt"))
+        .expect("a fistt");
+    assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
 }

@@ -24,12 +24,6 @@
 //! verifier says the same, `a phi ... is not a predecessor`); it was left alone
 //! before.
 //!
-//! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
-//! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
-//! run before the coalescer on that route, where LLVM's FPS runs after
-//! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
-//! that nothing joins away. Under RFP the phis are lowered like any other.
-//!
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
 //! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
 //! 2026-11-14): a temporary is made in its result's class by name
@@ -172,7 +166,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let mut next = body.next_value();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -180,25 +173,13 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
-    // The x87 values, left alone without RFP: the stackifier follows allocation
-    // only there.
-    let x87 = if crate::backend::allocate::rfp_on() {
-        Default::default()
-    } else {
-        crate::backend::floatassign::_floating_values(body)
-    };
     for block in &body.blocks {
-        let mut stays = Vec::new();
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
         let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if x87.contains(&phi.result) {
-                stays.push(phi.clone());
-                continue;
-            }
             let width = widths[&phi.result];
             let key = {
                 let mut key = phi.incoming.clone();
@@ -232,7 +213,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                 tails.entry(pre).or_default().push(phielim::_copy(at_of[&pre], incoming, source, None, width));
             }
         }
-        left.insert(block.at, stays);
     }
     let mut out = body.clone();
     if !born.is_empty() {
@@ -245,8 +225,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         insns.extend(tail[..first].iter().cloned());
         insns.extend(head.get(&block.at).into_iter().flatten().cloned());
         insns.extend(tail[first..].iter().cloned());
-        let stays = &left[&block.at];
-        *block = LirBlock { insns: insns.into(), phis: stays.clone().into(), ..(**block).clone() }.into();
+        *block = LirBlock { insns: insns.into(), phis: Vec::new().into(), ..(**block).clone() }.into();
     }
     Ok(out)
 }
@@ -360,11 +339,10 @@ mod tests {
         assert_eq!(now.blocks.iter().map(|one| one.phis.len()).sum::<usize>(), 0, "no phi is left for the old stage");
     }
 
-    /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own
-    /// lowering, RFP lowers it like any other. The skip was removed for both
-    /// routes at once and nbody -O3 ran 10.5% more instructions on the old one.
+    /// The x87 phi of a loop is lowered like any other (the old route left it
+    /// for `phielim`'s own lowering, which is deleted).
     #[test]
-    fn test_an_x87_phi_is_left_alone_only_without_rfp() {
+    fn test_an_x87_phi_is_lowered_like_any_other() {
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let load = |value: u32| {
             let what = Semantics {
@@ -390,10 +368,6 @@ mod tests {
             block(2, vec![store(10)], &[], vec![]),
         ]);
         let phis_left = |now: &LirBody| now.blocks.iter().map(|one| one.phis.len()).sum::<usize>();
-        let old = crate::backend::allocate::RfpOn::off();
-        assert_eq!(phis_left(&lowered(&was).expect("lowers")), 1, "left for phielim");
-        drop(old);
-        let _rfp = crate::backend::allocate::RfpOn::set();
         assert_eq!(phis_left(&lowered(&was).expect("lowers")), 0, "lowered");
     }
 

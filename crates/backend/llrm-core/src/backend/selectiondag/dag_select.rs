@@ -67,7 +67,14 @@ pub fn select_block(
     arch: &dyn llrm_target::Target,
     temporaries: &mut dyn super::x86_preprocess::FrameObjects,
 ) -> Result<Emitted, Refusal> {
+    // The scratch slots the legalizers ask for are frame objects numbered from
+    // here; they are made as the legalizers finish, before anything else is.
+    dag.first_temporary = temporaries.objects();
     legalized(dag, tli, lowering, arch)?;
+    for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
+        let made = temporaries.create_stack_temporary(size, align);
+        debug_assert_eq!(made, dag.first_temporary + at as i32);
+    }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
     super::x86_preprocess::preprocess(dag, temporaries);
     do_instruction_selection(dag, selector, hooks)?;
@@ -84,16 +91,26 @@ pub fn legalized(
     lowering: &mut X86Lowering,
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
-    DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).run();
-    TypeLegalizer::new(dag, tli)
-        .with_target(arch)
-        .with_hooks(lowering)
-        .run()
-        .map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).run();
-    DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).run();
+    DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).with_tli(tli).run();
+    let types = TypeLegalizer::new(dag, tli).with_target(arch).with_hooks(lowering).run();
+    types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
+    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).with_tli(tli).run();
+    let legal = DagLegalizer::new(dag, tli, lowering).run();
+    legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
+    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
     Ok(())
+}
+
+/// A legalizer refusal; with `LLRM_DAGDUMP` set, the DAG it stopped on is
+/// printed to stderr first.
+fn refused_legalize(
+    dag: &SelectionDAG,
+    why: &str,
+) -> Refusal {
+    if std::env::var_os("LLRM_DAGDUMP").is_some() {
+        eprintln!("legalize refused: {why}\n{}", dag.dump());
+    }
+    Refusal::Legalize(why.to_owned())
 }
 
 /// `DoInstructionSelection`: the nodes the root reaches, users before the nodes

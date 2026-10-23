@@ -89,6 +89,10 @@
 //! arithmetic on frozen operands, `Register`s of known width and the like).
 //! Exit: with the known-bits translation (sdag-b). Owner sdag-a.
 //!
+//! DEVIATE SD102: an `invoke` has no `EH_LABEL`s around its call and a
+//! `landingpad` builds nothing: the QB personality's pad is entered by the
+//! runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -104,6 +108,8 @@ pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
 pub mod dagisel_adapter;
+pub mod div_combine;
+pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
@@ -113,6 +119,7 @@ pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
+pub mod logic_setcc;
 pub mod opcodes;
 pub mod schedule;
 pub mod switchcg;
@@ -128,7 +135,13 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod alloca_tests;
+#[cfg(test)]
+mod asmcall_tests;
+#[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod codecall_tests;
 #[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]
@@ -140,17 +153,31 @@ mod emit_tests;
 #[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
+mod fallthrough_tests;
+#[cfg(test)]
+mod farptr_tests;
+#[cfg(test)]
 mod fpret_tests;
 #[cfg(test)]
 mod fpround_tests;
 #[cfg(test)]
 mod freeze_tests;
 #[cfg(test)]
+mod gaps_tests;
+#[cfg(test)]
+mod invoke_tests;
+#[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]
 mod memconst_tests;
 #[cfg(test)]
+mod memlib_tests;
+#[cfg(test)]
+mod memspace_tests;
+#[cfg(test)]
 mod opcodes_tests;
+#[cfg(test)]
+mod overflow_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]

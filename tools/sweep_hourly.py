@@ -38,6 +38,7 @@ LOGS = SCRATCH / "results" / "sweep-hourly"
 DEMOS = SCRATCH / "gor"
 BINARIES = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")
 WRONG = "wrong-output"
+BUILD = "build-failure"
 COMPILE = "compile"
 OTHER = "other"
 
@@ -77,7 +78,9 @@ def parse_qbrt(text: str) -> tuple[list[Red], str]:
     for line in text.splitlines():
         words = line.split()
         if line.startswith("NOTPASS") and len(words) >= 3:
-            reds.append(Red(f"qbrt:{words[1]}:{words[2]}", WRONG, ["dosbatch/qbrt_run.py", "--only", words[1]]))
+            # `NOTPASS name target REFERENCE CANDIDATE why`: a candidate that was "not built" never ran, so its output is not wrong; it did not link.
+            built = " ".join(words[4:6]) != "not built"
+            reds.append(Red(f"qbrt:{words[1]}:{words[2]}", WRONG if built else BUILD, ["dosbatch/qbrt_run.py", "--only", words[1]]))
         elif line.startswith("COMPILE-FAIL") and len(words) >= 2:
             reds.append(Red(f"qbrt:{words[1]}:compile", COMPILE, ["dosbatch/qbrt_run.py", "--only", words[1]]))
         elif (m := re.match(r"RESULT (\d+) of (\d+) pass", line)):
@@ -205,9 +208,11 @@ def line(
 ) -> str:
     """The one line of the report."""
     wrong = [one for one in new if one.kind == WRONG]
-    rest = [one for one in new if one.kind != WRONG]
+    broken = [one for one in new if one.kind == BUILD]
+    rest = [one for one in new if one.kind not in (WRONG, BUILD)]
     state = "PASS" if not reds else f"RED {len(reds)}"
     shown = ", ".join(f"WRONG OUTPUT {one.name} ({bad.get(one.name, '?')})" for one in wrong)
+    shown += (", " if shown and broken else "") + ", ".join(f"BUILD FAILURE {one.name} ({bad.get(one.name, '?')})" for one in broken)
     shown += (", " if shown and rest else "") + ", ".join(f"{one.name} ({bad.get(one.name, '?')})" for one in rest)
     return (
         f"sweep {tip[:9]} {state} stamp={sha[:9]} md5 {md5s} | "
@@ -338,9 +343,14 @@ def ask_at(
             return None
     env = os.environ | {"LLRM_BIN": str(binaries), "QB45_DEMOS_DIR": str(DEMOS)}
     script = ROOT / "tools" / red.probe[0]
-    done = subprocess.run([sys.executable, str(script), *red.probe[1:]], cwd=ROOT, env=env, capture_output=True, text=True)
+    arguments = red.probe[1:]
+    if script.name == "qbrt_run.py":  # its first argument is the work directory: without one every probe is a usage error, and a usage error read as red
+        work = SCRATCH / f"qbrt-probe-{sha[:9]}"
+        work.mkdir(parents=True, exist_ok=True)
+        arguments = [str(work), *arguments]
+    done = subprocess.run([sys.executable, str(script), *arguments], cwd=ROOT, env=env, capture_output=True, text=True)
     text = done.stdout + done.stderr
-    if done.returncode == 3:  # the probe has no such job at that commit
+    if done.returncode in (2, 3):  # a usage error, or the probe has no such job at that commit: not asked
         return None
     return "FAIL" in text or "NOTPASS" in text or done.returncode != 0
 

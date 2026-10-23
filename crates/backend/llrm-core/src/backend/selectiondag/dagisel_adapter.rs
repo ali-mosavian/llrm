@@ -50,6 +50,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetFrameIndex => pin::TargetFrameIndex,
         ConstantPool => pin::ConstantPool,
         TargetConstantPool => pin::TargetConstantPool,
+        TargetJumpTable => pin::TargetJumpTable,
         BasicBlock => pin::BasicBlock,
         ValueType => pin::VALUETYPE,
         CondCodeNode => pin::CONDCODE,
@@ -136,6 +137,12 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAbs => pin::FABS,
         FSqrt => pin::FSQRT,
         Freeze => pin::FREEZE,
+        SCmp => pin::SCMP,
+        UCmp => pin::UCMP,
+        SMulFix => pin::SMULFIX,
+        SDivFix => pin::SDIVFIX,
+        StackSave => pin::STACKSAVE,
+        StackRestore => pin::STACKRESTORE,
         AbsMinPoison => pin::ABS_MIN_POISON,
         FSin => pin::FSIN,
         FCos => pin::FCOS,
@@ -229,8 +236,16 @@ pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::fr
 pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
+    // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
+    // AL 2, AX 3, ... EDX 27, ES 31); the ids
+    // module only names the ones some pattern mentions.
+    const AL: u16 = 2;
     Some(match register {
+        AL => RegId::AL,
+        x86::AH => RegId::AH,
         x86::AX => RegId::AX,
+        x86::CL => RegId::CL,
+        x86::CX => RegId::CX,
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
         x86::EDX => RegId::EDX,
@@ -243,6 +258,12 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
         x86::EFLAGS => EFLAGS_ID,
         _ => return None,
     })
+}
+
+/// The pin's register number of the register the builder names `id`
+/// (`phys_reg` inverted); `None` where it has none.
+pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
+    (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
 impl DagisAdapter<'_> {
@@ -558,6 +579,8 @@ impl Dag for DagisAdapter<'_> {
         let (zero, neg_zero, one, minus_one) = match self.dag.value_type(ours(value)) {
             EVT::Simple(MVT::F32) => (0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000),
             EVT::Simple(MVT::F64) => (0, 1 << 63, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000),
+            // x87 extended: sign, 15-bit exponent, an explicit integer bit.
+            EVT::Simple(MVT::F80) => (0, 1 << 79, (0x3fff << 64) | (1 << 63), (0xbfff << 64) | (1 << 63)),
             _ => return Some(FpClass::Other),
         };
         Some(if bits == zero {
@@ -659,6 +682,19 @@ impl Dag for DagisAdapter<'_> {
         let reg = self.register_node(vt, register);
         self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
     }
+    fn copy_from_reg_node(
+        &mut self,
+        chain: PinValue,
+        register: PinValue,
+        vt: Vt,
+        glue: Option<PinValue>,
+    ) -> u32 {
+        let vt = our_vt(vt);
+        let mut ops = vec![ours(chain), ours(register)];
+        ops.extend(glue.map(ours));
+        let vts: &[EVT] = if glue.is_some() { &[vt, EVT::OTHER, EVT::GLUE] } else { &[vt, EVT::OTHER] };
+        self.dag.get_node_multi(ISD::CopyFromReg, vts, &ops).node
+    }
     fn token_factor(
         &mut self,
         chains: &[PinValue],
@@ -755,6 +791,26 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn segment_override(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        use llrm_dagisel::generated::ids::x86;
+        match self.dag.nodes()[node as usize].data {
+            // The pin's address spaces 256, 257 and 258 are GS, FS and SS.
+            NodeData::Mem(info) => match info.space {
+                256 => Some(x86::GS),
+                257 => Some(x86::FS),
+                258 => Some(x86::SS),
+                // llrm's own: the segment `les` left in ES, and code-segment
+                // reads.
+                259 => Some(x86::ES),
+                260 => Some(x86::CS),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     fn is_add_like(
         &self,
         value: PinValue,

@@ -14,6 +14,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
 5. the changed .rs files are formatted (tools/fmt.sh);
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
+7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have;
 6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
@@ -141,7 +142,9 @@ def warning_failures(
     """`RUSTFLAGS="-D warnings" cargo check -p <crates> --tests`: its errors, one line each (a dead-code error refused a landing)."""
     if not packages:
         return []
-    command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)]])
+    # A package whose tests exist only with a feature (llrm-c's `toolchain`) is checked with it: without, its lib tests are a compile_error.
+    features = [f"{package}/{feature}" for package in packages for feature in parity_smoke.LIB_FEATURES.get(package, ())]
+    command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)], *(["--features", ",".join(features)] if features else [])])
     done = run(command, cwd=root, capture_output=True, text=True, env={**(env or {}), "RUSTFLAGS": "-D warnings"})
     if not done.returncode:
         return []
@@ -180,7 +183,8 @@ def _failing(
     filter_: str | None,
     run,
 ) -> set[str]:
-    command = ["cargo", "test", "-q", "--no-fail-fast", "-p", package, "--lib"] + (["--", filter_] if filter_ else [])
+    base = parity_smoke.lib_command(package)
+    command = [base[0], base[1], "-q", *base[2:]] + (["--", filter_] if filter_ else [])
     done = run(slotted(command), cwd=root, capture_output=True, text=True)
     output = done.stdout + done.stderr
     found = set(parity_smoke.failed_tests(output))
@@ -202,6 +206,33 @@ def _failing_on_base(
             return {package: parity_squash.failing_on_checkout(package, tests, tree) for package, tests in failed.items()}
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
+
+
+def scanner_failures(
+    root: Path,
+    files: list[str],
+    base: str = BASE,
+    run=subprocess.run,
+    on_base=None,
+) -> list[str]:
+    """The root scanners (tests that read sources and docs) and a `tests/*.rs` the branch changes that fail here and pass on `base`: the landing layer's check
+    (`parity_squash.new_scanner_failures`), so a docs-only PR that names a path of one machine or breaks a link is told before it is marked ready."""
+
+    def base_failures(targets: list[str]) -> set[str]:
+        with tempfile.TemporaryDirectory(prefix="precheck-base-") as scratch:
+            tree = Path(scratch) / "tree"
+            subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), base], cwd=root, check=True)
+            try:
+                return parity_smoke.integration_failures(targets, tree, run)
+            finally:
+                subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
+
+    here = parity_squash.new_scanner_failures(
+        files,
+        on_merged=lambda targets: parity_smoke.integration_failures(targets, root, run),
+        on_head=on_base or base_failures,
+    )
+    return [f"scanner fails here and passes on {base}: {name}" for name in sorted(here)]
 
 
 def precheck(
@@ -228,6 +259,7 @@ def precheck(
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)
+    why += scanner_failures(root, files, base, run)
     return list(dict.fromkeys(why))
 
 

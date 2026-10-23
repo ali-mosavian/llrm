@@ -22,12 +22,13 @@
 //! [select]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5513
 
-use crate::generated::ids::isd;
+use crate::generated::ids::{isd, x86isd};
 use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
+use crate::x86_fcmp::{select_fcmp, select_pop_from_x87};
 use crate::x86_hooks::X86Hooks;
-use crate::x86_llrm::{LLRM_NODES, select_llrm_node};
+use crate::x86_llrm::{llrm_opcode, select_llrm_node};
 use crate::x86_mul::select_mul_lohi;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -50,9 +51,18 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
-        op if LLRM_NODES.contains(&op) => {
-            select_llrm_node(dag, node);
+        op if llrm_opcode(op).is_some() => {
+            select_llrm_node(dag, node, llrm_opcode(op).expect("an llrm node"));
             return Outcome::Selected;
+        }
+        x86isd::POP_FROM_X87_REG => {
+            select_pop_from_x87(dag, node);
+            return Outcome::Selected;
+        }
+        x86isd::FCMP => {
+            if select_fcmp(dag, node) {
+                return Outcome::Selected;
+            }
         }
         isd::SMUL_LOHI | isd::UMUL_LOHI => {
             if select_mul_lohi(dag, hooks, node) {

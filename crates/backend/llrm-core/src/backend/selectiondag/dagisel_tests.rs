@@ -23,7 +23,7 @@ fn hooks() -> X86Hooks {
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
 }
 
 fn input(
@@ -118,7 +118,7 @@ fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
             |node| (node.opcode == ISD::CopyToReg
                 && matches!(
                     dag.nodes()[node.ops[1].node as usize].data,
-                    super::NodeData::Register(r) if r == u32::from(llrm_dagisel::generated::ids::x86::CL)
+                    super::NodeData::PhysReg(llrm_lir::registers::RegId::CL)
                 ))
             .then(|| node.ops[2]),
         );
@@ -194,4 +194,63 @@ fn a_store_narrower_than_its_value_is_truncating() {
 
     assert!(!adapter.is_truncating_store(wide.node));
     assert!(adapter.is_truncating_store(narrow.node));
+}
+
+/// The adapter said no memory node had a segment override, so a load through
+/// `fs:` selected as a plain `mov` (the segment operand left at `$noreg`).
+#[test]
+fn a_load_in_the_fs_space_addresses_through_fs() {
+    use llrm_lir::registers::RegId;
+
+    use super::dag::NodeData;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let ptr = input(&mut dag, 1);
+    let load = dag.get_load(EVT::I32, entry, ptr, MemInfo { space: 257, ..mem_info() });
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    let segment = dag.nodes()[load.node as usize].ops[4];
+    assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::FS));
+}
+
+/// The segment `les` leaves in ES is address space 259 (llrm's own, after the
+/// pin's 256 to 258).
+#[test]
+fn a_load_in_space_259_addresses_through_es() {
+    use llrm_lir::registers::RegId;
+
+    use super::dag::NodeData;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let ptr = input(&mut dag, 1);
+    let load = dag.get_load(EVT::I32, entry, ptr, MemInfo { space: 259, ..mem_info() });
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    let segment = dag.nodes()[load.node as usize].ops[4];
+    assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::ES));
+}
+
+/// Every `f80` constant was class `Other`, so `fldz` and `fld1` never matched a
+/// long double 0.0 or 1.0 and the `ConstantFP` stayed unselected
+/// (long_double_variadic).
+#[test]
+fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let zero = dag.get_constant_fp(0, EVT::Simple(super::mvt::MVT::F80));
+    let one = dag.get_constant_fp((0x3fff << 64) | (1 << 63), EVT::Simple(super::mvt::MVT::F80));
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    for (value, name) in [(zero, "LD_Fp080"), (one, "LD_Fp180")] {
+        assert_eq!(
+            select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), value.node),
+            Outcome::Selected,
+            "{name}"
+        );
+    }
+    assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
+    assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
 }

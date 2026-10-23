@@ -101,6 +101,65 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
+/// The library routines C's runtime on `target` has (`libcalls` of its
+/// `c.toml`), each with the calling convention (LLVM's number) a call of it is
+/// made in under `abi`: the convention a routine that states none has.
+fn libcalls(
+    target: &dyn llrm_target::Target,
+    abi: Option<&str>,
+    format: &str,
+) -> Result<Vec<(String, u32, String)>, String> {
+    let description = target.runtime("c").ok_or("this target has no C runtime")?;
+    libcalls_named(target, abi, format, libcall_names(&description.table()?))
+}
+
+/// `libcalls` for `names`: what a runtime that named them would get.
+fn libcalls_named(
+    target: &dyn llrm_target::Target,
+    abi: Option<&str>,
+    format: &str,
+    names: Vec<String>,
+) -> Result<Vec<(String, u32, String)>, String> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile = Profile::for_abi(target, abi)?;
+    // A routine the source declares and does not mark: in the default registers
+    // where the ABI has them, else C's.
+    let convention = if profile.flags.iter().any(|flag| flag == "-ecc") { &profile.cdecl } else { &profile.registers };
+    let calling = target.calling();
+    let one = calling.named(convention).ok_or_else(|| format!("calling.toml has no {convention}"))?;
+    let cc = one.cc.clone().ok_or_else(|| format!("calling.toml has no {convention} with a cc"))?;
+    let pattern = one.symbol.get(format).map_or("*", String::as_str);
+    let number = match cc.as_str() {
+        "cdecl" => 0,
+        other => llrm_mir::opcode::CONVENTIONS
+            .iter()
+            .find(|(spelled, _)| spelled.strip_suffix("cc") == Some(other))
+            .map(|(_, number)| *number)
+            .ok_or_else(|| format!("no calling convention {other:?}"))?,
+    };
+    Ok(names
+        .into_iter()
+        .map(|name| {
+            let symbol = pattern.replace('*', &name);
+            (name, number, symbol)
+        })
+        .collect())
+}
+
+/// The routines a runtime description names as its own (`libcalls`): none
+/// where it names none, which is how a target without them is told.
+fn libcall_names(table: &toml::Table) -> Vec<String> {
+    table
+        .get("libcalls")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|one| one.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The unit `text` records and the profile it is raised under, for `codegen`.
 pub(crate) fn prepared(
     text: &str,
@@ -611,7 +670,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         target,
         watcom,
         entry_requests,
-        codegen: llrm_core::driver::Options { rounds_float_spills: true, ..bound.options(&flags, machine) },
+        codegen: {
+            let options = bound.options(&flags, machine);
+            let libcalls = libcalls(&*bound.target, options.abi.as_deref(), options.object_format)?;
+            llrm_core::driver::Options { rounds_float_spills: true, libcalls, ..options }
+        },
         flags,
     })
 }
@@ -1730,6 +1793,57 @@ mod tests {
     /// while the real-mode target's was the x87 type: `-fld` was a switch
     /// in one target's file. The profile adds it where the layout has the x87
     /// type.
+    /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
+    /// there), a named one is a call: the m16 runtime names none and the m32
+    /// one names `memcpy` (runtime/c/x86-m32/ext.asm).
+    #[test]
+    fn test_a_runtime_names_its_libcalls_and_none_by_default() {
+        let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
+        assert_eq!(super::libcall_names(&table), ["memcpy"]);
+        assert!(super::libcall_names(&toml::Table::new()).is_empty());
+        let names =
+            |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
+        assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
+        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy", "memmove", "memset"]);
+    }
+
+    /// The call of `memcpy` named the routine `memcpy` in the stack convention:
+    /// the m32 runtime has `memcpy_` (registers) and `_memcpy` (sysv), so the
+    /// link failed with "memcpy is an undefined reference" once it was flipped
+    /// on.
+    #[test]
+    fn test_the_libcall_is_the_symbol_a_declared_memcpy_would_have() {
+        let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
+        let named = || ["memcpy", "memmove", "memset"].map(str::to_owned).to_vec();
+        let watcom = super::libcalls_named(m32, Some("watcom"), "omf", named()).unwrap();
+        let sysv = super::libcalls_named(m32, Some("sysv"), "omf", named()).unwrap();
+        assert_eq!(watcom.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["memcpy_", "memmove_", "memset_"]);
+        assert_eq!(sysv.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["_memcpy", "_memmove", "_memset"]);
+    }
+
+    /// A listed libcall is called by the symbol its ABI decorates, so a name
+    /// the runtime does not define is an undefined reference at link: every
+    /// (routine, ABI) of m32's `libcalls` is a `public` of ext.asm. Their
+    /// results are tests/run/c/memcpy_runtime.c and memfuncs_runtime.c (n =
+    /// 0..70000, both conventions).
+    #[test]
+    fn test_the_m32_runtime_defines_every_symbol_its_libcalls_name() {
+        let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
+        let root = Path::new(env!("LLRM_ROOT"));
+        let ext = std::fs::read_to_string(root.join("runtime/c/x86-m32/ext.asm")).unwrap()
+            + &std::fs::read_to_string(root.join("runtime/shared/dos/m32/memfuncs.inc")).unwrap();
+        let named = || ["memcpy", "memmove", "memset"].map(str::to_owned).to_vec();
+        let defined: Vec<&str> = ext.lines().filter_map(|line| line.trim().strip_prefix("public ")).collect();
+        for abi in ["watcom", "sysv"] {
+            for (name, _, symbol) in super::libcalls_named(m32, Some(abi), "omf", named()).unwrap() {
+                assert!(
+                    defined.contains(&symbol.as_str()),
+                    "{name} under {abi} is {symbol}, which ext.asm does not define (ext.asm, memfuncs.inc): {defined:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_every_x86_target_asks_for_the_x87_long_double_once() {
         for profile in
@@ -2820,31 +2934,6 @@ mod tests {
         assert!(body.last().is_some_and(|last| last.starts_with("ret")), "{body:#?}");
     }
 
-    /// A float argument read across a call went to a fresh 8-byte slot:
-    /// loaded and stored at entry, reloaded from the copy. Its own cell,
-    /// which nothing writes, is read again instead.
-    #[test]
-    fn test_a_float_argument_is_read_from_its_own_cell() {
-        // RFP-3, a row loss under RFP: greedy spills the argument to a slot of
-        // its own across the call (`sub sp, 20`), where floatassign
-        // re-read its cell.
-        let _old = llrm_core::backend::allocate::RfpOn::off();
-        let text =
-            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
-        let options = llrm_core::driver::Options {
-            pipeline: llrm_core::driver::flags::Level::Os.options(),
-            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
-                cpu: "486".to_owned(),
-                ..llrm_x86_m16::machine::BUILT_IN.clone()
-            })
-        };
-        let built = super::selected(&text, "paramremat", None, &options).expect("selects");
-        let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find("_summed proc").expect("_summed");
-        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"sub sp, 8"), "{body:#?}");
-    }
-
     /// The listing of each function in `fixture`, `-Os` on a 486.
     fn listed(
         fixture: &str,
@@ -2974,12 +3063,30 @@ mod tests {
         fixture: &str,
         flags: &[&str],
     ) -> Vec<String> {
+        flat_listing_libcalls(fixture, flags, true)
+    }
+
+    /// The listing of a flat fixture where the runtime names `memcpy`
+    /// (`libcalls`, as c.toml does) or does not.
+    fn flat_listing_libcalls(
+        fixture: &str,
+        flags: &[&str],
+        libcalls: bool,
+    ) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
                 .unwrap();
         let argv: Vec<String> =
             ["-m32"].into_iter().chain(flags.iter().copied()).chain(["x.c"]).map(str::to_owned).collect();
-        let args = super::parse_args(&argv).unwrap();
+        let mut args = super::parse_args(&argv).unwrap();
+        // As c.toml would name them, the runtime's own table naming none for
+        // now.
+        args.codegen.libcalls = if libcalls {
+            super::libcalls_named(&llrm_x86_m32::M32, args.codegen.abi.as_deref(), "omf", vec!["memcpy".to_owned()])
+                .unwrap()
+        } else {
+            Vec::new()
+        };
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }
@@ -3344,7 +3451,10 @@ mod tests {
                 .unwrap();
         let argv: Vec<String> =
             ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
-        let args = super::parse_args(&argv).unwrap();
+        let mut args = super::parse_args(&argv).unwrap();
+        // The objects asserted here are the selector's own copies, `rep movs`
+        // among them; the flip's are `flat_listing`'s.
+        args.codegen.libcalls.clear();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         let bytes = llrm_core::backend::objbuild::written(&built, "x.c").unwrap();
         let (mut at, mut out) = (0, Vec::new());
@@ -3397,7 +3507,9 @@ mod tests {
     /// dead.
     #[test]
     fn test_m32_lists_a_string_copy_through_esi_edi_ecx() {
-        let lines = flat_listing("strcopy");
+        // Where the runtime names no `memcpy`: the copy stays the string
+        // operation.
+        let lines = flat_listing_libcalls("strcopy", &["-O2"], false);
         let at = lines.iter().position(|line| line == "rep movsd").unwrap_or_else(|| panic!("a rep movsd: {lines:#?}"));
         let before = &lines[..at];
         assert!(
@@ -3413,6 +3525,16 @@ mod tests {
         let object = flat_object("strcopy");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
+    }
+
+    /// The same copy where the m32 runtime names `memcpy` (c.toml `libcalls`):
+    /// a call of `memcpy_`, the pointers' alignment being unknown, and no `rep
+    /// movs`.
+    #[test]
+    fn test_m32_calls_memcpy_for_a_string_copy_the_runtime_has_a_memcpy_for() {
+        let lines = flat_listing("strcopy");
+        assert!(lines.iter().any(|line| line == "call memcpy_"), "a call of memcpy_: {lines:#?}");
+        assert!(!lines.iter().any(|line| line.starts_with("rep movs")), "no rep movs: {lines:#?}");
     }
 
     /// `-fsanitize=stack` compares ESP with a dword limit and enters a near

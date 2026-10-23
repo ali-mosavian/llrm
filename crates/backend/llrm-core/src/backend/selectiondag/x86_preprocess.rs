@@ -25,6 +25,9 @@ use super::mvt::{EVT, MVT};
 
 /// `CreateStackTemporary`: where the stack slots come from.
 pub trait FrameObjects {
+    /// How many frame objects there are: the index the next one gets.
+    fn objects(&self) -> i32;
+
     /// A new frame object of `size` bytes, aligned to `align`; its index.
     fn create_stack_temporary(
         &mut self,
@@ -59,7 +62,8 @@ pub fn preprocess(
         let size = to.size_in_bits().div_ceil(8);
         let index = frame.create_stack_temporary(size, size);
         let slot = dag.get_frame_index(dag.config().pointer, index);
-        let info = MemInfo { mem_vt: to, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+        let info =
+            MemInfo { mem_vt: to, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
         let chain = dag.entry_node();
         let store = dag.get_store(chain, source, slot, info);
         let reloaded = dag.get_load(to, store, slot, info);

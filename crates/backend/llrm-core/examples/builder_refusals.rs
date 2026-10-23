@@ -26,11 +26,13 @@ fn main() {
                 continue;
             }
         };
+        let arch: &dyn llrm_target::Target = if m16 { &llrm_x86_m16::M16 } else { &llrm_x86_m32::M32 };
+        // the driver's MIR rewrites between the pipeline and selection
+        let _ = llrm_core::backend::ehprepare::prepared(&mut module, &llrm_target::Target::layout(arch));
         let _ = llrm_core::backend::memsetpattern::expanded(&mut module);
         let layout =
             module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
         let target = if m16 { BuilderTarget::m16() } else { BuilderTarget::m32() };
-        let arch: &dyn llrm_target::Target = if m16 { &llrm_x86_m16::M16 } else { &llrm_x86_m32::M32 };
         let (mut functions, mut blocks, mut refused) = (0, 0, 0);
         for (id, global, function) in module.functions() {
             if function.is_declaration() {

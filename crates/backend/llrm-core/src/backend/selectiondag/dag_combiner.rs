@@ -25,6 +25,12 @@
 //! asks for known bits sees only constants. Exit: a known-bits port. Owner
 //! sdag-b. Review 2026-11-13.
 //!
+//! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
+//! simple, non-extending load before operations are legal, with the table
+//! given by `with_tli` (no table: only a load nothing else reads); every
+//! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
+//! truncate query. Owner sdag-b. Review 2026-11-27.
+//!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
 //! ([L1845](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1845)),
@@ -35,7 +41,8 @@
 
 use std::collections::HashSet;
 
-use super::dag::{Rauw, SDValue, SelectionDAG};
+use super::actions::{Action, LoadExt, TargetLowering};
+use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
 
@@ -74,11 +81,13 @@ pub struct NoCombines;
 impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
-    dag: &'a mut SelectionDAG,
+    pub(super) dag: &'a mut SelectionDAG,
     hooks: &'a mut H,
-    level: CombineLevel,
+    pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
+    /// The action table, for the folds that ask what the target can do.
+    pub(super) tli: Option<&'a TargetLowering>,
 }
 
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
@@ -87,10 +96,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new() }
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new(), tli: None }
     }
 
-    fn add_to_worklist(
+    /// The action table the folds query (`TLI`).
+    pub fn with_tli(
+        mut self,
+        tli: &'a TargetLowering,
+    ) -> DagCombiner<'a, H> {
+        self.tli = Some(tli);
+        self
+    }
+
+    pub(super) fn add_to_worklist(
         &mut self,
         node: u32,
     ) {
@@ -99,7 +117,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    fn add_to_worklist_with_users(
+    pub(super) fn add_to_worklist_with_users(
         &mut self,
         node: u32,
     ) {
@@ -191,10 +209,181 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
+            ISD::MergeValues => self.visit_merge_values(node),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
+            ISD::Or => self.visit_or(node),
+            ISD::SDiv => self.visit_sdiv(node),
+            ISD::UDiv => self.visit_udiv(node),
+            ISD::SRem | ISD::URem => self.visit_rem(node),
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self.visit_extend(node),
             _ => None,
         }
+    }
+
+    /// `visitMERGE_VALUES` ([L2446][pin]): each result is its operand, so a
+    /// lowering that returns several values as one `MERGE_VALUES` leaves no
+    /// such node for selection. Returns the node itself so it is not looked
+    /// at again.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2446
+    fn visit_merge_values(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let count = self.dag.node(node).values.len();
+        for res in 0..count {
+            let operand = self.dag.operand(node, res);
+            self.replace_value(SDValue { node: node.node, res: res as u8 }, operand);
+        }
+        Some(SDValue { node: node.node, res: 0 })
+    }
+
+    /// The users of `old` read `new`, and are looked at again.
+    fn replace_value(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
+        for event in self.dag.replace_all_uses_with(old, new) {
+            match event {
+                Rauw::Updated(user) => self.add_to_worklist(user),
+                Rauw::Merged { into, .. } => self.add_to_worklist_with_users(into),
+            }
+        }
+    }
+
+    /// `visitSIGN_EXTEND`, `visitZERO_EXTEND` and `visitANY_EXTEND` for a
+    /// loaded operand (`tryToFoldExtOfLoad` and the load case after it): the
+    /// extension is the load's own. `(zext (load i8 p))` is `zextload i8 p`;
+    /// an already extending load is re-extended to the wider type.
+    fn visit_extend(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let load = self.dag.operand(node, 0);
+        if self.level >= CombineLevel::AfterLegalizeVectorOps || self.dag.opcode(load) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        if info.volatile {
+            return None;
+        }
+        let op = self.dag.opcode(node);
+        let wanted = match op {
+            ISD::ZeroExtend => LoadExt::ZExtLoad,
+            ISD::SignExtend => LoadExt::SExtLoad,
+            _ => LoadExt::ExtLoad,
+        };
+        let ext = match info.ext {
+            None => wanted,
+            Some(have) if have == wanted => have,
+            Some(LoadExt::ExtLoad) => wanted,
+            Some(have) if wanted == LoadExt::ExtLoad => have,
+            Some(_) => return None,
+        };
+        let wide = self.dag.value_type(node);
+        let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
+        let mut compares = Vec::new();
+        if !others.is_empty() {
+            // `isLoadExtLegal`, and `ExtendUsesToFormExtLoad`: the other
+            // readers are compares against a constant, which can be
+            // widened, or take the value back through a (free)
+            // truncate.
+            let EVT::Simple(wide_mvt) = wide else { return None };
+            let EVT::Simple(mem_mvt) = info.mem_vt else { return None };
+            let legal = self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal);
+            if info.ext.is_some() || !legal || !self.extend_uses(node, load, op, &others, &mut compares) {
+                return None;
+            }
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let info = super::dag::MemInfo { ext: None, ..info };
+        let extended = self.dag.get_ext_load(ext, wide, chain, ptr, info);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        if !others.is_empty() {
+            // The narrow value is the extending load, truncated.
+            let narrow = self.dag.value_type(load);
+            let truncated = self.dag.get_node(ISD::Truncate, narrow, &[extended]);
+            for compare in compares {
+                self.extend_compare(compare, load, extended, op);
+            }
+            self.replace_value(load, truncated);
+        }
+        Some(extended)
+    }
+
+    /// `ExtendUsesToFormExtLoad`: whether the other users of `load` can live
+    /// with its extension; the compares to widen are collected.
+    fn extend_uses(
+        &self,
+        node: SDValue,
+        load: SDValue,
+        op: ISD,
+        others: &[u32],
+        compares: &mut Vec<u32>,
+    ) -> bool {
+        let mut copy_to_reg = false;
+        for &user in others {
+            let user_value = SDValue { node: user, res: 0 };
+            if op != ISD::AnyExtend && self.dag.opcode(user_value) == ISD::SetCC {
+                let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(user_value, 2)).data else { return false };
+                if op == ISD::ZeroExtend && cc.is_signed_int() {
+                    return false;
+                }
+                let mut widens = false;
+                for at in 0..2 {
+                    let operand = self.dag.operand(user_value, at);
+                    if operand == load {
+                        continue;
+                    }
+                    if self.dag.constant(operand).is_none() {
+                        return false;
+                    }
+                    widens = true;
+                }
+                if widens {
+                    compares.push(user);
+                }
+                continue;
+            }
+            // Every integer truncate between these widths is free on x86.
+            if self.dag.opcode(user_value) == ISD::CopyToReg {
+                copy_to_reg = true;
+            }
+        }
+        if copy_to_reg {
+            // Both the narrow and the wide value are live out: only worth it if
+            // a compare is widened.
+            let both =
+                self.dag.users(node).any(|user| self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg);
+            if both {
+                return !compares.is_empty();
+            }
+        }
+        true
+    }
+
+    /// `ExtendSetCCUses`: the compare of the load against a constant is a
+    /// compare of the extending load against the extended constant.
+    fn extend_compare(
+        &mut self,
+        compare: u32,
+        load: SDValue,
+        extended: SDValue,
+        op: ISD,
+    ) {
+        let compare_value = SDValue { node: compare, res: 0 };
+        let wide = self.dag.value_type(extended);
+        let mut operands = [self.dag.operand(compare_value, 0), self.dag.operand(compare_value, 1)];
+        for operand in &mut operands {
+            *operand = if *operand == load { extended } else { self.dag.get_node(op, wide, &[*operand]) };
+        }
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(compare_value, 2)).data else { return };
+        let vt = self.dag.value_type(compare_value);
+        let replacement = self.dag.get_setcc(vt, operands[0], operands[1], cc);
+        self.replace_value(compare_value, replacement);
     }
 
     /// `visitAND`, the part `SimplifyDemandedBits` does for it: `(and x, c)` is
@@ -205,12 +394,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
+            return Some(folded);
+        }
         let vt = self.dag.value_type(n0);
         let all = super::fold::mask(vt.size_in_bits());
         for (other, constant) in [(n0, n1), (n1, n0)] {
             if let Some(c) = self.dag.constant(constant) {
                 if self.dag.is_opaque(constant) {
                     continue;
+                }
+                // `(and (anyext x), c)` is `(zext x)` when `c` keeps no bit
+                // above `x` and every bit `x` may set (`SimplifyDemandedBits`
+                // drops the `and` of a promoted boolean).
+                if self.dag.opcode(other) == ISD::AnyExtend {
+                    let source = self.dag.operand(other, 0);
+                    let width = self.dag.value_type(source).size_in_bits();
+                    let narrow = super::fold::mask(width);
+                    let known = super::known_bits::known_bits(self.dag, source);
+                    if c & !narrow == 0 && narrow & !(known.zero | c) == 0 {
+                        return Some(self.dag.get_node(ISD::ZeroExtend, vt, &[source]));
+                    }
                 }
                 let known = super::known_bits::known_bits(self.dag, other);
                 if all & !(known.zero | c) == 0 {

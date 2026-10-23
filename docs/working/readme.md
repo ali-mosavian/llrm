@@ -5,6 +5,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | Doc | Holds |
 |---|---|
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
+| [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -52,6 +53,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
+| [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
+| [loops-compile-plan](loops-compile-plan.md) | Loops compile-time bucket: dated plan to 1.0x of the pin |
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
 | [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
@@ -59,6 +62,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-address-registers](lsr-address-registers.md) | LSR address-register term (LU2): tried, not landed |
 | [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |
 | [machine-scheduler-plan](machine-scheduler-plan.md) | Machine Instruction Scheduler (codegen row 65) |
+| [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
 | [pei-plan](pei-plan.md) | Prologue/Epilogue Insertion and Frame Finalization (row 80): plan |
@@ -66,14 +70,22 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [x-base64-ties](x-base64-ties.md) | x_base64: the two ties that flip in the shared-LiveIntervals landing |
+| [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
+| [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
+| [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
+| [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5): plan |
 | [scev-s3-stubs](scev-s3-stubs.md) | SCEV stubs (S3), ranked |
 | [segment-cast-audit](segment-cast-audit.md) | Casts through the selector space: audit |
 | [selectiondag-c2-plan](selectiondag-c2-plan.md) | C2: m16 patterns for the DAG selector |
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
+| [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
+| [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
 | [shared-se](shared-se.md) | One ScalarEvolution across the loop passes — w-3, plan note 2026-10-28 |

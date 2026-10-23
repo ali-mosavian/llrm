@@ -537,8 +537,22 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
     return f"#{number}: REFUSED: {why}"
 
 
-def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
-    """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+def waiting(number: str, path: str | None = None) -> bool:
+    """Whether `number` is in waits.txt (an owner's hold) now: read from the file at every call, not once at the batch's start. The queue is built from it before a batch, and a PR
+    held while the batch ran landed anyway (#4057, 2026-10-23). `WAITS` is the live file of the queue runner; the batch's checkout has the committed one."""
+    live = Path(path or os.environ.get("WAITS") or ROOT / "tools/landing/waits.txt")
+    try:
+        text = live.read_text()
+    except OSError:
+        return False
+    return number in re.sub(r"#.*", "", text).split()
+
+
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool | None:
+    """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    if waiting(number):
+        print(f"#{number}: HELD: in waits.txt now; not pushed")
+        return None
     if FAST and info["mergeable"] == "CONFLICTING":
         if not (fresh := update(info["headRefOid"], info["headRefName"])):
             return False
@@ -547,7 +561,11 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         info = {**info, "headRefOid": fresh}
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
     stage(f"squash #{number}")
-    return run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body]).returncode == 0
+    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True)
+    if done.returncode:
+        # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
+        print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")
+    return done.returncode == 0
 
 
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
@@ -662,30 +680,105 @@ def new_lib_failures(
     return failed - also
 
 
+# Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
+# without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
+ALWAYS_SCANNERS = ("docs_links",)
+
+
+def landing_scanner_failures(
+    files: list[str],
+    tests: bool,
+    on_merged=None,
+    on_head=None,
+) -> set[str]:
+    """The new red scanners of a batch: all of them with the lib tests on (LAND_FAST_TESTS=1), else the always-on ones."""
+    return new_scanner_failures(files, on_merged, on_head, only=None if tests else ALWAYS_SCANNERS)
+
+
 def new_scanner_failures(
     files: list[str],
     on_merged=None,
     on_head=None,
+    only: tuple[str, ...] | None = None,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
     `on_head(targets)` -> the failing names."""
     smoke = parity_smoke_module()
     own = {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
-    targets = sorted((set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
+    targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
-    print(scanner_tests_line(targets, failed))
+    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
     return failed - (on_head or _scanners_failing_on_head)(targets)
 
 
+def new_link_failures(
+    files: list[str],
+    build=None,
+    check=None,
+) -> list[str]:
+    """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
+    and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import link_check  # noqa: PLC0415
+
+    if not link_check.touches_runtime(files):
+        print("link: skipped (nothing the programs link against changed)")
+        return []
+    (build or _build_release)()
+    failures = (check or _link_programs)()
+    print(f"link: {len(link_check.QB_PROGRAMS)} QB + {len(link_check.C_PROGRAMS)} C programs, {len(failures)} do not link")
+    return failures
+
+
+def _build_release() -> None:
+    from buildslot import slotted  # noqa: PLC0415
+
+    subprocess.run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=ROOT, check=True)
+
+
+def _link_programs() -> list[str]:
+    import link_check  # noqa: PLC0415
+
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
+    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+        (target / "release" / name).touch()  # the runners refuse a binary older than its sources
+    os.environ["LLRM_BIN"] = str(target / "release")
+    return link_check.link_failures(target / "link-check")
+
+
+def rescan_alone(number: str, info: dict) -> set[str]:
+    """The new red always-on scanners of PR `number` merged alone onto the head as it is now: the tree its squash makes after earlier PRs of the batch were dropped."""
+    git("fetch", "-q", "origin", "feat/parity")
+    clean_checkout(BASE)
+    git("fetch", "-q", "origin", info["headRefOid"])
+    if subprocess.run(["git", "merge", "--no-edit", "-q", info["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+        subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+        return set()  # a conflict is the squash's to refuse
+    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+
+
+def rescanned_refusal(number: str, info: dict, late_drops: list[str], rescan=rescan_alone) -> str:
+    """Why PR `number` may not be pushed after the batch dropped `late_drops` (refused, held or failed at the squash) once its scan had passed: the tree it lands on was never scanned. The
+    always-on scanners are run on it; "" when nothing was dropped or they pass."""
+    if not late_drops:
+        return ""
+    failed = rescan(number, info)
+    if not failed:
+        return ""
+    return f"the batch dropped {', '.join('#' + n for n in late_drops)} after its scan, and the tree #{number} lands on fails {', '.join(sorted(failed))}"
+
+
 def scanner_tests_line(
     targets: list[str],
     failed: set[str],
+    tree: str = "",
 ) -> str:
-    """What the scanner layer did, printed on every batch it sees: a gate silent on a pass cannot be told from one that never ran."""
-    return f"scanners: {len(targets)} targets, {len(failed)} red"
+    """What the scanner layer did, printed on every batch it sees: a gate silent on a pass cannot be told from one that never ran. `tree` is the commit it scanned: #4039 landed an unlinked page
+    after a batch line `0 red` that replaying the batch's PRs does not reproduce, and the log did not say which tree was scanned."""
+    return f"scanners: {len(targets)} targets, {len(failed)} red" + (f" (tree {tree})" if tree else "")
 
 
 def _scanners_failing_on_head(targets: list[str]) -> set[str]:
@@ -746,7 +839,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
-    landed, refused = [], []
+    landed, refused, held, late_drops = [], [], [], []
 
     left_out: dict[str, str] = {}
     failed_units: set[str] = set()
@@ -800,6 +893,14 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
                 failed_units.update(new)
                 return False
+        if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
+            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+            failed_units.update(new)
+            return False
+        if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
+            failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
+            return False
         return True
 
     def merge_alone(number: str) -> bool:
@@ -863,12 +964,24 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     def land(number: str) -> None:
         if number in left_out:
+            print(f"#{number}: REFUSED: left out: {left_out[number]}")
             refused.append(number)
+            return
+        if waiting(number):  # before the formatted head is pushed to the PR's branch
+            print(f"#{number}: HELD: in waits.txt now; not pushed")
+            held.append(number)
+            late_drops.append(number)
+            return
+        if why := rescanned_refusal(number, infos[number], late_drops):
+            print(f"#{number}: REFUSED: {why}")
+            refused.append(number)
+            late_drops.append(number)
             return
         sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
         if not sha:
             print(f"#{number}: REFUSED: {why}")
             refused.append(number)
+            late_drops.append(number)
             return
         if sha != infos[number]["headRefOid"]:
             print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
@@ -879,7 +992,13 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                     break
                 time.sleep(5)
         landed_ok = squash(number, infos[number], known_red_line(known))
+        if landed_ok is None:
+            held.append(number)
+            late_drops.append(number)
+            return
         (landed if landed_ok else refused).append(number)
+        if not landed_ok:
+            late_drops.append(number)
         if landed_ok:
             git("fetch", "-q", "origin", "feat/parity")
             log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
@@ -888,7 +1007,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         batch(list(numbers), passes, land, refuse, offending if FAST else None)
-    print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
+    print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}" + (f"  HELD: {' '.join('#' + n for n in held)}" if held else ""))
     return 1 if refused else 0
 
 

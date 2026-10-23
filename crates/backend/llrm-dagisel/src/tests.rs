@@ -1458,7 +1458,7 @@ mod llrm_intrinsics {
     use super::*;
     use crate::testing::TestDag;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
-    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES};
+    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES, SEGMENT_OF, SEGMENT_OF_OPCODE};
     use crate::x86_select::select_node;
 
     /// No pattern covers `X86ISD::LLRM_ASM`: it was `CannotSelect` and stopped
@@ -1488,6 +1488,59 @@ mod llrm_intrinsics {
             );
         }
     }
+
+    /// `SEGMENT_OF` (id 24580 collided with `LLRM_CODE` in the first version)
+    /// is a segment value: it becomes its own pseudo, with the global as
+    /// operand or none for `DGROUP`.
+    #[test]
+    fn a_segment_of_a_global_and_of_dgroup_are_the_segment_pseudo() {
+        for with_global in [true, false] {
+            let mut dag = TestDag::new();
+            let ops: Vec<SDValue> = if with_global { vec![dag.wrapped_global(1, 0, mvt::i16)] } else { vec![] };
+            let node = dag.node(SEGMENT_OF, &[mvt::i16], &ops);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::M16,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                address_mode: crate::x86_addr::AddrMode::Real16,
+            });
+
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+            let n = &dag.nodes[node as usize];
+            assert_eq!((n.machine, n.ops.clone(), n.vts.clone()), (Some(SEGMENT_OF_OPCODE), ops, vec![mvt::i16]));
+        }
+    }
+
+    /// `LLRM_FARCALL` is a target node with no pattern: it passes through as
+    /// its own pseudo, with the call's operands and its chain and glue
+    /// results.
+    #[test]
+    fn a_far_call_passes_through_as_its_pseudo() {
+        use crate::x86_llrm::{FARCALL_OPCODE, LLRM_FARCALL};
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let target = dag.wrapped_global(1, 0, mvt::i16);
+        let node = dag.node(LLRM_FARCALL, &[mvt::Other, mvt::Glue], &[chain, target]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Real16,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+        let n = &dag.nodes[node as usize];
+        assert_eq!(
+            (n.machine, n.ops.clone(), n.vts.clone()),
+            (Some(FARCALL_OPCODE), vec![chain, target], vec![mvt::Other, mvt::Glue])
+        );
+    }
 }
 
 mod instruction_names {
@@ -1503,5 +1556,75 @@ mod instruction_names {
         assert_eq!(name(x86::DIV32r), Some("DIV32r"));
         assert_eq!(name(x86::MUL32r), Some("MUL32r"));
         assert_eq!(name(x86::EAX), None, "a register is not an instruction");
+    }
+}
+
+mod fcmp_without_fcomi {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `fucom; fnstsw ax; sahf`: the table's `UCOM_FpIr64` needs `fcomi`, so an
+    /// `FCMP` was `CannotSelect` on every CPU here (the qbq corpus: 4
+    /// functions).
+    #[test]
+    fn a_double_compare_is_fucom_fnstsw_sahf() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let cmp = dag.node(x86isd::FCMP, &[mvt::i32], &[a, b]);
+        let user = dag.node(x86isd::SETCC, &[mvt::i8], &[SDValue::new(cmp, 0)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, cmp), Outcome::Selected);
+
+        let flags = dag.nodes[user as usize].ops[0];
+        assert_eq!(dag.nodes[flags.node as usize].machine, Some(x86::SAHF));
+        let machine: Vec<u16> = dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect();
+        assert!(machine.contains(&x86::UCOM_Fpr64) && machine.contains(&x86::FNSTSW16r), "{machine:?}");
+    }
+}
+
+mod pop_from_x87 {
+    use super::*;
+    use crate::generated::ids::x86isd;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// A call's float result is `POP_FROM_X87_REG chain, $fp0, glue`: no
+    /// pattern, the pin's `Select` turns it into a `CopyFromReg` (7 m32
+    /// execution programs stopped at `CannotSelect`).
+    #[test]
+    fn a_float_call_result_becomes_a_copy_from_the_x87_register() {
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let fp0 = dag.input(9, mvt::f64);
+        let glue = dag.input(10, mvt::Glue);
+        let pop = dag.node(x86isd::POP_FROM_X87_REG, &[mvt::f64, mvt::Other, mvt::Glue], &[chain, fp0, glue]);
+        let user = dag.node(isd::FADD, &[mvt::f64], &[SDValue::new(pop, 0), fp0]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, pop), Outcome::Selected);
+
+        let read = dag.nodes[user as usize].ops[0];
+        let copy = &dag.nodes[read.node as usize];
+        assert_eq!((copy.opcode, copy.ops.clone()), (isd::CopyFromReg, vec![chain, fp0, glue]));
+        assert_eq!(copy.vts, vec![mvt::f64, mvt::Other, mvt::Glue]);
     }
 }

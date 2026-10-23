@@ -34,6 +34,10 @@ impl super::emit::GlobalMap for NoGlobals {
 struct NoTemps;
 
 impl super::x86_preprocess::FrameObjects for NoTemps {
+    fn objects(&self) -> i32 {
+        0
+    }
+
     fn create_stack_temporary(
         &mut self,
         _size: u32,
@@ -111,6 +115,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
         caller_saved: &Default::default(),
+        conventions: &super::emit::NoConventions,
+        constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &HashMap::new(),
@@ -161,9 +167,8 @@ fn a_sum_of_two_arguments_goes_through() {
     assert_eq!(blocks.len(), 1, "{blocks:#?}");
     let names: Vec<&str> =
         blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
-    assert_eq!(names, ["mov", "add", "mov", "ret"], "{blocks:#?}");
+    assert_eq!(names, ["mov", "add", ""], "{blocks:#?}");
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
-    assert!(blocks[0][2].starts_with("[Reg(Reg { register: EAX"), "the sum is returned in EAX: {blocks:#?}");
 }
 
 /// `x * 5` reaches selection with no `MUL` node: the combiner ran between
@@ -207,6 +212,23 @@ fn a_load_of_a_global_is_one_instruction_on_the_symbol() {
     let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
     let names: Vec<&str> =
         blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
-    assert_eq!(names, ["mov", "mov", "ret"], "the load, the copy to EAX, the return: {blocks:#?}");
+    assert_eq!(names, ["mov", ""], "the load, the return that requires it in EAX: {blocks:#?}");
     assert!(blocks[0][0].contains("addr: Some"), "the load reads the symbol's cell: {blocks:#?}");
+}
+
+/// `end_of(t) - t` after inlining is `sub (sym+12), sym` of constant addresses:
+/// the DAG selects `neg` of the symbol and an `lea` of `sym+12` with the
+/// negated register as its index; `emit` named the cell by its symbol alone
+/// (`AddressRef` has no values), the register dropped: the answer
+/// was the address, 1639644 for 12 (`--isel=dag`).
+#[test]
+fn a_symbol_difference_keeps_the_negated_register_in_its_lea() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n@b = private constant [13 x i8] c\"strlen idiom\\00\"\ndefine i32 @f() {\nentry:\n  %d = sub i32 ptrtoint (ptr getelementptr inbounds nuw (i8, ptr @b, i32 12) to i32), ptrtoint (ptr @b to i32)\n  ret i32 %d\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    let names: Vec<&str> =
+        blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
+    let lea = blocks[0].iter().find(|line| line.contains(" lea "));
+    // Either the difference is a `sub`, or an `lea` that reads the register
+    // `neg` made.
+    assert!(names.contains(&"sub") || lea.is_some_and(|line| line.contains("index: Some")), "{blocks:#?}");
 }

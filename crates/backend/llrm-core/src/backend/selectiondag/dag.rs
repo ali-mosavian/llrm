@@ -107,6 +107,9 @@ pub struct MemInfo {
     /// The extension of a load narrower than its result (`LoadExtType`); none
     /// for a plain load.
     pub ext: Option<super::actions::LoadExt>,
+    /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
+    /// (`fs` 257, `gs` 256) the IR's pointer names.
+    pub space: u32,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -117,6 +120,8 @@ pub enum MemBase {
     Stack(i32),
     /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
     ConstantPool(u32),
+    /// A jump table entry (`MachinePointerInfo::getJumpTable`).
+    JumpTable,
 }
 
 #[derive(Clone, Debug)]
@@ -734,6 +739,24 @@ impl SelectionDAG {
         offset: i64,
     ) -> SDValue {
         let vt = self.value_type(ptr);
+        // a two-word pointer is not an integer: its zero offset is no add,
+        // and any other moves the offset word alone
+        if offset == 0 && !vt.is_integer() {
+            return ptr;
+        }
+        if vt == EVT::Simple(super::mvt::MVT::Far) {
+            let (zero, one) = (self.get_constant(0, EVT::I16), self.get_constant(1, EVT::I16));
+            let low = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, zero]);
+            let high = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, one]);
+            let step = self.get_constant(offset as u128 & 0xffff, EVT::I16);
+            let moved = self.get_node_flags(
+                ISD::Add,
+                EVT::I16,
+                &[low, step],
+                SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
+            );
+            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+        }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
     }
@@ -887,6 +910,16 @@ impl SelectionDAG {
         self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
+    /// `SEGMENT_OF`: the selector of the segment a global lives in, or of
+    /// DGROUP, where the near data is, when it names none.
+    pub fn get_segment_of(
+        &mut self,
+        symbol: Option<u32>,
+    ) -> SDValue {
+        let data = symbol.map_or(NodeData::None, |symbol| NodeData::Global { symbol, offset: 0 });
+        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &[], SDNodeFlags::default(), data)
+    }
+
     pub fn get_jump_table(
         &mut self,
         vt: EVT,
@@ -993,6 +1026,18 @@ impl SelectionDAG {
     ) -> SDValue {
         let cc = self.get_cond_code(cond);
         self.get_node(ISD::SetCC, vt, &[lhs, rhs, cc])
+    }
+
+    /// `doesNodeExist(SETCC, {vt}, {lhs, rhs, cc})`.
+    pub fn does_setcc_exist(
+        &mut self,
+        vt: EVT,
+        lhs: SDValue,
+        rhs: SDValue,
+        cc: CondCode,
+    ) -> bool {
+        let code = self.get_cond_code(cc);
+        self.cse.contains_key(&(ISD::SetCC, vec![vt], vec![lhs, rhs, code], NodeData::None))
     }
 
     pub fn get_select(

@@ -132,7 +132,9 @@ pub mod isd {
     pub const SADDO: u16 = 79;
     pub const SADDSAT: u16 = 85;
     pub const SCALAR_TO_VECTOR: u16 = 174;
+    pub const SCMP: u16 = 191;
     pub const SDIV: u16 = 62;
+    pub const SDIVFIX: u16 = 95;
     pub const SDIVREM: u16 = 68;
     pub const SELECT: u16 = 219;
     pub const SELECT_CC: u16 = 221;
@@ -145,6 +147,7 @@ pub mod isd {
     pub const SINT_TO_FP: u16 = 234;
     pub const SMAX: u16 = 188;
     pub const SMIN: u16 = 187;
+    pub const SMULFIX: u16 = 91;
     pub const SMULO: u16 = 83;
     pub const SMUL_LOHI: u16 = 66;
     pub const SRA: u16 = 199;
@@ -153,6 +156,8 @@ pub mod isd {
     pub const SRL: u16 = 200;
     pub const SSUBO: u16 = 81;
     pub const SSUBSAT: u16 = 87;
+    pub const STACKRESTORE: u16 = 332;
+    pub const STACKSAVE: u16 = 331;
     pub const STORE: u16 = 317;
     pub const STRICT_FADD: u16 = 104;
     pub const STRICT_FDIV: u16 = 107;
@@ -187,6 +192,7 @@ pub mod isd {
     pub const UADDO_CARRY: u16 = 75;
     pub const UADDSAT: u16 = 86;
     pub const UBSANTRAP: u16 = 351;
+    pub const UCMP: u16 = 192;
     pub const UDIV: u16 = 63;
     pub const UDIVREM: u16 = 69;
     pub const UINT_TO_FP: u16 = 235;
@@ -401,6 +407,9 @@ pub mod x86isd {
     pub const LDS: u16 = 24577;
     pub const LES: u16 = 24576;
     pub const LLRM_ASM: u16 = 24578;
+    pub const LLRM_CODE: u16 = 24582;
+    pub const LLRM_PTRDIFF: u16 = 24583;
+    pub const LLRM_WINDOW: u16 = 24581;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -477,6 +486,7 @@ pub mod x86isd {
     pub const SCALEFS: u16 = 734;
     pub const SCALEFS_RND: u16 = 735;
     pub const SCALEF_RND: u16 = 736;
+    pub const SEGMENT_OF: u16 = 24580;
     pub const SEG_ALLOCA: u16 = 737;
     pub const SELECTS: u16 = 738;
     pub const SETCC: u16 = 739;
@@ -712,6 +722,7 @@ pub mod x86 {
     pub const ADD32mr: u16 = 624;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
+    pub const AH: u16 = 1;
     pub const AND16mi: u16 = 804;
     pub const AND16mr: u16 = 814;
     pub const AND32mi: u16 = 845;
@@ -737,6 +748,7 @@ pub mod x86 {
     pub const EDX: u16 = 27;
     pub const EFLAGS: u16 = 28;
     pub const ES: u16 = 31;
+    pub const FNSTSW16r: u16 = 1706;
     pub const FS: u16 = 36;
     pub const GS: u16 = 38;
     pub const IDIV16m: u16 = 1757;
@@ -763,6 +775,7 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
     pub const SBB16mr: u16 = 4171;
     pub const SBB32mi: u16 = 4190;
@@ -776,6 +789,9 @@ pub mod x86 {
     pub const SUB32mr: u16 = 4795;
     pub const SUB8mi: u16 = 4867;
     pub const SUB8mr: u16 = 4873;
+    pub const UCOM_Fpr32: u16 = 5096;
+    pub const UCOM_Fpr64: u16 = 5097;
+    pub const UCOM_Fpr80: u16 = 5098;
     pub const XOR16mi: u16 = 22586;
     pub const XOR16mr: u16 = 22596;
     pub const XOR32mi: u16 = 22627;
@@ -783,6 +799,7 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    pub const sub_8bit_hi: u16 = 2;
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
         (386, "MOV32r0"),
@@ -813,6 +830,7 @@ pub mod x86 {
         (1556, "DIV16r"),
         (1559, "DIV32m"),
         (1562, "DIV32r"),
+        (1706, "FNSTSW16r"),
         (1757, "IDIV16m"),
         (1760, "IDIV16r"),
         (1763, "IDIV32m"),
@@ -836,6 +854,7 @@ pub mod x86 {
         (2973, "OR32mr"),
         (3045, "OR8mi"),
         (3051, "OR8mr"),
+        (4033, "SAHF"),
         (4165, "SBB16mi"),
         (4171, "SBB16mr"),
         (4190, "SBB32mi"),
@@ -848,6 +867,9 @@ pub mod x86 {
         (4795, "SUB32mr"),
         (4867, "SUB8mi"),
         (4873, "SUB8mr"),
+        (5096, "UCOM_Fpr32"),
+        (5097, "UCOM_Fpr64"),
+        (5098, "UCOM_Fpr80"),
         (22586, "XOR16mi"),
         (22596, "XOR16mr"),
         (22627, "XOR32mi"),
@@ -1102,6 +1124,9 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LDS" => 24577,
         "LES" => 24576,
         "LLRM_ASM" => 24578,
+        "LLRM_CODE" => 24582,
+        "LLRM_PTRDIFF" => 24583,
+        "LLRM_WINDOW" => 24581,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,
@@ -1178,6 +1203,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "SCALEFS" => 734,
         "SCALEFS_RND" => 735,
         "SCALEF_RND" => 736,
+        "SEGMENT_OF" => 24580,
         "SEG_ALLOCA" => 737,
         "SELECTS" => 738,
         "SETCC" => 739,

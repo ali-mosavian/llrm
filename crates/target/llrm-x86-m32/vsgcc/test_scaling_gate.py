@@ -1244,7 +1244,7 @@ def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_poi
     include += ["-I", str(Path(headers).expanduser())]
     command = gate.levels_time.command("llrm", "O1", base / "render" / "d_alias.c")
     # QCport is Open Watcom C for the 16-bit target: no -m32 -march.
-    command = [command[0], "-O1", *include, command[-1], "-o", os.devnull]
+    command = [command[0], "-O1", *include, command[-1], "-o", gate.levels_time.llrmbin.OBJECT]
     own = gate.own_work(command)
     assert own["regalloc recolor"] > 0.0, f"premise: recolor ran ({own['regalloc recolor']:.1f} Minstr)"
     assert own["regalloc recolor"] <= 70.0, own["regalloc recolor"]
