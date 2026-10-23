@@ -23,6 +23,34 @@ Inclusive per pass, M Ir.
 
 The MemorySSA rows overlap EarlyCSE and MemCpyOpt: EarlyCse 32.5 = MemorySSA 18.7 + fork/clone 3.4 + walk 8.7 + rest 1.7; MemCpyOpt 10.7 = MemorySSA 6.9 + `Pointers::run` 2.7 + body 0.7.
 
+## Bucket ledger
+
+Excess over the pin in M Ir, one tip, callee view for the bucket totals (`compile-time-owners.md`) and inclusive per-pass view for the rows. The two views overlap (MemorySSA is inside EarlyCSE and MemCpyOpt), so the rows are what is attributed and `unexplained` is the bucket's excess less them.
+
+Scalar bucket, ours 137.6 / pin 81.8, excess 55.8:
+
+| row | excess | status |
+|---|--:|---|
+| MemorySSA built per pass (EarlyCse 18.7 + MemCpyOpt 6.9 vs pin 2.9) | 22.7 | handed to w-3 (S3), 11-10 |
+| EarlyCse fork + `Context` clone | 3.4 | handed to w-3, 11-20 |
+| MemCpyOpt `Pointers::run` | 2.7 | handed to w-5, 11-27 |
+| SCCP + IPSCCP | 3.4 | flat, no gap to mirror |
+| GVN, SROA | -9.1 | below the pin |
+| Reassociate 3.0, DSE 1.1, InstSimplify 1.4 | 5.5 | unexplained: per-pass split not yet made |
+| rest of the bucket | 27.2 | unexplained: to attribute by callee (`ledger5.py`), 11-03 |
+
+IPO bucket, ours 47.0 / pin 13.3, excess 33.7:
+
+| row | excess | status |
+|---|--:|---|
+| Stamp: `stamped_all` 10.0 + `Stamp::run` 3.9 against the pin's 1.4 | 12.5 | handed to w-6, 11-17 |
+| Bounded | 7.0 | funcattrs-port, 11-20 |
+| GlobalOpt 4.8 vs 0.47, WriteOnly 2.3 | 6.6 | unexplained: pin GlobalOpt mirrored? to read, 11-06 |
+| functionattrs post-order in the walk | 1.1 | flat (skipping unchanged components gave -1.6 M) |
+| rest of the bucket | 6.5 | unexplained: to attribute by callee, 11-03 |
+
+`Homes` 8.4 and `Spares` 8.0 are llrm-only module passes counted in bucket 4 (w-6).
+
 ## Steps
 
 One PR per step, ledger pair in each body. Dates are land dates.
