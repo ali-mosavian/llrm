@@ -613,11 +613,23 @@ impl Ast<'_> {
         Ok(Some(Expr::Apply { name, arguments, span }))
     }
 
+    /// A field's name: any word, reserved or not (the checker refuses the ones the family refuses).
+    fn any_word_at(&self, at: usize) -> Option<String> {
+        match &self.tokens.get(at)?.kind {
+            TokenKind::Identifier(name) => Some(name.clone()),
+            TokenKind::Reserved(id) => {
+                let spelling = tables::token_spelling(*id)?.to_ascii_uppercase();
+                spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic).then_some(spelling)
+            }
+            _ => None,
+        }
+    }
+
     fn field_name(&mut self) -> R<(String, Span)> {
         let at = self.i;
         match self.tok_n(0) {
             Some(Tok::Ident) | Some(Tok::Kw(_)) => {
-                let name = self.name_at(at).ok_or(at)?;
+                let name = self.any_word_at(at).ok_or(at)?;
                 self.i += 1;
                 Ok((name, self.span(at)))
             }
@@ -846,13 +858,13 @@ impl Ast<'_> {
     fn name_statement(&mut self) -> R<()> {
         let start = self.i;
         let start_span = self.span(start);
+        if let Some(done) = self.isam_statement()? {
+            return Ok(done);
+        }
         if matches!(self.kinds[start], Tok::Ident) && self.line_start() && self.is_n(1, Kw::Colon) {
             let name = self.identifier()?.0;
             self.out.push(Statement::Label(name, start_span));
             return Ok(());
-        }
-        if let Some(done) = self.isam_statement()? {
-            return Ok(done);
         }
         if let Ok(target) = self.name_ref() {
             if self.eat(Kw::EQ) {
@@ -1847,7 +1859,10 @@ impl Ast<'_> {
         let at = self.i;
         let name = self.name_at(at).ok_or(at)?;
         self.i += 1;
-        self.expect(Kw::NewLine)?;
+        // `TYPE t: a AS INTEGER: END TYPE` on one line is BC's too
+        if !self.eat(Kw::Colon) {
+            self.expect(Kw::NewLine)?;
+        }
         let mut fields = Vec::new();
         loop {
             self.skip_separators();
@@ -1856,7 +1871,7 @@ impl Ast<'_> {
                 break;
             }
             let at = self.i;
-            let field = self.name_at(at).ok_or(at)?;
+            let field = self.any_word_at(at).ok_or(at)?;
             self.i += 1;
             let mut bounds = Vec::new();
             let array = self.eat(Kw::LParen);
@@ -1884,7 +1899,7 @@ impl Ast<'_> {
                 volatile: false,
                 span: self.span(at),
             });
-            if !self.is(Kw::NewLine) {
+            if !(self.is(Kw::NewLine) || self.is(Kw::Colon)) {
                 return self.fail();
             }
         }
