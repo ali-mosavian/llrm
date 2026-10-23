@@ -89,7 +89,8 @@ fn record_to(
 ) {
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        // one write: parallel compiles append to one report, and `writeln!` is several
+        // one write: parallel compiles append to one report, and `writeln!` is
+        // several
         let _ = file.write_all(format!("{name} {}\n", by.name()).as_bytes());
     }
 }
