@@ -236,7 +236,9 @@ pub fn selected(
         info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
     allocas.sort();
     for (index, value) in allocas {
-        let ValueDef::Instruction(def) = function.value(value).def else { return refuse("an alloca that is not an instruction") };
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return refuse("an alloca that is not an instruction");
+        };
         let instruction = function.instruction(def);
         let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
@@ -246,7 +248,8 @@ pub fn selected(
         }
         let types = &module.context.types;
         let size = layout.alloc_size(types, allocated) as i64;
-        let align = crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        let align =
+            crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
     }
