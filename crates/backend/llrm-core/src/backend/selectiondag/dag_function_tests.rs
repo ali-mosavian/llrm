@@ -149,3 +149,36 @@ fn a_subregister_is_the_same_value_viewed_narrower() {
     };
     assert_eq!((written.value, written.width, read.value, read.width), (written.value, 4, written.value, 1));
 }
+
+const LOCAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  %p = alloca i32
+  store i32 %a, ptr %p
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+
+/// A local is a cell below the frame pointer, written and read at one
+/// displacement; frame object 0 was `Emit(Unsupported(frame index 0))` in
+/// 10 functions of the corpora.
+#[test]
+fn a_local_is_a_frame_cell_below_bp() {
+    let module = llrm_mir::parse::module(LOCAL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let cells: Vec<i64> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.dests.iter().chain(w.sources.iter()))
+        .filter_map(|loc| match loc {
+            crate::model::ir::Loc::Mem(cell) => cell.addr.map(|a| a.disp),
+            _ => None,
+        })
+        .collect();
+    assert!(cells.len() >= 2 && cells.iter().all(|d| *d == -4), "{cells:?}");
+    assert_eq!(done.depth, 4);
+    assert_eq!(done.extents, [(-4, 4)]);
+}
