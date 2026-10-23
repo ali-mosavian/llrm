@@ -882,8 +882,12 @@ impl Builder<'_> {
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
-            // a far global's selector is a segment-of-symbol form not built yet
-            ConstantKind::Global(_) if vt == MVT::Far.into() => Err(Refused("address of a far global")),
+            // a far global: its offset and the selector of its segment
+            ConstantKind::Global(global) if vt == MVT::Far.into() => {
+                let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
+                let segment = self.segment_of(Some(global.0));
+                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+            }
             ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
                 source,
@@ -894,10 +898,17 @@ impl Builder<'_> {
             }) => {
                 let base = self.constant_value(operands[0])?;
                 let indices: Vec<Operand> = operands[1..].iter().map(|id| Operand::Constant(*id)).collect();
+                if self.dag.value_type(base) == MVT::Far.into() {
+                    let pointer = Operand::Constant(operands[0]);
+                    return self.far_gep(pointer, base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices);
+                }
                 self.gep_value(base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices)
             }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op, value }) => {
                 let operand = self.constant_value(*value)?;
+                if *op == CastOp::AddrSpaceCast || self.dag.value_type(operand) == MVT::Far.into() || vt == MVT::Far.into() {
+                    return self.pointer_cast(*op, Operand::Constant(*value), operand, constant.ty);
+                }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
             }
             _ => Err(Refused("aggregate constant")),
@@ -1187,12 +1198,16 @@ impl Builder<'_> {
                             ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
                         )
                     );
-                    // a global's selector (DGROUP) waits on the
-                    // segment-of-symbol form
-                    if !framed {
-                        return Err(Refused("near pointer to far, outside the frame"));
-                    }
-                    let selector = self.stack_selector();
+                    // a frame object is in SS; a global is in its own segment;
+                    // any other near pointer is into DGROUP
+                    let selector = match base {
+                        _ if framed => self.stack_selector(),
+                        Operand::Constant(id) => match self.module.context.get(id).kind {
+                            ConstantKind::Global(global) => self.segment_of(Some(global.0)),
+                            _ => self.segment_of(None),
+                        },
+                        _ => self.segment_of(None),
+                    };
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 _ => Err(Refused("cast to a far pointer")),
@@ -1203,6 +1218,14 @@ impl Builder<'_> {
             CastOp::AddrSpaceCast if from == dest => Ok(operand),
             _ => Err(Refused("cast between address spaces")),
         }
+    }
+
+    /// The selector of the segment `global` lives in (`SEGMENT_OF`).
+    fn segment_of(
+        &mut self,
+        global: Option<u32>,
+    ) -> SDValue {
+        self.dag.get_segment_of(global)
     }
 
     /// `SS`, the stack's selector.
