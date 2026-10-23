@@ -181,3 +181,16 @@ fn the_combiner_runs_between_the_legalizers() {
         }
     }
 }
+
+/// The lowering makes the `Wrapper` of a global after the load that reads it,
+/// so reverse creation order selected the wrapper first (`mov r, $g`) and the
+/// load read through `r`: `mov eax, offset g; mov eax, [eax]` for `return g`.
+#[test]
+fn a_load_of_a_global_is_one_instruction_on_the_symbol() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n@g = global i32 5\ndefine i32 @f() {\nentry:\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    let names: Vec<&str> =
+        blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
+    assert_eq!(names, ["mov", "mov", "ret"], "the load, the copy to EAX, the return: {blocks:#?}");
+    assert!(blocks[0][0].contains("addr: Some"), "the load reads the symbol's cell: {blocks:#?}");
+}
