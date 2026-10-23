@@ -87,6 +87,9 @@ pub enum NodeData {
     },
     Block(u32),
     Symbol(u32),
+    /// A constant pool node's entry, an index into
+    /// [`SelectionDAG::constant_pool`].
+    PoolIndex(u32),
     Mem(MemInfo),
     JumpTable(u32),
 }
@@ -99,6 +102,9 @@ pub struct MemInfo {
     pub align: u32,
     pub volatile: bool,
     pub base: MemBase,
+    /// The extension of a load narrower than its result (`LoadExtType`); none
+    /// for a plain load.
+    pub ext: Option<super::actions::LoadExt>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -107,6 +113,8 @@ pub enum MemBase {
     Unknown,
     Global(u32),
     Stack(i32),
+    /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
+    ConstantPool(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -172,6 +180,9 @@ pub struct SelectionDAG {
     pub block_names: Vec<String>,
     /// Names of external symbols, by id.
     pub symbol_names: Vec<String>,
+    /// The constants spilled to the pool: bits and type
+    /// (`MachineConstantPool`).
+    pub constant_pool: Vec<(u128, EVT)>,
 }
 
 impl SelectionDAG {
@@ -187,6 +198,7 @@ impl SelectionDAG {
             global_names: Vec::new(),
             block_names: Vec::new(),
             symbol_names: Vec::new(),
+            constant_pool: Vec::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
@@ -650,6 +662,21 @@ impl SelectionDAG {
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 
+    /// `getExtLoad`: a load of `info.mem_vt` extended to `vt`.
+    pub fn get_ext_load(
+        &mut self,
+        ext: super::actions::LoadExt,
+        vt: EVT,
+        chain: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
+        let offset = self.get_poison(self.value_type(ptr));
+        let info = MemInfo { ext: Some(ext), ..info };
+        self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
+    }
+
     /// `getStore` (unindexed, not truncating): `store chain, value, ptr,
     /// poison`.
     pub fn get_store(
@@ -736,6 +763,26 @@ impl SelectionDAG {
         vt: EVT,
     ) -> SDValue {
         self.intern(ISD::ValueType, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::ValueType(vt))
+    }
+
+    /// `getConstantPool`: the node for an entry holding `bits` of type `vt`
+    /// (equal entries share one index), as a pointer of type `ptr`.
+    pub fn get_constant_pool(
+        &mut self,
+        ptr: EVT,
+        bits: u128,
+        vt: EVT,
+        target: bool,
+    ) -> SDValue {
+        let index = match self.constant_pool.iter().position(|&entry| entry == (bits, vt)) {
+            Some(at) => at,
+            None => {
+                self.constant_pool.push((bits, vt));
+                self.constant_pool.len() - 1
+            }
+        } as u32;
+        let opcode = if target { ISD::TargetConstantPool } else { ISD::ConstantPool };
+        self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index))
     }
 
     pub fn get_global_address(

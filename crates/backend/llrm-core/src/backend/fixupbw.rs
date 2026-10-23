@@ -234,7 +234,7 @@ impl FixupBw {
             // extension within one register).
             if regs.is_segment(src.register)
                 || !_lanes(regs, src.register).iter().all(|lane| lane.1 < src.width as u32)
-                || (name == "movsx" && ir::root(src.register) == ir::root(dest.register))
+                || (&*name == "movsx" && ir::root(src.register) == ir::root(dest.register))
             {
                 return None;
             }
@@ -256,7 +256,7 @@ fn rebuilt(
 ) -> Insn {
     let mut new = (**one).clone();
     let what = new.what.as_mut().expect("semantics");
-    what.name = Some(name.to_owned());
+    what.name = Some(name.into());
     what.op = op;
     what.dests = vec![Loc::Reg(wide)];
     if let Some(source) = source {

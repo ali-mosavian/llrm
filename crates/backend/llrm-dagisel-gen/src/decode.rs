@@ -1,9 +1,11 @@
 //! Bytes of the pin's `MatcherTable` to a tree of [`Matcher`] items.
 //!
-//! Reads the operands the way `SelectCodeCommon` does ([L3351][common]); an opcode the pin's
-//! x86 table does not use is refused by name, so a table that starts using one fails here.
+//! Reads the operands the way `SelectCodeCommon` does ([L3351][common]); an
+//! opcode the pin's x86 table does not use is refused by name, so a table that
+//! starts using one fails here.
 //!
-//! [common]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
+//! [common]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
 
 use std::collections::BTreeMap;
 
@@ -11,7 +13,8 @@ use llrm_dagisel::matcher::{Emit, Matcher, Opcode, Slice, Vt};
 
 use crate::inc::Ids;
 
-/// A decoded table: alternatives and cases are nested here and become items in `flatten`.
+/// A decoded table: alternatives and cases are nested here and become items in
+/// `flatten`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
     Item(Matcher),
@@ -22,7 +25,8 @@ pub enum Node {
 
 pub struct Decoded {
     pub root: Vec<Node>,
-    /// The operand lists of `Emit`s and `CompleteMatch`es, as `Slice`s point into it.
+    /// The operand lists of `Emit`s and `CompleteMatch`es, as `Slice`s point
+    /// into it.
     pub lists: Vec<u16>,
 }
 
@@ -38,7 +42,12 @@ struct Decoder<'a> {
     lists: Vec<u16>,
 }
 
-pub fn decode(bytes: &[u8], operand_lists: &[u8], ids: &Ids, hw: &HwModes) -> Result<Decoded, String> {
+pub fn decode(
+    bytes: &[u8],
+    operand_lists: &[u8],
+    ids: &Ids,
+    hw: &HwModes,
+) -> Result<Decoded, String> {
     let mut names = BTreeMap::new();
     for (name, &value) in &ids.0 {
         if name.starts_with("OPC_") {
@@ -50,7 +59,11 @@ pub fn decode(bytes: &[u8], operand_lists: &[u8], ids: &Ids, hw: &HwModes) -> Re
     Ok(Decoded { root, lists: decoder.lists })
 }
 
-fn vbr(first: u64, bytes: &[u8], at: &mut usize) -> u64 {
+fn vbr(
+    first: u64,
+    bytes: &[u8],
+    at: &mut usize,
+) -> u64 {
     let mut value = first & 127;
     let mut shift = 7;
     loop {
@@ -65,18 +78,27 @@ fn vbr(first: u64, bytes: &[u8], at: &mut usize) -> u64 {
 }
 
 impl Decoder<'_> {
-    fn byte(&self, at: &mut usize) -> Result<u8, String> {
+    fn byte(
+        &self,
+        at: &mut usize,
+    ) -> Result<u8, String> {
         let b = *self.bytes.get(*at).ok_or("the table ends inside an opcode")?;
         *at += 1;
         Ok(b)
     }
 
-    fn vbr(&self, at: &mut usize) -> Result<u64, String> {
+    fn vbr(
+        &self,
+        at: &mut usize,
+    ) -> Result<u64, String> {
         let first = u64::from(self.byte(at)?);
         Ok(if first & 128 != 0 { vbr(first, self.bytes, at) } else { first })
     }
 
-    fn signed_vbr(&self, at: &mut usize) -> Result<i64, String> {
+    fn signed_vbr(
+        &self,
+        at: &mut usize,
+    ) -> Result<i64, String> {
         let mut value = 0i64;
         let mut shift = 0u32;
         loop {
@@ -92,21 +114,34 @@ impl Decoder<'_> {
         }
     }
 
-    fn vt(&self, at: &mut usize) -> Result<Vt, String> {
+    fn vt(
+        &self,
+        at: &mut usize,
+    ) -> Result<Vt, String> {
         Ok(Vt(self.vbr(at)? as u16))
     }
 
-    fn hw_vt(&self, at: &mut usize) -> Result<Vt, String> {
+    fn hw_vt(
+        &self,
+        at: &mut usize,
+    ) -> Result<Vt, String> {
         let index = usize::from(self.byte(at)?);
         self.hw.0.get(index).copied().ok_or_else(|| format!("no type for hardware mode index {index}"))
     }
 
-    fn u16(&self, at: &mut usize) -> Result<u16, String> {
+    fn u16(
+        &self,
+        at: &mut usize,
+    ) -> Result<u16, String> {
         let low = self.byte(at)?;
         Ok(u16::from(low) | u16::from(self.byte(at)?) << 8)
     }
 
-    fn inline_list(&mut self, at: &mut usize, count: usize) -> Result<Slice, String> {
+    fn inline_list(
+        &mut self,
+        at: &mut usize,
+        count: usize,
+    ) -> Result<Slice, String> {
         let start = self.lists.len() as u32;
         for _ in 0..count {
             let v = self.vbr(at)?;
@@ -115,8 +150,12 @@ impl Decoder<'_> {
         Ok(Slice { start, len: count as u8 })
     }
 
-    /// The operands of an `EmitNode`/`MorphNodeTo`: a count, then an index into `OperandLists`.
-    fn operand_list(&mut self, at: &mut usize) -> Result<Slice, String> {
+    /// The operands of an `EmitNode`/`MorphNodeTo`: a count, then an index into
+    /// `OperandLists`.
+    fn operand_list(
+        &mut self,
+        at: &mut usize,
+    ) -> Result<Slice, String> {
         let count = usize::from(self.byte(at)?);
         let start = self.lists.len() as u32;
         if count != 0 {
@@ -131,14 +170,17 @@ impl Decoder<'_> {
         Ok(Slice { start, len: count as u8 })
     }
 
-    /// `OPC_EmitNode*` and `OPC_MorphNodeTo*`: the long forms spell flags and result count, the
-    /// compressed ones put the count (and sometimes the flags) in the opcode.
-    fn emit(&mut self, name: &str, at: &mut usize) -> Result<Emit, String> {
+    /// `OPC_EmitNode*` and `OPC_MorphNodeTo*`: the long forms spell flags and
+    /// result count, the compressed ones put the count (and sometimes the
+    /// flags) in the opcode.
+    fn emit(
+        &mut self,
+        name: &str,
+        at: &mut usize,
+    ) -> Result<Emit, String> {
         let opcode = self.u16(at)?;
-        let rest = name
-            .strip_prefix("OPC_MorphNodeTo")
-            .or_else(|| name.strip_prefix("OPC_EmitNode"))
-            .ok_or("not an emit")?;
+        let rest =
+            name.strip_prefix("OPC_MorphNodeTo").or_else(|| name.strip_prefix("OPC_EmitNode")).ok_or("not an emit")?;
         let (flags, num_vts) = if rest.is_empty() {
             let flags = self.byte(at)?;
             (flags, usize::from(self.byte(at)?))
@@ -166,16 +208,24 @@ impl Decoder<'_> {
     }
 
     /// `MVT::<name>`, for the opcodes that imply their type.
-    fn fixed_vt(&self, name: &str) -> Result<Vt, String> {
+    fn fixed_vt(
+        &self,
+        name: &str,
+    ) -> Result<Vt, String> {
         Ok(Vt(self.ids.get(&format!("MVT::{name}"))? as u16))
     }
 
-    fn sequence(&mut self, start: usize, end: usize) -> Result<Vec<Node>, String> {
+    fn sequence(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<Node>, String> {
         let mut at = start;
         let mut out = Vec::new();
         while at < end {
             let opcode = self.byte(&mut at)?;
-            let name = *self.names.get(&opcode).ok_or_else(|| format!("byte {opcode} at {} is not an opcode", at - 1))?;
+            let name =
+                *self.names.get(&opcode).ok_or_else(|| format!("byte {opcode} at {} is not an opcode", at - 1))?;
             let item = match name {
                 "OPC_Scope" => {
                     let mut alternatives = Vec::new();
@@ -335,7 +385,9 @@ impl Decoder<'_> {
                 _ if name.starts_with("OPC_EmitCopyToReg") && !name.ends_with("TwoByte") => {
                     Matcher::EmitCopyToReg { record: digit(name)?, register: u16::from(self.byte(&mut at)?) }
                 }
-                _ if name.starts_with("OPC_EmitNode") && name != "OPC_EmitNodeXForm" || name.starts_with("OPC_MorphNodeTo") => {
+                _ if name.starts_with("OPC_EmitNode") && name != "OPC_EmitNodeXForm"
+                    || name.starts_with("OPC_MorphNodeTo") =>
+                {
                     let emit = self.emit(name, &mut at)?;
                     if name.starts_with("OPC_Morph") { Matcher::MorphNodeTo(emit) } else { Matcher::EmitNode(emit) }
                 }
@@ -351,10 +403,7 @@ impl Decoder<'_> {
 }
 
 fn digit(name: &str) -> Result<u8, String> {
-    name.bytes()
-        .find(u8::is_ascii_digit)
-        .map(|d| d - b'0')
-        .ok_or_else(|| format!("{name} has no digit"))
+    name.bytes().find(u8::is_ascii_digit).map(|d| d - b'0').ok_or_else(|| format!("{name} has no digit"))
 }
 
 #[cfg(test)]
@@ -395,7 +444,15 @@ mod tests {
         let flat = flatten(&decoded.root, &decoded.lists);
         assert_eq!(
             flat.items,
-            [Matcher::Scope, Matcher::Alt(1), Matcher::RecordNode, Matcher::Alt(2), Matcher::MoveParent, Matcher::MoveParent, Matcher::Alt(0)]
+            [
+                Matcher::Scope,
+                Matcher::Alt(1),
+                Matcher::RecordNode,
+                Matcher::Alt(2),
+                Matcher::MoveParent,
+                Matcher::MoveParent,
+                Matcher::Alt(0)
+            ]
         );
     }
 

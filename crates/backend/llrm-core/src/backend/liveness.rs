@@ -578,7 +578,7 @@ mod tests {
         Arc::new(Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }),
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }),
             vec![],
             vec![],
         ))
@@ -615,7 +615,7 @@ mod tests {
                 at,
                 Some((at, at)),
                 Some(Semantics {
-                    name: Some("mov".to_owned()),
+                    name: Some("mov".into()),
                     dests: vec![Loc::Reg(into)],
                     sources: vec![Loc::Reg(from)],
                     ..Semantics::new(Operation::Move)
@@ -682,7 +682,7 @@ mod tests {
         let mut ret = Insn::new(
             3,
             Some((3, 3)),
-            Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Return) }),
+            Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Return) }),
             vec![],
             vec![1],
         );

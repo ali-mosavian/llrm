@@ -189,7 +189,8 @@ fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() 
 #[test]
 fn an_unsigned_counter_read_through_sext_is_not_widened() {
     let text = clearing("e-p:32:32-n8:16:32").replace("zext i16 %i to i32", "sext i16 %i to i32");
-    // The pin stamps `nuw` on the step (its context inference) and widens nothing.
+    // The pin stamps `nuw` on the step (its context inference) and widens
+    // nothing.
     let (_, after) = widening(&text);
     assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }

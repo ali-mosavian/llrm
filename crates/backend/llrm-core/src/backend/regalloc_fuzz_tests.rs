@@ -111,7 +111,7 @@ impl Builder {
         uses: &[u32],
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), defines.to_vec(), uses.to_vec())
     }
 
@@ -122,7 +122,7 @@ impl Builder {
         to: i64,
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), target: Some(to), ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), target: Some(to), ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), vec![], vec![])
     }
 
@@ -1467,7 +1467,7 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(into)],
                 sources: vec![held(from)],
                 ..Semantics::new(Operation::Move)
@@ -1634,7 +1634,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         3,
         Some((3, 1)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(3)],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
@@ -1647,7 +1647,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(value)],
                 sources: vec![imm(0)],
                 ..Semantics::new(Operation::Move)

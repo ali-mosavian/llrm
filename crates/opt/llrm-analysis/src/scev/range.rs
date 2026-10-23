@@ -729,8 +729,8 @@ impl ScalarEvolution {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6463
-    /// `getRangeForUnknownRecurrence`: a shift recurrence `<start, shift, step>`
-    /// over a loop with a small constant maximum trip count.
+    /// `getRangeForUnknownRecurrence`: a shift recurrence `<start, shift,
+    /// step>` over a loop with a small constant maximum trip count.
     fn get_range_for_unknown_recurrence(
         &mut self,
         cx: &Cx,

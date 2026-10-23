@@ -3,7 +3,10 @@
 
 use std::process::Command;
 
-fn asm(source: &str, flags: &[&str]) -> Vec<String> {
+fn asm(
+    source: &str,
+    flags: &[&str],
+) -> Vec<String> {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))

@@ -1923,7 +1923,7 @@ define double @f(double %x) addrspace(1) {
         .flat_map(|block| &block.insns)
         .filter_map(|one| one.what.as_ref())
         .filter(|what| what.op == crate::model::ir::Operation::FloatUnary)
-        .filter_map(|what| what.name.clone())
+        .filter_map(|what| what.name.as_deref().map(str::to_owned))
         .collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }
