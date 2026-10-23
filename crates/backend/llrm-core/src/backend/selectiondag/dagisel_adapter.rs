@@ -204,6 +204,47 @@ fn our_vt(vt: Vt) -> EVT {
     .unwrap_or_else(|| panic!("pin value type {vt:?} has no counterpart"))
 }
 
+/// The id the flags register has: iced numbers no EFLAGS, so it takes the last
+/// raw id.
+pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
+
+/// The register of the pin's register number `register` that the builder names
+/// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
+/// the ones with no id.
+pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
+    use llrm_dagisel::generated::ids::x86;
+    use llrm_lir::registers::RegId;
+    Some(match register {
+        x86::AX => RegId::AX,
+        x86::DX => RegId::DX,
+        x86::EAX => RegId::EAX,
+        x86::EDX => RegId::EDX,
+        x86::CS => RegId::CS,
+        x86::DS => RegId::DS,
+        x86::ES => RegId::ES,
+        x86::FS => RegId::FS,
+        x86::GS => RegId::GS,
+        x86::SS => RegId::SS,
+        x86::EFLAGS => EFLAGS_ID,
+        _ => return None,
+    })
+}
+
+impl DagisAdapter<'_> {
+    /// The `Register` node for the pin's register number: physical when the
+    /// builder names it so.
+    fn register_node(
+        &mut self,
+        vt: EVT,
+        register: u16,
+    ) -> SDValue {
+        match phys_reg(register) {
+            Some(id) => self.dag.get_phys_register(vt, id),
+            None => self.dag.get_register(vt, u32::from(register)),
+        }
+    }
+}
+
 fn ours(v: PinValue) -> SDValue {
     SDValue { node: v.node, res: v.res }
 }
@@ -570,7 +611,8 @@ impl Dag for DagisAdapter<'_> {
         register: u16,
         vt: Vt,
     ) -> PinValue {
-        theirs(self.dag.get_register(our_vt(vt), u32::from(register)))
+        let node = self.register_node(our_vt(vt), register);
+        theirs(node)
     }
     fn copy_to_reg(
         &mut self,
@@ -580,7 +622,7 @@ impl Dag for DagisAdapter<'_> {
         glue: Option<PinValue>,
     ) -> u32 {
         let vt = self.dag.value_type(ours(value));
-        let reg = self.dag.get_register(vt, u32::from(register));
+        let reg = self.register_node(vt, register);
         let mut ops = vec![ours(chain), reg, ours(value)];
         ops.extend(glue.map(ours));
         self.dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops).node
@@ -593,7 +635,7 @@ impl Dag for DagisAdapter<'_> {
         glue: PinValue,
     ) -> u32 {
         let vt = our_vt(vt);
-        let reg = self.dag.get_register(vt, u32::from(register));
+        let reg = self.register_node(vt, register);
         self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
     }
     fn token_factor(
