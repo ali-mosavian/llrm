@@ -138,3 +138,25 @@ fn a_merge_values_is_replaced_by_its_operands() {
     let root = dag.get_root();
     assert_eq!((dag.operand(root, 0), dag.operand(root, 1)), (a, b));
 }
+
+/// A branch on `!(a == b)` made `xor (setcc eq), true`, which selected as a
+/// `setcc`, an `xor` and a compare against zero (8 m32 shadow functions:
+/// `SETCCr` the pin does not have). `not (setcc x, y, cc)` is `setcc x, y,
+/// !cc`.
+#[test]
+fn a_not_of_a_compare_is_the_inverse_compare() {
+    let mut dag = dag();
+    let (a, b) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2));
+    let eq = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
+    let one = dag.get_constant(1, EVT::I1);
+    let not = dag.get_node(ISD::Xor, EVT::I1, &[eq, one]);
+    let chain = dag.entry_node();
+    let dest = dag.get_basic_block(1);
+    let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, not, dest]);
+    dag.set_root(branch);
+    generic(&mut dag);
+    let root = dag.get_root();
+    let cond = dag.operand(root, 1);
+    assert_eq!(dag.opcode(cond), ISD::SetCC);
+    assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetNe)));
+}

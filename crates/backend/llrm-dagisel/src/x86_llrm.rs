@@ -17,8 +17,7 @@
 
 use crate::dag::{Dag, SDValue};
 
-/// `X86ISD::LLRM_ASM` and `LLRM_WINDOW` (`tools/dagisel/own_ids.txt`);
-/// `LLRM_CODE` has no id yet.
+/// `X86ISD::LLRM_ASM` and `LLRM_WINDOW` (`tools/dagisel/own_ids.txt`).
 pub const LLRM_NODES: [u16; 2] = [24578, 24581];
 
 /// `X86ISD::SEGMENT_OF`: the segment of its global operand, or `DGROUP` with
@@ -40,11 +39,19 @@ pub const LLRM_FARCALL: u16 = 24584;
 /// The machine opcode `LLRM_FARCALL` becomes; the emitter prints `call far`.
 pub const FARCALL_OPCODE: u16 = 30012;
 
+/// `X86ISD::LLRM_CODE` (sdag-a): an `llrm.ia16.code` call, with its bytes in
+/// the frame.
+pub const LLRM_CODE: u16 = 24582;
+
+/// The machine opcode `LLRM_CODE` becomes.
+pub const CODE_OPCODE: u16 = 30013;
+
 /// The pseudo opcode an llrm node of this id becomes.
 pub fn llrm_opcode(node: u16) -> Option<u16> {
     match node {
         SEGMENT_OF => Some(SEGMENT_OF_OPCODE),
         LLRM_FARCALL => Some(FARCALL_OPCODE),
+        LLRM_CODE => Some(CODE_OPCODE),
         n if LLRM_NODES.contains(&n) => Some(LLRM_ASM_OPCODE),
         _ => None,
     }
