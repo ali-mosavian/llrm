@@ -2,9 +2,10 @@
 //! registers and symbols its name states. Before, any such call stopped the
 //! builder at "intrinsic call" (the Nib block at m32, two QB blocks at m16).
 
+use llrm_mir::datalayout::DataLayout;
+
 use super::builder::{BuilderTarget, build_block};
 use super::function_lowering::FunctionLoweringInfo;
-use llrm_mir::datalayout::DataLayout;
 
 fn dump(
     text: &str,
