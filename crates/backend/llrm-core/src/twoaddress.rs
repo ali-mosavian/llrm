@@ -795,11 +795,14 @@ impl<'a> Commuter<'a> {
         for (place, one) in moved.into_iter().enumerate() {
             work.insert(after + place, one);
         }
-        // `LIS->handleMove` of the instruction and its copies, in order, before
-        // what follows them.
-        let next = work.get(after + (end - at)).map(|one| one.id());
-        for one in &work[after..after + (end - at)] {
-            self.facts.move_before(self.block, one.id(), next);
+        // `LIS->handleMove` of the copies and then the instruction, each
+        // below what it reads: the last copy first, before what follows them,
+        // so the block is well-formed (a def moved below its reader) at each
+        // move (TwoAddressInstructionPass.cpp#L1066).
+        let mut before = work.get(after + (end - at)).map(|one| one.id());
+        for one in work[after..after + (end - at)].iter().rev() {
+            self.facts.move_before(self.block, one.id(), before);
+            before = Some(one.id());
         }
         self.distance.remove(&mi.id());
         true

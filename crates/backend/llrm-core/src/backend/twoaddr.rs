@@ -1157,6 +1157,20 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
 
+    /// The copy of a tied add's result goes below the kill with it: the intervals
+    /// are moved the copy first, below what it reads. The add moved first was a
+    /// def moved below its own reader, and `handleMove` asserted on a segment
+    /// that ends before the new place ("Must have following segment": 7 of
+    /// QCport's modules did not compile at -Os).
+    #[test]
+    fn test_a_tied_add_with_a_copy_of_its_result_goes_below_the_kill_with_it() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, copy_insn(2, 9, 8), lea_of(3, 5, 7), read(4, 9), read(5, 5)];
+        let got = tied(&of(insns), Off);
+        let names = names_of(&got);
+        assert!(position(&got, "lea") < position(&got, "add"), "{names:?}");
+    }
+
     /// The pin's checks: a kill that is a copy, or a call between, leaves the
     /// add where it was.
     #[test]
