@@ -225,6 +225,7 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+pub(crate) use matcher::reads_invariant_memory;
 #[cfg(feature = "fixtures")]
 pub use matcher::selector;
 #[cfg(test)]

@@ -51,7 +51,8 @@
 
 use std::sync::Arc;
 
-use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, Opcode, TypeId};
 
 use super::{
@@ -189,9 +190,7 @@ impl Selector<'_, '_, '_> {
         };
         let first = out.len();
         (self.compiled.emit)(self, chosen, &m, out)?;
-        if self.loads_constant_memory(inst)
-            || llrm_mir::memory::invariant_load(&self.module.context, &self.layout, self.function, inst)
-        {
+        if self.loads_constant_memory(inst) {
             for one in &mut out[first..] {
                 let plain = one
                     .what
@@ -208,42 +207,12 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `AA->pointsToConstantMemory` for a load: its pointer is into a global
-    /// that is constant, defined here and not externally initialized
-    /// (`SelectionDAGBuilder::visitLoad`'s `isInvariant`; its other halves,
-    /// `!invariant.load` and a `noalias readonly` argument, are
-    /// `llrm_mir::memory::invariant_load`).
+    /// `AA->pointsToConstantMemory` for a load: see [`reads_invariant_memory`].
     fn loads_constant_memory(
         &self,
         inst: InstId,
     ) -> bool {
-        let instruction = self.function.instruction(inst);
-        let (Opcode::Load { volatile: false, .. }, Some(&pointer)) =
-            (&instruction.opcode, instruction.operands.first())
-        else {
-            return false;
-        };
-        let query = llrm_mir::valuetracking::Query::new(self.module, self.function, &self.layout);
-        let Operand::Constant(object) = llrm_mir::valuetracking::underlying::get_underlying_object(&query, pointer, 0)
-        else {
-            return false;
-        };
-        let ConstantKind::Global(global) = self.module.context.get(object).kind else { return false };
-        let global = self.module.global(global);
-        matches!(
-            &global.kind,
-            llrm_mir::module::GlobalKind::Variable(variable)
-                if variable.constant
-                    && variable.initializer.is_some()
-                    && !variable.externally_initialized
-                    && !matches!(
-                        global.linkage,
-                        llrm_mir::module::Linkage::Weak
-                            | llrm_mir::module::Linkage::LinkOnce
-                            | llrm_mir::module::Linkage::Common
-                            | llrm_mir::module::Linkage::ExternWeak
-                    )
-        )
+        reads_invariant_memory(self.module, self.function, &self.layout, inst)
     }
 
     fn matched<'a>(
@@ -1751,6 +1720,54 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(), Unselected> {
         self.landing_pad(m.inst, m.at, out)
     }
+}
+
+/// `isInvariant` of `SelectionDAGBuilder::visitLoad`: `!invariant.load`, or
+/// `AA->pointsToConstantMemory`: a pointer into a global that is constant,
+/// defined here and not externally initialized, or a `noalias readonly`
+/// argument.
+pub(crate) fn reads_invariant_memory(
+    module: &Module,
+    function: &Function,
+    layout: &DataLayout,
+    inst: InstId,
+) -> bool {
+    llrm_mir::memory::invariant_load(&module.context, layout, function, inst)
+        || loads_constant_global(module, function, layout, inst)
+}
+
+fn loads_constant_global(
+    module: &Module,
+    function: &Function,
+    layout: &DataLayout,
+    inst: InstId,
+) -> bool {
+    let instruction = function.instruction(inst);
+    let (Opcode::Load { volatile: false, .. }, Some(&pointer)) = (&instruction.opcode, instruction.operands.first())
+    else {
+        return false;
+    };
+    let query = llrm_mir::valuetracking::Query::new(module, function, layout);
+    let Operand::Constant(object) = llrm_mir::valuetracking::underlying::get_underlying_object(&query, pointer, 0)
+    else {
+        return false;
+    };
+    let ConstantKind::Global(global) = module.context.get(object).kind else { return false };
+    let global = module.global(global);
+    matches!(
+        &global.kind,
+        llrm_mir::module::GlobalKind::Variable(variable)
+            if variable.constant
+                && variable.initializer.is_some()
+                && !variable.externally_initialized
+                && !matches!(
+                    global.linkage,
+                    llrm_mir::module::Linkage::Weak
+                        | llrm_mir::module::Linkage::LinkOnce
+                        | llrm_mir::module::Linkage::Common
+                        | llrm_mir::module::Linkage::ExternWeak
+                )
+    )
 }
 
 #[cfg(test)]

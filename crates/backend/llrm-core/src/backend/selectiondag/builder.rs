@@ -1184,7 +1184,7 @@ impl Builder<'_> {
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
-            Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
+            Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
@@ -1620,6 +1620,7 @@ impl Builder<'_> {
 
     fn visit_load(
         &mut self,
+        inst: llrm_mir::module::InstId,
         instruction: &llrm_mir::module::Instruction,
         align: Option<u64>,
         volatile: bool,
@@ -1631,6 +1632,9 @@ impl Builder<'_> {
         let root = if volatile { self.root() } else { self.dag.get_root() };
         let address = self.dag.get_object_ptr_offset(ptr, 0);
         let load = self.dag.get_load(info.mem_vt, root, address, info);
+        if crate::backend::isel::reads_invariant_memory(self.module, self.function, self.layout, inst) {
+            self.dag.invariant_loads.insert(load.node);
+        }
         let chain = SDValue { node: load.node, res: 1 };
         let token = self.dag.get_token_factor(&[chain]);
         if volatile {
