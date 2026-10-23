@@ -506,7 +506,8 @@ impl Builder<'_> {
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let vt = self.type_of(self.function.value(arg).ty)?;
-            // the registers a convention names split a value as `getNumRegisters` does
+            // the registers a convention names split a value as
+            // `getNumRegisters` does
             let (part_vt, parts) = match self.convention.parameters.get(at) {
                 Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
