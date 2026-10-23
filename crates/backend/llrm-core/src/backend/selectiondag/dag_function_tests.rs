@@ -445,3 +445,37 @@ fn a_call_destroys_what_its_conventions_says() {
         calls[1].clobbers
     );
 }
+
+const BIG_COPY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [200 x i8] zeroinitializer
+@b = global [200 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr @a, ptr @b, i32 200, i1 false)
+  call void @llvm.memset.p0.i32(ptr @a, i8 1, i32 200, i1 false)
+  ret void
+}
+";
+
+/// A long copy or fill is `rep movs` / `rep stos` with ECX, ESI and EDI set by
+/// the glued copies: the emitter refused `REP_MOVSB_32` and `REP_STOSB_32` in
+/// 14 programs of the m32 execution run.
+#[test]
+fn a_long_copy_and_fill_are_rep_string_operations() {
+    let module = llrm_mir::parse::module(BIG_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let strings: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(
+            w.op,
+            crate::model::ir::Operation::Copy | crate::model::ir::Operation::Fill
+        ))
+        .collect();
+    assert_eq!(strings.len(), 2, "{strings:?}");
+    assert!(strings.iter().all(|w| w.sources.len() == 3), "count, source and destination are operands: {strings:?}");
+}
