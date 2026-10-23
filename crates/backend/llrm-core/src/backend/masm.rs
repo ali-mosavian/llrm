@@ -2038,8 +2038,16 @@ pub fn _operand(
             }
         }
         Loc::Mem(cell) => _memory(regs, cell, names)?,
-        Loc::Address(ir::AddressRef { addr: Some(address), index_through: RegId::None, through, .. }) => {
-            let text = _memory(regs, &ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
+        // A named address keeps its symbol with the registers it is reached
+        // through: `lea eax, b+12[eax]`.
+        Loc::Address(ir::AddressRef { addr: Some(address), index_through, scale, through, .. }) => {
+            let cell = ir::Mem {
+                through: *through,
+                index_through: *index_through,
+                scale: *scale,
+                ..ir::Mem::new(Some(*address), 2)
+            };
+            let text = _memory(regs, &cell, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
         Loc::Address(ir::AddressRef { through, index_through: index, scale, offset, .. }) => {
@@ -2960,5 +2968,20 @@ mod tests {
         let r#where =
             ir::AddressRef { through: RegId::EBX, index_through: RegId::EBX, scale: 2, ..ir::AddressRef::new(None) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &no_names()).unwrap(), "[ebx+ebx*2]");
+    }
+
+    /// `lea eax, b+12[eax]`: a named address with an index register kept no
+    /// symbol in its text (`lea eax, [eax]`), so `end_of(t) - t` was 0
+    /// where it was 12 (the DAG selector's `sub(lea sym+12, sym)`,
+    /// `--isel=dag`).
+    #[test]
+    fn test_a_named_address_with_an_index_register_prints_its_symbol() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let mut names = IndexMap::default();
+        names.insert((Space::Segment, 3), "L_b1".to_owned());
+        let address = Addr { index: 3, ..Addr::new(Space::Segment, 12) };
+        let r#where =
+            ir::AddressRef { through: RegId::None, index_through: RegId::EAX, ..ir::AddressRef::new(Some(address)) };
+        assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
     }
 }
