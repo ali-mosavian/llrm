@@ -456,6 +456,15 @@ impl Emitter<'_, '_> {
         true
     }
 
+    /// (low, high, bytes): AX and DX, or EAX and EDX.
+    fn accumulator_pair(
+        &self,
+        dword: bool,
+    ) -> Result<(llrm_lir::registers::RegId, llrm_lir::registers::RegId, u32), EmitError> {
+        use llrm_lir::registers::RegId;
+        Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
+    }
+
     /// Whether `value` is an `IMPLICIT_DEF` machine node.
     fn is_implicit_def(
         &self,
@@ -513,6 +522,45 @@ impl Emitter<'_, '_> {
                     ..Semantics::new(Operation::Call)
                 };
                 self.push_call(what);
+                return Ok(Some(()));
+            }
+            // Division and the one-operand multiply work in AX:DX or EAX:EDX,
+            // which the matcher names with `CopyToReg`/`CopyFromReg` around
+            // them: the LIR form says the pair in its operands.
+            "CDQ" | "CWD" => {
+                let (low, high, bytes) = self.accumulator_pair(name == "CDQ")?;
+                self.push(
+                    Operation::Extend,
+                    if name == "CDQ" { "cdq" } else { "cwd" },
+                    vec![Loc::Reg(Reg { register: high, width: bytes })],
+                    vec![Loc::Reg(Reg { register: low, width: bytes })],
+                );
+                return Ok(Some(()));
+            }
+            _ if is_div_or_mul(name) => {
+                let (signed, divide, bytes, memory) = div_or_mul(name);
+                let (low, high, wide) = self.accumulator_pair(bytes == 4)?;
+                if bytes == 1 {
+                    return Err(EmitError::Unsupported(format!("{name}: the byte forms work in AH:AL")));
+                }
+                let divisor = if memory {
+                    let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
+                    Loc::Mem(self.cell(group, bytes)?)
+                } else {
+                    self.operand(node.ops[0])?
+                };
+                let (low, high) = (Loc::Reg(Reg { register: low, width: wide }), Loc::Reg(Reg { register: high, width: wide }));
+                let mnemonic = match (divide, signed) {
+                    (true, true) => "idiv",
+                    (true, false) => "div",
+                    (false, true) => "imul",
+                    (false, false) => "mul",
+                };
+                if divide {
+                    self.push(Operation::Divide, mnemonic, vec![low.clone(), high.clone()], vec![high, low, divisor]);
+                } else {
+                    self.push(Operation::Multiply, mnemonic, vec![low.clone(), high], vec![low, divisor]);
+                }
                 return Ok(Some(()));
             }
             // The low byte, word or dword of a register is the same value
@@ -877,6 +925,23 @@ impl Emitter<'_, '_> {
         let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses));
         self.blocks.last_mut().expect("a block").insns.push(insn);
     }
+}
+
+/// `DIV32r`, `IDIV16m`, `MUL32r`, `IMUL32m`: the one-operand forms.
+fn is_div_or_mul(name: &str) -> bool {
+    let rest = name.strip_prefix('I').unwrap_or(name);
+    (rest.starts_with("DIV") || rest.starts_with("MUL"))
+        && rest[3..].len() >= 2
+        && rest[3..rest.len() - 1].chars().all(|c| c.is_ascii_digit())
+        && matches!(rest.chars().last(), Some('r' | 'm'))
+}
+
+/// (signed, divide, bytes, memory) of a name `is_div_or_mul` accepts.
+fn div_or_mul(name: &str) -> (bool, bool, u32, bool) {
+    let signed = name.starts_with('I');
+    let rest = name.strip_prefix('I').unwrap_or(name);
+    let bytes = rest[3..rest.len() - 1].parse::<u32>().unwrap_or(32) / 8;
+    (signed, rest.starts_with("DIV"), bytes, rest.ends_with('m'))
 }
 
 fn width_of(

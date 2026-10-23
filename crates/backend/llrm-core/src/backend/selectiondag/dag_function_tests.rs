@@ -306,3 +306,25 @@ fn the_type_legalizer_has_the_targets_hooks() {
         .map_or_else(String::new, |e| e.0);
     assert!(!why.contains("expand operand"), "{why}");
 }
+
+const DIVIDE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %q = sdiv i32 %a, %b
+  ret i32 %q
+}
+";
+
+/// A signed divide sign-extends EAX into EDX, divides by the operand and
+/// reads the quotient out of EAX: `CDQ` and `IDIV32r` were unmapped in 14 + 14
+/// functions of the corpora. The quotient is the divide's first result.
+#[test]
+fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
+    let module = llrm_mir::parse::module(DIVIDE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let (cdq, idiv) = (names.iter().position(|n| n == "cdq").expect("cdq"), names.iter().position(|n| n == "idiv").expect("idiv"));
+    assert!(cdq + 1 == idiv, "cdq right before idiv: {names:?}");
+}
