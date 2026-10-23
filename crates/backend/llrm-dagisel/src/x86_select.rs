@@ -28,7 +28,7 @@ use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::select_fcmp;
 use crate::x86_hooks::X86Hooks;
-use crate::x86_llrm::{LLRM_NODES, select_llrm_node};
+use crate::x86_llrm::{llrm_opcode, select_llrm_node};
 use crate::x86_mul::select_mul_lohi;
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -51,8 +51,8 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
-        op if LLRM_NODES.contains(&op) => {
-            select_llrm_node(dag, node);
+        op if llrm_opcode(op).is_some() => {
+            select_llrm_node(dag, node, llrm_opcode(op).expect("an llrm node"));
             return Outcome::Selected;
         }
         x86isd::FCMP => {

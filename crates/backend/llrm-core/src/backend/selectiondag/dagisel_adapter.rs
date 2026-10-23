@@ -767,6 +767,10 @@ impl AddrDag for DagisAdapter<'_> {
                 256 => Some(x86::GS),
                 257 => Some(x86::FS),
                 258 => Some(x86::SS),
+                // llrm's own: the segment `les` left in ES, and code-segment
+                // reads.
+                259 => Some(x86::ES),
+                260 => Some(x86::CS),
                 _ => None,
             },
             _ => None,
