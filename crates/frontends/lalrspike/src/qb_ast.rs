@@ -1129,7 +1129,11 @@ impl Ast<'_> {
             Kw::SELECT => return self.select_statement(),
             Kw::DATA => return self.data_statement(),
             Kw::SUB | Kw::FUNCTION => return self.procedure(false, None, false),
+            // a STATIC prefix on SUB and FUNCTION is VBDOS's
             Kw::STATIC if matches!(self.kw_n(1), Some(Kw::SUB | Kw::FUNCTION)) => {
+                if !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+                    return self.fail();
+                }
                 self.i += 1;
                 return self.procedure(false, None, true);
             }
