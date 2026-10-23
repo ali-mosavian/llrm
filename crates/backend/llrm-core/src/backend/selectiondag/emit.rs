@@ -191,8 +191,22 @@ struct Emitter<'a, 'd> {
     glue_users: HashMap<SDValue, Vec<u32>>,
     /// The node whose flags EFLAGS holds now.
     flags_now: Option<u32>,
+    /// The select a following one may join.
+    last_select: Option<Select>,
     /// The compares that made flags, to make them again.
     flag_insns: HashMap<u32, Arc<Insn>>,
+}
+
+/// The last lowered select: the block that branches, the one it skips, the
+/// one it joins, and what it reads.
+#[derive(Clone, Copy)]
+struct Select {
+    producer: u32,
+    cc: usize,
+    this: i64,
+    false_at: i64,
+    sink: i64,
+    result: u32,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -274,6 +288,7 @@ pub fn emit_in(
         calls: Vec::new(),
         last_call: None,
         flags_now: None,
+        last_select: None,
         flag_insns: HashMap::new(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
@@ -640,6 +655,27 @@ impl Emitter<'_, '_> {
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
         let result = self.fresh(width(node.values[0]));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
+        // The flags this select reads: the producer of the `CopyToReg EFLAGS`
+        // glued to it.
+        let producer =
+            node.ops.iter().find(|op| self.dag.opcode(**op) == ISD::CopyToReg).map(|op| self.dag.node(*op).ops[2].node);
+        // `EmitLoweredSelect`'s cascade: a select right after another on the
+        // same flags and condition, reading neither's result, is one more phi
+        // of the first's sink block (one branch, not two).
+        if let Some(last) = self.last_select
+            && Some(last.producer) == producer
+            && last.cc == cc
+            && self.blocks.last().is_some_and(|block| block.at == last.sink && block.insns.is_empty())
+            && when_false.value != last.result
+            && when_true.value != last.result
+        {
+            let phi = Phi {
+                result: result.value,
+                incoming: vec![(last.false_at, when_false.value), (last.this, when_true.value)],
+            };
+            self.blocks.last_mut().expect("a block").phis.push(phi);
+            return Ok(());
+        }
         let this = self.blocks.last().expect("a block").at;
         let (false_at, sink_at) = (self.next_address(), self.next_address());
         let target = Some(sink_at);
@@ -648,6 +684,8 @@ impl Emitter<'_, '_> {
         let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
         self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
         self.blocks.push(EmitBlock { at: sink_at, phis: vec![phi], ..EmitBlock::default() });
+        self.last_select =
+            producer.map(|producer| Select { producer, cc, this, false_at, sink: sink_at, result: result.value });
         Ok(())
     }
 
