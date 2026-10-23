@@ -195,9 +195,8 @@ impl BodyFacts {
         made: &[Arc<Insn>],
     ) {
         use std::collections::BTreeSet;
-        let named = |one: &Insn| -> BTreeSet<u32> {
-            one.defines.iter().chain(&one.uses).chain(&one.undefs).copied().collect()
-        };
+        let named =
+            |one: &Insn| -> BTreeSet<u32> { one.defines.iter().chain(&one.uses).chain(&one.undefs).copied().collect() };
         let (last, rest) = made.split_last().expect("an instruction replaced by none");
         let mut lis = self.lis.borrow_mut();
         lis.rewrite_instr(block, one.id(), Arc::clone(last));
@@ -222,7 +221,8 @@ impl BodyFacts {
         let lis = self.lis.into_inner();
         let done = lis.body_like(body);
         if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
-            // The premise: the intervals the edits left are the ones made afresh.
+            // The premise: the intervals the edits left are the ones made
+            // afresh.
             assert!(lis.assert_intervals_equal_afresh(&done) > 0, "{}: the check compared no interval", body.name);
         }
         crate::liveness::liveintervals::hand_over(lis, &done);
