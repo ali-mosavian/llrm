@@ -913,3 +913,40 @@ fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
     let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
     assert_eq!(high, [expected.clone(), expected]);
 }
+
+const SHIFTS_ON_ONE_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %x, i64 %y, i32 %n) {
+entry:
+  %c = zext i32 %n to i64
+  %a = lshr i64 %x, %c
+  %b = shl i64 %y, %c
+  %m = mul i64 %b, 7
+  %r = add i64 %a, %m
+  ret i64 %r
+}
+";
+
+/// Two selects on one compare, the second in the sink block of the first: a
+/// flag-writing unit between them (the pin's scheduler allows it, its EFLAGS
+/// live-in covers it) left the second branch on the flags of a `sub`
+/// (shift_int64_variable -O2). Each branch is preceded by the compare that
+/// made its flags.
+#[test]
+fn a_branch_on_flags_follows_the_compare_that_made_them() {
+    let module = llrm_mir::parse::module(SHIFTS_ON_ONE_COUNT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    for (at, name) in names.iter().enumerate() {
+        if !matches!(name.as_str(), "jne" | "je") {
+            continue;
+        }
+        let before = names[..at].iter().rev().find(|n| !matches!(n.as_str(), "mov" | "jmp" | "jne" | "je" | ""));
+        assert!(
+            matches!(before.map(String::as_str), Some("test" | "cmp" | "and")),
+            "{name} after {before:?}: {names:?}"
+        );
+    }
+}
