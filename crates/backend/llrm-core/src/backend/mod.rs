@@ -56,7 +56,6 @@
 //!   #  phase (name)             module        notes
 //!   1  far-indirect-calls       farcall       memory operand for a far call
 //!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
-//!   3  SsaSpill                 ssaspill      spiller route only
 //!   4  liverangeshrink          liverangeshrink  instruction up to its operands' last def
 //!   4  phielim                  phielim       phis -> copy groups; SSA ends
 //!   5  pressuresink             pressuresink  move a load to its one reader
@@ -326,11 +325,8 @@ pub mod regclass;
 pub mod registerinfo;
 pub mod rewriter;
 pub mod sharedstores;
-pub mod spiller;
 pub mod spillforward;
 pub mod spillplacement;
-pub mod ssarepair;
-pub mod ssaspill;
 pub mod storecombine;
 pub mod storedhomes;
 pub mod target;
@@ -347,5 +343,3 @@ pub(crate) mod regalloc_fuzz_tests;
 pub mod regalloc_input;
 #[cfg(test)]
 mod regalloc_total_tests;
-#[cfg(test)]
-mod ssaspill_tests;
