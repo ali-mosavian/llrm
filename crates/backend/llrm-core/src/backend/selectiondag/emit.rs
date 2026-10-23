@@ -438,14 +438,21 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
-            // An undefined value reads as zero, as the old selector's undef does.
+            // An undefined value reads as zero, as the old selector's undef
+            // does.
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: 0, width, address: None })]);
+                self.push(
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Held(held)],
+                    vec![Loc::Imm(Imm { value: 0, width, address: None })],
+                );
                 return Ok(Some(()));
             }
-            // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider value.
+            // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
+            // value.
             "INSERT_SUBREG" => {
                 if !self.is_implicit_def(node.ops[0]) {
                     return Err(EmitError::Unsupported("INSERT_SUBREG into a defined register".to_owned()));
