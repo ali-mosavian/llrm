@@ -217,6 +217,15 @@ impl Builder<'_> {
         Some(ops)
     }
 
+    /// The address space an access through `ptr` is in: a far pointer's
+    /// offset half is read through `ES` after `LES` (llrm's space 259).
+    fn space_of(
+        &self,
+        ptr: SDValue,
+    ) -> u32 {
+        if self.dag.value_type(ptr) == EVT::Simple(super::super::mvt::MVT::Far) { 259 } else { 0 }
+    }
+
     fn ptr_plus(
         &mut self,
         base: SDValue,
@@ -266,7 +275,7 @@ impl Builder<'_> {
                     volatile: false,
                     base: MemBase::Unknown,
                     ext: None,
-                    space: 0,
+                    space: self.space_of(dst),
                 };
                 chains.push(self.dag.get_store(chain, value, to, info));
                 src_off += width;
@@ -281,7 +290,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
-                space: 0,
+                space: self.space_of(src),
             };
             let value = self.dag.get_load(vt, chain, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -291,7 +300,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
-                space: 0,
+                space: self.space_of(dst),
             };
             let store = self.dag.get_store(chain, value, to, info);
             chains.push(SDValue { node: value.node, res: 1 });
@@ -332,7 +341,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
-                space: 0,
+                space: self.space_of(src),
             };
             let value = self.dag.get_load(vt, chain, from, info);
             placed.push((value, off, vt));
@@ -350,7 +359,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
-                space: 0,
+                space: self.space_of(dst),
             };
             stores.push(self.dag.get_store(joined, value, to, info));
         }
@@ -388,7 +397,7 @@ impl Builder<'_> {
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
-                space: 0,
+                space: self.space_of(dst),
             };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;
