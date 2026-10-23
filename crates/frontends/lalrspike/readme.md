@@ -54,19 +54,29 @@ with a negative argument). Not done.
 
 ## Against the real BC.EXE
 
-`python3 bcdiff.py [--root DIR] ~/llrm-private-tools/qb45 FILE.bas...` runs
-Microsoft's `BC.EXE` (QB 4.5) and the grammar on each file and lists the
-disagreements. BC runs on the dosrun fork of DOSBox-X (`bcprobe.py`; four
-booted machines per core, a forked job per file, a tqdm bar). 1,300+ programs:
-the QB 4.5 examples, `GORILLA.BAS` and `NIBBLES.BAS`, the repo's files, the
-test sources' programs and mgl (in place, so its `$INCLUDE`s resolve).
+`python3 bcdiff.py [--root DIR] QB45,PDS71,VBDOS FILE.bas...` runs Microsoft's
+`BC.EXE` of all three families (QB 4.5, PDS 7.1, VBDOS; the directories are
+`llrm-private-tools/qb45`, `/pds71`, `/vbdos`) and the grammar on each file
+and lists the disagreements. BC runs on the dosrun fork of DOSBox-X
+(`bcprobe.py`, a tqdm bar). Programs the grammar must take are those some BC
+takes:
 
-**BC accepts and the grammar refuses: none.** BC refuses and the grammar
-accepts: about 250, which are `OPTION EXPLICIT`, the VBDOS/PDS/Quickr forms
-(`AS` return types, `UNSIGNED`, `BYTE`), missing includes, `TYPE not defined`,
-`Duplicate definition`, and a few syntax errors BC 4.5 reports that the
-grammar is too lax to (`DIM a() AS INTEGER` outside `$DYNAMIC`). BC's own
-checks, not the parser's, are what the later passes have to reproduce.
+| corpus | some BC accepts | grammar takes them | grammar refuses |
+|---|---|---|---|
+| QB 4.5 examples, GORILLA, NIBBLES, VBDOS and PDS sources (128) | 123 | 120 | 3 |
+| the repo's `.bas` files (599) | 560 | 559 | 1 |
+| the test sources' programs (487) | 363 | 363 | 0 |
+| mgl, in place so `$INCLUDE`s resolve (180) | 135 | 135 | 0 |
+
+Of the 4 refused, all are the lexer's (shared with the table-driven parser,
+so not the grammar's): the `@` currency suffix (`det@`, 2 files), VBDOS's
+doubled quote inside a string (`""""`), and `1_` as a line continuation with
+no space before the `_`. Where every BC refuses and the grammar accepts (about
+140): `OPTION EXPLICIT` in QB 4.5, dialect forms in the wrong dialect, missing
+includes, `TYPE not defined`, `Duplicate definition`, `ON PLAY` without the
+event option, and a few syntax errors a BC reports that the grammar is too
+lax to. BC's own checks, not the parser's, are what the later passes have to
+reproduce.
 
 The first version of the runner took 3m50s for 128 files on three compilers,
 211 s of it PDS 7.1's. Its `BC.EXE` is an NE image and the fork's debug-symbol
