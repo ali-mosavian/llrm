@@ -1,6 +1,6 @@
 # Row 23: CodeGenPrepare translation plan
 
-Owner w-4. Row 23 is last in the order and follows the `--isel=dag` switch (earliest 2027-02-04), because CodeGenPrepare is tuned for the DAG's legality hooks. Pin `d1106deb71cc`, `llvm/lib/CodeGen/CodeGenPrepare.cpp`. Function by function in the order `_run` ([L585](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L585)) and `optimizeInst` ([L8947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8947)) run them.
+Owner w-4. Row 23 is dated from the hook each entry needs, not from the `--isel=dag` switch (the ruling of 2026-10-24): a `Lowering` method from the target description or the shared DAG tables is a small llrm-x86 change, not the switch. Pin `d1106deb71cc`, `llvm/lib/CodeGen/CodeGenPrepare.cpp`. Function by function in the order `_run` ([L585](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L585)) and `optimizeInst` ([L8947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8947)) run them.
 
 States: done; partial (what is missing is in the blocker column); missing; N/A (evidence). Today's code is `cgpaddr.rs` (address sinking, select combiner, compare and mask sinks, address phis) and `extload.rs`. The dates are land dates of a PR each. No entry waits for the `--isel=dag` switch: each is dated from the hook it needs (a `Lowering` method, from the target description or the shared DAG tables), in pin order from 2026-11-27, one every two or three working days; entries 4, 26 and 39 (m16/m32) are N/A with the pin's own gate as evidence.
 
@@ -52,7 +52,10 @@ States: done; partial (what is missing is in the blocker column); missing; N/A (
 - **w-3** writes `combineToUAddWithOverflow` and `combineToUSubWithOverflow` (11-13, x_adler), with `matchUAddWithOverflowConstantEdgeCases`, `replaceMathCmpWithIntrinsic` and `optimizeMulWithOverflow` as the one overflow family; they add a function beside `cgpaddr.rs` and touch none of mine. Confirmed by w-3 (date 2026-11-13, owner w-3; usubo fires in 0/71 m32 programs and 2/65 QCport m16 modules, #3786).
 - **w-4** writes every other row.
 
-## The blockers
+## The hooks
 
-- **`--isel=dag` switch (earliest 2027-02-04):** `splitBranchCondition`, `despeculateCountZeros`, `optimizeSelectInst`, `dupRetToEnableTailCallOpts`, `optimizeShiftInst`, `optimizePhiTypes`, `optimizeSwitchType`. Each reads a `TargetLowering` hook that the DAG legalizer defines; written before the switch they would restate our selector's rules, not the pin's.
-- **TargetLowering hooks in the target description:** `isTruncateFree`, `isZExtFree`, `isExtFree`, `isLoadExtLegal`, `hasBitTest`, `isIntDivCheap`: added to `Lowering` as each row needs one (the first, with row 7, 2027-02-25).
+- **CPU features in `Lowering`** (cmov, bmi, lzcnt, out of order), set from the target description's CPU: `despeculateCountZeros` (28, 2026-12-09) and `optimizeSelectInst` (29, 2026-12-11) need them. `isTruncateFree`, `isZExtFree`, `isExtFree`, `isLoadExtLegal`, `isOperationLegalOrCustom`, `isTypeLegal` and `enableExtLdPromotion` are in (#3891, #3900, #3943, #3940).
+- **Calls:** `mayBeEmittedAsTailCall` (36, 2026-12-11).
+- **Switch:** `getPreferredSwitchConditionType` and `isSExtCheaperThanZExt` (31, 2026-12-16).
+- **64-bit only:** `shouldConvertPhiType` (39, m64, 2026-12-18).
+- What truly needs the DAG: nothing in this file. Entries 4, 26 and 39 (at m16 and m32) are N/A by the pin's own gate.
