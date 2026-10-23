@@ -761,9 +761,14 @@ pub(crate) fn llvm_order(
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
             // L1438; llrm's targets have no vector registers.
             slot("loop-load-elim@1400", Box::new(crate::looploadelim::LoopLoadElim::default())),
+            // InstCombinePass (l.1403), l.1464 and l.1499: the three late runs
+            // that clean what SimplifyCFG (l.1438) and the unroll leave, as the
+            // `not` of a condition it makes before a branch.
+            combine("combine@1403"),
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
             slot(
@@ -779,6 +784,7 @@ pub(crate) fn llvm_order(
             // `AllowSpeculation=true`), in a loop pass manager of its own after
             // the unroll and the combine that follow it: "helps to clean up
             // some loop-invariant code created by the loop unroll pass".
+            combine("combine@1499"),
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             // TailCallElim (l.1677, the module optimization pipeline's

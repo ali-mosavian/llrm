@@ -569,3 +569,16 @@ fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
     }
     assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
 }
+
+/// The three late InstCombines of the pin's default pipeline (l.1403, l.1464,
+/// l.1499) had no slot: a `not` of a condition that SimplifyCFG (l.1438) made
+/// before a branch stayed, 30 QCport objects larger once `fold`, which had
+/// cleaned it, went. They run in a compile of a body, once each.
+#[test]
+fn test_the_late_instcombine_slots_run_in_a_compile() {
+    let lines = runs_of(&Applied::default());
+    for slot in ["combine@1403", "combine@1464", "combine@1499"] {
+        let ran = lines.iter().filter(|line| line.contains(&format!("r01-{slot}"))).count();
+        assert!(ran >= 1, "{slot} did not run: {lines:?}");
+    }
+}

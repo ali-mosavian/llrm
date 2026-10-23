@@ -57,3 +57,11 @@ Rows corpus objsweep (+800 B, 11 objects; not stage-diffed here): x_fir m16 O2/O
 x_fir to GlobalOpt SRA and localize, docs/working/fold.md), x_cordic m16 O3 +118 and m32 O3 +38, lru m32/m16 Os +53/+50, floats m32 Os -20,
 sieve m32 Os -16, nbody m32 Os -13: causes owed with the E group, w-6, 2026-11-06. The translations of FR-2 (`foldNot`,
 the float constant fold) are expected to close A and B. qbq-llrm d_faces: object identical (8170 B).
+
+## Retraction of the cause column of FR-2 and FR-3 (w-6)
+
+The "cause" of FR-2 A (and FR-3 A) is the *first* normalised stage where the two bodies differ (`br %c` against
+`xor i1 %c, true; br`), not shown to be what grew the object. The three late InstCombine slots (combine@1403, @1464, @1499, the
+pin's L1403, L1464 and L1499) clean exactly that form, and with them QCport's FR-2 objects (savegame, weapons, ls, d_alias, ...) do not
+change (`lateic` pair, base 1586dd80c1): the growth comes from a later divergence the first difference only precedes. The per-object
+cause stays open (w-6, 2026-11-06); `foldNot` is not shown to matter for it either.
