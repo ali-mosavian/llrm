@@ -64,8 +64,12 @@ pub fn select_block(
     ctx: &EmitContext<'_>,
     state: &mut EmitState,
     first_at: i64,
+    arch: &dyn llrm_target::Target,
+    temporaries: &mut dyn super::x86_preprocess::FrameObjects,
 ) -> Result<Emitted, Refusal> {
-    legalized(dag, tli, lowering)?;
+    legalized(dag, tli, lowering, arch)?;
+    // `PreprocessISelDAG`: the rewrites that need no matcher.
+    super::x86_preprocess::preprocess(dag, temporaries);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
@@ -78,30 +82,30 @@ pub fn legalized(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
     lowering: &mut X86Lowering,
+    arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
     DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).run();
-    TypeLegalizer::new(dag, tli).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    TypeLegalizer::new(dag, tli).with_target(arch).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).run();
     DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).run();
     Ok(())
 }
 
-/// `DoInstructionSelection`: the nodes the root reaches, last created first.
+/// `DoInstructionSelection`: the nodes the root reaches, users before the nodes
+/// they read (`allnodes` in the pin is in topological order; here creation
+/// order is not, since a lowering makes the operand it replaces after its
+/// user).
 fn do_instruction_selection(
     dag: &mut SelectionDAG,
     selector: &Selector,
     hooks: &mut X86Hooks,
 ) -> Result<(), Refusal> {
-    let reachable = reachable_from_root(dag);
-    let count = dag.nodes().len() as u32;
+    let order = users_first(dag);
     let mut adapter = DagisAdapter::new(dag);
-    for node in (0..count).rev() {
+    for node in order {
         // `Node->use_empty()`: a node selection left unused is dead.
-        if !reachable.contains(&node)
-            || adapter.is_dead(node)
-            || !(node == adapter.dag.get_root().node || adapter.has_live_users(node))
-        {
+        if adapter.is_dead(node) || !(node == adapter.dag.get_root().node || adapter.has_live_users(node)) {
             continue;
         }
         if matches!(adapter.dag.nodes()[node as usize].opcode, ISD::Machine(_)) {
@@ -114,13 +118,20 @@ fn do_instruction_selection(
     Ok(())
 }
 
-fn reachable_from_root(dag: &SelectionDAG) -> HashSet<u32> {
+/// The nodes the root reaches in reverse topological order: a node comes before
+/// everything it reads.
+fn users_first(dag: &SelectionDAG) -> Vec<u32> {
+    let mut order = Vec::new();
     let mut seen = HashSet::new();
-    let mut work = vec![dag.get_root().node];
-    while let Some(n) = work.pop() {
-        if seen.insert(n) {
-            work.extend(dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| op.node));
+    let mut stack = vec![(dag.get_root().node, false)];
+    while let Some((n, expanded)) = stack.pop() {
+        if expanded {
+            order.push(n);
+        } else if seen.insert(n) {
+            stack.push((n, true));
+            stack.extend(dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| (op.node, false)));
         }
     }
-    seen
+    order.reverse();
+    order
 }

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 130 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 131 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -19,6 +19,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 130 documented
 | booleans | Setcc chains the target's cost table prices above a branch, made selects for `selects::lowered` to branch. | Inside `selects::priced`, after the selects of the module were folded and | [booleans](booleans.md) |
 | bytes | Expands `llvm.bswap` into shifts, masks and ors in MIR before instruction selection, for the targets whose description lists `bswap` under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [bytes](bytes.md) |
 | calleefacts | Records which registers a private function writes, so its direct callers keep values in the others across the call. | Per function in `assemble.rs`: `record` after the function is machined. | [calleefacts](calleefacts.md) |
+| callframe | Stores into a reserved call frame become pushes: `X86CallFrameOptimization`. | After `FixupSetCC`, before `FlagsCopy` (the pin's pre-allocation order). | [callframe](callframe.md) |
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
