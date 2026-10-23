@@ -66,6 +66,8 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
                     let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
                     out.replace_range(at..close, "next_variable: None");
                 }
+                // the old parser records neither a DECLARE without a parameter list nor `SUB p ()`
+                let out = out.replace("unchecked: true", "unchecked: false").replace("empty_list: true", "empty_list: false");
                 // CURRENCY is a type of its own here; the old parser read it as a user type's name
                 // (and a FUNCTION named with `@` has a CURRENCY result, where the old parser left it untyped)
                 let out = out.replace("result: Some(Currency)", "result: None").replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
