@@ -19,6 +19,14 @@ use super::x86_lowering::X86Lowering;
 use crate::backend::isel::Parameter;
 use crate::model::ir::{Addr, Mem, Space};
 
+struct NoGlobals;
+
+impl super::emit::GlobalMap for NoGlobals {
+    fn address(&self, symbol: u32, offset: i64) -> Addr {
+        Addr { index: i64::from(symbol), ..Addr::new(Space::Segment, offset) }
+    }
+}
+
 struct Info;
 
 impl SchedInfo for Info {

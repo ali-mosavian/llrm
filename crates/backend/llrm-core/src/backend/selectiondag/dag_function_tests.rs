@@ -72,3 +72,24 @@ fn a_loop_is_blocks_with_phis_and_branches() {
     assert_eq!(blocks[2].succ.iter().copied().collect::<Vec<_>>(), [addresses[1]]);
     assert!(blocks[3].succ.is_empty());
 }
+
+const GLOBAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global i32 7
+define i32 @f() {
+entry:
+  %v = load i32, ptr @g
+  ret i32 %v
+}
+";
+
+/// A load of a global was refused for 132 functions of the corpora ("operand
+/// TargetGlobalAddress before its definition"); the symbol is the memory
+/// operand's address.
+#[test]
+fn a_load_of_a_global_names_its_symbol() {
+    let module = llrm_mir::parse::module(GLOBAL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let first = done.body.insns()[0].what.clone().expect("semantics");
+    let crate::model::ir::Loc::Mem(cell) = &first.sources[0] else { panic!("{first:?}") };
+    assert!(cell.addr.is_some_and(|a| a.index == 0), "{cell:?}");
+}

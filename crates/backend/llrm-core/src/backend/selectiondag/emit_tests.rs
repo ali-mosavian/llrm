@@ -39,6 +39,14 @@ impl SchedInfo for Info {
     }
 }
 
+struct NoGlobals;
+
+impl super::emit::GlobalMap for NoGlobals {
+    fn address(&self, symbol: u32, offset: i64) -> crate::model::ir::Addr {
+        crate::model::ir::Addr { index: i64::from(symbol), ..crate::model::ir::Addr::new(crate::model::ir::Space::Segment, offset) }
+    }
+}
+
 struct NoFrame;
 
 impl super::emit::FrameMap for NoFrame {
@@ -67,7 +75,7 @@ fn context_in(
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::new();
-    f(&EmitContext { block_at: &no_blocks, frame: &NoFrame, address_mode: mode, map: &map, names: &names });
+    f(&EmitContext { globals: &NoGlobals, block_at: &no_blocks, frame: &NoFrame, address_mode: mode, map: &map, names: &names });
 }
 
 fn text(insns: &[std::sync::Arc<crate::model::lir::Insn>]) -> Vec<String> {
