@@ -35,3 +35,22 @@ def test_every_failure_is_in_exactly_one_row_and_the_rows_sum():
 def test_a_failure_no_rule_names_is_refused():
     with pytest.raises(SystemExit, match="unclassified"):
         classify_isel.table(LOG + "FAIL  c/z.c: something nobody anticipated\n")
+
+
+M16 = """\
+FAIL  c/a.c [-O0]: compile: thread 'main' (1) panicked at crates/backend/llrm-core/src/backend/selectiondag/dag.rs:570:9:
+integer constant of Simple(Far)
+note: run with `RUST_BACKTRACE=1`
+FAIL  c/b.c [-O2]: compile: llrm-c: _main: Semantics(op=<Operation.CALL: 'call'>, name='call', dests=(), sources=(Imm(value=0, width=2, address=[seg:0+0x0]),), target=None, indirect=True)
+FAIL  c/c.c [-O0]: compile: llrm-c: isel: 0x000a names 25 at width 4, which is not the width that register is
+FAIL  c/d.c [-O0]: compile: llrm-c: isel: value#28 is read but never defined or supplied by the caller
+FAIL  c/e.c [-O0]: compile: llrm-c: @_main: _main: the greedy allocator could not place every range
+"""
+
+
+def test_the_real_mode_failures_have_causes_and_owners():
+    rows, unclassified = classify_isel.classify(M16)
+    assert unclassified == []
+    assert sum(len(programs) for programs in rows.values()) == 5
+    assert ("panic in selectiondag/dag.rs: integer constant of Simple(Far)", "sdag-a") in rows
+    assert ("lir: a direct call is emitted as an indirect call of an immediate", "sdag-d") in rows

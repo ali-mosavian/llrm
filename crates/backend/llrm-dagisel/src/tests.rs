@@ -1513,6 +1513,34 @@ mod llrm_intrinsics {
             assert_eq!((n.machine, n.ops.clone(), n.vts.clone()), (Some(SEGMENT_OF_OPCODE), ops, vec![mvt::i16]));
         }
     }
+
+    /// `LLRM_FARCALL` is a target node with no pattern: it passes through as
+    /// its own pseudo, with the call's operands and its chain and glue
+    /// results.
+    #[test]
+    fn a_far_call_passes_through_as_its_pseudo() {
+        use crate::x86_llrm::{FARCALL_OPCODE, LLRM_FARCALL};
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let target = dag.wrapped_global(1, 0, mvt::i16);
+        let node = dag.node(LLRM_FARCALL, &[mvt::Other, mvt::Glue], &[chain, target]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Real16,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+        let n = &dag.nodes[node as usize];
+        assert_eq!(
+            (n.machine, n.ops.clone(), n.vts.clone()),
+            (Some(FARCALL_OPCODE), vec![chain, target], vec![mvt::Other, mvt::Glue])
+        );
+    }
 }
 
 mod instruction_names {

@@ -129,6 +129,22 @@ fn a_far_pointer_in_two_registers_is_two_parts() {
     assert!(copies.iter().any(|line| line.contains("$ax")) && copies.iter().any(|line| line.contains("$dx")), "{dump}");
 }
 
+/// A far pointer used in a later block is carried in two `i16` registers
+/// (offset, selector), as any expanded type is. One `CopyToReg` of the whole
+/// far stopped the type legalizer ("CopyToReg: expand operand", 12 programs
+/// of the m16 execution run).
+#[test]
+fn a_far_pointer_leaves_its_block_in_two_word_registers() {
+    let dag = built(
+        "define i16 @f(ptr addrspace(1) %p, i1 %c) {\n  br i1 %c, label %a, label %b\na:\n  %v = load i16, ptr addrspace(1) %p\n  ret i16 %v\nb:\n  ret i16 0\n}\n",
+    );
+    let copies: Vec<_> = dag.nodes().iter().filter(|node| node.opcode == ISD::CopyToReg).collect();
+    let far = MVT::Far.into();
+    assert!(copies.iter().all(|copy| dag.value_type(copy.ops[2]) != far), "a far copied whole:\n{}", dag.dump());
+    let words = copies.iter().filter(|copy| dag.value_type(copy.ops[2]) == super::mvt::EVT::I16).count();
+    assert!(words >= 2, "the offset and the selector:\n{}", dag.dump());
+}
+
 /// An inline copy between far pointers steps the offset word and reads and
 /// writes through `ES` (space 259). It panicked making `Constant: Far` for
 /// the step (bitfield_long_long, 2 m16 programs) and, past that, would have

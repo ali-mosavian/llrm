@@ -685,3 +685,63 @@ fn va_start_finds_the_first_variadic_argument() {
         .map(|e| e.0);
     assert!(why.is_none(), "{why:?}");
 }
+
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16)
+define cc 1005 i16 @f(i16 %a) addrspace(1) {
+entry:
+  %r = call cc 1005 i16 @g(i16 %a)
+  ret i16 %r
+}
+";
+
+/// At m16 a call of a symbol is `CALL16r` of its address; it was emitted as a
+/// call through an immediate (`call offset _report`), the biggest cause in the
+/// m16 execution run (79 programs).
+#[test]
+fn an_m16_call_of_a_symbol_is_a_direct_call() {
+    let module = llrm_mir::parse::module(M16_DIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
+    let insns = done.body.insns();
+    let call =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == crate::model::ir::Operation::Call).unwrap();
+    assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
+}
+
+const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare i16 @g(i16, i16)
+define i16 @f(i16 %a) {
+entry:
+  %r = call i16 @g(i16 %a, i16 233)
+  ret i16 %r
+}
+";
+
+/// Real mode has no `[sp+k]`: the outgoing arguments are pushed. The stores
+/// into the area stopped 32 QCport modules from assembling.
+#[test]
+fn an_m16_call_pushes_its_stack_arguments() {
+    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Push).count();
+    assert_eq!(pushes, 2);
+    let through_sp = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.dests
+                .iter()
+                .any(
+                    |l| matches!(
+                        l,
+                        crate::model::ir::Loc::Mem(m) if m.through == llrm_lir::registers::RegId::SP
+                    ),
+                ),
+        );
+    assert!(!through_sp, "no store through SP");
+}

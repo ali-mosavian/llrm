@@ -1047,6 +1047,12 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
     assert "docs_links" in asked[0] and len(asked[0]) > 1
 
 
+def test_the_scanner_line_names_the_tree_it_scanned():
+    """#4039 landed after `scanners: 13 targets, 0 red`; replaying its PRs on the head is red, and the log did not say which tree the scanners saw."""
+    assert ps.scanner_tests_line(["docs_links"], set(), "abc123def") == "scanners: 1 targets, 0 red (tree abc123def)"
+    assert ps.scanner_tests_line(["docs_links"], {"x"}) == "scanners: 1 targets, 1 red"
+
+
 def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
     """The batch's scanners ran on a tree with #4042 in it; #4042 failed at the squash ("Head branch was modified") and the others were pushed on a tree no scanner had seen."""
     asked = []
