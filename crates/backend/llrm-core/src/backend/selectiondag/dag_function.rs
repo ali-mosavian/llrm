@@ -98,6 +98,20 @@ impl FrameMap for Frame {
     }
 }
 
+/// The module's globals by `GlobalId`: where each symbol is.
+struct Globals<'a>(&'a Module);
+
+impl super::emit::GlobalMap for Globals<'_> {
+    fn address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> Addr {
+        let space = crate::backend::globals::space(self.0, llrm_mir::context::GlobalId(symbol));
+        Addr { index: i64::from(symbol), ..Addr::new(space, offset) }
+    }
+}
+
 /// What does not change between functions: the opcode map and names, built
 /// once (`x86.instr` is parsed at 5,000 instructions a row).
 struct Tables {
@@ -192,7 +206,9 @@ pub fn selected(
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
     let block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
+    let globals = Globals(module);
     let ctx = EmitContext {
+        globals: &globals,
         block_at: &block_at,
         frame: &frame,
         address_mode: AddrMode::Flat32,

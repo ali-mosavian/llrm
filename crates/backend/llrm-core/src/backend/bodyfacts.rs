@@ -25,7 +25,7 @@ use crate::analysis::intervals::key;
 use crate::backend::postings::{At, Postings};
 use crate::greedy::remat::group_source;
 use crate::greedy::tii::_width;
-use crate::model::ir::{AddressRef, Held, Imm, Loc, Mem, Operation, Space};
+use crate::model::ir::{AddressRef, Imm, Loc, Mem, Operation, Space};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -874,76 +874,6 @@ pub(crate) fn _unchanged_reference(
     true
 }
 
-/// `folded_source`, for an instruction that `tied` writes the register of its
-/// first source (after two-address lowering) or, not tied, names its result
-/// apart (SSA).
-pub(crate) fn folded_source_in(
-    one: &Insn,
-    values: &BTreeSet<u32>,
-    tied: bool,
-) -> Option<Held> {
-    folded_source_among(one, &|value| values.contains(&value), tied)
-}
-
-/// `folded_source_in` for the values `among` says are spilled, so that a caller
-/// that asks of one value at a time builds no set to ask with.
-pub(crate) fn folded_source_among(
-    one: &Insn,
-    among: &dyn Fn(u32) -> bool,
-    tied: bool,
-) -> Option<Held> {
-    let (left, right) = folded_pair(one, tied)?;
-    if !among(right.value)
-        || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value)
-    {
-        return None;
-    }
-    Some(right)
-}
-
-/// The two values `one` could fold the second of into the first's operation,
-/// whichever are spilled: what `folded_source_among` finds before it asks which
-/// are. The second is the only value that can fold.
-pub(crate) fn folded_pair(
-    one: &Insn,
-    tied: bool,
-) -> Option<(Held, Held)> {
-    if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
-        return None;
-    }
-    let what = one.what.as_ref()?;
-    let mut widths: &[u32] = &[2, 4];
-    let (left, right) = match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
-        (Operation::Binary, name, [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || (tied && dest != left) {
-                return None;
-            }
-            (*left, *right)
-        }
-        (Operation::Compare, Some("cmp"), [], [Loc::Held(left), Loc::Held(right)]) => (*left, *right),
-        (Operation::Multiply, Some("imul"), [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if tied && dest != left {
-                return None;
-            }
-            (*left, *right)
-        }
-        (Operation::Move, Some("mov"), [Loc::Held(left)], [Loc::Held(right)]) => {
-            // A copy is the most useful direct reload.
-            widths = &[1, 2, 4];
-            (*left, *right)
-        }
-        _ => return None,
-    };
-    if !widths.contains(&left.width)
-        || right.width != left.width
-        || left.value == right.value
-        || one.defines.contains(&right.value)
-    {
-        return None;
-    }
-    Some((left, right))
-}
-
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
@@ -969,134 +899,11 @@ pub(crate) fn _constants(
     _literals(body, values, false)
 }
 
-pub(crate) fn check_postings() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_POSTINGS"))
-}
-
 pub(crate) fn _at<'b>(
     body: &'b LirBody,
     at: At,
 ) -> &'b Arc<Insn> {
     &body.blocks[at.0 as usize].insns[at.1 as usize]
-}
-
-/// `_addresses`, from the definitions of `values` alone.
-pub(crate) fn _addresses_by(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    postings: &Postings,
-) -> IndexMap<u32, AddressRef> {
-    let mut order: Vec<(At, usize, u32)> = Vec::new();
-    for &value in values {
-        let Some(&first) = postings.defs(value).first() else { continue };
-        let at = body.blocks[first.0 as usize].insns[first.1 as usize]
-            .defines
-            .iter()
-            .position(|one| *one == value)
-            .unwrap_or(0);
-        order.push((first, at, value));
-    }
-    order.sort_unstable();
-    let mut result = IndexMap::default();
-    for (_, _, value) in order {
-        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
-        if let Some(source) = _address_of(value, &defining) {
-            result.insert(value, source);
-        }
-    }
-    if check_postings() {
-        assert!(
-            result.iter().eq(_addresses(body, values).iter()),
-            "{}: the addresses from the postings differ",
-            body.name
-        );
-    }
-    result
-}
-
-/// `_literals` of the values in `values`, from their definitions and those of
-/// what they are copies of: the answer for a value reads its own definition
-/// and, for a copy, its source's, and so down the chain.
-pub(crate) fn _literals_by(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    any_width: bool,
-    postings: &Postings,
-) -> IndexMap<u32, Imm> {
-    enum Step {
-        Visiting,
-        Is(Option<Imm>),
-    }
-    // What a value is made from, where it is one single plain move of a
-    // constant or of another value.
-    let source_of = |value: u32| -> Option<Loc> {
-        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
-        if defining.is_empty() || defining.iter().any(|one| one.group.is_some() && (one.defines.contains(&value))) {
-            return None;
-        }
-        if postings.uses(value).iter().any(|at| {
-            let one = _at(body, *at);
-            one.group.is_some() && group_source(one).is_none()
-        }) {
-            return None;
-        }
-        let one = _one_definition(&defining)?;
-        let what = one.what.as_ref()?;
-        if what.op != Operation::Move
-            || what.dests.len() != 1
-            || what.sources.len() != 1
-            || one.defines != [value]
-            || !one.clobbers.is_empty()
-        {
-            return None;
-        }
-        let (into, source) = (&what.dests[0], &what.sources[0]);
-        let Loc::Held(into) = into else { return None };
-        let (source_width, source_uses) = match source {
-            Loc::Imm(imm) => (imm.width, Vec::new()),
-            Loc::Held(held) => (held.width, vec![held.value]),
-            _ => return None,
-        };
-        let widest = postings.uses(value).iter().map(|at| _width(_at(body, *at), value)).max().unwrap_or(0);
-        (into.width == source_width && one.uses == source_uses && (any_width || widest <= source_width))
-            .then(|| source.clone())
-    };
-    let mut steps: IndexMap<u32, Step> = IndexMap::default();
-    fn resolve(
-        value: u32,
-        source_of: &dyn Fn(u32) -> Option<Loc>,
-        steps: &mut IndexMap<u32, Step>,
-    ) -> Option<Imm> {
-        match steps.get(&value) {
-            Some(Step::Is(known)) => return known.clone(),
-            Some(Step::Visiting) => return None,
-            None => {}
-        }
-        steps.insert(value, Step::Visiting);
-        let found = match source_of(value) {
-            Some(Loc::Imm(imm)) => Some(imm),
-            Some(Loc::Held(held)) => resolve(held.value, source_of, steps),
-            _ => None,
-        };
-        steps.insert(value, Step::Is(found.clone()));
-        found
-    }
-    let mut result: IndexMap<u32, Imm> = IndexMap::default();
-    for &value in values {
-        if let Some(constant) = resolve(value, &source_of, &mut steps) {
-            result.insert(value, constant);
-        }
-    }
-    if check_postings() {
-        let reference = _literals(body, values, any_width);
-        assert!(
-            result.len() == reference.len() && result.iter().all(|(value, one)| reference.get(value) == Some(one)),
-            "{}: the literals from the postings differ",
-            body.name
-        );
-    }
-    result
 }
 
 /// `_constants`, and also those some instruction reads wider than the literal:

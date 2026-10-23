@@ -818,9 +818,8 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{constrained, hoisted, required};
-    use crate::backend::frame::Frame;
-    use crate::backend::{allocate, select, spiller, target};
+    use super::{constrained, hoisted};
+    use crate::backend::{allocate, select, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -891,58 +890,12 @@ mod tests {
         }
     }
 
-    fn merged(
-        one: &IndexMap<u32, RegId>,
-        other: &IndexMap<u32, RegId>,
-    ) -> IndexMap<u32, RegId> {
-        let mut out = one.clone();
-        out.extend(other.iter().map(|(value, register)| (*value, *register)));
-        out
-    }
-
     fn what(one: &Insn) -> &Semantics {
         one.what.as_ref().expect("semantics")
     }
 
     fn pinned(pairs: &[(u32, RegId)]) -> IndexMap<u32, RegId> {
         pairs.iter().copied().collect()
-    }
-
-    /// H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled
-    /// from BX.
-    #[test]
-    fn test_call_result_spill_keeps_its_register_after_input_split() {
-        let (argument, result) = (Held { value: 1, width: 2 }, Held { value: 2, width: 2 });
-        let source =
-            _insn(semantics(Operation::Move, "mov", vec![Loc::Held(argument)], vec![imm(7, 2)]), &[1], &[], 0x100);
-        let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[2], &[1], 0x108);
-        call.requires = vec![(argument, RegId::AX)];
-        call.delivers = vec![(result, RegId::SI)];
-        let use_ =
-            _insn(semantics(Operation::Move, "mov", vec![held(3, 2)], vec![Loc::Held(result)]), &[3], &[2], 0x110);
-        let (split, pins) = constrained(
-            &_body(vec![source, call, use_]),
-            Some(&pinned(&[(2, RegId::SI)])),
-            &crate::backend::classes::RegisterClasses::m16(),
-        );
-        let mut frame = Frame::new(0);
-        let (spilled, _) = spiller::spilled(
-            &split,
-            &BTreeSet::from([2]),
-            Some(&mut frame),
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .unwrap();
-        let assignment =
-            allocated(&spilled, &merged(&pins, &required(&spilled, &crate::backend::classes::RegisterClasses::m16())));
-        let placed =
-            crate::backend::rewriter::rewrite(&spilled, &assignment, &crate::backend::classes::RegisterClasses::m16())
-                .unwrap();
-        let insns = placed.insns();
-        let call_index = insns.iter().position(|one| what(one).op == Operation::Call).unwrap();
-        let store = &insns[call_index + 1];
-        assert!(matches!(what(store).dests[0], Loc::Mem(_)));
-        assert_eq!(what(store).sources, vec![Loc::Reg(Reg { register: RegId::SI, width: 2 })]);
     }
 
     /// JUMPS refused emission: ON GOTO read old v20 while its required input

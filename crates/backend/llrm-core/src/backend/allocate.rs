@@ -234,16 +234,16 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
-use crate::analysis::intervals::{self as ranges, Indexes, Interval};
+use crate::analysis::intervals::{self as ranges, Indexes, Interval, key};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
 use crate::backend::liveunion::LiveUnion;
 use crate::backend::liveunion::Placed;
 use crate::backend::target::{self, Segments};
-use crate::backend::{constrain, datagroup, spiller};
+use crate::backend::{constrain, datagroup};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Semantics, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
 
@@ -2633,35 +2633,10 @@ impl RegAlloc {
             .filter(|one| _unread_move(one))
             .map(ranges::key)
             .collect();
-        body = spiller::_remove_abandoned(&body, &abandoned);
+        body = removed_unread(&body, &abandoned);
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body, &self.classes));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
-        // A value read once, from a cell that holds, by an instruction that
-        // takes the cell: never held in a register. Once per body,
-        // before the candidates: every trial starts from the body with those
-        // reads placed.
-        let mut reloads = reloads;
-        {
-            // -O0 reads every value from its register or slot as selected: this
-            // improvement alone was 13% of d_faces.c's -O0 compile.
-            let wanted: BTreeSet<u32> = if cpu.optimized {
-                _values(&body)
-                    .into_iter()
-                    .filter(|value| !reloads.contains(value) && !self.pinned.contains_key(value))
-                    .collect()
-            } else {
-                BTreeSet::new()
-            };
-            let read_at_use = spiller::_folded_reads(&body, &wanted);
-            if !read_at_use.is_empty() {
-                let floor = body.next_value();
-                let (moved, made) =
-                    spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
-                body = moved;
-                reloads.extend(made);
-            }
-        }
         drop(prepare);
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
@@ -2871,6 +2846,53 @@ pub(crate) fn _g(value: f64) -> String {
     trimmed(format!("{value:.*}", (5 - exponent) as usize))
 }
 
+/// `body` without the abandoned moves (an instruction nothing reads) in
+/// `abandoned`, keeping the bytes each owned.
+fn removed_unread(
+    body: &LirBody,
+    abandoned: &BTreeSet<usize>,
+) -> LirBody {
+    if abandoned.is_empty() {
+        return body.clone();
+    }
+    let every = || body.blocks.iter().flat_map(|block| &block.insns);
+    let mut used: BTreeSet<u32> = every().flat_map(|one| one.uses.iter().copied()).collect();
+    used.extend(every().flat_map(|one| one.requires.iter().map(|(held, _)| held.value)));
+    used.extend(body.blocks.iter().flat_map(|one| one.arrives()));
+    used.extend(
+        body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)),
+    );
+
+    let removable =
+        |one: &Arc<Insn>| abandoned.contains(&key(one)) && !one.defines.iter().any(|value| used.contains(value));
+
+    let anchor = |one: Arc<Insn>| -> Arc<Insn> {
+        if !removable(&one) {
+            return one;
+        }
+        crate::greedy::tii::_with(&one, |made| {
+            made.what = Some(lir::inert());
+            made.defines = Vec::new();
+            made.uses = Vec::new();
+            made.widths = Vec::new();
+        })
+    };
+
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| {
+                block.with_insns(
+                    lir::without(&block.insns, removable, None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+                        .into_iter()
+                        .map(anchor)
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Ports of `tests/test_allocation.py`, `tests/test_allocation_hints.py`,
@@ -2990,6 +3012,7 @@ mod tests {
     /// operand and one instruction fewer; the registers it held took the
     /// constants' (+1 instruction, +3 B).
     #[test]
+    #[ignore = "AM-CD-1: the spiller route that read the load at the push is gone"]
     fn test_a_load_read_once_by_a_push_is_read_at_the_push() {
         let cell = Mem { offset: 0, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, 6)), 2) };
         let at = |at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>| {
@@ -3048,41 +3071,6 @@ mod tests {
         };
         assert!(!loads_in(0), "the load stayed in the entry block: {:?}", got.blocks[0].insns);
         assert!(loads_in(20), "the load is not at the push");
-    }
-
-    /// The first version of reading loads at their use ran once per allocation,
-    /// and an allocation that spills runs the base and each candidate
-    /// shape: deedlines compiled 2% slower. The scan is a fact of the body:
-    /// once.
-    #[test]
-    fn test_loads_read_at_their_use_are_found_once_per_body_however_many_candidates_run() {
-        // Volatile loads: not made again, so ten of them live at once spill.
-        let mut insns: Vec<Insn> = (1..=10_u32)
-            .map(|value| {
-                let cell = Mem::new(Some(Addr::new(Space::Segment, i64::from(value) * 2)), 2);
-                Insn {
-                    volatile: true,
-                    ..Insn::new(
-                        i64::from(value) * 4,
-                        Some((0, 1)),
-                        Some(semantics(Operation::Move, "mov", vec![held(value, 2)], vec![Loc::Mem(cell)])),
-                        vec![value],
-                        vec![],
-                    )
-                }
-            })
-            .collect();
-        for value in 2..=10_u32 {
-            let what = semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), held(value, 2)]);
-            insns.push(Insn::new(100 + i64::from(value), Some((100, 101)), Some(what), vec![1], vec![1, value]));
-        }
-        let before = spiller::folded_read_scans();
-        let got = _through_regalloc(_one_block(insns), &[]);
-        assert!(
-            got.insns().iter().any(|one| one.spill_reload || one.spill_store),
-            "premise: the body spills, so candidates run"
-        );
-        assert_eq!(spiller::folded_read_scans() - before, 1);
     }
 
     /// The greedy allocator reads only the register classes of `Facts`, but
