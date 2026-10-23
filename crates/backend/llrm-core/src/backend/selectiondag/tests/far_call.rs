@@ -35,3 +35,28 @@ fn a_call_through_a_far_pointer_calls_through_a_cell_holding_both_words() {
         assert_eq!(displacement, at);
     }
 }
+
+/// The stores of a far call's cell come before `callseq_start`, not after the
+/// argument copies glued to the call: the call then needed what came after it
+/// (a cycle), the scheduler left the whole sequence out, and a call through a
+/// function table vanished with its loads (function_table at m16).
+#[test]
+fn the_cell_is_stored_before_the_call_sequence_starts() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
+    let (entry, mask) = (dag.entry_node(), dag.get_register_mask());
+    let start = dag.get_callseq_start(entry, 0);
+    let copy = dag.get_copy_to_reg(SDValue { node: start.node, res: 0 }, 5, offset);
+    let call = dag.get_node_multi(own::CALL, &[EVT::OTHER, EVT::GLUE], &[copy, far, mask]);
+    dag.set_root(SDValue { node: call.node, res: 0 });
+    TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), own::LLRM_FARCALL);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::CopyToReg, "the call follows the copies directly");
+    let before = dag.operand(start, 0);
+    assert_eq!(dag.opcode(before), ISD::TokenFactor, "the stores are joined before the sequence starts");
+    let stores = (0..dag.node(before).ops.len()).filter(|i| dag.opcode(dag.operand(before, *i)) == ISD::Store).count();
+    assert_eq!(stores, 2);
+}

@@ -1320,7 +1320,11 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// A call through a far pointer: offset then selector stored to a 4-byte
-    /// stack cell, and the call reads the cell (`LLRM_FARCALL`, SD208).
+    /// stack cell, and the call reads the cell (`LLRM_FARCALL`, SD208). The
+    /// stores come before `callseq_start`: the argument copies, the call and
+    /// `callseq_end` are one glued run, and a store chained after a copy would
+    /// have to precede the call that is glued to that copy (a cycle the
+    /// scheduler left unresolved: the call and everything it read vanished).
     fn expand_far_call(
         &mut self,
         call: SDValue,
@@ -1340,15 +1344,29 @@ impl<'a> TypeLegalizer<'a> {
             ext: None,
             space: 0,
         };
-        let low_store = self.dag.get_store(chain, offset, slot, info);
-        let high_store = self.dag.get_store(chain, selector, high_slot, info);
-        let stores = self.dag.get_token_factor(&[low_store, high_store]);
+        // the chain the argument copies hang from, back to `callseq_start`
+        let mut start = chain;
+        while self.dag.opcode(start) == ISD::CopyToReg {
+            start = self.dag.operand(start, 0);
+        }
+        let before = if self.dag.opcode(start) == ISD::CallSeqStart { self.dag.operand(start, 0) } else { chain };
+        let low_store = self.dag.get_store(before, offset, slot, info);
+        let high_store = self.dag.get_store(before, selector, high_slot, info);
+        if self.dag.opcode(start) == ISD::CallSeqStart {
+            let stores = self.dag.get_token_factor(&[before, low_store, high_store]);
+            let mut ops = self.dag.node(start).ops.clone();
+            ops[0] = stores;
+            self.dag.update_node_operands(start.node, &ops);
+        }
         let target = self.dag.get_target_frame_index(pointer, cell);
         let mut ops = self.dag.node(call).ops.clone();
-        ops[0] = stores;
+        if self.dag.opcode(start) != ISD::CallSeqStart {
+            ops[0] = self.dag.get_token_factor(&[low_store, high_store]);
+        }
         ops[1] = target;
         let values = self.dag.node(call).values.clone();
         let far_call = self.dag.get_node_multi(super::x86isd::LLRM_FARCALL, &values, &ops);
+        self.replace_value_with(SDValue { node: call.node, res: 0 }, SDValue { node: far_call.node, res: 0 });
         self.replace_value_with(SDValue { node: call.node, res: 1 }, SDValue { node: far_call.node, res: 1 });
         far_call
     }
