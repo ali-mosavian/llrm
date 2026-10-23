@@ -1327,3 +1327,25 @@ fn a_floating_constant_is_loaded_after_the_call_that_precedes_its_use() {
         whats.iter().map(|w| &w.name).collect::<Vec<_>>()
     );
 }
+
+const EXTRA_ARGS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare watcallcc i32 @none()
+define i32 @f() {
+entry:
+  %r = call watcallcc i32 (i32, i32, i32, i32, i32, i32) @none(i32 1, i32 2, i32 3, i32 4, i32 5, i32 6)
+  ret i32 %r
+}
+";
+
+/// A call with more arguments than the callee declares (an old-style `()`
+/// definition): the callee pops what it declares, so the caller removes the
+/// rest. The DAG path left them on the stack and `main` returned elsewhere
+/// (old_style_extra_args -m32: exception 0Dh).
+#[test]
+fn the_caller_removes_the_arguments_the_callee_does_not_declare() {
+    let module = llrm_mir::parse::module(EXTRA_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let text = format!("{:?}", done.body.insns().iter().filter_map(|i| i.what.as_ref()).collect::<Vec<_>>());
+    assert!(text.contains("\"add\"") && text.contains("Imm(Imm { value: 8,"), "{text}");
+}
