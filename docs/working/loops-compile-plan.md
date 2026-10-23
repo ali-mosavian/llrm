@@ -16,3 +16,15 @@ Owner w-3. Ledger command (docs/working/ledger-command.md): qbq-llrm render/d_fa
 Sum of the steps: about 52 M of the 73.6 M excess, so the bucket lands near 108 M (1.25x). The last ~22 M is not attributed to a callee yet: L9, 12-18, re-measure after L1 to L3 on the ledger command and plan the next steps from the callee view; the goal stays 1.0x.
 
 Each step is one PR with its cost measured on the ledger command (dist, before and after, same target dir) and objects compared (objsweep, QCport) where the change can reach output; none is in this PR.
+
+## From about 1.25x to 1.0x (not dated yet)
+
+After L1 to L7 the bucket is near 108 M against 86.8 M. What is left, with what each needs before it can get a date:
+
+| # | Where (ours after L1 to L7, est. M; pin) | Needs |
+|---|---|---|
+| R1 | IndVars ~37 (pin 23.3): `ExitOpt` 6.9 (pin's `optimizeLoopExits` ~3.9), `simplify_users_of_iv` outside `eliminate_iv_user` 4.4, `get_scev` | measurement: SCEV nodes made per pass on the ledger command, ours against the pin's `-stats`-less count (callee view of `createSCEV`) |
+| R2 | cold `ScalarEvolution` starts: `delete_loops` x60, `ScevSession::within` x51, unroll x37, LoopDeletion x32, IndVars x19 (the pin keeps one SE for the loop pipeline) | blocker: which passes drop `Scevs` between the loop passes (`PreservedAnalyses`); measurement: nodes made after each |
+| R3 | Licm ~23 (pin 14.0): `sink_and_hoist` 9.2 x62 against `hoistRegion` 10.6 in the pin | measurement: `can_sink_or_hoist_inst` x914 (3.5) against the pin's `canSinkOrHoistInst` 8.9 on the same loops |
+| R4 | LoopLoadElim ~4.5 (pin 2.3), LCSSA ~2 (0.8), LoopSimplify ~2 (1.0 + 1.0), LSR ~14 (12.8) | after L3, L4, L6, L7 are measured |
+| R5 | rotate 2.9, deletion 6.3, unroll 10.5 against the pin's 7.8, 7.3, 9.1 | none: at or below the pin; keep out of the way |
