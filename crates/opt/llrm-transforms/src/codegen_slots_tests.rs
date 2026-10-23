@@ -474,7 +474,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "flagscopy.rs",
         "",
-        "CG9: translated (registry flagscopy@5) over an explicit flags copy, the pseudo pair standing for the pin's COPY $eflags search (R1 one block, R2); reason: isel makes no flags copy; cost: none; exit: an isel producer of a flags copy; owner w-5; review 2026-11-19. Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
+        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); same-block lowering as the pin (checked against llc -run-pass=x86-flags-copy-lowering). Blockers, landing 2026-11-04: restore in another block, flags live into successors, test-position hoisting, splitBlock for a second jcc. The NF variants are N/A (APX). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -781,7 +781,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "fixupbw.rs",
         "",
-        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with two deviations: W1 real mode rewrites only if not longer (the 0x66 prefix), W3 a movsx within one register is refused; reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs (#3749, #3777)",
+        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with one deviation, W1: real mode rewrites only if not longer (the 0x66 prefix); reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs (#3749, #3777)",
     ),
     row(
         "X86 Atom pad short functions",
