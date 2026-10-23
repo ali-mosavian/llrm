@@ -2308,8 +2308,24 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
-    // What a call reaches elsewhere depends on its callee alone.
+    // What a call reaches elsewhere depends on its callee alone, and on the
+    // module analyses the unit reads: kept with the proxy that holds them,
+    // where the unit is made under it.
+    let memo = unit.outer.filter(|outer| {
+        let same = |held: Option<*const ()>, now: Option<*const ()>| held == now;
+        same(
+            unit.globals_aa.map(|one| std::ptr::from_ref(one).cast()),
+            outer
+                .cached_ref::<crate::manager::GlobalsAA>()
+                .and_then(|one| one.as_ref().ok())
+                .map(|one| std::ptr::from_ref(one).cast()),
+        ) && same(
+            unit.globals_mr.map(|one| std::ptr::from_ref(one).cast()),
+            outer.cached_ref::<crate::manager::GlobalsModRefAnalysis>().map(|one| std::ptr::from_ref(one).cast()),
+        )
+    });
     let reaches = |callee: Option<GlobalId>, nocallback: bool| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+        REACHES.with(|made| made.set(made.get() + 1));
         // A callee that cannot call back writes of the tracked globals only
         // what the runtime module promises of it (`!llrm.writes`).
         let promised = if nocallback { unit.globals_aa.map(|aa| aa.unsummarized(callee)) } else { None };
@@ -2340,6 +2356,10 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             }
         }
         (reads.iter().map(&reference).collect(), writes.iter().map(&reference).collect())
+    };
+    let remembered = |key: u64, make: &dyn Fn() -> (Rc<[MemRef]>, Rc<[MemRef]>)| match memo {
+        Some(outer) => (*outer.memo(key, make)).clone(),
+        None => make(),
     };
     let mut elsewhere: llrm_mir::dense::IdMap<u32, (Rc<[MemRef]>, Rc<[MemRef]>)> = llrm_mir::dense::IdMap::default();
     let mut elsewhere_unknown = None;
@@ -2400,11 +2420,11 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
             Some(id) => {
                 let key = id.0 * 2 + u32::from(nocallback);
                 if !elsewhere.contains_key(&key) {
-                    elsewhere.insert(key, reaches(callee, nocallback));
+                    elsewhere.insert(key, remembered(u64::from(key), &|| reaches(callee, nocallback)));
                 }
                 elsewhere.get(&key).expect("inserted above")
             }
-            None => elsewhere_unknown.get_or_insert_with(|| reaches(None, false)),
+            None => elsewhere_unknown.get_or_insert_with(|| remembered(u64::MAX, &|| reaches(None, false))),
         };
         if allowed.other.reads {
             loads.extend(other_loads.iter().cloned());
@@ -2599,12 +2619,20 @@ thread_local! {
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FOOTPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REACHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has worked out the footprints of a body's calls
 /// (`calls_by_attributes`), for a test that `Writes` and `Accesses` share one.
 pub fn footprints_made() -> usize {
     FOOTPRINTS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has worked out what a callee reaches elsewhere
+/// (the `reaches` of `calls_by_attributes`), for a test that a proxy keeps
+/// them.
+pub fn reaches_made() -> usize {
+    REACHES.with(std::cell::Cell::get)
 }
 
 /// How many rounds over the blocks the value solves of this thread have made,
