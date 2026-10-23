@@ -781,7 +781,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "fixupbw.rs",
         "",
-        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with two deviations: W1 real mode rewrites only if not longer (the 0x66 prefix), W3 a movsx within one register is refused; reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs (#3749, #3777)",
+        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with one deviation, W1: real mode rewrites only if not longer (the 0x66 prefix); reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs (#3749, #3777)",
     ),
     row(
         "X86 Atom pad short functions",
