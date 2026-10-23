@@ -73,6 +73,9 @@ pub mod x86isd {
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
     pub const FILD: ISD = ISD::Target(586);
+    /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
+    /// `sahf` on a 486).
+    pub const FCMP: ISD = ISD::Target(576);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -89,6 +92,7 @@ pub mod cond {
     pub const A: u128 = 7;
     pub const S: u128 = 8;
     pub const NS: u128 = 9;
+    pub const P: u128 = 10;
     pub const NP: u128 = 11;
     pub const L: u128 = 12;
     pub const GE: u128 = 13;
@@ -206,6 +210,62 @@ fn translate_cc(
     }
 }
 
+/// `isNON_EXTLoad`.
+fn is_non_ext_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::Load
+        && matches!(
+            dag.node(value).data,
+            super::dag::NodeData::Mem(info) if info.ext.is_none()
+        )
+}
+
+/// `TranslateX86CC` for floats: the code and the operands, swapped where the
+/// flags want the other order. `None` for `oeq` and `une`, which the
+/// legalizer has already expanded to two compares.
+fn translate_fp_cc(
+    dag: &SelectionDAG,
+    mut cc: CondCode,
+    lhs: &mut SDValue,
+    rhs: &mut SDValue,
+) -> Option<u128> {
+    if is_non_ext_load(dag, *lhs) && !is_non_ext_load(dag, *rhs) {
+        cc = cc.swapped_operands();
+        std::mem::swap(lhs, rhs);
+    }
+    if matches!(
+        cc,
+        CondCode::SetOLt | CondCode::SetOLe | CondCode::SetUGt | CondCode::SetUGe
+    ) {
+        std::mem::swap(lhs, rhs);
+    }
+    // ZF PF CF: greater 0 0 0, less 0 0 1, equal 1 0 0, unordered 1 1 1.
+    Some(match cc {
+        CondCode::SetUEq | CondCode::SetEq => cond::E,
+        CondCode::SetOLt | CondCode::SetOGt | CondCode::SetGt => cond::A,
+        CondCode::SetOLe | CondCode::SetOGe | CondCode::SetGe => cond::AE,
+        CondCode::SetUGt | CondCode::SetULt | CondCode::SetLt => cond::B,
+        CondCode::SetUGe | CondCode::SetULe | CondCode::SetLe => cond::BE,
+        CondCode::SetONe | CondCode::SetNe => cond::NE,
+        CondCode::SetUo => cond::P,
+        CondCode::SetO => cond::NP,
+        _ => return None,
+    })
+}
+
+/// A float compare's flags and condition code (`LowerSETCC`, floating point).
+fn float_flags(
+    dag: &mut SelectionDAG,
+    setcc: SDValue,
+) -> Option<(SDValue, SDValue)> {
+    let (mut lhs, mut rhs) = (dag.operand(setcc, 0), dag.operand(setcc, 1));
+    let code = translate_fp_cc(dag, cond_of(dag, dag.operand(setcc, 2)), &mut lhs, &mut rhs)?;
+    let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+    Some((flags, cond_code(dag, code)))
+}
+
 /// `EmitTest`, without the arithmetic-flag reuse (SD35): `cmp x, 0`.
 fn emit_test(
     dag: &mut SelectionDAG,
@@ -258,6 +318,10 @@ fn lower_setcc(
     node: SDValue,
 ) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(op0).is_floating_point() {
+        let (flags, code) = float_flags(dag, node)?;
+        return Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]));
+    }
     if !dag.value_type(op0).is_integer() {
         return None;
     }
@@ -292,6 +356,7 @@ fn is_logical_cmp(
 ) -> bool {
     let op = dag.opcode(flags);
     op == x86isd::CMP
+        || op == x86isd::FCMP
         || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
 }
 
@@ -310,7 +375,7 @@ fn lower_select(
     can_cmov: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if !vt.is_integer() {
+    if !vt.is_integer() && !vt.is_floating_point() {
         return None;
     }
     let (mut cond, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
@@ -349,7 +414,8 @@ fn lower_brcond(
         let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc);
         (code, flags)
     } else if dag.opcode(cond) == ISD::SetCC {
-        return None;
+        let (flags, code) = float_flags(dag, cond)?;
+        (code, flags)
     } else {
         // Anything else is tested: `and cond, 1`, then `!= 0`.
         let vt = dag.value_type(cond);
@@ -479,7 +545,8 @@ fn lower_fp_to_int(
         let offset = dag.get_select(value_vt, at_least, threshold, zero);
         value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
     }
-    let info = MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+    let info =
+        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -531,6 +598,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::Stack(index),
         ext: None,
+        space: 0,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -570,6 +638,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
+        space: 0,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -596,7 +665,8 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    let info = MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None };
+    let info =
+        MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
     Some(dag.get_store(chain, first, list, info))
 }
 

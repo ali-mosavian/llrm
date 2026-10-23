@@ -140,7 +140,11 @@ impl SelectionDAG {
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
                 };
                 let volatile = if info.volatile { "volatile " } else { "" };
-                write!(text, "<({volatile}{verb} (s{}) {to} {base})", info.mem_vt.size_in_bits()).ok();
+                write!(text, "<({volatile}{verb} (s{}) {to} {base}", info.mem_vt.size_in_bits()).ok();
+                if info.space != 0 {
+                    write!(text, ", addrspace {}", info.space).ok();
+                }
+                text.push(')');
                 if let Some(ext) = info.ext {
                     let name = match ext {
                         super::actions::LoadExt::ExtLoad => "anyext",
