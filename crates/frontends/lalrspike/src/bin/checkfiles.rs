@@ -11,12 +11,22 @@ fn main() {
         _ => Dialect::VbDos,
     };
     for path in args {
-        let source = lalrspike::dos_source(&std::fs::read(&path).unwrap());
+        // BC inlines `'$INCLUDE:` files, so the front end sees the expanded text
+        let source = match qbfront::source::load(std::path::Path::new(&path), &[]) {
+            Ok(text) => lalrspike::dos_source(text.as_bytes()),
+            Err(_) => lalrspike::dos_source(&std::fs::read(&path).unwrap()),
+        };
         let (class, message) = match lalrspike::qb_ast::parse(&source, dialect) {
-            Err(e) => ("syntax", format!("{}:{} {}", e.span.line, e.span.start, e.message)),
+            Err(e) => {
+                let text = source.lines().nth(e.span.line.saturating_sub(1)).unwrap_or("").trim();
+                ("syntax", format!("{}:{} {}{}", e.span.line, e.span.start, e.message, if std::env::var("SRC").is_ok() { format!("  | {text}") } else { String::new() }))
+            }
             Ok(module) => match lalrspike::qb_check::check(&module, dialect).first() {
                 None => ("ok", String::new()),
-                Some(d) => ("semantic", format!("{}:{} {}", d.span.line, d.span.start, d.message)),
+                Some(d) => {
+                    let text = source.lines().nth(d.span.line.saturating_sub(1)).unwrap_or("").trim();
+                    ("semantic", format!("{}:{} {}{}", d.span.line, d.span.start, d.message, if std::env::var("SRC").is_ok() { format!("  | {text}") } else { String::new() }))
+                }
             },
         };
         println!("{path}\t{class}\t{message}");

@@ -180,6 +180,15 @@ fn dotted_name(expr: &Expr) -> Option<String> {
     }
 }
 
+/// The type a real literal's suffix gives it.
+fn real_type(suffix: Option<char>) -> TypeName {
+    match suffix {
+        Some('#') => TypeName::Double,
+        Some('@') => TypeName::Currency,
+        _ => TypeName::Single,
+    }
+}
+
 fn name_of_suffix(name: &str) -> Option<TypeName> {
     match name.as_bytes().last() {
         Some(b'%') => Some(TypeName::Integer),
@@ -187,6 +196,7 @@ fn name_of_suffix(name: &str) -> Option<TypeName> {
         Some(b'!') => Some(TypeName::Single),
         Some(b'#') => Some(TypeName::Double),
         Some(b'$') => Some(TypeName::String),
+        Some(b'@') => Some(TypeName::Currency),
         _ => None,
     }
 }
@@ -509,12 +519,7 @@ impl Ast<'_> {
             TokenKind::Integer(value, suffix) => {
                 Expr::Literal(Literal::Integer(*value, if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer }), span)
             }
-            // The compiler has no CURRENCY type: `1@` would otherwise be read as a SINGLE.
-            TokenKind::Real(_, Some('@')) => return self.fail(),
-            TokenKind::Real(value, suffix) => Expr::Literal(
-                Literal::Real(value.clone(), if *suffix == Some('#') { TypeName::Double } else { TypeName::Single }),
-                span,
-            ),
+            TokenKind::Real(value, suffix) => Expr::Literal(Literal::Real(value.clone(), real_type(*suffix)), span),
             TokenKind::String(value) => Expr::Literal(Literal::String(value.clone()), span),
             _ => return self.fail(),
         };
@@ -1431,7 +1436,7 @@ impl Ast<'_> {
                             span,
                         )),
                         TokenKind::Real(text, suffix) => Some(Expr::Literal(
-                            Literal::Real(text.clone(), if *suffix == Some('#') { TypeName::Double } else { TypeName::Single }),
+                            Literal::Real(text.clone(), real_type(*suffix)),
                             span,
                         )),
                         _ => None,
@@ -1514,6 +1519,7 @@ impl Ast<'_> {
                 Some(Kw::ANY) => TypeName::Named("ANY".into()),
                 _ => TypeName::Named(self.name_at(at).ok_or(at)?),
             },
+            TokenKind::Identifier(name) if name == "CURRENCY" && self.dialect.currency_suffix() => TypeName::Currency,
             TokenKind::Identifier(name) => TypeName::Named(name.clone()),
             _ => return self.fail(),
         };
@@ -1603,16 +1609,19 @@ impl Ast<'_> {
     /// CHAIN to carry them it declares them, shared where SHARED says so.
     fn common(&mut self) -> R<()> {
         self.i += 1;
+        let keyword = self.i - 1;
         let shared = self.eat(Kw::SHARED);
+        let mut block = None;
         if self.eat(Kw::Div) {
-            self.identifier()?;
+            block = Some(self.identifier()?.0);
             self.expect(Kw::Div)?;
         }
         let mut declarations = vec![self.declaration(shared, false)?];
         while self.eat(Kw::Comma) {
             declarations.push(self.declaration(shared, false)?);
         }
-        self.out.push(Statement::Dim(declarations));
+        let span = self.span(keyword);
+        self.out.push(Statement::Common { shared, block, declarations, span });
         Ok(())
     }
 
