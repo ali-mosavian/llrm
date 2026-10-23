@@ -94,6 +94,8 @@ struct Var {
     dynamic: bool,
     /// Named by a declaration (DIM, a parameter, SHARED), not made by a first use.
     explicit: bool,
+    /// The name carried a type character.
+    suffixed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -264,7 +266,21 @@ impl Checker {
         }
     }
 
+    /// A word BC reserves cannot name anything; dotted names are checked as the variables they are.
+    fn reserved_name(&mut self, name: &str, span: Span) -> bool {
+        // DATA, REM, TRON and TROFF swallow the rest of their line; a suffixed spelling is no use of the word
+        let word_with_suffix = Ty::of_suffix(name).is_some() && matches!(stem(name).to_ascii_uppercase().as_str(), "DATA" | "REM" | "TRON" | "TROFF");
+        if name.contains('.') || word_with_suffix || !crate::qb_reserved::is_reserved_name(self.dialect, name) {
+            return false;
+        }
+        self.err(span, "Identifier expected");
+        true
+    }
+
     fn declare_procedure(&mut self, procedure: &Procedure) {
+        if !procedure.module_scope && self.reserved_name(&procedure.name, procedure.span) {
+            return;
+        }
         let params: Vec<ParamInfo> = procedure
             .parameters
             .iter()
@@ -330,6 +346,9 @@ impl Checker {
 
     /// The variable `name` names in the current scope: found, or implicitly created.
     fn variable(&mut self, name: &str, array: bool, span: Span) -> Option<Var> {
+        if self.reserved_name(name, span) {
+            return None;
+        }
         let key = stem(name).to_owned();
         let suffix = Ty::of_suffix(name);
         let in_procedure = self.procedure.is_some();
@@ -359,7 +378,7 @@ impl Checker {
             self.err(span, "Array not dimensioned");
             return None;
         }
-        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false };
+        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false, suffixed: suffix.is_some() };
         self.scope.vars.entry(key).or_default().push(var.clone());
         Some(var)
     }
@@ -389,12 +408,15 @@ impl Checker {
 
     fn declare_parameter(&mut self, parameter: &Parameter) {
         let declaration = &parameter.declaration;
+        if self.reserved_name(&declaration.name, declaration.span) {
+            return;
+        }
         let ty = declaration
             .type_name
             .as_ref()
             .and_then(|name| self.type_of_name(name))
             .unwrap_or_else(|| self.default_type(&declaration.name));
-        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true };
+        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true, suffixed: Ty::of_suffix(&declaration.name).is_some() };
         self.scope.vars.entry(stem(&declaration.name).to_owned()).or_default().push(var);
     }
 }
@@ -935,6 +957,10 @@ impl Checker {
             }
             let argument = self.unwrap_step(argument);
             let letter = part.chars().next().unwrap_or('n');
+            if letter == 'k' {
+                // a keyword the statement spells (ON, KEY, a device name): nothing to evaluate
+                continue;
+            }
             let class = match letter {
                 'n' => Class::Num,
                 's' => Class::Str,
@@ -1025,7 +1051,12 @@ impl Checker {
                 }
             }
             Statement::Assign { target, value, span } => self.assign(target, value, *span),
-            Statement::Label(..) | Statement::Comment(_) | Statement::OptionExplicit(_) => {}
+            Statement::Label(name, span) => {
+                if crate::qb_reserved::is_reserved_name(self.dialect, name) {
+                    self.err(*span, "Statement unrecognizable");
+                }
+            }
+            Statement::Comment(_) | Statement::OptionExplicit(_) => {}
             Statement::OptionBase(_, span) => {
                 let dimensioned = |scope: &Scope| scope.vars.values().flatten().any(|v| v.rank.is_some());
                 if dimensioned(&self.scope) || dimensioned(&self.module_scope) {
@@ -1277,7 +1308,11 @@ impl Checker {
         let value_typed = self.expr(value);
         // PDS and VBDOS: ERR = n
         if matches!(target, Expr::Name(name, _) if name == "ERR") {
-            self.numeric(value);
+            if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+                self.err(span, "Statement unrecognizable");
+            } else {
+                self.numeric(value);
+            }
             return;
         }
         // MID$(s$, n, n) = x
@@ -1303,7 +1338,7 @@ impl Checker {
         // a FUNCTION assigns its result through its own name
         if let (Expr::Name(name, _), Some((ProcedureKind::Function, own))) = (target, &self.procedure) {
             if stem(name) == stem(own) {
-                let ty = self.procs.get(stem(own)).and_then(|p| p.result.clone());
+                let ty = self.procs.get(stem(own)).or_else(|| self.procs.get(own.as_str())).and_then(|p| p.result.clone());
                 if let (Some(ty), Some(v)) = (ty, value_typed) {
                     self.assignable(&ty, &v, value.span());
                 }
@@ -1397,6 +1432,9 @@ impl Checker {
     }
 
     fn constant(&mut self, name: &str, value: &Expr, span: Span) {
+        if self.reserved_name(name, span) {
+            return;
+        }
         let Some(typed) = self.constant_expr(value) else { return };
         let key = stem(name).to_owned();
         if self.consts.contains_key(&key) || self.scope.vars.contains_key(&key) {
@@ -1420,12 +1458,24 @@ impl Checker {
         if self.procedure.is_some() {
             self.err(span, "Illegal inside SUB or FUNCTION");
         }
+        if crate::qb_reserved::is_reserved_type(self.dialect, name) {
+            self.err(span, "Identifier expected");
+            return;
+        }
         if self.records.contains_key(name) {
             self.err(span, "Duplicate definition");
             return;
         }
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();
         for field in fields {
+            if Ty::of_suffix(&field.name).is_some() {
+                self.err(field.span, "Invalid character");
+                continue;
+            }
+            if crate::qb_reserved::is_reserved_field(self.dialect, &field.name) {
+                self.err(field.span, "Identifier expected");
+                continue;
+            }
             if out.iter().any(|(existing, ..)| *existing == field.name) {
                 self.err(field.span, "Duplicate definition");
                 continue;
@@ -1449,6 +1499,9 @@ impl Checker {
 
     fn declare(&mut self, d: &Declaration, redim: bool) {
         let span = d.span;
+        if self.reserved_name(&d.name, span) {
+            return;
+        }
         if let Some((prefix, _)) = d.name.split_once('.') {
             // `r.a` names a field of the record variable `r`; a record variable's dotted names are not free
             let record = |scope: &Scope| scope.vars.get(stem(prefix)).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
@@ -1509,8 +1562,8 @@ impl Checker {
                     return;
                 }
             }
-        } else if existing.iter().any(|v| v.explicit && v.rank.is_none() && (v.ty.plain() == ty.plain() || v.declared || as_declared)) {
-            self.err(span, "Duplicate definition");
+        } else if let Some(message) = self.scalar_conflict(&existing, &ty, &d.name, as_declared) {
+            self.err(span, message);
             return;
         }
         // a name bound by AS to another type, or a different suffix, is taken
@@ -1530,8 +1583,42 @@ impl Checker {
                 || (d.array && !constant_bounds)
                 || (d.array && self.procedure.is_some() && !self.static_scope),
             explicit: true,
+            suffixed: Ty::of_suffix(&d.name).is_some(),
         };
         self.scope.vars.entry(key).or_default().push(var);
+    }
+
+    /// Why declaring a scalar `name` of type `ty` clashes with the variables already named by its stem (BC's rules:
+    /// `q` and `q%` are two variables, `q AS T` binds the stem, and PDS and VBDOS refuse to mix a suffix with AS).
+    fn scalar_conflict(&self, existing: &[Var], ty: &Ty, name: &str, as_declared: bool) -> Option<&'static str> {
+        let suffixed = Ty::of_suffix(name).is_some();
+        let mixes = !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
+        for v in existing.iter().filter(|v| v.rank.is_none()) {
+            let bare = !v.declared && !v.suffixed;
+            if as_declared {
+                if mixes && v.suffixed && v.ty.plain() == ty.plain() {
+                    return Some("AS clause required on first declaration");
+                }
+                if v.explicit && (v.declared || bare) {
+                    return Some("Duplicate definition");
+                }
+            } else if suffixed {
+                if mixes && v.declared && v.explicit && v.ty.plain() == ty.plain() {
+                    return Some("AS clause required");
+                }
+                if v.explicit && (v.declared || (v.suffixed && v.ty.plain() == ty.plain()) || (bare && v.ty.plain() == ty.plain())) {
+                    return Some("Duplicate definition");
+                }
+            } else {
+                if v.explicit && v.declared {
+                    return Some("AS clause required");
+                }
+                if v.explicit && (bare || (v.suffixed && v.ty.plain() == ty.plain())) {
+                    return Some("Duplicate definition");
+                }
+            }
+        }
+        None
     }
 
     fn share(&mut self, d: &Declaration) {
@@ -1549,7 +1636,7 @@ impl Checker {
             }
             None => {
                 let ty = wanted.clone().unwrap_or_else(|| self.default_type(&d.name));
-                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true };
+                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true, suffixed: Ty::of_suffix(&d.name).is_some() };
                 self.scope.vars.entry(key.clone()).or_default().push(var.clone());
                 self.module_scope.vars.entry(key).or_default().push(var);
             }
@@ -1557,6 +1644,14 @@ impl Checker {
     }
 
     fn call(&mut self, name: &str, arguments: &[Expr], explicit: bool, span: Span) {
+        if explicit && Ty::of_suffix(name).is_some() {
+            self.err(span, "Invalid character");
+            return;
+        }
+        if explicit && !name.contains('.') && crate::qb_reserved::is_reserved_name(self.dialect, name) {
+            self.err(span, "Name of subprogram illegal");
+            return;
+        }
         // the statements the syntax stores as implicit calls
         if !explicit {
             let handled = match name {
@@ -1757,16 +1852,16 @@ impl Checker {
             "SWAP" => "v v",
             "RESTORE" => "l?",
             "DATE$" | "TIME$" => "s",
-            "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "x",
+            "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "k",
             "KEY" => "n s",
-            "EVENT" => "x n? x x?",
+            "EVENT" => "k n? k l?",
             "LOCK" | "UNLOCK" => "n n? n?",
             "IOCTL" => "n s",
             "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT" => "",
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => "",
             "CHDRIVE" => "s",
             "STACK" => "n?",
-            "EVENT_SWITCH" => "x",
+            "EVENT_SWITCH" => "k",
             "ROLLBACK" => "n?",
             "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" => "n",
             "DELETEINDEX" => "n s",

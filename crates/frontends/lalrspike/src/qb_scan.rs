@@ -206,7 +206,7 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                         continue;
                     }
                     TokenKind::Reserved(id)
-                } else if let Some(word) = extension_keyword(bare).filter(|_| name.len() == bare.len()) {
+                } else if let Some(word) = extension_keyword(bare).filter(|word| name.len() == bare.len() && (*word != "EXPLICIT" || matches!(dialect, Dialect::VbDos | Dialect::Quickr))) {
                     TokenKind::ExtensionKeyword(word)
                 } else {
                     TokenKind::Identifier(name.to_ascii_uppercase())
