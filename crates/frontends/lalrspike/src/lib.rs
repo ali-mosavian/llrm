@@ -32,6 +32,8 @@ pub fn parse_nib_source(source: &str) -> Result<ast::Module, String> {
 }
 
 pub mod qb_kw;
+pub mod qb_lexer;
+pub mod qb_words;
 pub mod qb_tokens;
 pub mod qb_tree;
 
