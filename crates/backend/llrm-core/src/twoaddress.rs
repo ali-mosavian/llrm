@@ -24,10 +24,9 @@
 //! on the instruction; `backend::twoaddr::Fixed` reads them, and a value read
 //! once by a sum that ends in a register ends in it too.
 //!
-//! DEVIATE TA-2 (no exit while the target needs it): `hasCommutePreference`
-//! (X86InstrInfo.cpp#L3152) concerns an `add` fed by an LEA that
-//! X86FixupLEAs turns back into an `add`; no LEA is made before this pass
-//! here, so there is no preference to give.
+//! `hasCommutePreference` (X86InstrInfo.cpp#L3152): an `add` fed by an LEA that
+//! this pass made takes the LEA's result as its second source, so X86FixupLEAs
+//! (`optLEAALU`) turns the pair into two adds.
 //!
 //! DEVIATE TA-3 (exit: the translated pass owns the instruction list): the
 //! pin sees a tied use through `isRegTiedToUseOperand`; here only the
@@ -49,9 +48,9 @@
 //! `upperzero::wide_roots` does not count a `lea` cell: it is arithmetic, not
 //! an address read.
 //!
-//! DEVIATE TA-5 (exit: `isProfitableToConv3Addr` needs the register maps of
-//! piece 4): a source that dies is never converted; the pin also converts one
-//! that dies when the destination is mapped to another register.
+//! `isProfitableToConv3Addr`: a source that dies is also converted when the
+//! sum is to end in a register other than the one the source arrives in
+//! (`backend::twoaddr::profitable_to_convert`, from the maps of TA-1).
 //!
 //! `rescheduleMIBelowKill` moves a tied instruction below the one local reader
 //! that kills its source (and the copies of its result), so the source dies at
@@ -336,6 +335,9 @@ pub struct Commuter<'a> {
     /// `DistanceMap`: the position of each instruction passed in this block.
     distance: HashMap<InstrKey, u32>,
     dist: u32,
+    /// The values `convertInstTo3Addr` made a two-register `lea` of in this
+    /// block (`isConvertibleLEA`).
+    leas: std::collections::HashSet<u32>,
 }
 
 impl<'a> Commuter<'a> {
@@ -345,7 +347,7 @@ impl<'a> Commuter<'a> {
         fixed: &'a Fixed,
         block: usize,
     ) -> Self {
-        Self { facts, fixed, block, distance: HashMap::default(), dist: 0 }
+        Self { facts, fixed, block, distance: HashMap::default(), dist: 0, leas: Default::default() }
     }
 
     /// `DistanceMap.insert(MI, ++Dist)`: the instruction is passed; its
@@ -524,6 +526,7 @@ impl<'a> Commuter<'a> {
         c: u32,
         key: InstrKey,
         dist: u32,
+        prefers: Option<bool>,
     ) -> bool {
         if !self.is_plainly_killed(key, c) {
             return false;
@@ -571,9 +574,39 @@ impl<'a> Commuter<'a> {
         if self.is_rev_copy_chain(b, a, MAX_DATA_FLOW_EDGE) {
             return false;
         }
+        // Another target preference (`hasCommutePreference`).
+        if let Some(commute) = prefers {
+            return commute;
+        }
         // Neither is used in between: the one defined later has the shorter
         // interval.
         last_def_b != 0 && last_def_c != 0 && last_def_c > last_def_b
+    }
+
+    /// `a := lea [x + y]` was made in this block.
+    pub fn note_lea(
+        &mut self,
+        value: u32,
+    ) {
+        self.leas.insert(value);
+    }
+
+    /// `X86InstrInfo::hasCommutePreference` (X86InstrInfo.cpp#L3152): `r3 = lea
+    /// r1, r2; r5 = add r3, r4` is better as `add r4, r3`, which
+    /// X86FixupLEAs then splits into two adds. `Some(true)` commutes.
+    fn commute_preference(
+        &self,
+        what: &Semantics,
+        first: u32,
+        second: u32,
+    ) -> Option<bool> {
+        if what.name.as_deref() != Some("add") {
+            return None;
+        }
+        if self.leas.contains(&first) {
+            return Some(true);
+        }
+        self.leas.contains(&second).then_some(false)
     }
 
     /// Whether `isKilled` says `reg` dies at the instruction.
@@ -837,7 +870,14 @@ impl<'a> Commuter<'a> {
         let other_killed = self.is_killed(key, second.value);
         let mut commute = !base_killed && other_killed;
         if !commute {
-            commute = self.is_profitable_to_commute(into.value, first.value, second.value, key, dist);
+            commute = self.is_profitable_to_commute(
+                into.value,
+                first.value,
+                second.value,
+                key,
+                dist,
+                self.commute_preference(what, first.value, second.value),
+            );
         }
         if !commute {
             return None;

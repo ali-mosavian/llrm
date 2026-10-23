@@ -358,7 +358,7 @@ impl Peephole {
         let body = addresses(&body, &self.cpu)?;
         let body = stepped_after_compare(self.rules, &body);
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
-        let body = borrows(self.rules, &increments(self.rules, &lea_fixed(self.rules, &body)));
+        let body = borrows(self.rules, &increments(self.rules, &lea_alus(self.rules, &lea_fixed(self.rules, &body))));
         let body = doubled(self.rules, &body, &self.cpu)?;
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and
@@ -2285,6 +2285,15 @@ pub fn lea_fixed(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.lea_fixup, body, &Facts::new(body, None))
+}
+
+/// `lea t,[x+y]` read once by the add or subtract of `d` after it as two steps
+/// on `d` (`peephole.peep`; X86FixupLEAs `optLEAALU`).
+pub fn lea_alus(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.lea_alu, body, &Facts::new(body, None))
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead

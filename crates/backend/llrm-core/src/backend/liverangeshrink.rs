@@ -38,6 +38,12 @@
 //! with a live flags def does not move), and one that reads them does not
 //! move. Exit: none; the register and flag model of the LIR.
 //!
+//! DEVIATE LRS2 (owner w-8, review 2026-11-14): the pin's `COPY` from a
+//! physical register is a value the entry delivers; a call's result is a `COPY`
+//! there too, and counted here as a definition that shortens a range. Not
+//! counting it grew recchop -O3 by 16 bytes. Exit: the allocation that makes
+//! the call result's copy coalesce.
+//!
 //! # Example
 //! ```text
 //! b1: v1 = load [p]      b1: v1 = load [p]
@@ -304,7 +310,12 @@ fn landing(
             eligible += 1;
             continue;
         };
-        if !is_copy(&body.blocks[block].insns[def]) {
+        // A value the entry delivers in a register is the pin's `COPY` from
+        // that physical register. A call's result is the pin's
+        // `COPY` too, and counted here: not counting it grew recchop -O3 by 16
+        // bytes (DEVIATE LRS2).
+        let site = &body.blocks[block].insns[def];
+        if !is_copy(site) && (site.call.is_some() || !site.delivers.iter().any(|(held, _)| held.value == *value)) {
             eligible += 1;
         }
         insert = dominated(block, block_at, def, insert, position, order);
@@ -395,6 +406,8 @@ fn flags_allow(
 mod tests {
     use std::sync::Arc;
 
+    use llrm_lir::registers::RegId;
+
     use super::*;
     use crate::model::ir::{Held, Imm, Semantics};
     use crate::model::lir::{Insn, LirBlock};
@@ -483,6 +496,21 @@ mod tests {
     fn test_a_copy_does_not_count_as_a_shortened_range() {
         let copy = insn(0, Operation::Move, "mov", vec![held(10)], vec![held(1)], vec![10], vec![1]);
         let before = body(vec![copy, constant(1, 11), constant(2, 12), add(3, 13, 10, 11), ret(4)]);
+        assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13]);
+    }
+
+    /// A value the entry delivers in a register is the pin's `COPY` from a
+    /// physical register: it does not count either. `a + b` of two
+    /// arguments was hoisted above the sum of the other two, which made the
+    /// two-address pass see the `lea` first and left `lea ecx,[ebx+ecx]` and
+    /// `add` apart in six_.
+    #[test]
+    fn test_a_value_delivered_in_a_register_does_not_count_as_a_shortened_range() {
+        let entry = Arc::new(Insn {
+            delivers: vec![(Held { value: 10, width: 4 }, RegId::EAX), (Held { value: 11, width: 4 }, RegId::EDX)],
+            ..Insn::new(0, None, None, vec![10, 11], vec![])
+        });
+        let before = body(vec![entry, constant(1, 12), add(2, 13, 10, 11), ret(3)]);
         assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13]);
     }
 

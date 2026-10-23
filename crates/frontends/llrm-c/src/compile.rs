@@ -3166,18 +3166,15 @@ mod tests {
     #[test]
     fn test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments() {
         let body = regs_body("six_");
-        assert_eq!(
-            body,
-            [
-                "L0_0:",
-                "add eax, edx",
-                "add eax, ebx",
-                "add eax, ecx",
-                "add eax, dword ptr [esp+4]",
-                "add eax, dword ptr [esp+8]",
-                "ret 8"
-            ]
-        );
+        // The pin makes the sum of four registers a tree and splits its `lea`
+        // into adds, so which register takes which add
+        // is the allocator's: five adds, three of registers and two of the
+        // stack words, no move, no `lea`.
+        let adds = |from: &str| body.iter().filter(|line| line.starts_with("add ") && line.contains(from)).count();
+        assert_eq!(body.len(), 7, "{body:?}");
+        assert_eq!((body[0].as_str(), body[6].as_str()), ("L0_0:", "ret 8"), "{body:?}");
+        assert_eq!((adds("esp"), adds("e")), (2, 5), "{body:?}");
+        assert!(body[1..6].iter().all(|line| line.starts_with("add ")), "{body:?}");
     }
 
     /// A struct larger than a dword is written through the address in ESI,
