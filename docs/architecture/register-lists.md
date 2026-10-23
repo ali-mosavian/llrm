@@ -41,4 +41,4 @@ O(parameters) per function or call, plus one intern per distinct list. Risks: a 
 
 ## Order
 
-(1) description + `Convention::derived`; (2) the two attributes, verifier, `isel::entry`; (3) llrm-c and the static rule; (4) the clib objects and their run tests. The tools/clib PR (the inventory, library and module-swap scripts that produced the numbers above, plus `docs/frontends/c/clib.md`) is independent: 2026-10-24.
+(1) description + `Convention::derived`; (2) the two attributes, verifier, `isel::entry`; (3) llrm-c and the static rule; (4) the clib objects and their run tests. The tools/clib PR (the inventory, library and module-swap scripts that produced the numbers above) is independent: 2026-10-24.
