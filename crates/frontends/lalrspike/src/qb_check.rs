@@ -467,6 +467,11 @@ impl Checker {
             }),
             Expr::Name(name, span) => self.name_expr(name, *span),
             Expr::Apply { name, arguments, span } => self.apply(name, arguments, *span),
+            // `Math.Add(1, 2)`: a procedure or array whose name has a dot is not a field of anything
+            Expr::Index { base, indices, span } if dotted(base).is_some_and(|name| !self.lookup_record_var(name.split('.').next().unwrap_or(""))) => {
+                let name = dotted(base).unwrap_or_default();
+                self.apply(&name, indices, *span)
+            }
             Expr::Index { base, indices, span } => {
                 let base_typed = self.expr(base)?;
                 let _ = (base_typed, indices, span);
@@ -577,7 +582,9 @@ impl Checker {
             return None;
         };
         let record = self.records.get(record)?.clone();
-        match record.fields.iter().find(|(field, ..)| field == name) {
+        // a field may be named with its type character (`menu.text$`)
+        let wanted = Ty::of_suffix(name);
+        match record.fields.iter().find(|(field, ty, _)| stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)) {
             Some((_, ty, _)) => Some(Typed { ty: ty.clone(), variable: true, constant: None, array: None }),
             None => {
                 self.err(span, "Element not defined");
@@ -598,6 +605,10 @@ impl Checker {
             return Some(constant.clone());
         }
         if let Some(sig) = qb_sigs::function(name, self.dialect) {
+            if sig.parens {
+                self.err(span, "Left parenthesis missing");
+                return None;
+            }
             if sig.accepts(0) {
                 return Some(Typed::value(self.result_type(sig.ret, &[])));
             }
@@ -626,6 +637,7 @@ impl Checker {
             Ret::Long => Ty::Long,
             Ret::Single => Ty::Single,
             Ret::Double => Ty::Double,
+            Ret::Currency => Ty::Currency,
             Ret::Str => Ty::Str(None),
             Ret::Same => args.first().map_or(Ty::Single, |a| if a.ty.rank() == 0 { Ty::Single } else { a.ty.clone() }),
             Ret::Float => match args.first() {
@@ -781,7 +793,7 @@ impl Checker {
             Class::Array => self.array_argument(argument),
             Class::Label => {
                 if let Expr::Name(name, span) = argument {
-                    if !self.labels.contains(name) {
+                    if !self.labels.contains(name) && !self.module_labels.contains(name) {
                         self.err(*span, "Label not defined");
                     }
                     return Some(Typed::value(Ty::Int));
@@ -1526,6 +1538,11 @@ impl Checker {
                 self.check_arguments(&procedure, arguments, span, true);
             }
             Some(_) => self.err(span, if explicit { "Name of subprogram illegal" } else { "Variable required" }),
+            None if qb_sigs::function(name, self.dialect).is_some_and(|sig| sig.statement) => {
+                if let Some(sig) = qb_sigs::function(name, self.dialect) {
+                    self.intrinsic(sig, name, arguments, span);
+                }
+            }
             None => {
                 if !explicit {
                     // a statement that starts with an unknown name is taken for an assignment
@@ -1633,7 +1650,7 @@ impl Checker {
             "EVENT" => "x n? x x?",
             "LOCK" | "UNLOCK" => "n n? n?",
             "IOCTL" => "n s",
-            "FIELD" => "",
+            "FIELD" | "PALETTE_USING" => "",
             "ENDIF" => "",
             _ => {
                 self.err(span, "Syntax error");
