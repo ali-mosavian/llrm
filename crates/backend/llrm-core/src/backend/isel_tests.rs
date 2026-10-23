@@ -1582,10 +1582,9 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
-            "mov cx, word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
-            "mov ax, word ptr [bp-4]",
-            "add ax, cx",
+            "add ax, word ptr [bp-4]",
             "fldcw word ptr [bp-6]",
             "leave",
             "retf"
@@ -5673,7 +5672,7 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
         "f",
     );
-    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+6]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"add ecx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
     assert!(arithmetic.contains(&"lea eax, [ecx+ecx*2]".to_owned()), "{arithmetic:?}");
 
     let extends = listing(
