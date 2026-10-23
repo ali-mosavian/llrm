@@ -1327,7 +1327,6 @@ b3:
             "mov ax, word ptr [bp-4]",
             "or ax, 3072",
             "mov word ptr [bp-6], ax",
-            "L0_1:",
             "fld dword ptr $K1",
             "fadd dword ptr $K2",
             "fldcw word ptr [bp-6]",
@@ -1356,7 +1355,7 @@ b3:
   ret i16 %0
 }
 ";
-    assert_eq!(listing(text, "f"), ["L0_0:", "L0_1:", "mov ax, 7", "retf"]);
+    assert_eq!(listing(text, "f"), ["L0_0:", "mov ax, 7", "retf"]);
 }
 
 /// A far null is offset 0, selector 0: runtime.nib's errors.say stored one
