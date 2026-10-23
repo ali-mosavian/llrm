@@ -3,9 +3,10 @@
 //! a `memmove` is refused, as the old selector does. A call of a routine the
 //! runtime lacks does not link: before, the DAG path emitted one regardless.
 
+use llrm_mir::datalayout::DataLayout;
+
 use super::builder::{BuilderTarget, build_block};
 use super::function_lowering::FunctionLoweringInfo;
-use llrm_mir::datalayout::DataLayout;
 
 const BODY: &str = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
     declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
@@ -27,9 +28,18 @@ fn built(
         .unwrap();
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    build_block(&module, function, &layout, target, &llrm_x86_m32::M32, &convention, &mut info, function.entry().unwrap())
-        .map(|built| built.dag.dump())
-        .map_err(|why| why.0)
+    build_block(
+        &module,
+        function,
+        &layout,
+        target,
+        &llrm_x86_m32::M32,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .map(|built| built.dag.dump())
+    .map_err(|why| why.0)
 }
 
 #[test]
