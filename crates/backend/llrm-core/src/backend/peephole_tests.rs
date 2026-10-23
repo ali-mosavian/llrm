@@ -3753,6 +3753,46 @@ fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
     }
 }
 
+/// `lea cx,[eax+edx]; add bx,cx` (a word `lea` of dword address registers, as
+/// the real-mode target makes one) is no two word steps on `eax` and `edx`,
+/// which are no word operands: QCport's `con_draw` ended `add ax, ecx; add ax,
+/// edi`, which no assembler takes, and its object was not made. The pin splits
+/// only the `lea`s whose terms are as wide as the add.
+#[test]
+fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
+    let cx = rl(RegId::CX, 2);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![cx.clone()], vec![Loc::Address(sum(RegId::EAX, RegId::EDX, 1, 0))])),
+        vec![11],
+        vec![20, 21],
+    ));
+    let add = Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), cx])),
+        vec![12],
+        vec![13, 11],
+    ));
+    let cmp = Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 2), im(8, 2)])),
+        vec![],
+        vec![],
+    ));
+    // The return reads only eax: everything else is dead after it, as in
+    // `lea_alu_body_at`.
+    let ret = Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    });
+    let done = lea_alus(rules(), &body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
+    assert_eq!(names(&done.insns())[0], "lea", "{:?}", steps(&done));
+}
+
 /// Where the address register `d` is the index, `d` is added first: `d + (x+d)`
 /// is `(d+d)+x`.
 #[test]

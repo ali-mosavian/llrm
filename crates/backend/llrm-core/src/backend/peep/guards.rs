@@ -662,13 +662,21 @@ pub fn sums_into_cell(
 /// that are not `t`, and not both the destination `d` of the add or subtract
 /// that reads `t` (`optLEAALU`, case 3: `d + (x+y)` as two steps on `d`).
 pub fn splits_into(
-    _cx: &Cx,
+    cx: &Cx,
     one: &Loc,
     t: Reg,
     d: Reg,
 ) -> bool {
     let Some((symbol, base, index, scale, offset)) = lea_cell(one) else { return false };
+    // The pin's `optLEAALU` is of the `LEA32r` and `LEA64r`, whose terms are as
+    // wide as the add that reads them; a word `lea` of dword address
+    // registers (real mode) split into word adds on `ecx` and `edi` was no
+    // instruction.
+    let regs = cx.regs();
+    let wide = |register: RegId| regs.bytes(register) == Some(i64::from(d.width));
     !symbol
+        && wide(base)
+        && wide(index)
         && scale == 1
         && offset == 0
         && base != RegId::None
