@@ -1101,3 +1101,46 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare].sources.iter().all(|l| matches!(l, Loc::Held(h) if h.width == 10)), "{:?}", whats[compare]);
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
+
+const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 ptr addrspace(1) @g()
+declare cc 1005 void @use(ptr addrspace(1))
+define cc 1005 i16 @f(i16 %n) addrspace(1) {
+entry:
+  %p = call cc 1005 ptr addrspace(1) @g()
+  br label %loop
+loop:
+  %q = phi ptr addrspace(1) [ %p, %entry ], [ %q2, %loop ]
+  %i = phi i16 [ 0, %entry ], [ %i2, %loop ]
+  %q2 = getelementptr i8, ptr addrspace(1) %q, i16 4
+  %i2 = add i16 %i, 1
+  call cc 1005 void @use(ptr addrspace(1) %q)
+  %c = icmp ult i16 %i2, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret i16 %i2
+}
+";
+
+/// A phi of a two-register value (a far pointer) has an entry for each part;
+/// both went to the first register, so the second part was read and never
+/// defined and the allocator's liveness failed ("a unique value") in 3 QCport
+/// modules once float compares let those functions through.
+#[test]
+fn every_part_of_a_far_phi_is_defined() {
+    let module = llrm_mir::parse::module(M16_FAR_LOOP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut defined: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for block in done.body.blocks.iter() {
+        defined.extend(block.phis.iter().map(|phi| phi.result));
+        for insn in block.insns.iter() {
+            defined.extend(insn.defines.iter().copied());
+        }
+    }
+    for insn in done.body.insns().iter() {
+        for used in &insn.uses {
+            assert!(defined.contains(used), "value {used} is read and never defined: {:?}", insn.what);
+        }
+    }
+}

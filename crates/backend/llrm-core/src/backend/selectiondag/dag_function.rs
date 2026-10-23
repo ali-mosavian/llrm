@@ -567,26 +567,22 @@ fn selected_in(
         made.insert(parent.0, start..emitted.len());
         exports.push((parent, built.phi_updates));
     }
-    if std::env::var("LLRM_DAG_DUMP").is_ok_and(|n| n == name) {
-        for b in &emitted {
-            eprintln!("DAG block {} phis {:?}", b.at, b.phis.iter().map(|p| (p.result, p.incoming.clone())).collect::<Vec<_>>());
-            for i in &b.insns {
-                eprintln!("DAG   d{:?} u{:?} {:?}", i.defines, i.uses, i.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
-            }
-        }
-    }
     let succ = successors(&emitted);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
     // that leaves for it, the register the predecessor copied its value to.
     for (pred, updates) in &exports {
-        for (phi, reg_in) in updates {
+        for (at_update, (phi, reg_in)) in updates.iter().enumerate() {
             let ValueDef::Instruction(def) = function.value(*phi).def else {
                 return refuse("a phi that is not an instruction");
             };
             let Some(phi_block) = function.parent(def) else { return refuse("a phi outside a block") };
             let at = block_at[&phi_block.0];
-            let Some(reg_out) = info.value_regs.get(phi) else { return refuse("a phi with no register") };
-            let (result, incoming) = (state.vreg(*reg_out), state.vreg(*reg_in));
+            let Some(reg_out) = info.value_regs.get(phi).copied() else { return refuse("a phi with no register") };
+            // A value of two registers (a far pointer, an `i64`) has one entry
+            // for each part, in order: the k-th is the phi's k-th register.
+            let part = updates[..at_update].iter().filter(|(one, _)| one == phi).count();
+            let reg_out = if part == 0 { reg_out } else { info.part_regs(reg_out, part + 1)[part] };
+            let (result, incoming) = (state.vreg(reg_out), state.vreg(*reg_in));
             let edges: Vec<i64> =
                 made[&pred.0].clone().filter(|i| succ[*i].contains(&at)).map(|i| emitted[i].at).collect();
             let target = made[&phi_block.0].start;
@@ -600,6 +596,29 @@ fn selected_in(
                     }
                     None => block.phis.push(Phi { result, incoming: vec![(edge, incoming)] }),
                 }
+            }
+        }
+    }
+    // Every value read is defined somewhere (a phi, an instruction, an
+    // arrival): a LIR that reads one nothing defines stops the allocator's
+    // liveness, so it is a refusal here.
+    let defined: std::collections::HashSet<u32> = emitted
+        .iter()
+        .flat_map(|block| {
+            block
+                .phis
+                .iter()
+                .map(|phi| phi.result)
+                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().copied()))
+        })
+        .collect();
+    for block in &emitted {
+        for insn in &block.insns {
+            if let Some(value) = insn.uses.iter().find(|value| !defined.contains(value)) {
+                return refuse(format!(
+                    "--isel=dag: value {value} is read and never defined ({:?})",
+                    insn.what.as_ref().map(|what| what.name.clone())
+                ));
             }
         }
     }

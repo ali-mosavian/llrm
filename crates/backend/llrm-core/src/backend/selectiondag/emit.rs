@@ -217,6 +217,7 @@ struct Emitter<'a, 'd> {
     flags_now: Option<u32>,
     /// The select a following one may join.
     last_select: Option<Select>,
+
     /// The compares that made flags, to make them again.
     flag_insns: HashMap<u32, Arc<Insn>>,
 }
@@ -481,7 +482,12 @@ impl Emitter<'_, '_> {
         match node.opcode {
             ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
             ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
-            ISD::CopyToReg if self.glue_reaches(n, |name| name == "SAHF") => Ok(()),
+            ISD::CopyToReg
+                if self.dag.node(node.ops[1]).data == NodeData::PhysReg(llrm_lir::registers::RegId::AH)
+                    && self.glue_reaches(n, |name| name == "SAHF") =>
+            {
+                Ok(())
+            }
             ISD::CopyToReg if self.feeds_call(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
