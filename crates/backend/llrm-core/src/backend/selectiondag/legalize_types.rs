@@ -669,7 +669,8 @@ impl<'a> TypeLegalizer<'a> {
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             op @ (ISD::Undef | ISD::Poison) => {
                 // `ExpandIntRes_UNDEF`: an undef (poison) of each half.
-                let make = |dag: &mut SelectionDAG| if op == ISD::Undef { dag.get_undef(half) } else { dag.get_poison(half) };
+                let make =
+                    |dag: &mut SelectionDAG| if op == ISD::Undef { dag.get_undef(half) } else { dag.get_poison(half) };
                 (make(self.dag), make(self.dag))
             }
             ISD::Select => {
