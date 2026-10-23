@@ -157,3 +157,24 @@ fn a_target_code_is_named_or_already_the_pins_number() {
     assert_eq!(pin_opcode(super::x86isd::CALL), pin::CALL, "sdag-a's private code, by name");
     assert_eq!(pin_opcode(ISD::Target(pin::Wrapper)), pin::Wrapper, "sdag-b's lowering writes the pin's number");
 }
+
+/// The adapter numbered the pin's registers like the builder's virtual ones, so
+/// EFLAGS (28) read as the builder's 28th virtual register in the emitter.
+#[test]
+fn the_pins_physical_registers_are_physical_register_nodes() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::x86;
+    use llrm_lir::registers::RegId;
+
+    use super::dag::NodeData;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let eax = adapter.register(x86::EAX, llrm_dagisel::generated::ids::mvt::i32);
+    let noreg = adapter.register(0, llrm_dagisel::generated::ids::mvt::i32);
+    let flags = adapter.register(x86::EFLAGS, llrm_dagisel::generated::ids::mvt::i32);
+
+    let data = |node: llrm_dagisel::dag::SDValue| dag.nodes()[node.node as usize].data;
+    assert!(matches!(data(eax), NodeData::PhysReg(r) if r == RegId::EAX));
+    assert!(matches!(data(noreg), NodeData::Register(0)));
+    assert!(matches!(data(flags), NodeData::PhysReg(r) if r == super::dagisel_adapter::EFLAGS_ID));
+}
