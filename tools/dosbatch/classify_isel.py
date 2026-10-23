@@ -28,6 +28,8 @@ RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"Semantics\(op=<Operation\.CALL.*indirect=True\)"), "lir: a direct call is emitted as an indirect call of an immediate", "sdag-d"),
     (re.compile(r"isel: \S+ names \S+ at width \d+, which is not the width that register is"), "lir verify: a register named at the wrong width", "sdag-d"),
     (re.compile(r"isel: value#\d+ is read but never defined"), "lir verify: a value read and never defined", "sdag-d"),
+    (re.compile(r"isel: value#\d+ is defined \d+ times"), "lir verify: a value defined more than once", "sdag-d"),
+    (re.compile(r"Semantics\(op=<Operation\.ADDRESS"), "lir: an address form the verifier rejects", "sdag-d"),
     (re.compile(r"the greedy allocator could not place every range"), "allocator: could not place every range", "regalloc"),
     (re.compile(r"jwlink: Error! E2028: (\S+) is an undefined reference"), "link: {0} undefined", "sdag-b"),
     (re.compile(r"^line \d+: want '.*', got '.*'$"), "wrong output", "triage"),

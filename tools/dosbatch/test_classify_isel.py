@@ -54,3 +54,12 @@ def test_the_real_mode_failures_have_causes_and_owners():
     assert sum(len(programs) for programs in rows.values()) == 5
     assert ("panic in selectiondag/dag.rs: integer constant of Simple(Far)", "sdag-a") in rows
     assert ("lir: a direct call is emitted as an indirect call of an immediate", "sdag-d") in rows
+
+
+def test_ssa_and_address_verify_failures_have_causes():
+    log = (
+        "FAIL  c/a.c [-O0]: compile: llrm-c: isel: value#44 is defined 2 times in a body that should be in SSA\n"
+        "FAIL  c/b.c [-O0]: compile: llrm-c: _main: Semantics(op=<Operation.ADDRESS: 'addr'>, name='lea', dests=())\n"
+    )
+    rows, unclassified = classify_isel.classify(log)
+    assert unclassified == [] and len(rows) == 2
