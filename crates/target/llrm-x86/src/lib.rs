@@ -3,12 +3,12 @@
 
 #[cfg(test)]
 mod codemetrics_tests;
-pub mod effects;
-#[cfg(test)]
-mod instructioncost_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
 pub mod dag;
+pub mod effects;
+#[cfg(test)]
+mod instructioncost_tests;
 pub mod lowering;
 pub use llrm_instr as parse;
 pub mod select;

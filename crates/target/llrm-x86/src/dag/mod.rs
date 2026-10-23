@@ -1,7 +1,7 @@
-//! The SelectionDAG's type and action tables, below the passes that ask them: the
-//! pin's `MVT`, `ISD`, `TargetLoweringInfo` and the x86 `TargetLowering` action
-//! tables. `llrm-core`'s `selectiondag` re-exports them; `Lowering` reads the same
-//! tables, so there is one copy.
+//! The SelectionDAG's type and action tables, below the passes that ask them:
+//! the pin's `MVT`, `ISD`, `TargetLoweringInfo` and the x86 `TargetLowering`
+//! action tables. `llrm-core`'s `selectiondag` re-exports them; `Lowering`
+//! reads the same tables, so there is one copy.
 //!
 //! # Example
 //! ```
