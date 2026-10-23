@@ -1095,7 +1095,7 @@ fn a_float_to_int_conversion_is_a_truncating_store() {
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fistt"))
+        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fisttp"))
         .expect("a fistt");
     assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
 }

@@ -1351,7 +1351,7 @@ impl Emitter<'_, '_> {
             let Loc::Held(source) = self.operand(node.ops[5])? else {
                 return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
             };
-            self.push(Operation::FloatStore, "fistt", vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
+            self.push(Operation::FloatStore, "fisttp", vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             return Ok(Some(()));
         }
         let Some((prefix, rest)) = name.split_once("_Fp") else { return Ok(None) };
@@ -1397,7 +1397,7 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(node.ops[5])? else {
                     return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
                 };
-                let mnemonic = if prefix == "ST" { "fst" } else { "fist" };
+                let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
             "CHS" | "ABS" | "SQRT" => {
