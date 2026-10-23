@@ -178,3 +178,20 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
     assert!(matches!(data(noreg), NodeData::Register(0)));
     assert!(matches!(data(flags), NodeData::PhysReg(r) if r == super::dagisel_adapter::EFLAGS_ID));
 }
+
+/// The adapter said no store truncates, so a narrow store of a wide value
+/// matched the plain store patterns (and `ST_Fp64m32`'s truncating pattern
+/// never could).
+#[test]
+fn a_store_narrower_than_its_value_is_truncating() {
+    use llrm_dagisel::dag::Dag;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let (value, ptr) = (input(&mut dag, 1), input(&mut dag, 2));
+    let wide = dag.get_store(entry, value, ptr, mem_info());
+    let narrow = dag.get_store(entry, value, ptr, MemInfo { mem_vt: EVT::I8, ..mem_info() });
+    let adapter = DagisAdapter::new(&mut dag);
+
+    assert!(!adapter.is_truncating_store(wide.node));
+    assert!(adapter.is_truncating_store(narrow.node));
+}

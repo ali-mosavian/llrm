@@ -194,6 +194,15 @@ impl<'a> Query<'a> {
         self.callee_function(inst)?.name.as_deref()
     }
 
+    /// The intrinsic of `pattern::IntrinsicId` a call reaches, from the name's
+    /// cached id.
+    pub(crate) fn callee_intrinsic_id(
+        &self,
+        inst: InstId,
+    ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.callee_function(inst)?.name.intrinsic_id()
+    }
+
     /// The function global a call's callee names.
     fn callee_function(
         &self,
