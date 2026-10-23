@@ -139,6 +139,7 @@ pub mod isd {
     pub const SMULO: u16 = 83;
     pub const SMUL_LOHI: u16 = 66;
     pub const SRA: u16 = 199;
+    pub const SRCVALUE: u16 = 341;
     pub const SREM: u16 = 64;
     pub const SRL: u16 = 200;
     pub const SSUBO: u16 = 81;
@@ -189,7 +190,10 @@ pub mod isd {
     pub const USUBO: u16 = 82;
     pub const USUBO_CARRY: u16 = 76;
     pub const USUBSAT: u16 = 88;
+    pub const VACOPY: u16 = 336;
+    pub const VAEND: u16 = 337;
     pub const VALUETYPE: u16 = 8;
+    pub const VASTART: u16 = 338;
     pub const VECTOR_COMPRESS: u16 = 178;
     pub const VSELECT: u16 = 220;
     pub const XOR: u16 = 195;
@@ -387,6 +391,7 @@ pub mod x86isd {
     pub const LCMPXCHG_DAG: u16 = 661;
     pub const LDS: u16 = 24577;
     pub const LES: u16 = 24576;
+    pub const LLRM_ASM: u16 = 24578;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -1014,6 +1019,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LCMPXCHG_DAG" => 661,
         "LDS" => 24577,
         "LES" => 24576,
+        "LLRM_ASM" => 24578,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,

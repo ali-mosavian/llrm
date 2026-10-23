@@ -95,3 +95,21 @@ fn abs_with_cmov_is_a_cmov_on_the_flags_of_zero_minus_x() {
     assert_eq!(dag.opcode(neg), x86isd::SUB);
     assert_eq!(dag.operand(root, 3), SDValue { node: neg.node, res: 1 });
 }
+
+/// Without CMOV (the i486 default) `Abs` is expanded: it was an "expand node"
+/// refusal.
+#[test]
+fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let x = load(&mut dag, EVT::I32);
+    let abs = dag.get_node(ISD::Abs, EVT::I32, &[x]);
+    dag.set_root(abs);
+    let tli = TargetLowering::x86_32(Features { cmov: false, ..Features::default() }, MVT::I32);
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false }).run().expect("legalizes");
+
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Sub);
+    let (flipped, sign) = (dag.operand(root, 0), dag.operand(root, 1));
+    assert_eq!((dag.opcode(sign), dag.constant(dag.operand(sign, 1))), (ISD::Sra, Some(31)));
+    assert_eq!((dag.opcode(flipped), dag.operand(flipped, 1)), (ISD::Xor, sign));
+}

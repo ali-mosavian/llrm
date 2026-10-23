@@ -51,6 +51,7 @@ use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
+use super::x86_preprocess::FrameObjects;
 use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Mem, Space};
 use crate::model::lir::{Block, LirBlock, LirBody, Phi};
@@ -80,8 +81,21 @@ impl SchedInfo for Info {
     }
 }
 
-/// Fixed object `-k` is the k-th stack-passed parameter.
-struct Frame(Vec<i64>);
+/// The frame's objects: fixed object `-k` is the k-th stack-passed
+/// parameter; a stack temporary or alloca `k >= 0` is a cell below BP, laid
+/// out as the old selector lays them (`depth` grows, a slot is at `-depth`).
+pub(super) struct Frame {
+    params: Vec<i64>,
+    /// (displacement, size) of each object made, by index.
+    locals: std::cell::RefCell<Vec<(i64, i64)>>,
+    depth: std::cell::Cell<i64>,
+}
+
+impl Frame {
+    pub(super) fn new(params: Vec<i64>) -> Frame {
+        Frame { params, locals: Default::default(), depth: Default::default() }
+    }
+}
 
 impl FrameMap for Frame {
     fn cell(
@@ -89,12 +103,34 @@ impl FrameMap for Frame {
         index: i32,
         width: u32,
     ) -> Option<Mem> {
-        let disp = *self.0.get(usize::try_from(-index - 1).ok()?)?;
+        let disp = if index < 0 {
+            *self.params.get(usize::try_from(-index - 1).ok()?)?
+        } else {
+            self.locals.borrow().get(usize::try_from(index).ok()?)?.0
+        };
         Some(Mem {
             through: llrm_lir::registers::RegId::BP,
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, disp)), width)
         })
+    }
+}
+
+/// `CreateStackTemporary`: the preprocess makes its slots here.
+pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
+
+impl FrameObjects for Temporaries<'_> {
+    fn create_stack_temporary(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32 {
+        let (size, align) = (i64::from(size), i64::from(align.max(1)));
+        let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
+        self.0.depth.set(depth);
+        let mut locals = self.0.locals.borrow_mut();
+        locals.push((-depth, size));
+        (locals.len() - 1) as i32
     }
 }
 
@@ -186,7 +222,7 @@ pub fn selected(
     let mut info = FunctionLoweringInfo::new(function);
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let tables = tables(arch);
-    let frame = Frame(
+    let frame = Frame::new(
         convention
             .parameters
             .iter()
@@ -236,6 +272,8 @@ pub fn selected(
             &ctx,
             &mut state,
             block_at[&block.0],
+            arch,
+            &mut Temporaries(&frame),
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
         let from = emitted.len();
@@ -300,8 +338,8 @@ pub fn selected(
         inline_symbols: IndexMap::default(),
         far: Default::default(),
         pops: IndexMap::default(),
-        depth: 0,
-        extents: Vec::new(),
+        depth: frame.depth.get(),
+        extents: frame.locals.borrow().clone(),
         landing: None,
     })
 }

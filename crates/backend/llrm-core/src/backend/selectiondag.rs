@@ -145,6 +145,10 @@ mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
+mod switchbpi_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_ext;
+#[cfg(test)]
+mod vararg_tests;

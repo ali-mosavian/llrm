@@ -31,6 +31,18 @@ impl super::emit::GlobalMap for NoGlobals {
     }
 }
 
+struct NoTemps;
+
+impl super::x86_preprocess::FrameObjects for NoTemps {
+    fn create_stack_temporary(
+        &mut self,
+        _size: u32,
+        _align: u32,
+    ) -> i32 {
+        panic!("this test makes no stack temporary")
+    }
+}
+
 struct Info;
 
 impl SchedInfo for Info {
@@ -121,6 +133,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &ctx,
             &mut super::emit::EmitState::default(),
             0,
+            &machine,
+            &mut NoTemps,
         )
         .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
         for b in emitted.blocks {
@@ -169,7 +183,7 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }).expect("legalizes");
+    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &machine).expect("legalizes");
     let root = built.dag.get_root();
     let mut seen = std::collections::HashSet::new();
     let mut work = vec![root.node];
@@ -180,4 +194,17 @@ fn the_combiner_runs_between_the_legalizers() {
             work.extend(node.ops.iter().map(|op| op.node));
         }
     }
+}
+
+/// The lowering makes the `Wrapper` of a global after the load that reads it,
+/// so reverse creation order selected the wrapper first (`mov r, $g`) and the
+/// load read through `r`: `mov eax, offset g; mov eax, [eax]` for `return g`.
+#[test]
+fn a_load_of_a_global_is_one_instruction_on_the_symbol() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n@g = global i32 5\ndefine i32 @f() {\nentry:\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    let names: Vec<&str> =
+        blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
+    assert_eq!(names, ["mov", "mov", "ret"], "the load, the copy to EAX, the return: {blocks:#?}");
+    assert!(blocks[0][0].contains("addr: Some"), "the load reads the symbol's cell: {blocks:#?}");
 }

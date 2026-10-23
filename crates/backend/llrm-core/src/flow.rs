@@ -76,6 +76,7 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineLICM",
     "FixupBW",
     "CmpAsSub",
+    "CallFrameOpt",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -94,6 +95,8 @@ const SLOTS: &[(&str, &str)] = &[
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
     ("FixupSetCC", "fixupsetcc@5"),
+    ("CallFrameOpt", "callframe@5"),
+    ("CallFrameOpt", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
@@ -183,6 +186,15 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // Stores into a reserved call frame become pushes (the pin:
+        // X86CallFrameOptimization, optimizing levels).
+        Box::new(crate::backend::callframe::CallFrameOpt {
+            slot: registers.slot,
+            align: registers.align,
+            stack: registers.stack,
+            has_var_sized: false,
+            slow_two_mem_ops: false,
+        }),
         // Flags kept across an instruction that clobbers them become a byte
         // per condition (the pin: X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
