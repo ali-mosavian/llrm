@@ -69,6 +69,9 @@ pub mod x86isd {
     /// the type legalizer, never selected (24578..24580 are the asm
     /// pass-through nodes).
     pub const LLRM_WINDOW: ISD = ISD::Target(24581);
+    /// `llrm.ia16.ptrdiff`: the bytes between two carried huge pointers,
+    /// `(far, far) -> i32`. Expanded by the type legalizer, never selected.
+    pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);
