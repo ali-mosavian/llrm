@@ -124,6 +124,40 @@ Same 737 files: old lexer + token vector + lalrpop 73.6 ms (10.7 MB/s); streamed
 49.8 ms (15.8 MB/s). The parser itself is 36.9 ms of that, so lexing is now about
 a quarter of the time and lalrpop's tables the rest.
 
+## A recursive-descent parser, for comparison
+
+`src/qb_rd.rs` is the same grammar by hand: about 1,400 lines over a pre-lexed
+`Vec<Tok>` (`qb_lexer::prelex`, the logos DFA lexer, kinds and spans), one function
+per rule, precedence levels as a ladder with the grammar's `P` threaded to the
+leftmost primary (`First::{Full, NoParen, Joined, NoErr}`), and the keyword sets
+generated from `qb.lalrpop` by `gen_classes.py`. It builds the same `Tree`.
+Where the LR automaton decides with a token after a shared prefix, it reads the
+prefix and looks: `foo (a) * b, c` injects the parsed name as the next primary;
+`GET (x,y)-(x,y), a` against `GET (n), x` tries the coordinate pair and backs up.
+
+`tests/qb_rd.rs` and `rdcheck`: the same verdict and an equal tree on every tracked
+program in three dialects (1,920 parses), on the 487 test-source programs and on
+mgl. `rdfuzz` deletes, doubles and swaps one token of each short line (76,542
+variants): one disagreement, a statement that begins with a sign, `+ a - b, c(d)`,
+which lalrpop takes because `Neg<NameRefApplied>` lets `AddOp Neg<Primary>` in. That
+is a leak in the LR grammar, not in the recursive-descent parser.
+
+Release build, 737 files, 766 KB:
+
+| | time | MB/s |
+|---|---|---|
+| old lexer + token vector + lalrpop | 76.6 ms | 10 |
+| logos streamed into lalrpop | 48.1 ms | 16 |
+| pre-lex to `Vec<Tok>` (logos) | 10.1 ms | 77 |
+| lalrpop on `Vec<Tok>` | 30.0 ms | 26 |
+| recursive descent on `Vec<Tok>` | 11.8 ms | 67 |
+| pre-lex + recursive descent | 28.5 ms | 27 |
+
+The recursive-descent parser is 2.5x faster than lalrpop on the same tokens, and the
+whole pipeline 1.7x faster than the streamed one. Both build the same tree, so
+the allocation of `Node` vectors is in both; the difference is the driver, the
+tables and the reduce actions.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

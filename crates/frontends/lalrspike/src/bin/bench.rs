@@ -59,7 +59,18 @@ fn qb(paths: &[String]) {
             lalrspike::parse_qb_stream(s, dialect, &mut spans).is_ok()
         }).count()
     });
+    let kinds: Vec<_> = both.iter().map(|s| lalrspike::qb_lexer::prelex(s, dialect).unwrap().unwrap().0).collect();
+    let prelex = time(ROUNDS, || both.iter().map(|s| lalrspike::qb_lexer::prelex(s, dialect).unwrap().unwrap().0.len()).sum::<usize>());
+    let lalr_kinds = time(ROUNDS, || kinds.iter().filter(|k| lalrspike::parse_qb_kinds(k).is_ok()).count());
+    let rd_kinds = time(ROUNDS, || kinds.iter().filter(|k| lalrspike::qb_rd::parse(k).is_ok()).count());
+    let rd_all = time(ROUNDS, || {
+        both.iter().filter(|s| lalrspike::qb_rd::parse(&lalrspike::qb_lexer::prelex(s, dialect).unwrap().unwrap().0).is_ok()).count()
+    });
     report("QB", both.len(), bytes, &[
+        ("pre-lex to Vec<Tok>", prelex),
+        ("lalrpop on Vec<Tok>", lalr_kinds),
+        ("recursive descent on Vec<Tok>", rd_kinds),
+        ("pre-lex + recursive descent", rd_all),
         ("old lexer + lalrpop", vector),
         ("logos streamed + lalrpop", streamed),("lexer", lex), ("logos lexer", logos), ("table-driven lex+parse+AST", old), ("lalrpop parser (no lex)", lalr)]);
 }
