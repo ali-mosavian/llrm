@@ -49,6 +49,12 @@ use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::Loc;
 use crate::support::hash::{HashMap, HashSet};
 
+/// Whether `one` does nothing but define its values: a copy or a definition
+/// the spiller could make again (`isTriviallyReMaterializable`).
+fn effect_free(one: &crate::model::lir::Insn) -> bool {
+    one.copy_of().is_some() || crate::greedy::inlinespiller::remat_shape(one)
+}
+
 /// `RegisterCoalescer::eliminateDeadDefs` (`LiveRangeEdit::eliminateDeadDefs`
 /// over `DeadDefs`): the instructions of `dead` whose values nothing reads go,
 /// the registers they read are cut back, and what that leaves dead goes in
@@ -59,8 +65,13 @@ fn eliminate_dead_defs(
     mut dead: Vec<InstrKey>,
 ) {
     while !dead.is_empty() {
-        let round: Vec<InstrKey> =
-            std::mem::take(&mut dead).into_iter().filter(|&key| lis.all_defs_are_dead(key)).collect();
+        // Only what has no effect of its own goes: a call that delivers a
+        // value nothing reads still calls (`LiveRangeEdit::isDead` is
+        // `wouldBeTriviallyDead`).
+        let round: Vec<InstrKey> = std::mem::take(&mut dead)
+            .into_iter()
+            .filter(|&key| effect_free(lis.instr(key)) && lis.all_defs_are_dead(key))
+            .collect();
         state.erased.extend(round.iter().copied());
         dead = lis.erase_dead_defs(&round);
     }
