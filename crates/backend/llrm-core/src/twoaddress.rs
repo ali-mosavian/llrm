@@ -17,12 +17,11 @@
 //! instruction (`isPlainlyKilled`); looking through the copies that define it
 //! gives `isKilled`.
 //!
-//! DEVIATE TA-1 (exit: `processCopy`/`scanUses` translated, piece 4 of
-//! docs/working/twoaddress-translation-plan.md): `SrcRegMap` and `DstRegMap`
-//! are not built by walking copies from and to physical registers. LIR says
-//! which register a value arrives in (`delivers`) and must end in (`requires`)
-//! on the instruction; `backend::twoaddr::Fixed` reads them, and a value read
-//! once by a sum that ends in a register ends in it too.
+//! `SrcRegMap` and `DstRegMap` are made as the walk passes the copies from and
+//! to registers (`processCopy`, `scanUses`, `removeClobberedSrcRegMap`). LIR
+//! says which register a value arrives in (`delivers`) and must end in
+//! (`requires`) on the instruction, where the pin has a COPY beside it (DEVIATE
+//! TA-1: the copies are those fields, at the instruction carrying them).
 //!
 //! `hasCommutePreference` (X86InstrInfo.cpp#L3152): an `add` fed by an LEA that
 //! this pass made takes the LEA's result as its second source, so X86FixupLEAs
@@ -78,7 +77,6 @@
 
 use std::sync::Arc;
 
-use crate::backend::twoaddr::Fixed;
 use crate::model::ir::{self, Loc, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::HashMap;
@@ -405,15 +403,31 @@ pub fn flags_dead_after(
     false
 }
 
-/// The state of one block's walk: the intervals, the registers values are
-/// fixed to and the instructions passed so far.
+/// What `SrcRegMap` and `DstRegMap` map a value to: another value, or a
+/// register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mapped {
+    Value(u32),
+    Register(llrm_lir::registers::RegId),
+}
+
+/// The state of one block's walk: the intervals, the maps of values to the
+/// registers they may end up in (`SrcRegMap`, `DstRegMap`, made as the walk
+/// passes the copies, `processCopy`) and the instructions passed so far.
 pub struct Commuter<'a> {
     facts: &'a BodyFacts,
-    fixed: &'a Fixed,
     block: usize,
     /// `DistanceMap`: the position of each instruction passed in this block.
     distance: HashMap<InstrKey, u32>,
     dist: u32,
+    /// `SrcRegMap`: a value to the register it arrives in, or the value it is
+    /// tied to a use of.
+    src: HashMap<u32, Mapped>,
+    /// `DstRegMap`: a value to the register it ends in, or the value it dies
+    /// into.
+    dst: HashMap<u32, Mapped>,
+    /// `Processed`: the instructions whose copies are in the maps.
+    processed: std::collections::HashSet<InstrKey>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: std::collections::HashSet<u32>,
@@ -423,10 +437,181 @@ impl<'a> Commuter<'a> {
     /// The walk of `block`, at its first instruction.
     pub fn new(
         facts: &'a BodyFacts,
-        fixed: &'a Fixed,
         block: usize,
     ) -> Self {
-        Self { facts, fixed, block, distance: HashMap::default(), dist: 0, leas: Default::default() }
+        Self {
+            facts,
+            block,
+            distance: HashMap::default(),
+            dist: 0,
+            src: HashMap::default(),
+            dst: HashMap::default(),
+            processed: Default::default(),
+            leas: Default::default(),
+        }
+    }
+
+    /// `getMappedReg`: the register `value` may be mapped to, following the
+    /// values.
+    fn mapped(
+        map: &HashMap<u32, Mapped>,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        let mut at = Mapped::Value(value);
+        // A cycle of values maps to no register.
+        for _ in 0..=map.len() {
+            match at {
+                Mapped::Register(register) => return Some(register),
+                Mapped::Value(value) => at = *map.get(&value)?,
+            }
+        }
+        None
+    }
+
+    /// `getMappedReg(value, SrcRegMap)`: the register `value` arrives in.
+    pub fn src_register(
+        &self,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        Self::mapped(&self.src, value)
+    }
+
+    /// `getMappedReg(value, DstRegMap)`: the register `value` ends in.
+    pub fn dst_register(
+        &self,
+        value: u32,
+    ) -> Option<llrm_lir::registers::RegId> {
+        Self::mapped(&self.dst, value)
+    }
+
+    /// `processCopy`: the copies of `one` from and to a register (`delivers`
+    /// and `requires`), once.
+    pub fn process_copy(
+        &mut self,
+        one: &Insn,
+    ) {
+        if !self.processed.insert(one.id()) {
+            return;
+        }
+        // The copy to a register, before the instruction.
+        for (held, register) in &one.requires {
+            self.dst.entry(held.value).or_insert(Mapped::Register(*register));
+        }
+        // The copy from a register, after it: the value's uses are followed.
+        for (held, register) in &one.delivers {
+            self.src.entry(held.value).or_insert(Mapped::Register(*register));
+            self.scan_uses(held.value);
+        }
+    }
+
+    /// `findOnlyInterestingUse`: where all of `reg`'s uses are in this block,
+    /// the one that kills it when it is a copy to a register or another
+    /// value, or a tied use: that instruction, whether it is a copy, and
+    /// where `reg` goes.
+    fn find_only_interesting_use(
+        &self,
+        reg: u32,
+    ) -> Option<(Arc<Insn>, bool, Mapped)> {
+        let mut killing = None;
+        for (key, is_def) in self.facts.refs(reg) {
+            if is_def {
+                continue;
+            }
+            if self.facts.block_of(key) != Some(self.block) {
+                return None;
+            }
+            if self.facts.killed(key, reg) {
+                killing = Some(key);
+            }
+        }
+        let one = self.facts.insn(killing?);
+        // A copy to a register (the requirement that `reg` is in it).
+        if let Some(register) = one.requires.iter().find(|(held, _)| held.value == reg).map(|(_, register)| *register) {
+            return Some((one, true, Mapped::Register(register)));
+        }
+        // A copy to another value.
+        if let Some((dst, src)) = crate::coalescer::pair::full_copy(&one)
+            && src.value == reg
+        {
+            return Some((one, true, Mapped::Value(dst.value)));
+        }
+        // A tied use: the result is the first source's register.
+        if let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))
+            && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
+            && first.value == reg
+        {
+            let into = into.value;
+            return Some((one, false, Mapped::Value(into)));
+        }
+        // The other operand of a commutative instruction is the tied one.
+        if let Some((into, first, second)) = crate::backend::twoaddr::swappable_held(&one)
+            && second.value == reg
+            && first.value != reg
+        {
+            let into = into.value;
+            return Some((one, false, Mapped::Value(into)));
+        }
+        None
+    }
+
+    /// `scanUses`: the chain of copies and tied uses `dst_reg` goes through,
+    /// into `SrcRegMap` (each to the value before it) and `DstRegMap` (each
+    /// to where the chain ends).
+    fn scan_uses(
+        &mut self,
+        dst_reg: u32,
+    ) {
+        let mut pairs: Vec<Mapped> = Vec::new();
+        let mut reg = dst_reg;
+        while let Some((one, is_copy, next)) = self.find_only_interesting_use(reg) {
+            if is_copy && !self.processed.insert(one.id()) {
+                break;
+            }
+            // Earlier in this block, reached by a back edge.
+            if self.distance.contains_key(&one.id()) {
+                break;
+            }
+            let Mapped::Value(next_value) = next else {
+                pairs.push(next);
+                break;
+            };
+            self.src.insert(next_value, Mapped::Value(reg));
+            pairs.push(next);
+            reg = next_value;
+        }
+        let Some(mut to) = pairs.pop() else { return };
+        while let Some(from) = pairs.pop() {
+            let Mapped::Value(from_value) = from else { break };
+            self.dst.entry(from_value).or_insert(to);
+            to = from;
+        }
+        self.dst.entry(dst_reg).or_insert(to);
+    }
+
+    /// `removeClobberedSrcRegMap`: after `one`, a register it writes no longer
+    /// holds what the entries mapped to it arrived as.
+    pub fn remove_clobbered_src_reg_map(
+        &mut self,
+        one: &Insn,
+    ) {
+        // A copy from a register into a value writes no register (the pin
+        // returns early for it); one to a register writes it, unless
+        // the value was mapped to it already (`%100 = COPY $r8 ... $r8
+        // = COPY %100` keeps the entry).
+        let mut written: Vec<llrm_lir::registers::RegId> =
+            one.clobbers.iter().chain(&one.clobbers_high).copied().collect();
+        for (held, register) in &one.requires {
+            if !self.src_register(held.value).is_some_and(|mapped| Self::compatible(*register, mapped)) {
+                written.push(*register);
+            }
+        }
+        if written.is_empty() {
+            return;
+        }
+        self.src.retain(|_, to| match to {
+            Mapped::Register(register) => !written.iter().any(|clobbered| Self::compatible(*clobbered, *register)),
+            Mapped::Value(_) => true,
+        });
     }
 
     /// `DistanceMap.insert(MI, ++Dist)`: the instruction is passed; its
@@ -623,9 +808,9 @@ impl<'a> Commuter<'a> {
             (true, false) => return true,
             _ => {}
         }
-        if let Some(&to_a) = self.fixed.to.get(&a) {
-            let from_b = self.fixed.from.get(&b).copied();
-            let from_c = self.fixed.from.get(&c).copied();
+        if let Some(to_a) = self.dst_register(a) {
+            let from_b = self.src_register(b);
+            let from_c = self.src_register(c);
             let comp_b = from_b.is_some_and(|register| Self::compatible(register, to_a));
             let comp_c = from_c.is_some_and(|register| Self::compatible(register, to_a));
             // B is not tied to a register and C agrees with A, or B is tied to
