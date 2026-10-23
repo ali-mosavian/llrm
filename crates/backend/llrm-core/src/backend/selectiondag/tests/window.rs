@@ -52,3 +52,50 @@ fn a_window_moves_whole_paragraphs_of_the_offset_into_the_selector() {
         assert_eq!(got_sel * 16 + got_off, sel * 16 + off, "the address is kept");
     }
 }
+
+/// `llrm.ia16.ptrdiff`: the byte distance of two carried huge pointers into
+/// one object: selectors differ by whole 64K strides (0x1000 steps), offsets
+/// by the rest, as a dword. Checked against the linear address difference.
+#[test]
+fn a_pointer_difference_is_the_byte_distance() {
+    use std::collections::HashMap;
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let regs: Vec<SDValue> = (7..11).map(|r| dag.get_register(EVT::I16, r)).collect();
+    let a = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[regs[0], regs[1]]);
+    let b = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[regs[2], regs[3]]);
+    let diff = dag.get_node(x86isd::LLRM_PTRDIFF, EVT::I32, &[a, b]);
+    dag.set_root(diff);
+    TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m16::M16).run().unwrap();
+    let root = dag.get_root();
+    fn value(
+        dag: &SelectionDAG,
+        v: SDValue,
+        regs: &HashMap<u32, u128>,
+    ) -> u128 {
+        let arg = |i: usize| value(dag, dag.operand(v, i), regs);
+        let r = match dag.opcode(v) {
+            ISD::Register => match dag.node(v).data {
+                NodeData::Register(r) => regs[&r],
+                other => panic!("{other:?}"),
+            },
+            ISD::Constant => dag.constant(v).unwrap(),
+            ISD::ZeroExtend => arg(0),
+            ISD::Sub => arg(0).wrapping_sub(arg(1)),
+            ISD::Add => arg(0).wrapping_add(arg(1)),
+            ISD::Shl => arg(0) << arg(1),
+            ISD::Sra => ((arg(0) as u32 as i32) >> arg(1)) as u32 as u128,
+            other => panic!("unexpected {other:?}"),
+        };
+        r & 0xFFFF_FFFF
+    }
+    // Carried pointers into one object (what `HUGE_ADD` makes): the offset
+    // wraps at 64K and the selector steps 0x1000 for each wrap.
+    let (base_sel, base_off) = (0x1000u128, 0x0008u128);
+    for distance in [0u128, 1, 15, 16, 0xFFF8, 0xFFFF, 0x1_0000, 0x2_0010, 0x10_0000] {
+        let sum = base_off + distance;
+        let (off, sel) = (sum & 0xFFFF, base_sel + (sum >> 16) * 0x1000);
+        let regs = HashMap::from([(7, off), (8, sel), (9, base_off), (10, base_sel)]);
+        assert_eq!(value(&dag, root, &regs), distance, "distance {distance:#x}");
+    }
+}

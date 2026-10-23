@@ -10,10 +10,6 @@ TOOLS = Path(__file__).resolve().parent
 # Tools that time or count the compiler's own work, not a verdict on whether it compiled. They leave out the encoder's cost too; moving them
 # to an object moves their baselines, so each is listed with its owner's reason rather than silently.
 MEASURING = {
-    "compile-cost.py": "compile time per file",
-    "pipeline-runs.py": "pass runs per file",
-    "pass-profile.py": "pass time per file",
-    "scoreboard.py": "instructions retired against gcc",
     "abmeasure.py": "perf and callgrind of one compile",
     "leaf_sites.py": "callgrind note",
     "test_alloc_scaling.py": "allocator time against size",

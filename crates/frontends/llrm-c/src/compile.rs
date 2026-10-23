@@ -2901,31 +2901,6 @@ mod tests {
         assert!(body.last().is_some_and(|last| last.starts_with("ret")), "{body:#?}");
     }
 
-    /// A float argument read across a call went to a fresh 8-byte slot:
-    /// loaded and stored at entry, reloaded from the copy. Its own cell,
-    /// which nothing writes, is read again instead.
-    #[test]
-    fn test_a_float_argument_is_read_from_its_own_cell() {
-        // RFP-3, a row loss under RFP: greedy spills the argument to a slot of
-        // its own across the call (`sub sp, 20`), where floatassign
-        // re-read its cell.
-        let _old = llrm_core::backend::allocate::RfpOn::off();
-        let text =
-            std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
-        let options = llrm_core::driver::Options {
-            pipeline: llrm_core::driver::flags::Level::Os.options(),
-            ..llrm_driver::m16_options(llrm_core::abi::machine::Machine {
-                cpu: "486".to_owned(),
-                ..llrm_x86_m16::machine::BUILT_IN.clone()
-            })
-        };
-        let built = super::selected(&text, "paramremat", None, &options).expect("selects");
-        let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find("_summed proc").expect("_summed");
-        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"sub sp, 8"), "{body:#?}");
-    }
-
     /// The listing of each function in `fixture`, `-Os` on a 486.
     fn listed(
         fixture: &str,

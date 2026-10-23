@@ -3,6 +3,7 @@
 The one resolver every Python tool and test uses; a tree built elsewhere (the gate's) has no ./target.
 """
 import atexit
+import contextlib
 import hashlib
 import os
 import shutil
@@ -151,3 +152,20 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
+
+
+OBJECT = "<object>"
+OBJECT_BYTES = 100
+
+
+@contextlib.contextmanager
+def with_object(command: list[str]):
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
+    OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
+    if OBJECT not in command:
+        yield command
+        return
+    with tempfile.TemporaryDirectory(prefix="llrm-obj-", dir="/tmp") as directory:
+        path = Path(directory) / ("o" * (OBJECT_BYTES - len(directory) - len("/.obj")) + ".obj")
+        yield [str(path) if one == OBJECT else one for one in command]

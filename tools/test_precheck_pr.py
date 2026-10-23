@@ -206,3 +206,15 @@ def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypa
     named = pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: set())
     assert named == ["scanner fails here and passes on origin/feat/parity: integration docs_links::test_every_markdown_link_resolves"]
     assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []
+
+
+def test_a_pr_touching_llrm_c_is_checked_and_tested_with_the_toolchain_feature():
+    """llrm-c's lib tests are a compile_error without `--features toolchain`: the precheck's cargo check and lib run failed ("did-not-run") for any PR touching llrm-c, for a reason that was not the PR's."""
+
+    def cargo(command, **kwargs):
+        has = any("toolchain" in part for part in command)
+        refused = SimpleNamespace(returncode=101, stdout="", stderr="error: llrm-c's lib tests need --features toolchain\n")
+        return SimpleNamespace(returncode=0, stdout="test result: ok. 1 passed\n", stderr="") if has else refused
+
+    assert pc.warning_failures(Path("."), ["llrm-c"], cargo, {}) == []
+    assert pc._failing(Path("."), "llrm-c", None, cargo) == set()

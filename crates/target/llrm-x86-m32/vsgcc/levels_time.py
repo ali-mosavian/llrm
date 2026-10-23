@@ -33,7 +33,7 @@ UNRANDOMIZED = ["setarch", "-R"]
 
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
-        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
+        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", llrmbin.OBJECT, str(source)]
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 
@@ -62,7 +62,7 @@ def counted(cmd: list[str], env: dict | None = None, preexec=None, timeout: floa
     import resource
 
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
-    with tempfile.NamedTemporaryFile("r") as out:
+    with tempfile.NamedTemporaryFile("r") as out, llrmbin.with_object(cmd) as cmd:
         if backend() == "perf":
             wrapped = ["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, "--"]
         else:  # the tool's own messages go to a file, so the command's stderr is its own

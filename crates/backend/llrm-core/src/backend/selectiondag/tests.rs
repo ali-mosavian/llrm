@@ -36,6 +36,7 @@ mod legalize_types;
 mod logic_setcc;
 mod m16_coverage;
 mod mem_space;
+mod min_max;
 mod pair_arith;
 mod pair_mul;
 mod select_i1;
