@@ -432,8 +432,8 @@ fn block_simplified(
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
-    let predecessors = function.predecessors(block);
-    if (predecessors.is_empty() && function.entry() != Some(block)) || predecessors[..] == [block] {
+    let reach = reached_from(function, block);
+    if (reach == Reach::Nothing && function.entry() != Some(block)) || reach == Reach::Itself {
         dead_blocks_deleted(context, function, &[block]);
         return true;
     }
@@ -525,6 +525,41 @@ fn branch_hoisted(
         && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
+/// What `predecessors(block)` is, to the one question asked of it at the head
+/// of a visit: no block names it, only itself does, or another does.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Reach {
+    Nothing,
+    Itself,
+    Other,
+}
+
+/// `predecessors(block)` as a `Reach`, without the list: the visit of every
+/// block began by building it (9,955 builds, 1.7 M Ir in d_faces -O2).
+fn reached_from(
+    function: &Function,
+    block: BlockId,
+) -> Reach {
+    let mut found = None;
+    for one in function.block_users(block) {
+        let user = one.user;
+        if !function.instruction(user).opcode.is_terminator() {
+            continue;
+        }
+        let Some(parent) = function.parent(user) else { continue };
+        match found {
+            None => found = Some(parent),
+            Some(earlier) if earlier == parent => {}
+            Some(_) => return Reach::Other,
+        }
+    }
+    match found {
+        None => Reach::Nothing,
+        Some(parent) if parent == block => Reach::Itself,
+        Some(_) => Reach::Other,
+    }
+}
+
 /// The block `block`'s predecessors all have as their only predecessor:
 /// `allPredecessorsComeFromSameSource`.
 fn all_predecessors_come_from_same_source(
@@ -533,11 +568,11 @@ fn all_predecessors_come_from_same_source(
 ) -> Option<BlockId> {
     let mut source = None;
     for &pred in function.predecessors(block).iter() {
-        let preds = function.predecessors(pred);
-        if preds.len() != 1 || source.is_some_and(|one| one != preds[0]) {
+        let only = function.sole_predecessor(pred)?;
+        if source.is_some_and(|one| one != only) {
             return None;
         }
-        source = Some(preds[0]);
+        source = Some(only);
     }
     source
 }

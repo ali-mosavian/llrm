@@ -249,7 +249,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .iter()
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "LLRM_FARCALL")])
+                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR")])
                     .collect(),
             })
         })

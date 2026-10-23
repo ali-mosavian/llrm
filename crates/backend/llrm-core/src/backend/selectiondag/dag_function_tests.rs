@@ -1637,3 +1637,25 @@ entry:
     assert_eq!(flags(""), [false], "the premise: one load of the cell, not invariant");
     assert_eq!(flags(", !invariant.load !0"), [true]);
 }
+
+const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+define void @f(ptr addrspace(1) %p) {
+entry:
+  call watcallcc addrspace(1) void %p(i32 7)
+  ret void
+}
+";
+
+/// The argument of a call through a far pointer reaches the call in its
+/// register: `CALL_FAR` was not a call to the emitter, so the copy to `eax`
+/// was dropped and `table[i](7 + i)` ran with garbage (function_table -O2:
+/// want 7, got 478).
+#[test]
+fn a_call_through_a_far_pointer_receives_its_arguments() {
+    let module = llrm_mir::parse::module(FAR_INDIRECT_ARGUMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call));
+    assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
+}

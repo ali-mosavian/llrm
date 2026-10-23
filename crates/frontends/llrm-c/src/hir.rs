@@ -455,17 +455,17 @@ pub(crate) fn hex(text: &str) -> i64 {
 }
 
 fn field<'a>(
-    one: &'a Record,
+    one: &'a Record<'_>,
     key: &str,
 ) -> &'a str {
-    one.fields.get(key).unwrap_or_else(|| panic!("KeyError: {key:?}"))
+    one.field(key).unwrap_or_else(|| panic!("KeyError: {key:?}"))
 }
 
-fn arg(
-    one: &Record,
+fn arg<'a>(
+    one: &'a Record<'_>,
     index: usize,
-) -> &str {
-    one.args.get(index).unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
+) -> &'a str {
+    one.args.get(index).map(AsRef::as_ref).unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
 }
 
 /// The current `proc`; Python raises `AttributeError` on `None`.
@@ -473,7 +473,7 @@ fn open(proc: Option<usize>) -> usize {
     proc.expect("AttributeError: 'NoneType' object has no attribute")
 }
 
-pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
+pub fn unit(records: &[Record<'_>]) -> Result<Unit, Unsupported> {
     let mut made = Unit::default();
     let mut proc: Option<usize> = None;
     let mut segment: Option<i64> = None;
@@ -483,26 +483,27 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
     let mut main_file: Option<String> = None;
     for one in records {
         let args = &one.args;
-        match one.call.as_str() {
+        let owned = || -> Vec<String> { args.iter().map(|one| one.to_string()).collect() };
+        match one.call {
             "UNSUPPORTED" => {
                 return Err(Unsupported(format!("stream line {}: the shim refused {}", one.line, args.join(" "))));
             }
             "INIT" => {
                 made.target = hex(field(one, "target"));
                 made.switches = hex(field(one, "sw"));
-                made.flat = one.fields.get("flat").is_some_and(|one| one == "1");
+                made.flat = one.field("flat") == Some("1");
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());
                 }
             }
             "DBScalar" | "DBArray" | "DBPtr" | "DBStruct" | "DBEnum" | "DBProc" | "DBName" => {
-                let result = handle(one.result.as_deref().expect("a debug type's handle"));
+                let result = handle(one.result.expect("a debug type's handle"));
                 let debug = made
                     .debug
                     .as_mut()
                     .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
-                let described = match one.call.as_str() {
+                let described = match one.call {
                     "DBScalar" => DebugType::Scalar { name: arg(one, 0).to_owned(), cg: arg(one, 1).to_owned() },
                     "DBArray" => DebugType::Array { hi: int(arg(one, 1)), base: handle(arg(one, 2)) },
                     "DBPtr" => DebugType::Pointer { cg: arg(one, 0).to_owned(), base: handle(arg(one, 1)) },
@@ -524,7 +525,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .as_mut()
                     .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let known = debug.types.get_mut(&handle(arg(one, 0)));
-                match (one.call.as_str(), known) {
+                match (one.call, known) {
                     ("DBField", Some(DebugType::Struct { fields, .. })) => {
                         fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None))
                     }
@@ -593,7 +594,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         return_registers: String::new(),
                         saved_registers: String::new(),
                         code: None,
-                        segment: int(one.fields.get("seg").map_or("0", String::as_str)),
+                        segment: int(one.field("seg").unwrap_or("0")),
                     },
                 );
             }
@@ -601,11 +602,11 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let symbol = made.symbols.get_mut(&handle(arg(one, 0))).expect("KeyError: symbol");
                 symbol.call_class = hex(field(one, "class"));
                 symbol.call_target = hex(field(one, "target"));
-                let parms = one.fields.get("parms").map_or("[]", String::as_str);
+                let parms = one.field("parms").unwrap_or("[]");
                 symbol.register_parms = parms != "[]";
                 symbol.register_list = parms.to_owned();
-                symbol.return_registers = one.fields.get("ret").cloned().unwrap_or_default();
-                symbol.saved_registers = one.fields.get("save").cloned().unwrap_or_default();
+                symbol.return_registers = one.field("ret").unwrap_or_default().to_owned();
+                symbol.saved_registers = one.field("save").unwrap_or_default().to_owned();
             }
             "CODE" => {
                 let fixups = field(one, "fix")
@@ -624,7 +625,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     Some(Code { data, fixups });
             }
             "BENewBack" => {
-                let result = one.result.as_deref().expect("TypeError: 'NoneType' object is not subscriptable");
+                let result = one.result.expect("TypeError: 'NoneType' object is not subscriptable");
                 made.backs.insert(handle(result), handle(arg(one, 0)));
             }
             "CGProcDecl" => {
@@ -650,22 +651,22 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let auto = (arg(one, 0).to_owned(), arg(one, 1).to_owned());
                 // A local of a nested block is placed where its block begins.
                 if depth > 0 {
-                    made.procs[at].body.push(Statement { call: one.call.clone(), args: vec![auto.0.clone()], line });
+                    made.procs[at].body.push(Statement { call: one.call.to_owned(), args: vec![auto.0.clone()], line });
                 }
                 made.procs[at].autos.push(auto);
             }
             "DBBegBlock" | "DBEndBlock" => {
                 let at = open(proc);
                 depth = if one.call == "DBBegBlock" { depth + 1 } else { depth.saturating_sub(1) };
-                made.procs[at].body.push(Statement { call: one.call.clone(), args: Vec::new(), line });
+                made.procs[at].body.push(Statement { call: one.call.to_owned(), args: Vec::new(), line });
             }
             "CGTemp" => {
                 let at = open(proc);
-                let result = one.result.clone().expect("CGTemp returns a handle");
+                let result = one.result.map(str::to_owned).expect("CGTemp returns a handle");
                 made.procs[at].autos.push((result, arg(one, 0).to_owned()));
             }
             "CGInitCall" => {
-                let result = one.result.as_deref().expect("CGInitCall returns a handle");
+                let result = one.result.expect("CGInitCall returns a handle");
                 made.calls.insert(
                     handle(result),
                     Call {
@@ -680,18 +681,18 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let parm = (arg(one, 1).to_owned(), arg(one, 2).to_owned());
                 made.calls.get_mut(&handle(arg(one, 0))).expect("KeyError: call").parms.push(parm);
             }
-            "DBSrcFile" if one.fields.get("main").is_some_and(|one| one == "1") => main_file = one.result.clone(),
+            "DBSrcFile" if one.field("main") == Some("1") => main_file = one.result.map(str::to_owned),
             "DBSrcFile" => {}
             // A line of another file, a header's, is no line of the source.
             "DBSrcCue" => line = if main_file.as_deref() == Some(arg(one, 0)) { int(arg(one, 1)) } else { 0 },
             "CGSelInit" => {
                 let at = open(proc);
-                let result = one.result.clone().expect("CGSelInit returns a handle");
-                made.procs[at].body.push(Statement { call: one.call.clone(), args: vec![result], line });
+                let result = one.result.map(str::to_owned).expect("CGSelInit returns a handle");
+                made.procs[at].body.push(Statement { call: one.call.to_owned(), args: vec![result], line });
             }
             call if STATEMENTS.contains(&call) => {
                 let at = open(proc);
-                made.procs[at].body.push(Statement { call: call.to_owned(), args: args.clone(), line });
+                made.procs[at].body.push(Statement { call: call.to_owned(), args: owned(), line });
             }
             call if call.starts_with("DG") => {
                 let Some(segment) = segment else {
@@ -701,17 +702,17 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .get_mut(&segment)
                     .expect("KeyError: segment")
                     .items
-                    .push((call.to_owned(), Tuple(args.clone())));
+                    .push((call.to_owned(), Tuple(owned())));
             }
             call if IGNORED.contains(&call) => {}
             "CGFact" => {
-                let node = Node { call: one.call.clone(), args: args.clone() };
+                let node = Node { call: one.call.to_owned(), args: owned() };
                 crate::ow_facts::check(&node)?;
-                made.nodes.insert(handle(one.result.as_deref().expect("a fact names its node")), node);
+                made.nodes.insert(handle(one.result.expect("a fact names its node")), node);
             }
-            _ if one.result.as_deref().is_some_and(|result| result.starts_with('n')) => {
-                let result = one.result.as_deref().expect("checked");
-                made.nodes.insert(handle(result), Node { call: one.call.clone(), args: args.clone() });
+            _ if one.result.is_some_and(|result| result.starts_with('n')) => {
+                let result = one.result.expect("checked");
+                made.nodes.insert(handle(result), Node { call: one.call.to_owned(), args: owned() });
             }
             _ => {
                 return Err(Unsupported(format!("stream line {}: {}", one.line, one.call)));
