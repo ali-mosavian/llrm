@@ -1140,14 +1140,39 @@ impl<'a> TypeLegalizer<'a> {
         }
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
-        let pointer = self.dag.value_type(ptr);
-        let offset = self.dag.get_constant(step, pointer);
-        let high_ptr = self.dag.get_node(ISD::Add, pointer, &[ptr, offset]);
+        let high_ptr = self.address_plus(ptr, step);
         let lo = self.dag.get_load(half, chain, ptr, info);
         let hi = self.dag.get_load(half, chain, high_ptr, info);
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
         (lo, hi)
+    }
+
+    /// `ptr + step` for the second half of a split access. A far pointer moves
+    /// in its offset word and keeps its selector (a far `getelementptr`
+    /// does the same); a type with no constant panicked on a far `i64`
+    /// load.
+    ///
+    /// DEVIATE SD308: no carry into the selector, so a half that crosses a
+    /// segment of a huge pointer wraps. Reason: an object lies in one
+    /// segment unless the pointer is huge, and a split 8-byte access of a
+    /// huge element is not seen in the corpus. Exit: `HUGE_ADD` here when
+    /// the access's pointer space is known. Owner sdag-c. Review 2026-12-10.
+    fn address_plus(
+        &mut self,
+        ptr: SDValue,
+        step: u128,
+    ) -> SDValue {
+        let pointer = self.dag.value_type(ptr);
+        if pointer == EVT::Simple(MVT::Far) {
+            let (offset, selector) = self.expanded_integer(ptr);
+            let word = self.dag.value_type(offset);
+            let delta = self.dag.get_constant(step, word);
+            let moved = self.dag.get_node(ISD::Add, word, &[offset, delta]);
+            return self.dag.get_node(ISD::BuildPair, pointer, &[moved, selector]);
+        }
+        let offset = self.dag.get_constant(step, pointer);
+        self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
     }
 
     /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4.
@@ -1161,9 +1186,7 @@ impl<'a> TypeLegalizer<'a> {
         let half = self.dag.value_type(lo);
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
-        let pointer = self.dag.value_type(ptr);
-        let offset = self.dag.get_constant(step, pointer);
-        let high_ptr = self.dag.get_node(ISD::Add, pointer, &[ptr, offset]);
+        let high_ptr = self.address_plus(ptr, step);
         let low_store = self.dag.get_store(chain, lo, ptr, info);
         let high_store = self.dag.get_store(chain, hi, high_ptr, info);
         self.dag.get_token_factor(&[low_store, high_store])
