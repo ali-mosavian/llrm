@@ -1084,3 +1084,17 @@ def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_li
     assert failed == {"integration no_local_paths::test_no_tracked_markdown_names_a_path_of_one_machine"}
     smoke = ps.parity_smoke_module()
     assert set(ps.ALWAYS_SCANNERS) <= set(smoke.SCANNERS) and not set(ps.ALWAYS_SCANNERS) & set(smoke.NIGHTLY_ONLY)
+
+
+def test_a_pr_refused_for_its_own_head_is_held_until_its_head_changes(tmp_path):
+    """#4142 was refused six times, #4145 and #4146 four, each with the same head, each retry a batch of 1-14 minutes (21:47-22:22, 2026-10-23)."""
+    state = tmp_path / "held.state"
+    reasons = {"4142": "alone on the head it fails unit llrm-core::x", "4145": "alone on the head it does not build: error", "4150": "conflicts with an earlier PR of the batch or with feat/parity", "4151": "the batch dropped #4142 after its scan"}
+    heads = {"4142": "aaa", "4145": "bbb", "4150": "ccc", "4151": "ddd"}
+    lines = ps.hold_own_refusals(["4142", "4145", "4150", "4151"], reasons, heads, state)
+    assert lines == ["#4142: held until head changes: aaa", "#4145: held until head changes: bbb"]
+    assert ps.held_at("4142", "aaa", state), "the same head twice: held the second time"
+    assert not ps.held_at("4142", "zzz", state), "a new head: included"
+    assert not ps.held_at("4150", "ccc", state) and not ps.held_at("4151", "ddd", state), "a conflict and a dropped batch are not the PR's own"
+    ps.hold_own_refusals(["4142"], reasons, {"4142": "zzz"}, state)
+    assert ps.held_at("4142", "zzz", state) and not ps.held_at("4142", "aaa", state), "one line per PR, the latest head"
