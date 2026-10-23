@@ -67,3 +67,10 @@ def : Pat<(i16 lea16addr:$src), (LEA16r lea16addr:$src)>;
 
 // A wrapped symbol is a 16-bit immediate with a relocation (the pin has it for i32 and i64).
 def : Pat<(i16 relocImm:$src), (MOV16ri relocImm:$src)>;
+
+// `X86mul_imm` (a multiply by 3, 5 or 9 the combiner leaves for `lea`) when `lea` cannot take it,
+// which is every real-mode scaled index: the multiply instruction.
+let Predicates = [Not64BitMode] in {
+def : Pat<(X86mul_imm GR16:$src1, imm:$src2), (IMUL16rri GR16:$src1, imm:$src2)>;
+def : Pat<(X86mul_imm GR32:$src1, imm:$src2), (IMUL32rri GR32:$src1, imm:$src2)>;
+}
