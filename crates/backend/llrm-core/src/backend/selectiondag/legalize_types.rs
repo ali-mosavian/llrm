@@ -1205,6 +1205,40 @@ impl<'a> TypeLegalizer<'a> {
         Ok(self.dag.get_node(ISD::Add, vt, &[within, high]))
     }
 
+    /// A call through a far pointer: offset then selector stored to a 4-byte
+    /// stack cell, and the call reads the cell (`LLRM_FARCALL`, SD208).
+    fn expand_far_call(
+        &mut self,
+        call: SDValue,
+    ) -> SDValue {
+        let (chain, callee) = (self.dag.operand(call, 0), self.dag.operand(call, 1));
+        let (offset, selector) = self.expanded_integer(callee);
+        let pointer = self.dag.config().pointer;
+        let cell = self.dag.create_stack_temporary(4, 2);
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let high = self.dag.get_constant(2, pointer);
+        let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, high]);
+        let info = super::dag::MemInfo {
+            mem_vt: EVT::I16,
+            align: 2,
+            volatile: false,
+            base: super::dag::MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+        };
+        let low_store = self.dag.get_store(chain, offset, slot, info);
+        let high_store = self.dag.get_store(chain, selector, high_slot, info);
+        let stores = self.dag.get_token_factor(&[low_store, high_store]);
+        let target = self.dag.get_target_frame_index(pointer, cell);
+        let mut ops = self.dag.node(call).ops.clone();
+        ops[0] = stores;
+        ops[1] = target;
+        let values = self.dag.node(call).values.clone();
+        let far_call = self.dag.get_node_multi(super::x86isd::LLRM_FARCALL, &values, &ops);
+        self.replace_value_with(SDValue { node: call.node, res: 1 }, SDValue { node: far_call.node, res: 1 });
+        far_call
+    }
+
     /// `IntegerExpandSetCCOperands`: equality is the halves' xors or-ed
     /// against zero; an ordering is the low halves' unsigned compare unless
     /// the high halves differ.
@@ -1275,6 +1309,7 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
             }
             ISD::Store if at == 1 => self.expand_store(node),
+            super::x86isd::CALL if at == 1 => self.expand_far_call(node),
             x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
             ISD::BitCast => {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
