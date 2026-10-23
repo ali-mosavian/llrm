@@ -6510,6 +6510,32 @@ e:
     assert_eq!(memory_loads(&shared), 1);
 }
 
+/// A load marked `!invariant.load` at the same index in two blocks was made
+/// twice: selection took only a constant global for invariant
+/// (`SelectionDAGBuilder::visitLoad` also takes the metadata).
+#[test]
+fn test_a_load_marked_invariant_in_two_blocks_is_made_once() {
+    let text = "@tab = global [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+define i16 @f(i16 %n, i1 %c) addrspace(1) {
+entry:
+  %p = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %a = load i16, ptr %p, !invariant.load !0
+  br i1 %c, label %t, label %e
+t:
+  %q = getelementptr [4 x i16], ptr @tab, i16 0, i16 %n
+  %b = load i16, ptr %q, !invariant.load !0
+  %s = add i16 %a, %b
+  ret i16 %s
+e:
+  ret i16 %a
+}
+!0 = !{}
+";
+    let (body, shared) = precse_of(text);
+    assert_eq!(memory_loads(&body), 2, "the premise: the table is loaded twice");
+    assert_eq!(memory_loads(&shared), 1);
+}
+
 /// The same loads of a table that is not constant stay: a store may change it.
 #[test]
 fn test_a_load_of_a_table_that_is_not_constant_is_kept() {

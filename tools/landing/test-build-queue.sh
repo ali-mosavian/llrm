@@ -25,6 +25,11 @@ echo "3012 h3012 paritysha1" > $d/refused.state; echo "3013 h3013 oldparity" >> 
 again=$(REFUSED_STATE=$d/refused.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
 echo "$again" | grep -qw 3012 && { echo "FAIL: a PR refused at this head and this feat/parity was queued again (the runner spun on it every second)"; exit 1; }
 echo "$again" | grep -qw 3013 || { echo "FAIL: a PR refused against an older feat/parity was not queued again"; exit 1; }
+# a PR refused for its own head stays out whatever feat/parity does, until its head changes (held.state)
+printf '3014 h3014\n3015 hOTHER\n' > $d/held.state
+held=$(HELD_STATE=$d/held.state REFUSED_STATE=$d/none.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
+echo "$held" | grep -qw 3014 && { echo "FAIL: a PR held at its current head was queued again"; exit 1; }
+echo "$held" | grep -qw 3015 || { echo "FAIL: a PR held at an older head was not queued once its head changed"; exit 1; }
 # a PR refused at an older head whose owner has just pushed (new head first seen now) lands alone for the grace; after it the normal order resumes
 echo "3020 hOLD paritysha1" > $d/refused2.state
 run() { NOW=$1 SEEN_STATE=$d/seen.state REFUSED_STATE=$d/refused2.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err2 | tr '\n' ' '; }

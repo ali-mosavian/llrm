@@ -254,3 +254,16 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
 }
+
+/// Every node of ours that the matcher passes through has an id in
+/// `own_ids.txt`: `LLRM_FARCALL` had none, mapped to no opcode, and a call
+/// through a function pointer was `CannotSelect(Target(24584))` (7 m16
+/// programs: function_table, static_inline, static_pointers).
+#[test]
+fn every_own_node_has_a_pin_id() {
+    use super::dagisel_adapter::pin_opcode;
+    use super::x86isd::{LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF};
+    for node in [LLRM_ASM, LLRM_CODE, LLRM_FARCALL, LLRM_PTRDIFF, LLRM_WINDOW, SEGMENT_OF] {
+        assert_ne!(pin_opcode(node), u16::MAX, "{node:?}");
+    }
+}

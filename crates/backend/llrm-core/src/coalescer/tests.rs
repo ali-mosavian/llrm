@@ -106,6 +106,21 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
+/// then is the definition it alone read. Only the copy went, leaving a `v1`
+/// that nothing reads (C5: `eliminateDeadDefs` was not run).
+#[test]
+fn test_a_dead_copy_takes_the_definition_only_it_read() {
+    let (a, c) = (def(1), copy(2, 1));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert!(names(&lis).is_empty(), "both the copy and the def are gone: {:?}", names(&lis));
+}
+
 /// `v1` redefined while `v2` (a copy of its first value) is live: the join
 /// would make `v2` read the new value. The copy stays and nothing changes.
 #[test]

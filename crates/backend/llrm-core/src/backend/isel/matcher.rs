@@ -189,7 +189,9 @@ impl Selector<'_, '_, '_> {
         };
         let first = out.len();
         (self.compiled.emit)(self, chosen, &m, out)?;
-        if self.loads_constant_memory(inst) {
+        if self.loads_constant_memory(inst)
+            || llrm_mir::memory::invariant_load(&self.module.context, &self.layout, self.function, inst)
+        {
             for one in &mut out[first..] {
                 let plain = one
                     .what
@@ -208,7 +210,9 @@ impl Selector<'_, '_, '_> {
 
     /// `AA->pointsToConstantMemory` for a load: its pointer is into a global
     /// that is constant, defined here and not externally initialized
-    /// (`SelectionDAGBuilder::visitLoad`'s `isInvariant`).
+    /// (`SelectionDAGBuilder::visitLoad`'s `isInvariant`; its other halves,
+    /// `!invariant.load` and a `noalias readonly` argument, are
+    /// `llrm_mir::memory::invariant_load`).
     fn loads_constant_memory(
         &self,
         inst: InstId,

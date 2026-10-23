@@ -1012,6 +1012,37 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    /// What was worked out of these module analyses and nothing else.
+    memo: Memo,
+}
+
+/// Results derived from the module analyses of one [`Outer`] alone, kept for
+/// its life: a clone starts empty, as does one made by `with_declared`, and
+/// `require` empties it, so none outlives the analyses it was made from.
+#[derive(Default)]
+pub struct Memo(std::cell::RefCell<HashMap<(TypeId, u64), Rc<dyn Any>>>);
+
+impl Clone for Memo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Outer {
+    /// The `V` kept under `key`, made by `make` the first time it is asked.
+    pub fn memo<V: 'static>(
+        &self,
+        key: u64,
+        make: impl FnOnce() -> V,
+    ) -> Rc<V> {
+        let at = (TypeId::of::<V>(), key);
+        if let Some(found) = self.memo.0.borrow().get(&at) {
+            return Rc::clone(found).downcast::<V>().expect("keyed by its type");
+        }
+        let made = Rc::new(make());
+        self.memo.0.borrow_mut().insert(at, Rc::clone(&made) as Rc<dyn Any>);
+        made
+    }
 }
 
 impl Outer {
@@ -1041,7 +1072,13 @@ impl Outer {
             }
             modules.insert(key, Rc::new(callees));
         }
-        Outer { metadata: self.metadata.clone(), globals, program: Rc::clone(&self.program), modules }
+        Outer {
+            metadata: self.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        }
     }
 
     /// `module`'s, a program of its own for `target`, or a neutral one:
@@ -1060,6 +1097,7 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
+        self.memo.0.borrow_mut().clear();
     }
 
     /// Whether alias and decisions ask the intervals of counted loops.
@@ -2337,6 +2375,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    memo: Memo::default(),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -2444,7 +2483,13 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
