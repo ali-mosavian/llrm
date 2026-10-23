@@ -75,6 +75,24 @@ pub enum FileMode {
     Output,
     Append,
     Binary,
+    Random,
+}
+
+/// `OPEN … ACCESS READ|WRITE|READ WRITE`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileAccess {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+/// `OPEN … SHARED` or `LOCK READ|WRITE|READ WRITE`: what other processes may not do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileLock {
+    Shared,
+    Read,
+    Write,
+    ReadWrite,
 }
 
 /// Which statement prints: PRINT, LPRINT to the printer, or WRITE, whose items
@@ -133,6 +151,10 @@ pub enum Unary {
     Not,
     /// A parenthesized reference: a value, so a BYREF formal gets a copy.
     Grouped,
+    /// `BYVAL x` in a call's arguments.
+    ByValue,
+    /// `SEG x` in a call's arguments.
+    Segmented,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,6 +365,20 @@ pub enum Statement {
         path: Expr,
         mode: FileMode,
         file: Expr,
+        /// `FOR` absent: the default mode, RANDOM, was not written.
+        mode_written: bool,
+        access: Option<FileAccess>,
+        lock: Option<FileLock>,
+        /// `LEN = n`, the record length.
+        record_length: Option<Expr>,
+        span: Span,
+    },
+    /// `OPEN mode$, [#]file, path$[, record length]`, the old form; the mode is a string expression.
+    OpenClassic {
+        mode: Expr,
+        file: Expr,
+        path: Expr,
+        record_length: Option<Expr>,
         span: Span,
     },
     Close {
@@ -359,7 +395,8 @@ pub enum Statement {
         write: bool,
         file: Expr,
         position: Option<Expr>,
-        target: Expr,
+        /// Absent in `GET #1` and `GET #1, 5`: a RANDOM file's buffer is the record.
+        target: Option<Expr>,
         span: Span,
     },
     Seek {
@@ -393,6 +430,18 @@ pub enum Statement {
     Runtime {
         name: String,
         arguments: Vec<Expr>,
+        span: Span,
+    },
+    /// `ON [LOCAL] ERROR RESUME NEXT`.
+    OnErrorResumeNext {
+        local: bool,
+        span: Span,
+    },
+    /// `COMMON [SHARED] [/block/] a, b AS INTEGER`.
+    Common {
+        shared: bool,
+        block: Option<String>,
+        declarations: Vec<Declaration>,
         span: Span,
     },
 }
@@ -455,7 +504,10 @@ impl Statement {
             | Self::Input { span, .. }
             | Self::Data { span, .. }
             | Self::Read { span, .. }
-            | Self::Runtime { span, .. } => *span,
+            | Self::OpenClassic { span, .. }
+            | Self::Runtime { span, .. }
+            | Self::OnErrorResumeNext { span, .. }
+            | Self::Common { span, .. } => *span,
         }
     }
 }

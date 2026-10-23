@@ -1,0 +1,4043 @@
+0	SCREEN 
+1	SCREEN ,
+2	SCREEN ,,
+3	SCREEN ,,,x%
+4	SCREEN ,,x%
+5	SCREEN ,,x%,x%
+6	SCREEN ,x%
+7	SCREEN ,x%,
+8	SCREEN ,x%,,x%
+9	SCREEN ,x%,x%
+10	SCREEN ,x%,x%,x%
+11	SCREEN x%
+12	SCREEN x%,
+13	SCREEN x%,,
+14	SCREEN x%,,,x%
+15	SCREEN x%,,x%
+16	SCREEN x%,,x%,x%
+17	SCREEN x%,x%
+18	SCREEN x%,x%,
+19	SCREEN x%,x%,,x%
+20	SCREEN x%,x%,x%
+21	SCREEN x%,x%,x%,x%
+22	SCREEN 1,x%,x%,x%
+23	SCREEN l&,x%,x%,x%
+24	SCREEN s!,x%,x%,x%
+25	SCREEN d#,x%,x%,x%
+26	SCREEN (x% + 1),x%,x%,x%
+27	SCREEN arr%(1),x%,x%,x%
+28	SCREEN -1,x%,x%,x%
+29	SCREEN 100,x%,x%,x%
+30	SCREEN "a",x%,x%,x%
+31	SCREEN s$,x%,x%,x%
+32	SCREEN x%,1,x%,x%
+33	SCREEN x%,l&,x%,x%
+34	SCREEN x%,s!,x%,x%
+35	SCREEN x%,d#,x%,x%
+36	SCREEN x%,(x% + 1),x%,x%
+37	SCREEN x%,arr%(1),x%,x%
+38	SCREEN x%,-1,x%,x%
+39	SCREEN x%,100,x%,x%
+40	SCREEN x%,"a",x%,x%
+41	SCREEN x%,s$,x%,x%
+42	SCREEN x%,x%,1,x%
+43	SCREEN x%,x%,l&,x%
+44	SCREEN x%,x%,s!,x%
+45	SCREEN x%,x%,d#,x%
+46	SCREEN x%,x%,(x% + 1),x%
+47	SCREEN x%,x%,arr%(1),x%
+48	SCREEN x%,x%,-1,x%
+49	SCREEN x%,x%,100,x%
+50	SCREEN x%,x%,"a",x%
+51	SCREEN x%,x%,s$,x%
+52	SCREEN x%,x%,x%,1
+53	SCREEN x%,x%,x%,l&
+54	SCREEN x%,x%,x%,s!
+55	SCREEN x%,x%,x%,d#
+56	SCREEN x%,x%,x%,(x% + 1)
+57	SCREEN x%,x%,x%,arr%(1)
+58	SCREEN x%,x%,x%,-1
+59	SCREEN x%,x%,x%,100
+60	SCREEN x%,x%,x%,"a"
+61	SCREEN x%,x%,x%,s$
+62	SCREEN x%,x%,x%,x%, 1
+63	COLOR 
+64	COLOR ,
+65	COLOR ,,x%
+66	COLOR ,x%
+67	COLOR ,x%,x%
+68	COLOR x%
+69	COLOR x%,
+70	COLOR x%,,x%
+71	COLOR x%,x%
+72	COLOR x%,x%,x%
+73	COLOR 7,x%,x%
+74	COLOR 15,x%,x%
+75	COLOR "a",x%,x%
+76	COLOR s$,x%,x%
+77	COLOR x%,7,x%
+78	COLOR x%,15,x%
+79	COLOR x%,"a",x%
+80	COLOR x%,s$,x%
+81	COLOR x%,x%,7
+82	COLOR x%,x%,15
+83	COLOR x%,x%,"a"
+84	COLOR x%,x%,s$
+85	COLOR x%,x%,x%, 1
+86	CLS 
+87	CLS x%
+88	CLS 3
+89	CLS arr%(1)
+90	CLS (x% * 2)
+91	CLS "a"
+92	CLS s$
+93	CLS x%, 1
+94	LOCATE 
+95	LOCATE ,
+96	LOCATE ,,
+97	LOCATE ,,,
+98	LOCATE ,,,,x%
+99	LOCATE ,,,x%
+100	LOCATE ,,,x%,x%
+101	LOCATE ,,x%
+102	LOCATE ,,x%,
+103	LOCATE ,,x%,,x%
+104	LOCATE ,,x%,x%
+105	LOCATE ,,x%,x%,x%
+106	LOCATE ,x%
+107	LOCATE ,x%,
+108	LOCATE ,x%,,
+109	LOCATE ,x%,,,x%
+110	LOCATE ,x%,,x%
+111	LOCATE ,x%,,x%,x%
+112	LOCATE ,x%,x%
+113	LOCATE ,x%,x%,
+114	LOCATE ,x%,x%,,x%
+115	LOCATE ,x%,x%,x%
+116	LOCATE ,x%,x%,x%,x%
+117	LOCATE x%
+118	LOCATE x%,
+119	LOCATE x%,,
+120	LOCATE x%,,,
+121	LOCATE x%,,,,x%
+122	LOCATE x%,,,x%
+123	LOCATE x%,,,x%,x%
+124	LOCATE x%,,x%
+125	LOCATE x%,,x%,
+126	LOCATE x%,,x%,,x%
+127	LOCATE x%,,x%,x%
+128	LOCATE x%,,x%,x%,x%
+129	LOCATE x%,x%
+130	LOCATE x%,x%,
+131	LOCATE x%,x%,,
+132	LOCATE x%,x%,,,x%
+133	LOCATE x%,x%,,x%
+134	LOCATE x%,x%,,x%,x%
+135	LOCATE x%,x%,x%
+136	LOCATE x%,x%,x%,
+137	LOCATE x%,x%,x%,,x%
+138	LOCATE x%,x%,x%,x%
+139	LOCATE x%,x%,x%,x%,x%
+140	LOCATE 3,x%,x%,x%,x%
+141	LOCATE arr%(1),x%,x%,x%,x%
+142	LOCATE (x% * 2),x%,x%,x%,x%
+143	LOCATE "a",x%,x%,x%,x%
+144	LOCATE s$,x%,x%,x%,x%
+145	LOCATE x%,3,x%,x%,x%
+146	LOCATE x%,arr%(1),x%,x%,x%
+147	LOCATE x%,(x% * 2),x%,x%,x%
+148	LOCATE x%,"a",x%,x%,x%
+149	LOCATE x%,s$,x%,x%,x%
+150	LOCATE x%,x%,3,x%,x%
+151	LOCATE x%,x%,arr%(1),x%,x%
+152	LOCATE x%,x%,(x% * 2),x%,x%
+153	LOCATE x%,x%,"a",x%,x%
+154	LOCATE x%,x%,s$,x%,x%
+155	LOCATE x%,x%,x%,3,x%
+156	LOCATE x%,x%,x%,arr%(1),x%
+157	LOCATE x%,x%,x%,(x% * 2),x%
+158	LOCATE x%,x%,x%,"a",x%
+159	LOCATE x%,x%,x%,s$,x%
+160	LOCATE x%,x%,x%,x%,3
+161	LOCATE x%,x%,x%,x%,arr%(1)
+162	LOCATE x%,x%,x%,x%,(x% * 2)
+163	LOCATE x%,x%,x%,x%,"a"
+164	LOCATE x%,x%,x%,x%,s$
+165	LOCATE x%,x%,x%,x%,x%, 1
+166	WIDTH x%
+167	WIDTH x%,x%
+168	WIDTH 3,x%
+169	WIDTH arr%(1),x%
+170	WIDTH (x% * 2),x%
+171	WIDTH "a",x%
+172	WIDTH s$,x%
+173	WIDTH x%,3
+174	WIDTH x%,arr%(1)
+175	WIDTH x%,(x% * 2)
+176	WIDTH x%,"a"
+177	WIDTH x%,s$
+178	WIDTH x%,x%, 1
+179	WIDTH #1,x%
+180	WIDTH #x%,x%
+181	WIDTH #3,x%
+182	WIDTH #1,3
+183	WIDTH #1,arr%(1)
+184	WIDTH #1,(x% * 2)
+185	WIDTH #1,"a"
+186	WIDTH #1,s$
+187	WIDTH #1,x%, 1
+188	WIDTH 1,x%
+189	WIDTH 1,3
+190	WIDTH 1,arr%(1)
+191	WIDTH 1,(x% * 2)
+192	WIDTH 1,"a"
+193	WIDTH 1,s$
+194	WIDTH 1,x%, 1
+195	WIDTH LPRINT x%
+196	WIDTH LPRINT 3
+197	WIDTH LPRINT arr%(1)
+198	WIDTH LPRINT (x% * 2)
+199	WIDTH LPRINT "a"
+200	WIDTH LPRINT s$
+201	WIDTH LPRINT x%, 1
+202	WIDTH "SCRN:",x%
+203	WIDTH "LPT1:",x%
+204	WIDTH "SCRN:",3
+205	WIDTH "SCRN:",arr%(1)
+206	WIDTH "SCRN:",(x% * 2)
+207	WIDTH "SCRN:","a"
+208	WIDTH "SCRN:",s$
+209	WIDTH "SCRN:",x%, 1
+210	VIEW PRINT 
+211	VIEW PRINT x% TO x%
+212	VIEW PRINT 3 TO x%
+213	VIEW PRINT arr%(1) TO x%
+214	VIEW PRINT (x% * 2) TO x%
+215	VIEW PRINT "a" TO x%
+216	VIEW PRINT s$ TO x%
+217	VIEW PRINT x% TO 3
+218	VIEW PRINT x% TO arr%(1)
+219	VIEW PRINT x% TO (x% * 2)
+220	VIEW PRINT x% TO "a"
+221	VIEW PRINT x% TO s$
+222	VIEW PRINT x% TO x%, 1
+223	VIEW 
+224	VIEW  (x%,x%)-(x%,x%)
+225	VIEW  (x%,x%)-(x%,x%),
+226	VIEW  (x%,x%)-(x%,x%),,x%
+227	VIEW  (x%,x%)-(x%,x%),x%
+228	VIEW  (x%,x%)-(x%,x%),x%,x%
+229	VIEW SCREEN (x%,x%)-(x%,x%)
+230	VIEW SCREEN (x%,x%)-(x%,x%),
+231	VIEW SCREEN (x%,x%)-(x%,x%),,x%
+232	VIEW SCREEN (x%,x%)-(x%,x%),x%
+233	VIEW SCREEN (x%,x%)-(x%,x%),x%,x%
+234	VIEW  (1,x%)-(x%,x%),x%,x%
+235	VIEW  (l&,x%)-(x%,x%),x%,x%
+236	VIEW  (s!,x%)-(x%,x%),x%,x%
+237	VIEW  (d#,x%)-(x%,x%),x%,x%
+238	VIEW  ((x% + 1),x%)-(x%,x%),x%,x%
+239	VIEW  (arr%(1),x%)-(x%,x%),x%,x%
+240	VIEW  (-1,x%)-(x%,x%),x%,x%
+241	VIEW  (100,x%)-(x%,x%),x%,x%
+242	VIEW  ("a",x%)-(x%,x%),x%,x%
+243	VIEW  (s$,x%)-(x%,x%),x%,x%
+244	VIEW  (x%,1)-(x%,x%),x%,x%
+245	VIEW  (x%,l&)-(x%,x%),x%,x%
+246	VIEW  (x%,s!)-(x%,x%),x%,x%
+247	VIEW  (x%,d#)-(x%,x%),x%,x%
+248	VIEW  (x%,(x% + 1))-(x%,x%),x%,x%
+249	VIEW  (x%,arr%(1))-(x%,x%),x%,x%
+250	VIEW  (x%,-1)-(x%,x%),x%,x%
+251	VIEW  (x%,100)-(x%,x%),x%,x%
+252	VIEW  (x%,"a")-(x%,x%),x%,x%
+253	VIEW  (x%,s$)-(x%,x%),x%,x%
+254	VIEW  (x%,x%)-(1,x%),x%,x%
+255	VIEW  (x%,x%)-(l&,x%),x%,x%
+256	VIEW  (x%,x%)-(s!,x%),x%,x%
+257	VIEW  (x%,x%)-(d#,x%),x%,x%
+258	VIEW  (x%,x%)-((x% + 1),x%),x%,x%
+259	VIEW  (x%,x%)-(arr%(1),x%),x%,x%
+260	VIEW  (x%,x%)-(-1,x%),x%,x%
+261	VIEW  (x%,x%)-(100,x%),x%,x%
+262	VIEW  (x%,x%)-("a",x%),x%,x%
+263	VIEW  (x%,x%)-(s$,x%),x%,x%
+264	VIEW  (x%,x%)-(x%,1),x%,x%
+265	VIEW  (x%,x%)-(x%,l&),x%,x%
+266	VIEW  (x%,x%)-(x%,s!),x%,x%
+267	VIEW  (x%,x%)-(x%,d#),x%,x%
+268	VIEW  (x%,x%)-(x%,(x% + 1)),x%,x%
+269	VIEW  (x%,x%)-(x%,arr%(1)),x%,x%
+270	VIEW  (x%,x%)-(x%,-1),x%,x%
+271	VIEW  (x%,x%)-(x%,100),x%,x%
+272	VIEW  (x%,x%)-(x%,"a"),x%,x%
+273	VIEW  (x%,x%)-(x%,s$),x%,x%
+274	VIEW  (x%,x%)-(x%,x%),7,x%
+275	VIEW  (x%,x%)-(x%,x%),15,x%
+276	VIEW  (x%,x%)-(x%,x%),"a",x%
+277	VIEW  (x%,x%)-(x%,x%),s$,x%
+278	VIEW  (x%,x%)-(x%,x%),x%,7
+279	VIEW  (x%,x%)-(x%,x%),x%,15
+280	VIEW  (x%,x%)-(x%,x%),x%,"a"
+281	VIEW  (x%,x%)-(x%,x%),x%,s$
+282	VIEW  (x%,x%)-(x%,x%),x%,x%, 1
+283	WINDOW 
+284	WINDOW  (x%,x%)-(x%,x%)
+285	WINDOW SCREEN (x%,x%)-(x%,x%)
+286	WINDOW  (1,x%)-(x%,x%)
+287	WINDOW  (l&,x%)-(x%,x%)
+288	WINDOW  (s!,x%)-(x%,x%)
+289	WINDOW  (d#,x%)-(x%,x%)
+290	WINDOW  ((x% + 1),x%)-(x%,x%)
+291	WINDOW  (arr%(1),x%)-(x%,x%)
+292	WINDOW  (-1,x%)-(x%,x%)
+293	WINDOW  (100,x%)-(x%,x%)
+294	WINDOW  ("a",x%)-(x%,x%)
+295	WINDOW  (s$,x%)-(x%,x%)
+296	WINDOW  (x%,1)-(x%,x%)
+297	WINDOW  (x%,l&)-(x%,x%)
+298	WINDOW  (x%,s!)-(x%,x%)
+299	WINDOW  (x%,d#)-(x%,x%)
+300	WINDOW  (x%,(x% + 1))-(x%,x%)
+301	WINDOW  (x%,arr%(1))-(x%,x%)
+302	WINDOW  (x%,-1)-(x%,x%)
+303	WINDOW  (x%,100)-(x%,x%)
+304	WINDOW  (x%,"a")-(x%,x%)
+305	WINDOW  (x%,s$)-(x%,x%)
+306	WINDOW  (x%,x%)-(1,x%)
+307	WINDOW  (x%,x%)-(l&,x%)
+308	WINDOW  (x%,x%)-(s!,x%)
+309	WINDOW  (x%,x%)-(d#,x%)
+310	WINDOW  (x%,x%)-((x% + 1),x%)
+311	WINDOW  (x%,x%)-(arr%(1),x%)
+312	WINDOW  (x%,x%)-(-1,x%)
+313	WINDOW  (x%,x%)-(100,x%)
+314	WINDOW  (x%,x%)-("a",x%)
+315	WINDOW  (x%,x%)-(s$,x%)
+316	WINDOW  (x%,x%)-(x%,1)
+317	WINDOW  (x%,x%)-(x%,l&)
+318	WINDOW  (x%,x%)-(x%,s!)
+319	WINDOW  (x%,x%)-(x%,d#)
+320	WINDOW  (x%,x%)-(x%,(x% + 1))
+321	WINDOW  (x%,x%)-(x%,arr%(1))
+322	WINDOW  (x%,x%)-(x%,-1)
+323	WINDOW  (x%,x%)-(x%,100)
+324	WINDOW  (x%,x%)-(x%,"a")
+325	WINDOW  (x%,x%)-(x%,s$)
+326	WINDOW  (x%,x%)-(x%,x%), 1
+327	PALETTE 
+328	PALETTE x%,x%
+329	PALETTE 3,x%
+330	PALETTE arr%(1),x%
+331	PALETTE (x% * 2),x%
+332	PALETTE "a",x%
+333	PALETTE s$,x%
+334	PALETTE x%,1
+335	PALETTE x%,l&
+336	PALETTE x%,s!
+337	PALETTE x%,d#
+338	PALETTE x%,(x% + 1)
+339	PALETTE x%,arr%(1)
+340	PALETTE x%,-1
+341	PALETTE x%,100
+342	PALETTE x%,"a"
+343	PALETTE x%,s$
+344	PALETTE x%,x%, 1
+345	PALETTE USING arr%()
+346	PALETTE USING ars!()
+347	PALETTE USING sa$()
+348	PALETTE USING m%()
+349	PALETTE USING x%
+350	PALETTE USING 1
+351	PALETTE USING arr%(), 1
+352	PCOPY x%,x%
+353	PCOPY 3,x%
+354	PCOPY arr%(1),x%
+355	PCOPY (x% * 2),x%
+356	PCOPY "a",x%
+357	PCOPY s$,x%
+358	PCOPY x%,3
+359	PCOPY x%,arr%(1)
+360	PCOPY x%,(x% * 2)
+361	PCOPY x%,"a"
+362	PCOPY x%,s$
+363	PCOPY x%,x%, 1
+364	PSET (x%,x%)
+365	PSET (x%,x%),x%
+366	PSET STEP(x%,x%)
+367	PSET STEP(x%,x%),x%
+368	PSET (1,x%),x%
+369	PSET (l&,x%),x%
+370	PSET (s!,x%),x%
+371	PSET (d#,x%),x%
+372	PSET ((x% + 1),x%),x%
+373	PSET (arr%(1),x%),x%
+374	PSET (-1,x%),x%
+375	PSET (100,x%),x%
+376	PSET ("a",x%),x%
+377	PSET (s$,x%),x%
+378	PSET (x%,1),x%
+379	PSET (x%,l&),x%
+380	PSET (x%,s!),x%
+381	PSET (x%,d#),x%
+382	PSET (x%,(x% + 1)),x%
+383	PSET (x%,arr%(1)),x%
+384	PSET (x%,-1),x%
+385	PSET (x%,100),x%
+386	PSET (x%,"a"),x%
+387	PSET (x%,s$),x%
+388	PSET (x%,x%),7
+389	PSET (x%,x%),15
+390	PSET (x%,x%),"a"
+391	PSET (x%,x%),s$
+392	PSET (x%,x%),x%, 1
+393	PRESET (x%,x%)
+394	PRESET (x%,x%),x%
+395	PRESET STEP(x%,x%)
+396	PRESET STEP(x%,x%),x%
+397	PRESET (1,x%),x%
+398	PRESET (l&,x%),x%
+399	PRESET (s!,x%),x%
+400	PRESET (d#,x%),x%
+401	PRESET ((x% + 1),x%),x%
+402	PRESET (arr%(1),x%),x%
+403	PRESET (-1,x%),x%
+404	PRESET (100,x%),x%
+405	PRESET ("a",x%),x%
+406	PRESET (s$,x%),x%
+407	PRESET (x%,1),x%
+408	PRESET (x%,l&),x%
+409	PRESET (x%,s!),x%
+410	PRESET (x%,d#),x%
+411	PRESET (x%,(x% + 1)),x%
+412	PRESET (x%,arr%(1)),x%
+413	PRESET (x%,-1),x%
+414	PRESET (x%,100),x%
+415	PRESET (x%,"a"),x%
+416	PRESET (x%,s$),x%
+417	PRESET (x%,x%),7
+418	PRESET (x%,x%),15
+419	PRESET (x%,x%),"a"
+420	PRESET (x%,x%),s$
+421	PRESET (x%,x%),x%, 1
+422	LINE -STEP(x%,x%),,
+423	LINE STEP(x%,x%)-(x%,x%),x%,B,x%
+424	LINE -(x%,x%),x%
+425	LINE (x%,x%)-(x%,x%),,
+426	LINE -STEP(x%,x%)
+427	LINE STEP(x%,x%)-(x%,x%),,,x%
+428	LINE (x%,x%)-STEP(x%,x%),x%,B,x%
+429	LINE STEP(x%,x%)-(x%,x%)
+430	LINE (x%,x%)-STEP(x%,x%),,,x%
+431	LINE -STEP(x%,x%),x%,B
+432	LINE -(x%,x%),x%,B,x%
+433	LINE STEP(x%,x%)-(x%,x%),,
+434	LINE -(x%,x%),,,x%
+435	LINE (x%,x%)-STEP(x%,x%),,B
+436	LINE (x%,x%)-STEP(x%,x%),x%,,x%
+437	LINE -(x%,x%)
+438	LINE STEP(x%,x%)-STEP(x%,x%),x%
+439	LINE (x%,x%)-(x%,x%),,B
+440	LINE -STEP(x%,x%),x%,BF,x%
+441	LINE -(x%,x%),x%,BF
+442	LINE (x%,x%)-(x%,x%),x%,,x%
+443	LINE STEP(x%,x%)-STEP(x%,x%),,
+444	LINE -(x%,x%),,
+445	LINE STEP(x%,x%)-(x%,x%),x%
+446	LINE -(x%,x%),
+447	LINE STEP(x%,x%)-STEP(x%,x%),,BF
+448	LINE -STEP(x%,x%),x%,B,x%
+449	LINE STEP(x%,x%)-STEP(x%,x%),,,x%
+450	LINE STEP(x%,x%)-STEP(x%,x%),x%,
+451	LINE (x%,x%)-STEP(x%,x%),
+452	LINE STEP(x%,x%)-(x%,x%),,B,x%
+453	LINE (x%,x%)-(x%,x%),,,x%
+454	LINE -(x%,x%),x%,BF,x%
+455	LINE STEP(x%,x%)-(x%,x%),,B
+456	LINE -STEP(x%,x%),x%,BF
+457	LINE (x%,x%)-(x%,x%),
+458	LINE (x%,x%)-(x%,x%),,B,x%
+459	LINE STEP(x%,x%)-(x%,x%),x%,BF
+460	LINE -STEP(x%,x%),,BF,x%
+461	LINE (x%,x%)-STEP(x%,x%),,BF,x%
+462	LINE (x%,x%)-(x%,x%),x%,BF
+463	LINE (x%,x%)-STEP(x%,x%),,B,x%
+464	LINE STEP(x%,x%)-(x%,x%),x%,B
+465	LINE -STEP(x%,x%),,,x%
+466	LINE (x%,x%)-STEP(x%,x%),x%,BF,x%
+467	LINE STEP(x%,x%)-STEP(x%,x%),,B,x%
+468	LINE (x%,x%)-STEP(x%,x%),x%
+469	LINE (x%,x%)-(x%,x%),x%,B
+470	LINE -(x%,x%),,BF
+471	LINE -(x%,x%),x%,B
+472	LINE STEP(x%,x%)-STEP(x%,x%),,BF,x%
+473	LINE -(x%,x%),,BF,x%
+474	LINE -STEP(x%,x%),,BF
+475	LINE STEP(x%,x%)-STEP(x%,x%),x%,B
+476	LINE STEP(x%,x%)-(x%,x%),
+477	LINE (x%,x%)-(x%,x%),,BF
+478	LINE STEP(x%,x%)-STEP(x%,x%),,B
+479	LINE -STEP(x%,x%),,B
+480	LINE (x%,x%)-(x%,x%),x%,
+481	LINE (x%,x%)-STEP(x%,x%),x%,
+482	LINE STEP(x%,x%)-STEP(x%,x%)
+483	LINE STEP(x%,x%)-STEP(x%,x%),x%,,x%
+484	LINE STEP(x%,x%)-STEP(x%,x%),
+485	LINE -STEP(x%,x%),
+486	LINE (x%,x%)-STEP(x%,x%),x%,BF
+487	LINE (x%,x%)-(x%,x%)
+488	LINE (x%,x%)-STEP(x%,x%)
+489	LINE (x%,x%)-STEP(x%,x%),,
+490	LINE (x%,x%)-(x%,x%),x%
+491	LINE -STEP(x%,x%),x%,,x%
+492	LINE STEP(x%,x%)-(x%,x%),x%,,x%
+493	LINE -(x%,x%),,B,x%
+494	LINE STEP(x%,x%)-(x%,x%),x%,
+495	LINE STEP(x%,x%)-STEP(x%,x%),x%,BF,x%
+496	LINE STEP(x%,x%)-(x%,x%),,BF,x%
+497	LINE (x%,x%)-(x%,x%),,BF,x%
+498	LINE -(x%,x%),x%,,x%
+499	LINE STEP(x%,x%)-STEP(x%,x%),x%,B,x%
+500	LINE -STEP(x%,x%),x%
+501	LINE (x%,x%)-STEP(x%,x%),,BF
+502	LINE (1,x%)-(x%,x%),x%,,x%
+503	LINE (l&,x%)-(x%,x%),x%,,x%
+504	LINE (s!,x%)-(x%,x%),x%,,x%
+505	LINE (d#,x%)-(x%,x%),x%,,x%
+506	LINE ((x% + 1),x%)-(x%,x%),x%,,x%
+507	LINE (arr%(1),x%)-(x%,x%),x%,,x%
+508	LINE (-1,x%)-(x%,x%),x%,,x%
+509	LINE (100,x%)-(x%,x%),x%,,x%
+510	LINE ("a",x%)-(x%,x%),x%,,x%
+511	LINE (s$,x%)-(x%,x%),x%,,x%
+512	LINE (x%,1)-(x%,x%),x%,,x%
+513	LINE (x%,l&)-(x%,x%),x%,,x%
+514	LINE (x%,s!)-(x%,x%),x%,,x%
+515	LINE (x%,d#)-(x%,x%),x%,,x%
+516	LINE (x%,(x% + 1))-(x%,x%),x%,,x%
+517	LINE (x%,arr%(1))-(x%,x%),x%,,x%
+518	LINE (x%,-1)-(x%,x%),x%,,x%
+519	LINE (x%,100)-(x%,x%),x%,,x%
+520	LINE (x%,"a")-(x%,x%),x%,,x%
+521	LINE (x%,s$)-(x%,x%),x%,,x%
+522	LINE (x%,x%)-(1,x%),x%,,x%
+523	LINE (x%,x%)-(l&,x%),x%,,x%
+524	LINE (x%,x%)-(s!,x%),x%,,x%
+525	LINE (x%,x%)-(d#,x%),x%,,x%
+526	LINE (x%,x%)-((x% + 1),x%),x%,,x%
+527	LINE (x%,x%)-(arr%(1),x%),x%,,x%
+528	LINE (x%,x%)-(-1,x%),x%,,x%
+529	LINE (x%,x%)-(100,x%),x%,,x%
+530	LINE (x%,x%)-("a",x%),x%,,x%
+531	LINE (x%,x%)-(s$,x%),x%,,x%
+532	LINE (x%,x%)-(x%,1),x%,,x%
+533	LINE (x%,x%)-(x%,l&),x%,,x%
+534	LINE (x%,x%)-(x%,s!),x%,,x%
+535	LINE (x%,x%)-(x%,d#),x%,,x%
+536	LINE (x%,x%)-(x%,(x% + 1)),x%,,x%
+537	LINE (x%,x%)-(x%,arr%(1)),x%,,x%
+538	LINE (x%,x%)-(x%,-1),x%,,x%
+539	LINE (x%,x%)-(x%,100),x%,,x%
+540	LINE (x%,x%)-(x%,"a"),x%,,x%
+541	LINE (x%,x%)-(x%,s$),x%,,x%
+542	LINE (x%,x%)-(x%,x%),7,,x%
+543	LINE (x%,x%)-(x%,x%),15,,x%
+544	LINE (x%,x%)-(x%,x%),"a",,x%
+545	LINE (x%,x%)-(x%,x%),s$,,x%
+546	LINE (x%,x%)-(x%,x%),x%,,1
+547	LINE (x%,x%)-(x%,x%),x%,,l&
+548	LINE (x%,x%)-(x%,x%),x%,,s!
+549	LINE (x%,x%)-(x%,x%),x%,,d#
+550	LINE (x%,x%)-(x%,x%),x%,,(x% + 1)
+551	LINE (x%,x%)-(x%,x%),x%,,arr%(1)
+552	LINE (x%,x%)-(x%,x%),x%,,-1
+553	LINE (x%,x%)-(x%,x%),x%,,100
+554	LINE (x%,x%)-(x%,x%),x%,,"a"
+555	LINE (x%,x%)-(x%,x%),x%,,s$
+556	LINE (x%,x%)-(x%,x%),x%,,x%, 1
+557	CIRCLE (x%,x%),x%
+558	CIRCLE (x%,x%),x%,
+559	CIRCLE (x%,x%),x%,,
+560	CIRCLE (x%,x%),x%,,,
+561	CIRCLE (x%,x%),x%,,,,x%
+562	CIRCLE (x%,x%),x%,,,x%
+563	CIRCLE (x%,x%),x%,,,x%,x%
+564	CIRCLE (x%,x%),x%,,x%
+565	CIRCLE (x%,x%),x%,,x%,
+566	CIRCLE (x%,x%),x%,,x%,,x%
+567	CIRCLE (x%,x%),x%,,x%,x%
+568	CIRCLE (x%,x%),x%,,x%,x%,x%
+569	CIRCLE (x%,x%),x%,x%
+570	CIRCLE (x%,x%),x%,x%,
+571	CIRCLE (x%,x%),x%,x%,,
+572	CIRCLE (x%,x%),x%,x%,,,x%
+573	CIRCLE (x%,x%),x%,x%,,x%
+574	CIRCLE (x%,x%),x%,x%,,x%,x%
+575	CIRCLE (x%,x%),x%,x%,x%
+576	CIRCLE (x%,x%),x%,x%,x%,
+577	CIRCLE (x%,x%),x%,x%,x%,,x%
+578	CIRCLE (x%,x%),x%,x%,x%,x%
+579	CIRCLE (x%,x%),x%,x%,x%,x%,x%
+580	CIRCLE STEP(x%,x%),x%
+581	CIRCLE STEP(x%,x%),x%,
+582	CIRCLE STEP(x%,x%),x%,,
+583	CIRCLE STEP(x%,x%),x%,,,
+584	CIRCLE STEP(x%,x%),x%,,,,x%
+585	CIRCLE STEP(x%,x%),x%,,,x%
+586	CIRCLE STEP(x%,x%),x%,,,x%,x%
+587	CIRCLE STEP(x%,x%),x%,,x%
+588	CIRCLE STEP(x%,x%),x%,,x%,
+589	CIRCLE STEP(x%,x%),x%,,x%,,x%
+590	CIRCLE STEP(x%,x%),x%,,x%,x%
+591	CIRCLE STEP(x%,x%),x%,,x%,x%,x%
+592	CIRCLE STEP(x%,x%),x%,x%
+593	CIRCLE STEP(x%,x%),x%,x%,
+594	CIRCLE STEP(x%,x%),x%,x%,,
+595	CIRCLE STEP(x%,x%),x%,x%,,,x%
+596	CIRCLE STEP(x%,x%),x%,x%,,x%
+597	CIRCLE STEP(x%,x%),x%,x%,,x%,x%
+598	CIRCLE STEP(x%,x%),x%,x%,x%
+599	CIRCLE STEP(x%,x%),x%,x%,x%,
+600	CIRCLE STEP(x%,x%),x%,x%,x%,,x%
+601	CIRCLE STEP(x%,x%),x%,x%,x%,x%
+602	CIRCLE STEP(x%,x%),x%,x%,x%,x%,x%
+603	CIRCLE (1,x%),x%,x%,x%,x%,x%
+604	CIRCLE (l&,x%),x%,x%,x%,x%,x%
+605	CIRCLE (s!,x%),x%,x%,x%,x%,x%
+606	CIRCLE (d#,x%),x%,x%,x%,x%,x%
+607	CIRCLE ((x% + 1),x%),x%,x%,x%,x%,x%
+608	CIRCLE (arr%(1),x%),x%,x%,x%,x%,x%
+609	CIRCLE (-1,x%),x%,x%,x%,x%,x%
+610	CIRCLE (100,x%),x%,x%,x%,x%,x%
+611	CIRCLE ("a",x%),x%,x%,x%,x%,x%
+612	CIRCLE (s$,x%),x%,x%,x%,x%,x%
+613	CIRCLE (x%,1),x%,x%,x%,x%,x%
+614	CIRCLE (x%,l&),x%,x%,x%,x%,x%
+615	CIRCLE (x%,s!),x%,x%,x%,x%,x%
+616	CIRCLE (x%,d#),x%,x%,x%,x%,x%
+617	CIRCLE (x%,(x% + 1)),x%,x%,x%,x%,x%
+618	CIRCLE (x%,arr%(1)),x%,x%,x%,x%,x%
+619	CIRCLE (x%,-1),x%,x%,x%,x%,x%
+620	CIRCLE (x%,100),x%,x%,x%,x%,x%
+621	CIRCLE (x%,"a"),x%,x%,x%,x%,x%
+622	CIRCLE (x%,s$),x%,x%,x%,x%,x%
+623	CIRCLE (x%,x%),1,x%,x%,x%,x%
+624	CIRCLE (x%,x%),l&,x%,x%,x%,x%
+625	CIRCLE (x%,x%),s!,x%,x%,x%,x%
+626	CIRCLE (x%,x%),d#,x%,x%,x%,x%
+627	CIRCLE (x%,x%),(x% + 1),x%,x%,x%,x%
+628	CIRCLE (x%,x%),arr%(1),x%,x%,x%,x%
+629	CIRCLE (x%,x%),-1,x%,x%,x%,x%
+630	CIRCLE (x%,x%),100,x%,x%,x%,x%
+631	CIRCLE (x%,x%),"a",x%,x%,x%,x%
+632	CIRCLE (x%,x%),s$,x%,x%,x%,x%
+633	CIRCLE (x%,x%),x%,7,x%,x%,x%
+634	CIRCLE (x%,x%),x%,15,x%,x%,x%
+635	CIRCLE (x%,x%),x%,"a",x%,x%,x%
+636	CIRCLE (x%,x%),x%,s$,x%,x%,x%
+637	CIRCLE (x%,x%),x%,x%,1,x%,x%
+638	CIRCLE (x%,x%),x%,x%,l&,x%,x%
+639	CIRCLE (x%,x%),x%,x%,s!,x%,x%
+640	CIRCLE (x%,x%),x%,x%,d#,x%,x%
+641	CIRCLE (x%,x%),x%,x%,(x% + 1),x%,x%
+642	CIRCLE (x%,x%),x%,x%,arr%(1),x%,x%
+643	CIRCLE (x%,x%),x%,x%,-1,x%,x%
+644	CIRCLE (x%,x%),x%,x%,100,x%,x%
+645	CIRCLE (x%,x%),x%,x%,"a",x%,x%
+646	CIRCLE (x%,x%),x%,x%,s$,x%,x%
+647	CIRCLE (x%,x%),x%,x%,x%,1,x%
+648	CIRCLE (x%,x%),x%,x%,x%,l&,x%
+649	CIRCLE (x%,x%),x%,x%,x%,s!,x%
+650	CIRCLE (x%,x%),x%,x%,x%,d#,x%
+651	CIRCLE (x%,x%),x%,x%,x%,(x% + 1),x%
+652	CIRCLE (x%,x%),x%,x%,x%,arr%(1),x%
+653	CIRCLE (x%,x%),x%,x%,x%,-1,x%
+654	CIRCLE (x%,x%),x%,x%,x%,100,x%
+655	CIRCLE (x%,x%),x%,x%,x%,"a",x%
+656	CIRCLE (x%,x%),x%,x%,x%,s$,x%
+657	CIRCLE (x%,x%),x%,x%,x%,x%,1
+658	CIRCLE (x%,x%),x%,x%,x%,x%,l&
+659	CIRCLE (x%,x%),x%,x%,x%,x%,s!
+660	CIRCLE (x%,x%),x%,x%,x%,x%,d#
+661	CIRCLE (x%,x%),x%,x%,x%,x%,(x% + 1)
+662	CIRCLE (x%,x%),x%,x%,x%,x%,arr%(1)
+663	CIRCLE (x%,x%),x%,x%,x%,x%,-1
+664	CIRCLE (x%,x%),x%,x%,x%,x%,100
+665	CIRCLE (x%,x%),x%,x%,x%,x%,"a"
+666	CIRCLE (x%,x%),x%,x%,x%,x%,s$
+667	CIRCLE (x%,x%),x%,x%,x%,x%,x%, 1
+668	PAINT (x%,x%)
+669	PAINT (x%,x%),
+670	PAINT (x%,x%),,
+671	PAINT (x%,x%),,,s$
+672	PAINT (x%,x%),,x%
+673	PAINT (x%,x%),,x%,s$
+674	PAINT (x%,x%),x%
+675	PAINT (x%,x%),x%,
+676	PAINT (x%,x%),x%,,s$
+677	PAINT (x%,x%),x%,x%
+678	PAINT (x%,x%),x%,x%,s$
+679	PAINT (x%,x%),s$
+680	PAINT (x%,x%),s$,
+681	PAINT (x%,x%),s$,,s$
+682	PAINT (x%,x%),s$,x%
+683	PAINT (x%,x%),s$,x%,s$
+684	PAINT STEP(x%,x%)
+685	PAINT STEP(x%,x%),
+686	PAINT STEP(x%,x%),,
+687	PAINT STEP(x%,x%),,,s$
+688	PAINT STEP(x%,x%),,x%
+689	PAINT STEP(x%,x%),,x%,s$
+690	PAINT STEP(x%,x%),x%
+691	PAINT STEP(x%,x%),x%,
+692	PAINT STEP(x%,x%),x%,,s$
+693	PAINT STEP(x%,x%),x%,x%
+694	PAINT STEP(x%,x%),x%,x%,s$
+695	PAINT STEP(x%,x%),s$
+696	PAINT STEP(x%,x%),s$,
+697	PAINT STEP(x%,x%),s$,,s$
+698	PAINT STEP(x%,x%),s$,x%
+699	PAINT STEP(x%,x%),s$,x%,s$
+700	PAINT (1,x%),x%,x%,s$
+701	PAINT (l&,x%),x%,x%,s$
+702	PAINT (s!,x%),x%,x%,s$
+703	PAINT (d#,x%),x%,x%,s$
+704	PAINT ((x% + 1),x%),x%,x%,s$
+705	PAINT (arr%(1),x%),x%,x%,s$
+706	PAINT (-1,x%),x%,x%,s$
+707	PAINT (100,x%),x%,x%,s$
+708	PAINT ("a",x%),x%,x%,s$
+709	PAINT (s$,x%),x%,x%,s$
+710	PAINT (x%,1),x%,x%,s$
+711	PAINT (x%,l&),x%,x%,s$
+712	PAINT (x%,s!),x%,x%,s$
+713	PAINT (x%,d#),x%,x%,s$
+714	PAINT (x%,(x% + 1)),x%,x%,s$
+715	PAINT (x%,arr%(1)),x%,x%,s$
+716	PAINT (x%,-1),x%,x%,s$
+717	PAINT (x%,100),x%,x%,s$
+718	PAINT (x%,"a"),x%,x%,s$
+719	PAINT (x%,s$),x%,x%,s$
+720	PAINT (x%,x%),7,x%,s$
+721	PAINT (x%,x%),15,x%,s$
+722	PAINT (x%,x%),"a",x%,s$
+723	PAINT (x%,x%),x%,7,s$
+724	PAINT (x%,x%),x%,15,s$
+725	PAINT (x%,x%),x%,"a",s$
+726	PAINT (x%,x%),x%,s$,s$
+727	PAINT (x%,x%),x%,x%,"abc"
+728	PAINT (x%,x%),x%,x%,LEFT$(s$, 2)
+729	PAINT (x%,x%),x%,x%,sa$(1)
+730	PAINT (x%,x%),x%,x%,1
+731	PAINT (x%,x%),x%,x%,x%
+732	PAINT (x%,x%),x%,x%,s$, 1
+733	DRAW s$
+734	DRAW "abc"
+735	DRAW LEFT$(s$, 2)
+736	DRAW sa$(1)
+737	DRAW 1
+738	DRAW x%
+739	DRAW s$, 1
+740	GET (x%,x%)-(x%,x%),arr%()
+741	GET (x%,x%)-STEP(x%,x%),arr%()
+742	GET STEP(x%,x%)-(x%,x%),arr%()
+743	GET STEP(x%,x%)-STEP(x%,x%),arr%()
+744	GET (1,x%)-(x%,x%),arr%()
+745	GET (l&,x%)-(x%,x%),arr%()
+746	GET (s!,x%)-(x%,x%),arr%()
+747	GET (d#,x%)-(x%,x%),arr%()
+748	GET ((x% + 1),x%)-(x%,x%),arr%()
+749	GET (arr%(1),x%)-(x%,x%),arr%()
+750	GET (-1,x%)-(x%,x%),arr%()
+751	GET (100,x%)-(x%,x%),arr%()
+752	GET ("a",x%)-(x%,x%),arr%()
+753	GET (s$,x%)-(x%,x%),arr%()
+754	GET (x%,1)-(x%,x%),arr%()
+755	GET (x%,l&)-(x%,x%),arr%()
+756	GET (x%,s!)-(x%,x%),arr%()
+757	GET (x%,d#)-(x%,x%),arr%()
+758	GET (x%,(x% + 1))-(x%,x%),arr%()
+759	GET (x%,arr%(1))-(x%,x%),arr%()
+760	GET (x%,-1)-(x%,x%),arr%()
+761	GET (x%,100)-(x%,x%),arr%()
+762	GET (x%,"a")-(x%,x%),arr%()
+763	GET (x%,s$)-(x%,x%),arr%()
+764	GET (x%,x%)-(1,x%),arr%()
+765	GET (x%,x%)-(l&,x%),arr%()
+766	GET (x%,x%)-(s!,x%),arr%()
+767	GET (x%,x%)-(d#,x%),arr%()
+768	GET (x%,x%)-((x% + 1),x%),arr%()
+769	GET (x%,x%)-(arr%(1),x%),arr%()
+770	GET (x%,x%)-(-1,x%),arr%()
+771	GET (x%,x%)-(100,x%),arr%()
+772	GET (x%,x%)-("a",x%),arr%()
+773	GET (x%,x%)-(s$,x%),arr%()
+774	GET (x%,x%)-(x%,1),arr%()
+775	GET (x%,x%)-(x%,l&),arr%()
+776	GET (x%,x%)-(x%,s!),arr%()
+777	GET (x%,x%)-(x%,d#),arr%()
+778	GET (x%,x%)-(x%,(x% + 1)),arr%()
+779	GET (x%,x%)-(x%,arr%(1)),arr%()
+780	GET (x%,x%)-(x%,-1),arr%()
+781	GET (x%,x%)-(x%,100),arr%()
+782	GET (x%,x%)-(x%,"a"),arr%()
+783	GET (x%,x%)-(x%,s$),arr%()
+784	GET (x%,x%)-(x%,x%),ars!()
+785	GET (x%,x%)-(x%,x%),sa$()
+786	GET (x%,x%)-(x%,x%),m%()
+787	GET (x%,x%)-(x%,x%),x%
+788	GET (x%,x%)-(x%,x%),1
+789	GET (x%,x%)-(x%,x%),arr%(), 1
+790	PUT (x%,x%),arr%()
+791	PUT (x%,x%),arr%(),PSET
+792	PUT (x%,x%),arr%(),PRESET
+793	PUT (x%,x%),arr%(),AND
+794	PUT (x%,x%),arr%(),OR
+795	PUT (x%,x%),arr%(),XOR
+796	PUT STEP(x%,x%),arr%()
+797	PUT STEP(x%,x%),arr%(),PSET
+798	PUT STEP(x%,x%),arr%(),PRESET
+799	PUT STEP(x%,x%),arr%(),AND
+800	PUT STEP(x%,x%),arr%(),OR
+801	PUT STEP(x%,x%),arr%(),XOR
+802	PUT (1,x%),arr%()
+803	PUT (l&,x%),arr%()
+804	PUT (s!,x%),arr%()
+805	PUT (d#,x%),arr%()
+806	PUT ((x% + 1),x%),arr%()
+807	PUT (arr%(1),x%),arr%()
+808	PUT (-1,x%),arr%()
+809	PUT (100,x%),arr%()
+810	PUT ("a",x%),arr%()
+811	PUT (s$,x%),arr%()
+812	PUT (x%,1),arr%()
+813	PUT (x%,l&),arr%()
+814	PUT (x%,s!),arr%()
+815	PUT (x%,d#),arr%()
+816	PUT (x%,(x% + 1)),arr%()
+817	PUT (x%,arr%(1)),arr%()
+818	PUT (x%,-1),arr%()
+819	PUT (x%,100),arr%()
+820	PUT (x%,"a"),arr%()
+821	PUT (x%,s$),arr%()
+822	PUT (x%,x%),ars!()
+823	PUT (x%,x%),sa$()
+824	PUT (x%,x%),m%()
+825	PUT (x%,x%),x%
+826	PUT (x%,x%),1
+827	PUT (x%,x%),arr%(), 1
+828	PLAY s$
+829	PLAY "abc"
+830	PLAY LEFT$(s$, 2)
+831	PLAY sa$(1)
+832	PLAY 1
+833	PLAY x%
+834	PLAY s$, 1
+835	PLAY ON
+836	PLAY OFF
+837	PLAY STOP
+838	PLAY ON, 1
+839	SOUND x%,x%
+840	SOUND 1,x%
+841	SOUND l&,x%
+842	SOUND s!,x%
+843	SOUND d#,x%
+844	SOUND (x% + 1),x%
+845	SOUND arr%(1),x%
+846	SOUND -1,x%
+847	SOUND 100,x%
+848	SOUND "a",x%
+849	SOUND s$,x%
+850	SOUND x%,1
+851	SOUND x%,l&
+852	SOUND x%,s!
+853	SOUND x%,d#
+854	SOUND x%,(x% + 1)
+855	SOUND x%,arr%(1)
+856	SOUND x%,-1
+857	SOUND x%,100
+858	SOUND x%,"a"
+859	SOUND x%,s$
+860	SOUND x%,x%, 1
+861	BEEP
+862	BEEP, 1
+863	POKE x%,x%
+864	POKE 1,x%
+865	POKE l&,x%
+866	POKE s!,x%
+867	POKE d#,x%
+868	POKE (x% + 1),x%
+869	POKE arr%(1),x%
+870	POKE -1,x%
+871	POKE 100,x%
+872	POKE "a",x%
+873	POKE s$,x%
+874	POKE x%,1
+875	POKE x%,l&
+876	POKE x%,s!
+877	POKE x%,d#
+878	POKE x%,(x% + 1)
+879	POKE x%,arr%(1)
+880	POKE x%,-1
+881	POKE x%,100
+882	POKE x%,"a"
+883	POKE x%,s$
+884	POKE x%,x%, 1
+885	OUT x%,x%
+886	OUT 1,x%
+887	OUT l&,x%
+888	OUT s!,x%
+889	OUT d#,x%
+890	OUT (x% + 1),x%
+891	OUT arr%(1),x%
+892	OUT -1,x%
+893	OUT 100,x%
+894	OUT "a",x%
+895	OUT s$,x%
+896	OUT x%,1
+897	OUT x%,l&
+898	OUT x%,s!
+899	OUT x%,d#
+900	OUT x%,(x% + 1)
+901	OUT x%,arr%(1)
+902	OUT x%,-1
+903	OUT x%,100
+904	OUT x%,"a"
+905	OUT x%,s$
+906	OUT x%,x%, 1
+907	WAIT x%,x%
+908	WAIT x%,x%,x%
+909	WAIT 1,x%,x%
+910	WAIT l&,x%,x%
+911	WAIT s!,x%,x%
+912	WAIT d#,x%,x%
+913	WAIT (x% + 1),x%,x%
+914	WAIT arr%(1),x%,x%
+915	WAIT -1,x%,x%
+916	WAIT 100,x%,x%
+917	WAIT "a",x%,x%
+918	WAIT s$,x%,x%
+919	WAIT x%,1,x%
+920	WAIT x%,l&,x%
+921	WAIT x%,s!,x%
+922	WAIT x%,d#,x%
+923	WAIT x%,(x% + 1),x%
+924	WAIT x%,arr%(1),x%
+925	WAIT x%,-1,x%
+926	WAIT x%,100,x%
+927	WAIT x%,"a",x%
+928	WAIT x%,s$,x%
+929	WAIT x%,x%,1
+930	WAIT x%,x%,l&
+931	WAIT x%,x%,s!
+932	WAIT x%,x%,d#
+933	WAIT x%,x%,(x% + 1)
+934	WAIT x%,x%,arr%(1)
+935	WAIT x%,x%,-1
+936	WAIT x%,x%,100
+937	WAIT x%,x%,"a"
+938	WAIT x%,x%,s$
+939	WAIT x%,x%,x%, 1
+940	DEF SEG
+941	DEF SEG = x%
+942	DEF SEG = 1
+943	DEF SEG = l&
+944	DEF SEG = s!
+945	DEF SEG = d#
+946	DEF SEG = (x% + 1)
+947	DEF SEG = arr%(1)
+948	DEF SEG = -1
+949	DEF SEG = 100
+950	DEF SEG = "a"
+951	DEF SEG = s$
+952	DEF SEG = x%, 1
+953	BLOAD s$
+954	BLOAD s$,x%
+955	BLOAD "abc",x%
+956	BLOAD LEFT$(s$, 2),x%
+957	BLOAD sa$(1),x%
+958	BLOAD 1,x%
+959	BLOAD x%,x%
+960	BLOAD s$,1
+961	BLOAD s$,l&
+962	BLOAD s$,s!
+963	BLOAD s$,d#
+964	BLOAD s$,(x% + 1)
+965	BLOAD s$,arr%(1)
+966	BLOAD s$,-1
+967	BLOAD s$,100
+968	BLOAD s$,"a"
+969	BLOAD s$,s$
+970	BLOAD s$,x%, 1
+971	BSAVE s$,x%,x%
+972	BSAVE "abc",x%,x%
+973	BSAVE LEFT$(s$, 2),x%,x%
+974	BSAVE sa$(1),x%,x%
+975	BSAVE 1,x%,x%
+976	BSAVE x%,x%,x%
+977	BSAVE s$,1,x%
+978	BSAVE s$,l&,x%
+979	BSAVE s$,s!,x%
+980	BSAVE s$,d#,x%
+981	BSAVE s$,(x% + 1),x%
+982	BSAVE s$,arr%(1),x%
+983	BSAVE s$,-1,x%
+984	BSAVE s$,100,x%
+985	BSAVE s$,"a",x%
+986	BSAVE s$,s$,x%
+987	BSAVE s$,x%,1
+988	BSAVE s$,x%,l&
+989	BSAVE s$,x%,s!
+990	BSAVE s$,x%,d#
+991	BSAVE s$,x%,(x% + 1)
+992	BSAVE s$,x%,arr%(1)
+993	BSAVE s$,x%,-1
+994	BSAVE s$,x%,100
+995	BSAVE s$,x%,"a"
+996	BSAVE s$,x%,s$
+997	BSAVE s$,x%,x%, 1
+998	RANDOMIZE
+999	RANDOMIZE x%
+1000	RANDOMIZE 1
+1001	RANDOMIZE l&
+1002	RANDOMIZE s!
+1003	RANDOMIZE d#
+1004	RANDOMIZE (x% + 1)
+1005	RANDOMIZE arr%(1)
+1006	RANDOMIZE -1
+1007	RANDOMIZE 100
+1008	RANDOMIZE "a"
+1009	RANDOMIZE s$
+1010	RANDOMIZE x%, 1
+1011	RANDOMIZE TIMER
+1012	RANDOMIZE TIMER, 1
+1013	SLEEP
+1014	SLEEP x%
+1015	SLEEP 1
+1016	SLEEP l&
+1017	SLEEP s!
+1018	SLEEP d#
+1019	SLEEP (x% + 1)
+1020	SLEEP arr%(1)
+1021	SLEEP -1
+1022	SLEEP 100
+1023	SLEEP "a"
+1024	SLEEP s$
+1025	SLEEP x%, 1
+1026	TRON
+1027	TRON, 1
+1028	TROFF
+1029	TROFF, 1
+1030	CLEAR
+1031	CLEAR x%
+1032	CLEAR x%,
+1033	CLEAR x%,,x%
+1034	CLEAR x%,x%
+1035	CLEAR x%,x%,x%
+1036	CLEAR 1,x%,x%
+1037	CLEAR l&,x%,x%
+1038	CLEAR s!,x%,x%
+1039	CLEAR d#,x%,x%
+1040	CLEAR (x% + 1),x%,x%
+1041	CLEAR arr%(1),x%,x%
+1042	CLEAR -1,x%,x%
+1043	CLEAR 100,x%,x%
+1044	CLEAR "a",x%,x%
+1045	CLEAR s$,x%,x%
+1046	CLEAR x%,1,x%
+1047	CLEAR x%,l&,x%
+1048	CLEAR x%,s!,x%
+1049	CLEAR x%,d#,x%
+1050	CLEAR x%,(x% + 1),x%
+1051	CLEAR x%,arr%(1),x%
+1052	CLEAR x%,-1,x%
+1053	CLEAR x%,100,x%
+1054	CLEAR x%,"a",x%
+1055	CLEAR x%,s$,x%
+1056	CLEAR x%,x%,1
+1057	CLEAR x%,x%,l&
+1058	CLEAR x%,x%,s!
+1059	CLEAR x%,x%,d#
+1060	CLEAR x%,x%,(x% + 1)
+1061	CLEAR x%,x%,arr%(1)
+1062	CLEAR x%,x%,-1
+1063	CLEAR x%,x%,100
+1064	CLEAR x%,x%,"a"
+1065	CLEAR x%,x%,s$
+1066	CLEAR x%,x%,x%, 1
+1067	SHELL
+1068	SHELL s$
+1069	SHELL "abc"
+1070	SHELL LEFT$(s$, 2)
+1071	SHELL sa$(1)
+1072	SHELL 1
+1073	SHELL x%
+1074	SHELL s$, 1
+1075	ENVIRON s$
+1076	ENVIRON "abc"
+1077	ENVIRON LEFT$(s$, 2)
+1078	ENVIRON sa$(1)
+1079	ENVIRON 1
+1080	ENVIRON x%
+1081	ENVIRON s$, 1
+1082	SYSTEM
+1083	SYSTEM, 1
+1084	STOP
+1085	STOP, 1
+1086	END
+1087	END, 1
+1088	DATE$ = s$
+1089	DATE$ = "abc"
+1090	DATE$ = LEFT$(s$, 2)
+1091	DATE$ = sa$(1)
+1092	DATE$ = 1
+1093	DATE$ = x%
+1094	DATE$ = s$, 1
+1095	TIME$ = s$
+1096	TIME$ = "abc"
+1097	TIME$ = LEFT$(s$, 2)
+1098	TIME$ = sa$(1)
+1099	TIME$ = 1
+1100	TIME$ = x%
+1101	TIME$ = s$, 1
+1102	ERROR x%
+1103	ERROR 3
+1104	ERROR arr%(1)
+1105	ERROR (x% * 2)
+1106	ERROR "a"
+1107	ERROR s$
+1108	ERROR x%, 1
+1109	OPEN s$ FOR INPUT AS #1
+1110	OPEN s$ FOR OUTPUT AS #1
+1111	OPEN s$ FOR APPEND AS #1
+1112	OPEN s$ FOR RANDOM AS #1
+1113	OPEN s$ FOR BINARY AS #1
+1114	OPEN "abc" FOR INPUT AS #1
+1115	OPEN LEFT$(s$, 2) FOR INPUT AS #1
+1116	OPEN sa$(1) FOR INPUT AS #1
+1117	OPEN 1 FOR INPUT AS #1
+1118	OPEN x% FOR INPUT AS #1
+1119	OPEN s$ FOR INPUT AS #x%
+1120	OPEN s$ FOR INPUT AS #3
+1121	OPEN s$ FOR INPUT AS "a"
+1122	OPEN s$ FOR INPUT AS s$
+1123	OPEN s$ FOR INPUT AS #1, 1
+1124	OPEN s$ FOR INPUT AS 1
+1125	OPEN s$ FOR OUTPUT AS 1
+1126	OPEN s$ FOR APPEND AS 1
+1127	OPEN s$ FOR RANDOM AS 1
+1128	OPEN s$ FOR BINARY AS 1
+1129	OPEN "abc" FOR INPUT AS 1
+1130	OPEN LEFT$(s$, 2) FOR INPUT AS 1
+1131	OPEN sa$(1) FOR INPUT AS 1
+1132	OPEN 1 FOR INPUT AS 1
+1133	OPEN x% FOR INPUT AS 1
+1134	OPEN s$ FOR INPUT AS x%
+1135	OPEN s$ FOR INPUT AS 1, 1
+1136	OPEN s$ AS #1
+1137	OPEN s$ AS #1 LEN = x%
+1138	OPEN "abc" AS #1 LEN = x%
+1139	OPEN LEFT$(s$, 2) AS #1 LEN = x%
+1140	OPEN sa$(1) AS #1 LEN = x%
+1141	OPEN 1 AS #1 LEN = x%
+1142	OPEN x% AS #1 LEN = x%
+1143	OPEN s$ AS #x% LEN = x%
+1144	OPEN s$ AS #3 LEN = x%
+1145	OPEN s$ AS "a" LEN = x%
+1146	OPEN s$ AS s$ LEN = x%
+1147	OPEN s$ AS #1 LEN = 3
+1148	OPEN s$ AS #1 LEN = arr%(1)
+1149	OPEN s$ AS #1 LEN = (x% * 2)
+1150	OPEN s$ AS #1 LEN = "a"
+1151	OPEN s$ AS #1 LEN = s$
+1152	OPEN s$ AS #1 LEN = x%, 1
+1153	OPEN s$ FOR RANDOM AS #1 LEN = x%
+1154	OPEN "abc" FOR RANDOM AS #1 LEN = x%
+1155	OPEN LEFT$(s$, 2) FOR RANDOM AS #1 LEN = x%
+1156	OPEN sa$(1) FOR RANDOM AS #1 LEN = x%
+1157	OPEN 1 FOR RANDOM AS #1 LEN = x%
+1158	OPEN x% FOR RANDOM AS #1 LEN = x%
+1159	OPEN s$ FOR RANDOM AS #x% LEN = x%
+1160	OPEN s$ FOR RANDOM AS #3 LEN = x%
+1161	OPEN s$ FOR RANDOM AS "a" LEN = x%
+1162	OPEN s$ FOR RANDOM AS s$ LEN = x%
+1163	OPEN s$ FOR RANDOM AS #1 LEN = 3
+1164	OPEN s$ FOR RANDOM AS #1 LEN = arr%(1)
+1165	OPEN s$ FOR RANDOM AS #1 LEN = (x% * 2)
+1166	OPEN s$ FOR RANDOM AS #1 LEN = "a"
+1167	OPEN s$ FOR RANDOM AS #1 LEN = s$
+1168	OPEN s$ FOR RANDOM AS #1 LEN = x%, 1
+1169	OPEN s$ FOR BINARY ACCESS READ AS #1
+1170	OPEN s$ FOR BINARY ACCESS WRITE AS #1
+1171	OPEN s$ FOR BINARY ACCESS READ WRITE AS #1
+1172	OPEN "abc" FOR BINARY ACCESS READ AS #1
+1173	OPEN LEFT$(s$, 2) FOR BINARY ACCESS READ AS #1
+1174	OPEN sa$(1) FOR BINARY ACCESS READ AS #1
+1175	OPEN 1 FOR BINARY ACCESS READ AS #1
+1176	OPEN x% FOR BINARY ACCESS READ AS #1
+1177	OPEN s$ FOR BINARY ACCESS READ AS #x%
+1178	OPEN s$ FOR BINARY ACCESS READ AS #3
+1179	OPEN s$ FOR BINARY ACCESS READ AS "a"
+1180	OPEN s$ FOR BINARY ACCESS READ AS s$
+1181	OPEN s$ FOR BINARY ACCESS READ AS #1, 1
+1182	OPEN s$ FOR INPUT SHARED AS #1
+1183	OPEN "abc" FOR INPUT SHARED AS #1
+1184	OPEN LEFT$(s$, 2) FOR INPUT SHARED AS #1
+1185	OPEN sa$(1) FOR INPUT SHARED AS #1
+1186	OPEN 1 FOR INPUT SHARED AS #1
+1187	OPEN x% FOR INPUT SHARED AS #1
+1188	OPEN s$ FOR INPUT SHARED AS #x%
+1189	OPEN s$ FOR INPUT SHARED AS #3
+1190	OPEN s$ FOR INPUT SHARED AS "a"
+1191	OPEN s$ FOR INPUT SHARED AS s$
+1192	OPEN s$ FOR INPUT SHARED AS #1, 1
+1193	OPEN s$ FOR INPUT LOCK READ AS #1
+1194	OPEN s$ FOR INPUT LOCK WRITE AS #1
+1195	OPEN s$ FOR INPUT LOCK READ WRITE AS #1
+1196	OPEN "abc" FOR INPUT LOCK READ AS #1
+1197	OPEN LEFT$(s$, 2) FOR INPUT LOCK READ AS #1
+1198	OPEN sa$(1) FOR INPUT LOCK READ AS #1
+1199	OPEN 1 FOR INPUT LOCK READ AS #1
+1200	OPEN x% FOR INPUT LOCK READ AS #1
+1201	OPEN s$ FOR INPUT LOCK READ AS #x%
+1202	OPEN s$ FOR INPUT LOCK READ AS #3
+1203	OPEN s$ FOR INPUT LOCK READ AS "a"
+1204	OPEN s$ FOR INPUT LOCK READ AS s$
+1205	OPEN s$ FOR INPUT LOCK READ AS #1, 1
+1206	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1207	OPEN "abc" FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1208	OPEN LEFT$(s$, 2) FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1209	OPEN sa$(1) FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1210	OPEN 1 FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1211	OPEN x% FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1
+1212	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #x%
+1213	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #3
+1214	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS "a"
+1215	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS s$
+1216	OPEN s$ FOR RANDOM ACCESS READ WRITE LOCK WRITE AS #1, 1
+1217	OPEN "abc",#1,s$
+1218	OPEN "abc",#1,s$,x%
+1219	OPEN "MB T120",#1,s$,x%
+1220	OPEN 1,#1,s$,x%
+1221	OPEN x%,#1,s$,x%
+1222	OPEN "abc",#x%,s$,x%
+1223	OPEN "abc",#3,s$,x%
+1224	OPEN "abc","a",s$,x%
+1225	OPEN "abc",s$,s$,x%
+1226	OPEN "abc",#1,"abc",x%
+1227	OPEN "abc",#1,LEFT$(s$, 2),x%
+1228	OPEN "abc",#1,sa$(1),x%
+1229	OPEN "abc",#1,1,x%
+1230	OPEN "abc",#1,x%,x%
+1231	OPEN "abc",#1,s$,3
+1232	OPEN "abc",#1,s$,arr%(1)
+1233	OPEN "abc",#1,s$,(x% * 2)
+1234	OPEN "abc",#1,s$,"a"
+1235	OPEN "abc",#1,s$,s$
+1236	OPEN "abc",#1,s$,x%, 1
+1237	OPEN "abc", 1, s$
+1238	OPEN "MB T120", 1, s$
+1239	OPEN 1, 1, s$
+1240	OPEN x%, 1, s$
+1241	OPEN "abc", x%, s$
+1242	OPEN "abc", "a", s$
+1243	OPEN "abc", s$, s$
+1244	OPEN "abc", 1, "abc"
+1245	OPEN "abc", 1, LEFT$(s$, 2)
+1246	OPEN "abc", 1, sa$(1)
+1247	OPEN "abc", 1, 1
+1248	OPEN "abc", 1, x%
+1249	OPEN "abc", 1, s$, 1
+1250	CLOSE
+1251	CLOSE #1
+1252	CLOSE #1,#1
+1253	CLOSE #x%,#1
+1254	CLOSE #3,#1
+1255	CLOSE "a",#1
+1256	CLOSE s$,#1
+1257	CLOSE #1,#x%
+1258	CLOSE #1,#3
+1259	CLOSE #1,"a"
+1260	CLOSE #1,s$
+1261	CLOSE #1,#1, 1
+1262	CLOSE 1
+1263	CLOSE x%
+1264	CLOSE "a"
+1265	CLOSE s$
+1266	CLOSE 1, 1
+1267	RESET
+1268	RESET, 1
+1269	SEEK #1,x%
+1270	SEEK #x%,x%
+1271	SEEK #3,x%
+1272	SEEK "a",x%
+1273	SEEK s$,x%
+1274	SEEK #1,1
+1275	SEEK #1,l&
+1276	SEEK #1,s!
+1277	SEEK #1,d#
+1278	SEEK #1,(x% + 1)
+1279	SEEK #1,arr%(1)
+1280	SEEK #1,-1
+1281	SEEK #1,100
+1282	SEEK #1,"a"
+1283	SEEK #1,s$
+1284	SEEK #1,x%, 1
+1285	GET #1
+1286	GET #1,
+1287	GET #1,,x%
+1288	GET #1,x%
+1289	GET #1,x%,x%
+1290	GET #x%,x%,x%
+1291	GET #3,x%,x%
+1292	GET "a",x%,x%
+1293	GET s$,x%,x%
+1294	GET #1,1,x%
+1295	GET #1,l&,x%
+1296	GET #1,s!,x%
+1297	GET #1,d#,x%
+1298	GET #1,(x% + 1),x%
+1299	GET #1,arr%(1),x%
+1300	GET #1,-1,x%
+1301	GET #1,100,x%
+1302	GET #1,"a",x%
+1303	GET #1,s$,x%
+1304	GET #1,x%,l&
+1305	GET #1,x%,s!
+1306	GET #1,x%,d#
+1307	GET #1,x%,arr%(1)
+1308	GET #1,x%,r.a
+1309	GET #1,x%,1
+1310	GET #1,x%,"a"
+1311	GET #1,x%,s$
+1312	GET #1,x%,x%, 1
+1313	PUT #1
+1314	PUT #1,
+1315	PUT #1,,x%
+1316	PUT #1,x%
+1317	PUT #1,x%,x%
+1318	PUT #x%,x%,x%
+1319	PUT #3,x%,x%
+1320	PUT "a",x%,x%
+1321	PUT s$,x%,x%
+1322	PUT #1,1,x%
+1323	PUT #1,l&,x%
+1324	PUT #1,s!,x%
+1325	PUT #1,d#,x%
+1326	PUT #1,(x% + 1),x%
+1327	PUT #1,arr%(1),x%
+1328	PUT #1,-1,x%
+1329	PUT #1,100,x%
+1330	PUT #1,"a",x%
+1331	PUT #1,s$,x%
+1332	PUT #1,x%,l&
+1333	PUT #1,x%,s!
+1334	PUT #1,x%,d#
+1335	PUT #1,x%,arr%(1)
+1336	PUT #1,x%,r.a
+1337	PUT #1,x%,1
+1338	PUT #1,x%,"a"
+1339	PUT #1,x%,s$
+1340	PUT #1,x%,x%, 1
+1341	LOCK #1
+1342	LOCK #1,x%
+1343	LOCK #1,x% TO x%
+1344	LOCK #x%,x% TO x%
+1345	LOCK #3,x% TO x%
+1346	LOCK "a",x% TO x%
+1347	LOCK s$,x% TO x%
+1348	LOCK #1,1 TO x%
+1349	LOCK #1,l& TO x%
+1350	LOCK #1,s! TO x%
+1351	LOCK #1,d# TO x%
+1352	LOCK #1,(x% + 1) TO x%
+1353	LOCK #1,arr%(1) TO x%
+1354	LOCK #1,-1 TO x%
+1355	LOCK #1,100 TO x%
+1356	LOCK #1,"a" TO x%
+1357	LOCK #1,s$ TO x%
+1358	LOCK #1,x% TO 1
+1359	LOCK #1,x% TO l&
+1360	LOCK #1,x% TO s!
+1361	LOCK #1,x% TO d#
+1362	LOCK #1,x% TO (x% + 1)
+1363	LOCK #1,x% TO arr%(1)
+1364	LOCK #1,x% TO -1
+1365	LOCK #1,x% TO 100
+1366	LOCK #1,x% TO "a"
+1367	LOCK #1,x% TO s$
+1368	LOCK #1,x% TO x%, 1
+1369	UNLOCK #1
+1370	UNLOCK #1,x%
+1371	UNLOCK #1,x% TO x%
+1372	UNLOCK #x%,x% TO x%
+1373	UNLOCK #3,x% TO x%
+1374	UNLOCK "a",x% TO x%
+1375	UNLOCK s$,x% TO x%
+1376	UNLOCK #1,1 TO x%
+1377	UNLOCK #1,l& TO x%
+1378	UNLOCK #1,s! TO x%
+1379	UNLOCK #1,d# TO x%
+1380	UNLOCK #1,(x% + 1) TO x%
+1381	UNLOCK #1,arr%(1) TO x%
+1382	UNLOCK #1,-1 TO x%
+1383	UNLOCK #1,100 TO x%
+1384	UNLOCK #1,"a" TO x%
+1385	UNLOCK #1,s$ TO x%
+1386	UNLOCK #1,x% TO 1
+1387	UNLOCK #1,x% TO l&
+1388	UNLOCK #1,x% TO s!
+1389	UNLOCK #1,x% TO d#
+1390	UNLOCK #1,x% TO (x% + 1)
+1391	UNLOCK #1,x% TO arr%(1)
+1392	UNLOCK #1,x% TO -1
+1393	UNLOCK #1,x% TO 100
+1394	UNLOCK #1,x% TO "a"
+1395	UNLOCK #1,x% TO s$
+1396	UNLOCK #1,x% TO x%, 1
+1397	FIELD #1,x% AS s$
+1398	FIELD #1,x% AS s$,x% AS s$
+1399	FIELD #x%,x% AS s$,x% AS s$
+1400	FIELD #3,x% AS s$,x% AS s$
+1401	FIELD "a",x% AS s$,x% AS s$
+1402	FIELD s$,x% AS s$,x% AS s$
+1403	FIELD #1,3 AS s$,x% AS s$
+1404	FIELD #1,arr%(1) AS s$,x% AS s$
+1405	FIELD #1,(x% * 2) AS s$,x% AS s$
+1406	FIELD #1,"a" AS s$,x% AS s$
+1407	FIELD #1,s$ AS s$,x% AS s$
+1408	FIELD #1,x% AS sa$(1),x% AS s$
+1409	FIELD #1,x% AS r.s,x% AS s$
+1410	FIELD #1,x% AS x%,x% AS s$
+1411	FIELD #1,x% AS 1,x% AS s$
+1412	FIELD #1,x% AS "a",x% AS s$
+1413	FIELD #1,x% AS s$,3 AS s$
+1414	FIELD #1,x% AS s$,arr%(1) AS s$
+1415	FIELD #1,x% AS s$,(x% * 2) AS s$
+1416	FIELD #1,x% AS s$,"a" AS s$
+1417	FIELD #1,x% AS s$,s$ AS s$
+1418	FIELD #1,x% AS s$,x% AS sa$(1)
+1419	FIELD #1,x% AS s$,x% AS r.s
+1420	FIELD #1,x% AS s$,x% AS x%
+1421	FIELD #1,x% AS s$,x% AS 1
+1422	FIELD #1,x% AS s$,x% AS "a"
+1423	FIELD #1,x% AS s$,x% AS s$, 1
+1424	LSET s$ = s$
+1425	LSET sa$(1) = s$
+1426	LSET r.s = s$
+1427	LSET x% = s$
+1428	LSET 1 = s$
+1429	LSET "a" = s$
+1430	LSET s$ = "abc"
+1431	LSET s$ = LEFT$(s$, 2)
+1432	LSET s$ = sa$(1)
+1433	LSET s$ = 1
+1434	LSET s$ = x%
+1435	LSET s$ = s$, 1
+1436	RSET s$ = s$
+1437	RSET sa$(1) = s$
+1438	RSET r.s = s$
+1439	RSET x% = s$
+1440	RSET 1 = s$
+1441	RSET "a" = s$
+1442	RSET s$ = "abc"
+1443	RSET s$ = LEFT$(s$, 2)
+1444	RSET s$ = sa$(1)
+1445	RSET s$ = 1
+1446	RSET s$ = x%
+1447	RSET s$ = s$, 1
+1448	IOCTL #1,s$
+1449	IOCTL #x%,s$
+1450	IOCTL #3,s$
+1451	IOCTL "a",s$
+1452	IOCTL s$,s$
+1453	IOCTL #1,"abc"
+1454	IOCTL #1,LEFT$(s$, 2)
+1455	IOCTL #1,sa$(1)
+1456	IOCTL #1,1
+1457	IOCTL #1,x%
+1458	IOCTL #1,s$, 1
+1459	NAME s$ AS s$
+1460	NAME "abc" AS s$
+1461	NAME LEFT$(s$, 2) AS s$
+1462	NAME sa$(1) AS s$
+1463	NAME 1 AS s$
+1464	NAME x% AS s$
+1465	NAME s$ AS "abc"
+1466	NAME s$ AS LEFT$(s$, 2)
+1467	NAME s$ AS sa$(1)
+1468	NAME s$ AS 1
+1469	NAME s$ AS x%
+1470	NAME s$ AS s$, 1
+1471	KILL s$
+1472	KILL "abc"
+1473	KILL LEFT$(s$, 2)
+1474	KILL sa$(1)
+1475	KILL 1
+1476	KILL x%
+1477	KILL s$, 1
+1478	MKDIR s$
+1479	MKDIR "abc"
+1480	MKDIR LEFT$(s$, 2)
+1481	MKDIR sa$(1)
+1482	MKDIR 1
+1483	MKDIR x%
+1484	MKDIR s$, 1
+1485	CHDIR s$
+1486	CHDIR "abc"
+1487	CHDIR LEFT$(s$, 2)
+1488	CHDIR sa$(1)
+1489	CHDIR 1
+1490	CHDIR x%
+1491	CHDIR s$, 1
+1492	RMDIR s$
+1493	RMDIR "abc"
+1494	RMDIR LEFT$(s$, 2)
+1495	RMDIR sa$(1)
+1496	RMDIR 1
+1497	RMDIR x%
+1498	RMDIR s$, 1
+1499	FILES
+1500	FILES s$
+1501	FILES "abc"
+1502	FILES LEFT$(s$, 2)
+1503	FILES sa$(1)
+1504	FILES 1
+1505	FILES x%
+1506	FILES s$, 1
+1507	CHAIN s$
+1508	CHAIN "abc"
+1509	CHAIN LEFT$(s$, 2)
+1510	CHAIN sa$(1)
+1511	CHAIN 1
+1512	CHAIN x%
+1513	CHAIN s$, 1
+1514	RUN
+1515	RUN s$
+1516	RUN "abc"
+1517	RUN LEFT$(s$, 2)
+1518	RUN sa$(1)
+1519	RUN 1
+1520	RUN x%
+1521	RUN s$, 1
+1522	RUN lab
+1523	RUN lab, 1
+1524	WRITE
+1525	WRITEx%
+1526	WRITEx%,s$
+1527	WRITE #1,
+1528	WRITE #1,x%
+1529	WRITE #1,x%,s$
+1530	WRITE #x%,x%,s$
+1531	WRITE #3,x%,s$
+1532	WRITE "a",x%,s$
+1533	WRITE s$,x%,s$
+1534	WRITE #1,1,s$
+1535	WRITE #1,l&,s$
+1536	WRITE #1,s!,s$
+1537	WRITE #1,d#,s$
+1538	WRITE #1,(x% + 1),s$
+1539	WRITE #1,arr%(1),s$
+1540	WRITE #1,-1,s$
+1541	WRITE #1,100,s$
+1542	WRITE #1,"a",s$
+1543	WRITE #1,s$,s$
+1544	WRITE #1,x%,"abc"
+1545	WRITE #1,x%,LEFT$(s$, 2)
+1546	WRITE #1,x%,sa$(1)
+1547	WRITE #1,x%,1
+1548	WRITE #1,x%,x%
+1549	WRITE #1,x%,s$, 1
+1550	WRITE x%;s$
+1551	WRITE 1;s$
+1552	WRITE l&;s$
+1553	WRITE s!;s$
+1554	WRITE d#;s$
+1555	WRITE (x% + 1);s$
+1556	WRITE arr%(1);s$
+1557	WRITE -1;s$
+1558	WRITE 100;s$
+1559	WRITE "a";s$
+1560	WRITE s$;s$
+1561	WRITE x%;"abc"
+1562	WRITE x%;LEFT$(s$, 2)
+1563	WRITE x%;sa$(1)
+1564	WRITE x%;1
+1565	WRITE x%;x%
+1566	WRITE x%;s$, 1
+1567	INPUT x%
+1568	INPUT x%,x%
+1569	INPUT ;x%
+1570	INPUT ;x%,x%
+1571	INPUT l&,x%
+1572	INPUT s!,x%
+1573	INPUT d#,x%
+1574	INPUT arr%(1),x%
+1575	INPUT r.a,x%
+1576	INPUT 1,x%
+1577	INPUT "a",x%
+1578	INPUT s$,x%
+1579	INPUT x%,l&
+1580	INPUT x%,s!
+1581	INPUT x%,d#
+1582	INPUT x%,arr%(1)
+1583	INPUT x%,r.a
+1584	INPUT x%,1
+1585	INPUT x%,"a"
+1586	INPUT x%,s$
+1587	INPUT x%,x%, 1
+1588	INPUT "abc";x%
+1589	INPUT "abc",x%
+1590	INPUT ;"abc";x%
+1591	INPUT ;"abc",x%
+1592	INPUT "MB T120";x%
+1593	INPUT 1;x%
+1594	INPUT x%;x%
+1595	INPUT "abc";l&
+1596	INPUT "abc";s!
+1597	INPUT "abc";d#
+1598	INPUT "abc";arr%(1)
+1599	INPUT "abc";r.a
+1600	INPUT "abc";1
+1601	INPUT "abc";"a"
+1602	INPUT "abc";s$
+1603	INPUT "abc";x%, 1
+1604	INPUT #1,x%
+1605	INPUT #1,x%,x%
+1606	INPUT #x%,x%,x%
+1607	INPUT #3,x%,x%
+1608	INPUT "a",x%,x%
+1609	INPUT s$,x%,x%
+1610	INPUT #1,l&,x%
+1611	INPUT #1,s!,x%
+1612	INPUT #1,d#,x%
+1613	INPUT #1,arr%(1),x%
+1614	INPUT #1,r.a,x%
+1615	INPUT #1,1,x%
+1616	INPUT #1,"a",x%
+1617	INPUT #1,s$,x%
+1618	INPUT #1,x%,l&
+1619	INPUT #1,x%,s!
+1620	INPUT #1,x%,d#
+1621	INPUT #1,x%,arr%(1)
+1622	INPUT #1,x%,r.a
+1623	INPUT #1,x%,1
+1624	INPUT #1,x%,"a"
+1625	INPUT #1,x%,s$
+1626	INPUT #1,x%,x%, 1
+1627	LINE INPUT s$
+1628	LINE INPUT "abc";s$
+1629	LINE INPUT ;s$
+1630	LINE INPUT ;"abc";s$
+1631	LINE INPUT "MB T120";s$
+1632	LINE INPUT 1;s$
+1633	LINE INPUT x%;s$
+1634	LINE INPUT "abc";sa$(1)
+1635	LINE INPUT "abc";r.s
+1636	LINE INPUT "abc";x%
+1637	LINE INPUT "abc";1
+1638	LINE INPUT "abc";"a"
+1639	LINE INPUT "abc";s$, 1
+1640	LINE INPUT #1,s$
+1641	LINE INPUT #x%,s$
+1642	LINE INPUT #3,s$
+1643	LINE INPUT "a",s$
+1644	LINE INPUT s$,s$
+1645	LINE INPUT #1,sa$(1)
+1646	LINE INPUT #1,r.s
+1647	LINE INPUT #1,x%
+1648	LINE INPUT #1,1
+1649	LINE INPUT #1,"a"
+1650	LINE INPUT #1,s$, 1
+1651	PRINT
+1652	PRINT, 1
+1653	PRINT x%
+1654	PRINT 1
+1655	PRINT l&
+1656	PRINT s!
+1657	PRINT d#
+1658	PRINT (x% + 1)
+1659	PRINT arr%(1)
+1660	PRINT -1
+1661	PRINT 100
+1662	PRINT "a"
+1663	PRINT s$
+1664	PRINT x%, 1
+1665	PRINT "abc"
+1666	PRINT LEFT$(s$, 2)
+1667	PRINT sa$(1)
+1668	PRINT s$, 1
+1669	PRINT s$;x%
+1670	PRINT "abc";x%
+1671	PRINT LEFT$(s$, 2);x%
+1672	PRINT sa$(1);x%
+1673	PRINT 1;x%
+1674	PRINT x%;x%
+1675	PRINT s$;1
+1676	PRINT s$;l&
+1677	PRINT s$;s!
+1678	PRINT s$;d#
+1679	PRINT s$;(x% + 1)
+1680	PRINT s$;arr%(1)
+1681	PRINT s$;-1
+1682	PRINT s$;100
+1683	PRINT s$;"a"
+1684	PRINT s$;s$
+1685	PRINT s$;x%, 1
+1686	PRINT s$,x%
+1687	PRINT "abc",x%
+1688	PRINT LEFT$(s$, 2),x%
+1689	PRINT sa$(1),x%
+1690	PRINT 1,x%
+1691	PRINT x%,x%
+1692	PRINT s$,1
+1693	PRINT s$,l&
+1694	PRINT s$,s!
+1695	PRINT s$,d#
+1696	PRINT s$,(x% + 1)
+1697	PRINT s$,arr%(1)
+1698	PRINT s$,-1
+1699	PRINT s$,100
+1700	PRINT s$,"a"
+1701	PRINT s$,s$
+1702	PRINT s$,x%, 1
+1703	PRINT x%;
+1704	PRINT 1;
+1705	PRINT l&;
+1706	PRINT s!;
+1707	PRINT d#;
+1708	PRINT (x% + 1);
+1709	PRINT arr%(1);
+1710	PRINT -1;
+1711	PRINT 100;
+1712	PRINT "a";
+1713	PRINT s$;
+1714	PRINT x%;, 1
+1715	PRINT ;
+1716	PRINT ;, 1
+1717	PRINT ,
+1718	PRINT ,, 1
+1719	PRINT x%;;x%
+1720	PRINT 1;;x%
+1721	PRINT l&;;x%
+1722	PRINT s!;;x%
+1723	PRINT d#;;x%
+1724	PRINT (x% + 1);;x%
+1725	PRINT arr%(1);;x%
+1726	PRINT -1;;x%
+1727	PRINT 100;;x%
+1728	PRINT "a";;x%
+1729	PRINT s$;;x%
+1730	PRINT x%;;1
+1731	PRINT x%;;l&
+1732	PRINT x%;;s!
+1733	PRINT x%;;d#
+1734	PRINT x%;;(x% + 1)
+1735	PRINT x%;;arr%(1)
+1736	PRINT x%;;-1
+1737	PRINT x%;;100
+1738	PRINT x%;;"a"
+1739	PRINT x%;;s$
+1740	PRINT x%;;x%, 1
+1741	PRINT x%,,x%
+1742	PRINT 1,,x%
+1743	PRINT l&,,x%
+1744	PRINT s!,,x%
+1745	PRINT d#,,x%
+1746	PRINT (x% + 1),,x%
+1747	PRINT arr%(1),,x%
+1748	PRINT -1,,x%
+1749	PRINT 100,,x%
+1750	PRINT "a",,x%
+1751	PRINT s$,,x%
+1752	PRINT x%,,1
+1753	PRINT x%,,l&
+1754	PRINT x%,,s!
+1755	PRINT x%,,d#
+1756	PRINT x%,,(x% + 1)
+1757	PRINT x%,,arr%(1)
+1758	PRINT x%,,-1
+1759	PRINT x%,,100
+1760	PRINT x%,,"a"
+1761	PRINT x%,,s$
+1762	PRINT x%,,x%, 1
+1763	PRINT #1,x%
+1764	PRINT #x%,x%
+1765	PRINT #3,x%
+1766	PRINT "a",x%
+1767	PRINT #1,1
+1768	PRINT #1,l&
+1769	PRINT #1,s!
+1770	PRINT #1,d#
+1771	PRINT #1,(x% + 1)
+1772	PRINT #1,arr%(1)
+1773	PRINT #1,-1
+1774	PRINT #1,100
+1775	PRINT #1,"a"
+1776	PRINT #1,s$
+1777	PRINT #1,x%, 1
+1778	PRINT #1;x%
+1779	PRINT #x%;x%
+1780	PRINT #3;x%
+1781	PRINT "a";x%
+1782	PRINT #1;1
+1783	PRINT #1;l&
+1784	PRINT #1;s!
+1785	PRINT #1;d#
+1786	PRINT #1;(x% + 1)
+1787	PRINT #1;arr%(1)
+1788	PRINT #1;-1
+1789	PRINT #1;100
+1790	PRINT #1;"a"
+1791	PRINT #1;s$
+1792	PRINT #1;x%, 1
+1793	PRINT #1
+1794	PRINT #x%
+1795	PRINT #3
+1796	PRINT #1, 1
+1797	PRINT USING s$;x%
+1798	PRINT USING "abc";x%
+1799	PRINT USING LEFT$(s$, 2);x%
+1800	PRINT USING sa$(1);x%
+1801	PRINT USING 1;x%
+1802	PRINT USING x%;x%
+1803	PRINT USING s$;1
+1804	PRINT USING s$;l&
+1805	PRINT USING s$;s!
+1806	PRINT USING s$;d#
+1807	PRINT USING s$;(x% + 1)
+1808	PRINT USING s$;arr%(1)
+1809	PRINT USING s$;-1
+1810	PRINT USING s$;100
+1811	PRINT USING s$;"a"
+1812	PRINT USING s$;s$
+1813	PRINT USING s$;x%, 1
+1814	PRINT USING s$;x%;s$
+1815	PRINT USING "abc";x%;s$
+1816	PRINT USING LEFT$(s$, 2);x%;s$
+1817	PRINT USING sa$(1);x%;s$
+1818	PRINT USING 1;x%;s$
+1819	PRINT USING x%;x%;s$
+1820	PRINT USING s$;1;s$
+1821	PRINT USING s$;l&;s$
+1822	PRINT USING s$;s!;s$
+1823	PRINT USING s$;d#;s$
+1824	PRINT USING s$;(x% + 1);s$
+1825	PRINT USING s$;arr%(1);s$
+1826	PRINT USING s$;-1;s$
+1827	PRINT USING s$;100;s$
+1828	PRINT USING s$;"a";s$
+1829	PRINT USING s$;s$;s$
+1830	PRINT USING s$;x%;"abc"
+1831	PRINT USING s$;x%;LEFT$(s$, 2)
+1832	PRINT USING s$;x%;sa$(1)
+1833	PRINT USING s$;x%;1
+1834	PRINT USING s$;x%;x%
+1835	PRINT USING s$;x%;s$, 1
+1836	PRINT USING s$;
+1837	PRINT USING "abc";
+1838	PRINT USING LEFT$(s$, 2);
+1839	PRINT USING sa$(1);
+1840	PRINT USING 1;
+1841	PRINT USING x%;
+1842	PRINT USING s$;, 1
+1843	PRINT #1,USING s$;x%
+1844	PRINT #x%,USING s$;x%
+1845	PRINT #3,USING s$;x%
+1846	PRINT "a",USING s$;x%
+1847	PRINT s$,USING s$;x%
+1848	PRINT #1,USING "abc";x%
+1849	PRINT #1,USING LEFT$(s$, 2);x%
+1850	PRINT #1,USING sa$(1);x%
+1851	PRINT #1,USING 1;x%
+1852	PRINT #1,USING x%;x%
+1853	PRINT #1,USING s$;1
+1854	PRINT #1,USING s$;l&
+1855	PRINT #1,USING s$;s!
+1856	PRINT #1,USING s$;d#
+1857	PRINT #1,USING s$;(x% + 1)
+1858	PRINT #1,USING s$;arr%(1)
+1859	PRINT #1,USING s$;-1
+1860	PRINT #1,USING s$;100
+1861	PRINT #1,USING s$;"a"
+1862	PRINT #1,USING s$;s$
+1863	PRINT #1,USING s$;x%, 1
+1864	PRINT USING l&;x%
+1865	PRINT USING s!;x%
+1866	PRINT USING d#;x%
+1867	PRINT USING (x% + 1);x%
+1868	PRINT USING arr%(1);x%
+1869	PRINT USING -1;x%
+1870	PRINT USING 100;x%
+1871	PRINT USING "a";x%
+1872	PRINT USING x%;1
+1873	PRINT USING x%;l&
+1874	PRINT USING x%;s!
+1875	PRINT USING x%;d#
+1876	PRINT USING x%;(x% + 1)
+1877	PRINT USING x%;arr%(1)
+1878	PRINT USING x%;-1
+1879	PRINT USING x%;100
+1880	PRINT USING x%;"a"
+1881	PRINT USING x%;s$
+1882	PRINT USING x%;x%, 1
+1883	PRINT TAB(x%);s$
+1884	PRINT TAB(3);s$
+1885	PRINT TAB(arr%(1));s$
+1886	PRINT TAB((x% * 2));s$
+1887	PRINT TAB("a");s$
+1888	PRINT TAB(s$);s$
+1889	PRINT TAB(x%);"abc"
+1890	PRINT TAB(x%);LEFT$(s$, 2)
+1891	PRINT TAB(x%);sa$(1)
+1892	PRINT TAB(x%);1
+1893	PRINT TAB(x%);x%
+1894	PRINT TAB(x%);s$, 1
+1895	PRINT SPC(x%);s$
+1896	PRINT SPC(3);s$
+1897	PRINT SPC(arr%(1));s$
+1898	PRINT SPC((x% * 2));s$
+1899	PRINT SPC("a");s$
+1900	PRINT SPC(s$);s$
+1901	PRINT SPC(x%);"abc"
+1902	PRINT SPC(x%);LEFT$(s$, 2)
+1903	PRINT SPC(x%);sa$(1)
+1904	PRINT SPC(x%);1
+1905	PRINT SPC(x%);x%
+1906	PRINT SPC(x%);s$, 1
+1907	PRINT s$;TAB(x%);s$
+1908	PRINT "abc";TAB(x%);s$
+1909	PRINT LEFT$(s$, 2);TAB(x%);s$
+1910	PRINT sa$(1);TAB(x%);s$
+1911	PRINT 1;TAB(x%);s$
+1912	PRINT x%;TAB(x%);s$
+1913	PRINT s$;TAB(3);s$
+1914	PRINT s$;TAB(arr%(1));s$
+1915	PRINT s$;TAB((x% * 2));s$
+1916	PRINT s$;TAB("a");s$
+1917	PRINT s$;TAB(s$);s$
+1918	PRINT s$;TAB(x%);"abc"
+1919	PRINT s$;TAB(x%);LEFT$(s$, 2)
+1920	PRINT s$;TAB(x%);sa$(1)
+1921	PRINT s$;TAB(x%);1
+1922	PRINT s$;TAB(x%);x%
+1923	PRINT s$;TAB(x%);s$, 1
+1924	PRINT TAB(x%)
+1925	PRINT TAB(3)
+1926	PRINT TAB(arr%(1))
+1927	PRINT TAB((x% * 2))
+1928	PRINT TAB("a")
+1929	PRINT TAB(s$)
+1930	PRINT TAB(x%), 1
+1931	PRINT SPC(3)
+1932	PRINT SPC(3), 1
+1933	PRINT s$ x%
+1934	PRINT "abc" x%
+1935	PRINT LEFT$(s$, 2) x%
+1936	PRINT sa$(1) x%
+1937	PRINT 1 x%
+1938	PRINT x% x%
+1939	PRINT s$ 1
+1940	PRINT s$ l&
+1941	PRINT s$ s!
+1942	PRINT s$ d#
+1943	PRINT s$ (x% + 1)
+1944	PRINT s$ arr%(1)
+1945	PRINT s$ -1
+1946	PRINT s$ 100
+1947	PRINT s$ "a"
+1948	PRINT s$ s$
+1949	PRINT s$ x%, 1
+1950	PRINT s$s$
+1951	PRINT "abc"s$
+1952	PRINT LEFT$(s$, 2)s$
+1953	PRINT sa$(1)s$
+1954	PRINT 1s$
+1955	PRINT x%s$
+1956	PRINT s$"abc"
+1957	PRINT s$LEFT$(s$, 2)
+1958	PRINT s$sa$(1)
+1959	PRINT s$1
+1960	PRINT s$x%
+1961	PRINT s$s$, 1
+1962	PRINT l& x%
+1963	PRINT s! x%
+1964	PRINT d# x%
+1965	PRINT (x% + 1) x%
+1966	PRINT arr%(1) x%
+1967	PRINT -1 x%
+1968	PRINT 100 x%
+1969	PRINT "a" x%
+1970	PRINT x% 1
+1971	PRINT x% l&
+1972	PRINT x% s!
+1973	PRINT x% d#
+1974	PRINT x% (x% + 1)
+1975	PRINT x% arr%(1)
+1976	PRINT x% -1
+1977	PRINT x% 100
+1978	PRINT x% "a"
+1979	PRINT x% s$
+1980	PRINT x% x%, 1
+1981	LPRINT x%
+1982	LPRINT 1
+1983	LPRINT l&
+1984	LPRINT s!
+1985	LPRINT d#
+1986	LPRINT (x% + 1)
+1987	LPRINT arr%(1)
+1988	LPRINT -1
+1989	LPRINT 100
+1990	LPRINT "a"
+1991	LPRINT s$
+1992	LPRINT x%, 1
+1993	LPRINT USING s$;x%
+1994	LPRINT USING "abc";x%
+1995	LPRINT USING LEFT$(s$, 2);x%
+1996	LPRINT USING sa$(1);x%
+1997	LPRINT USING 1;x%
+1998	LPRINT USING x%;x%
+1999	LPRINT USING s$;1
+2000	LPRINT USING s$;l&
+2001	LPRINT USING s$;s!
+2002	LPRINT USING s$;d#
+2003	LPRINT USING s$;(x% + 1)
+2004	LPRINT USING s$;arr%(1)
+2005	LPRINT USING s$;-1
+2006	LPRINT USING s$;100
+2007	LPRINT USING s$;"a"
+2008	LPRINT USING s$;s$
+2009	LPRINT USING s$;x%, 1
+2010	LPRINT
+2011	LPRINT, 1
+2012	LPRINT s$;x%;
+2013	LPRINT "abc";x%;
+2014	LPRINT LEFT$(s$, 2);x%;
+2015	LPRINT sa$(1);x%;
+2016	LPRINT 1;x%;
+2017	LPRINT x%;x%;
+2018	LPRINT s$;1;
+2019	LPRINT s$;l&;
+2020	LPRINT s$;s!;
+2021	LPRINT s$;d#;
+2022	LPRINT s$;(x% + 1);
+2023	LPRINT s$;arr%(1);
+2024	LPRINT s$;-1;
+2025	LPRINT s$;100;
+2026	LPRINT s$;"a";
+2027	LPRINT s$;s$;
+2028	LPRINT s$;x%;, 1
+2029	? x%
+2030	? 1
+2031	? l&
+2032	? s!
+2033	? d#
+2034	? (x% + 1)
+2035	? arr%(1)
+2036	? -1
+2037	? 100
+2038	? "a"
+2039	? s$
+2040	? x%, 1
+2041	? s$;x%
+2042	? "abc";x%
+2043	? LEFT$(s$, 2);x%
+2044	? sa$(1);x%
+2045	? 1;x%
+2046	? x%;x%
+2047	? s$;1
+2048	? s$;l&
+2049	? s$;s!
+2050	? s$;d#
+2051	? s$;(x% + 1)
+2052	? s$;arr%(1)
+2053	? s$;-1
+2054	? s$;100
+2055	? s$;"a"
+2056	? s$;s$
+2057	? s$;x%, 1
+2058	DIM x%
+2059	DIM l&
+2060	DIM s!
+2061	DIM d#
+2062	DIM arr%(1)
+2063	DIM r.a
+2064	DIM 1
+2065	DIM "a"
+2066	DIM s$
+2067	DIM x%, 1
+2068	x% = x%
+2069	x% = 1
+2070	x% = l&
+2071	x% = s!
+2072	x% = d#
+2073	x% = (x% + 1)
+2074	x% = arr%(1)
+2075	x% = -1
+2076	x% = 100
+2077	x% = "a"
+2078	x% = s$
+2079	x% = x%, 1
+2080	s$ = s$
+2081	s$ = "abc"
+2082	s$ = LEFT$(s$, 2)
+2083	s$ = sa$(1)
+2084	s$ = 1
+2085	s$ = x%
+2086	s$ = s$, 1
+2087	s$ = l&
+2088	s$ = s!
+2089	s$ = d#
+2090	s$ = (x% + 1)
+2091	s$ = arr%(1)
+2092	s$ = -1
+2093	s$ = 100
+2094	s$ = "a"
+2095	s$ = x%, 1
+2096	x% = "abc"
+2097	x% = LEFT$(s$, 2)
+2098	x% = sa$(1)
+2099	x% = s$, 1
+2100	SWAP x%,x%
+2101	SWAP l&,x%
+2102	SWAP s!,x%
+2103	SWAP d#,x%
+2104	SWAP arr%(1),x%
+2105	SWAP r.a,x%
+2106	SWAP 1,x%
+2107	SWAP "a",x%
+2108	SWAP s$,x%
+2109	SWAP x%,l&
+2110	SWAP x%,s!
+2111	SWAP x%,d#
+2112	SWAP x%,arr%(1)
+2113	SWAP x%,r.a
+2114	SWAP x%,1
+2115	SWAP x%,"a"
+2116	SWAP x%,s$
+2117	SWAP x%,x%, 1
+2118	SWAP s$,t$
+2119	SWAP s$,t$, 1
+2120	SWAP x%,s$, 1
+2121	LET x% = x%
+2122	LET x% = 1
+2123	LET x% = l&
+2124	LET x% = s!
+2125	LET x% = d#
+2126	LET x% = (x% + 1)
+2127	LET x% = arr%(1)
+2128	LET x% = -1
+2129	LET x% = 100
+2130	LET x% = "a"
+2131	LET x% = s$
+2132	LET x% = x%, 1
+2133	MID$(s$, x%) = s$
+2134	MID$(s$, x%,x%) = s$
+2135	MID$(s$, 3,x%) = s$
+2136	MID$(s$, arr%(1),x%) = s$
+2137	MID$(s$, (x% * 2),x%) = s$
+2138	MID$(s$, "a",x%) = s$
+2139	MID$(s$, s$,x%) = s$
+2140	MID$(s$, x%,3) = s$
+2141	MID$(s$, x%,arr%(1)) = s$
+2142	MID$(s$, x%,(x% * 2)) = s$
+2143	MID$(s$, x%,"a") = s$
+2144	MID$(s$, x%,s$) = s$
+2145	MID$(s$, x%,x%) = "abc"
+2146	MID$(s$, x%,x%) = LEFT$(s$, 2)
+2147	MID$(s$, x%,x%) = sa$(1)
+2148	MID$(s$, x%,x%) = 1
+2149	MID$(s$, x%,x%) = x%
+2150	MID$(s$, x%,x%) = s$, 1
+2151	MID$(s$, s$) = s$
+2152	MID$(s$, "abc") = s$
+2153	MID$(s$, LEFT$(s$, 2)) = s$
+2154	MID$(s$, sa$(1)) = s$
+2155	MID$(s$, 1) = s$
+2156	MID$(s$, s$) = "abc"
+2157	MID$(s$, s$) = LEFT$(s$, 2)
+2158	MID$(s$, s$) = sa$(1)
+2159	MID$(s$, s$) = 1
+2160	MID$(s$, s$) = x%
+2161	MID$(s$, s$) = s$, 1
+2162	MID$(x%, 1) = s$
+2163	MID$(x%, 1) = "abc"
+2164	MID$(x%, 1) = LEFT$(s$, 2)
+2165	MID$(x%, 1) = sa$(1)
+2166	MID$(x%, 1) = 1
+2167	MID$(x%, 1) = x%
+2168	MID$(x%, 1) = s$, 1
+2169	ERASE arr%()
+2170	ERASE ars!()
+2171	ERASE sa$()
+2172	ERASE m%()
+2173	ERASE x%
+2174	ERASE 1
+2175	ERASE arr%(), 1
+2176	ERASE x%, 1
+2177	arr%(x%) = x%
+2178	arr%(3) = x%
+2179	arr%(arr%(1)) = x%
+2180	arr%((x% * 2)) = x%
+2181	arr%("a") = x%
+2182	arr%(s$) = x%
+2183	arr%(x%) = 1
+2184	arr%(x%) = l&
+2185	arr%(x%) = s!
+2186	arr%(x%) = d#
+2187	arr%(x%) = (x% + 1)
+2188	arr%(x%) = arr%(1)
+2189	arr%(x%) = -1
+2190	arr%(x%) = 100
+2191	arr%(x%) = "a"
+2192	arr%(x%) = s$
+2193	arr%(x%) = x%, 1
+2194	arr%(x%,x%) = x%
+2195	arr%(3,x%) = x%
+2196	arr%(arr%(1),x%) = x%
+2197	arr%((x% * 2),x%) = x%
+2198	arr%("a",x%) = x%
+2199	arr%(s$,x%) = x%
+2200	arr%(x%,3) = x%
+2201	arr%(x%,arr%(1)) = x%
+2202	arr%(x%,(x% * 2)) = x%
+2203	arr%(x%,"a") = x%
+2204	arr%(x%,s$) = x%
+2205	arr%(x%,x%) = 1
+2206	arr%(x%,x%) = l&
+2207	arr%(x%,x%) = s!
+2208	arr%(x%,x%) = d#
+2209	arr%(x%,x%) = (x% + 1)
+2210	arr%(x%,x%) = arr%(1)
+2211	arr%(x%,x%) = -1
+2212	arr%(x%,x%) = 100
+2213	arr%(x%,x%) = "a"
+2214	arr%(x%,x%) = s$
+2215	arr%(x%,x%) = x%, 1
+2216	m%(x%,x%) = x%
+2217	m%(3,x%) = x%
+2218	m%(arr%(1),x%) = x%
+2219	m%((x% * 2),x%) = x%
+2220	m%("a",x%) = x%
+2221	m%(s$,x%) = x%
+2222	m%(x%,3) = x%
+2223	m%(x%,arr%(1)) = x%
+2224	m%(x%,(x% * 2)) = x%
+2225	m%(x%,"a") = x%
+2226	m%(x%,s$) = x%
+2227	m%(x%,x%) = 1
+2228	m%(x%,x%) = l&
+2229	m%(x%,x%) = s!
+2230	m%(x%,x%) = d#
+2231	m%(x%,x%) = (x% + 1)
+2232	m%(x%,x%) = arr%(1)
+2233	m%(x%,x%) = -1
+2234	m%(x%,x%) = 100
+2235	m%(x%,x%) = "a"
+2236	m%(x%,x%) = s$
+2237	m%(x%,x%) = x%, 1
+2238	m%(x%) = x%
+2239	m%(3) = x%
+2240	m%(arr%(1)) = x%
+2241	m%((x% * 2)) = x%
+2242	m%("a") = x%
+2243	m%(s$) = x%
+2244	m%(x%) = 1
+2245	m%(x%) = l&
+2246	m%(x%) = s!
+2247	m%(x%) = d#
+2248	m%(x%) = (x% + 1)
+2249	m%(x%) = arr%(1)
+2250	m%(x%) = -1
+2251	m%(x%) = 100
+2252	m%(x%) = "a"
+2253	m%(x%) = s$
+2254	m%(x%) = x%, 1
+2255	READ x%
+2256	READ x%,x%
+2257	READ l&,x%
+2258	READ s!,x%
+2259	READ d#,x%
+2260	READ arr%(1),x%
+2261	READ r.a,x%
+2262	READ 1,x%
+2263	READ "a",x%
+2264	READ s$,x%
+2265	READ x%,l&
+2266	READ x%,s!
+2267	READ x%,d#
+2268	READ x%,arr%(1)
+2269	READ x%,r.a
+2270	READ x%,1
+2271	READ x%,"a"
+2272	READ x%,s$
+2273	READ x%,x%, 1
+2274	RESTORE
+2275	RESTORE lab
+2276	RESTORE, 1
+2277	OPTION BASE 0
+2278	OPTION BASE 1
+2279	OPTION BASE 0, 1
+2280	DEFINT A-Z
+2281	DEFINT A-Z, 1
+2282	DEFSTR s
+2283	DEFSTR s, 1
+2284	DEFLNG a-c
+2285	DEFLNG a-c, 1
+2286	DEFSNG x
+2287	DEFSNG x, 1
+2288	DEFDBL d
+2289	DEFDBL d, 1
+2290	CONST k1 = x%
+2291	CONST k1 = 1
+2292	CONST k1 = l&
+2293	CONST k1 = s!
+2294	CONST k1 = d#
+2295	CONST k1 = (x% + 1)
+2296	CONST k1 = arr%(1)
+2297	CONST k1 = -1
+2298	CONST k1 = 100
+2299	CONST k1 = "a"
+2300	CONST k1 = s$
+2301	CONST k1 = x%, 1
+2302	CONST k2 = s$
+2303	CONST k2 = "abc"
+2304	CONST k2 = LEFT$(s$, 2)
+2305	CONST k2 = sa$(1)
+2306	CONST k2 = 1
+2307	CONST k2 = x%
+2308	CONST k2 = s$, 1
+2309	CONST k3 = x%
+2310	CONST k3 = l&
+2311	CONST k3 = s!
+2312	CONST k3 = d#
+2313	CONST k3 = arr%(1)
+2314	CONST k3 = r.a
+2315	CONST k3 = 1
+2316	CONST k3 = "a"
+2317	CONST k3 = s$
+2318	CONST k3 = x%, 1
+2319	r.a = x%
+2320	r.a = 1
+2321	r.a = l&
+2322	r.a = s!
+2323	r.a = d#
+2324	r.a = (x% + 1)
+2325	r.a = arr%(1)
+2326	r.a = -1
+2327	r.a = 100
+2328	r.a = "a"
+2329	r.a = s$
+2330	r.a = x%, 1
+2331	r.s = s$
+2332	r.s = "abc"
+2333	r.s = LEFT$(s$, 2)
+2334	r.s = sa$(1)
+2335	r.s = 1
+2336	r.s = x%
+2337	r.s = s$, 1
+2338	r.a = "abc"
+2339	r.a = LEFT$(s$, 2)
+2340	r.a = sa$(1)
+2341	r.a = s$, 1
+2342	r.zz = 1
+2343	r.zz = 1, 1
+2344	r = r
+2345	r = r, 1
+2346	x% = c%
+2347	x% = c%, 1
+2348	c% = 1
+2349	c% = 1, 1
+2350	IF x% THEN x% = 1
+2351	IF x% THEN x% = 1 ELSE y% = 2
+2352	IF 1 THEN x% = 1
+2353	IF l& THEN x% = 1
+2354	IF s! THEN x% = 1
+2355	IF d# THEN x% = 1
+2356	IF (x% + 1) THEN x% = 1
+2357	IF arr%(1) THEN x% = 1
+2358	IF -1 THEN x% = 1
+2359	IF 100 THEN x% = 1
+2360	IF "a" THEN x% = 1
+2361	IF s$ THEN x% = 1
+2362	IF x% THEN x% = 1, 1
+2363	IF "abc" THEN x% = 1
+2364	IF LEFT$(s$, 2) THEN x% = 1
+2365	IF sa$(1) THEN x% = 1
+2366	IF s$ THEN x% = 1, 1
+2367	IF x% THEN lab
+2368	IF x% THEN lab ELSE lab
+2369	IF 1 THEN lab
+2370	IF l& THEN lab
+2371	IF s! THEN lab
+2372	IF d# THEN lab
+2373	IF (x% + 1) THEN lab
+2374	IF arr%(1) THEN lab
+2375	IF -1 THEN lab
+2376	IF 100 THEN lab
+2377	IF "a" THEN lab
+2378	IF s$ THEN lab
+2379	IF x% THEN lab, 1
+2380	IF x% GOTO lab
+2381	IF 1 GOTO lab
+2382	IF l& GOTO lab
+2383	IF s! GOTO lab
+2384	IF d# GOTO lab
+2385	IF (x% + 1) GOTO lab
+2386	IF arr%(1) GOTO lab
+2387	IF -1 GOTO lab
+2388	IF 100 GOTO lab
+2389	IF "a" GOTO lab
+2390	IF s$ GOTO lab
+2391	IF x% GOTO lab, 1
+2392	IF x% THEN 10
+2393	IF 1 THEN 10
+2394	IF l& THEN 10
+2395	IF s! THEN 10
+2396	IF d# THEN 10
+2397	IF (x% + 1) THEN 10
+2398	IF arr%(1) THEN 10
+2399	IF -1 THEN 10
+2400	IF 100 THEN 10
+2401	IF "a" THEN 10
+2402	IF s$ THEN 10
+2403	IF x% THEN 10, 1
+2404	FOR i% = x% TO x%: NEXT
+2405	FOR i% = x% TO x% STEP x%: NEXT
+2406	FOR i% = 1 TO x% STEP x%: NEXT
+2407	FOR i% = l& TO x% STEP x%: NEXT
+2408	FOR i% = s! TO x% STEP x%: NEXT
+2409	FOR i% = d# TO x% STEP x%: NEXT
+2410	FOR i% = (x% + 1) TO x% STEP x%: NEXT
+2411	FOR i% = arr%(1) TO x% STEP x%: NEXT
+2412	FOR i% = -1 TO x% STEP x%: NEXT
+2413	FOR i% = 100 TO x% STEP x%: NEXT
+2414	FOR i% = "a" TO x% STEP x%: NEXT
+2415	FOR i% = s$ TO x% STEP x%: NEXT
+2416	FOR i% = x% TO 1 STEP x%: NEXT
+2417	FOR i% = x% TO l& STEP x%: NEXT
+2418	FOR i% = x% TO s! STEP x%: NEXT
+2419	FOR i% = x% TO d# STEP x%: NEXT
+2420	FOR i% = x% TO (x% + 1) STEP x%: NEXT
+2421	FOR i% = x% TO arr%(1) STEP x%: NEXT
+2422	FOR i% = x% TO -1 STEP x%: NEXT
+2423	FOR i% = x% TO 100 STEP x%: NEXT
+2424	FOR i% = x% TO "a" STEP x%: NEXT
+2425	FOR i% = x% TO s$ STEP x%: NEXT
+2426	FOR i% = x% TO x% STEP 1: NEXT
+2427	FOR i% = x% TO x% STEP l&: NEXT
+2428	FOR i% = x% TO x% STEP s!: NEXT
+2429	FOR i% = x% TO x% STEP d#: NEXT
+2430	FOR i% = x% TO x% STEP (x% + 1): NEXT
+2431	FOR i% = x% TO x% STEP arr%(1): NEXT
+2432	FOR i% = x% TO x% STEP -1: NEXT
+2433	FOR i% = x% TO x% STEP 100: NEXT
+2434	FOR i% = x% TO x% STEP "a": NEXT
+2435	FOR i% = x% TO x% STEP s$: NEXT
+2436	FOR i% = x% TO x% STEP x%: NEXT, 1
+2437	FOR i% = x% TO x%: NEXT i%
+2438	FOR i% = 1 TO x%: NEXT i%
+2439	FOR i% = l& TO x%: NEXT i%
+2440	FOR i% = s! TO x%: NEXT i%
+2441	FOR i% = d# TO x%: NEXT i%
+2442	FOR i% = (x% + 1) TO x%: NEXT i%
+2443	FOR i% = arr%(1) TO x%: NEXT i%
+2444	FOR i% = -1 TO x%: NEXT i%
+2445	FOR i% = 100 TO x%: NEXT i%
+2446	FOR i% = "a" TO x%: NEXT i%
+2447	FOR i% = s$ TO x%: NEXT i%
+2448	FOR i% = x% TO 1: NEXT i%
+2449	FOR i% = x% TO l&: NEXT i%
+2450	FOR i% = x% TO s!: NEXT i%
+2451	FOR i% = x% TO d#: NEXT i%
+2452	FOR i% = x% TO (x% + 1): NEXT i%
+2453	FOR i% = x% TO arr%(1): NEXT i%
+2454	FOR i% = x% TO -1: NEXT i%
+2455	FOR i% = x% TO 100: NEXT i%
+2456	FOR i% = x% TO "a": NEXT i%
+2457	FOR i% = x% TO s$: NEXT i%
+2458	FOR i% = x% TO x%: NEXT i%, 1
+2459	FOR s$ = 1 TO 2: NEXT
+2460	FOR s$ = 1 TO 2: NEXT, 1
+2461	FOR i% = s$ TO 2: NEXT
+2462	FOR i% = "abc" TO 2: NEXT
+2463	FOR i% = LEFT$(s$, 2) TO 2: NEXT
+2464	FOR i% = sa$(1) TO 2: NEXT
+2465	FOR i% = 1 TO 2: NEXT
+2466	FOR i% = x% TO 2: NEXT
+2467	FOR i% = s$ TO 2: NEXT, 1
+2468	FOR arr%(1) = 1 TO 2: NEXT
+2469	FOR arr%(1) = 1 TO 2: NEXT, 1
+2470	FOR i% = 1 TO 2: NEXT j%
+2471	FOR i% = 1 TO 2: NEXT j%, 1
+2472	WHILE x%: WEND
+2473	WHILE 1: WEND
+2474	WHILE l&: WEND
+2475	WHILE s!: WEND
+2476	WHILE d#: WEND
+2477	WHILE (x% + 1): WEND
+2478	WHILE arr%(1): WEND
+2479	WHILE -1: WEND
+2480	WHILE 100: WEND
+2481	WHILE "a": WEND
+2482	WHILE s$: WEND
+2483	WHILE x%: WEND, 1
+2484	WHILE "abc": WEND
+2485	WHILE LEFT$(s$, 2): WEND
+2486	WHILE sa$(1): WEND
+2487	WHILE s$: WEND, 1
+2488	DO: LOOP
+2489	DO WHILE x%: LOOP
+2490	DO UNTIL x%: LOOP
+2491	DO WHILE 1: LOOP
+2492	DO WHILE l&: LOOP
+2493	DO WHILE s!: LOOP
+2494	DO WHILE d#: LOOP
+2495	DO WHILE (x% + 1): LOOP
+2496	DO WHILE arr%(1): LOOP
+2497	DO WHILE -1: LOOP
+2498	DO WHILE 100: LOOP
+2499	DO WHILE "a": LOOP
+2500	DO WHILE s$: LOOP
+2501	DO WHILE x%: LOOP, 1
+2502	DO: LOOP WHILE x%
+2503	DO: LOOP UNTIL x%
+2504	DO: LOOP WHILE 1
+2505	DO: LOOP WHILE l&
+2506	DO: LOOP WHILE s!
+2507	DO: LOOP WHILE d#
+2508	DO: LOOP WHILE (x% + 1)
+2509	DO: LOOP WHILE arr%(1)
+2510	DO: LOOP WHILE -1
+2511	DO: LOOP WHILE 100
+2512	DO: LOOP WHILE "a"
+2513	DO: LOOP WHILE s$
+2514	DO: LOOP WHILE x%, 1
+2515	DO WHILE x%: LOOP UNTIL x%
+2516	DO WHILE 1: LOOP UNTIL x%
+2517	DO WHILE l&: LOOP UNTIL x%
+2518	DO WHILE s!: LOOP UNTIL x%
+2519	DO WHILE d#: LOOP UNTIL x%
+2520	DO WHILE (x% + 1): LOOP UNTIL x%
+2521	DO WHILE arr%(1): LOOP UNTIL x%
+2522	DO WHILE -1: LOOP UNTIL x%
+2523	DO WHILE 100: LOOP UNTIL x%
+2524	DO WHILE "a": LOOP UNTIL x%
+2525	DO WHILE s$: LOOP UNTIL x%
+2526	DO WHILE x%: LOOP UNTIL 1
+2527	DO WHILE x%: LOOP UNTIL l&
+2528	DO WHILE x%: LOOP UNTIL s!
+2529	DO WHILE x%: LOOP UNTIL d#
+2530	DO WHILE x%: LOOP UNTIL (x% + 1)
+2531	DO WHILE x%: LOOP UNTIL arr%(1)
+2532	DO WHILE x%: LOOP UNTIL -1
+2533	DO WHILE x%: LOOP UNTIL 100
+2534	DO WHILE x%: LOOP UNTIL "a"
+2535	DO WHILE x%: LOOP UNTIL s$
+2536	DO WHILE x%: LOOP UNTIL x%, 1
+2537	SELECT CASE x%: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2538	SELECT CASE 1: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2539	SELECT CASE l&: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2540	SELECT CASE s!: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2541	SELECT CASE d#: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2542	SELECT CASE (x% + 1): CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2543	SELECT CASE arr%(1): CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2544	SELECT CASE -1: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2545	SELECT CASE 100: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2546	SELECT CASE "a": CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2547	SELECT CASE s$: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT
+2548	SELECT CASE x%: CASE 1: x% = 1: CASE ELSE: y% = 2: END SELECT, 1
+2549	SELECT CASE x%: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2550	SELECT CASE 1: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2551	SELECT CASE l&: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2552	SELECT CASE s!: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2553	SELECT CASE d#: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2554	SELECT CASE (x% + 1): CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2555	SELECT CASE arr%(1): CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2556	SELECT CASE -1: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2557	SELECT CASE 100: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2558	SELECT CASE "a": CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2559	SELECT CASE s$: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT
+2560	SELECT CASE x%: CASE IS > 1, 5 TO 7, 9: x% = 1: END SELECT
+2561	SELECT CASE x%: CASE IS > l&, 5 TO 7, 9: x% = 1: END SELECT
+2562	SELECT CASE x%: CASE IS > s!, 5 TO 7, 9: x% = 1: END SELECT
+2563	SELECT CASE x%: CASE IS > d#, 5 TO 7, 9: x% = 1: END SELECT
+2564	SELECT CASE x%: CASE IS > (x% + 1), 5 TO 7, 9: x% = 1: END SELECT
+2565	SELECT CASE x%: CASE IS > arr%(1), 5 TO 7, 9: x% = 1: END SELECT
+2566	SELECT CASE x%: CASE IS > -1, 5 TO 7, 9: x% = 1: END SELECT
+2567	SELECT CASE x%: CASE IS > 100, 5 TO 7, 9: x% = 1: END SELECT
+2568	SELECT CASE x%: CASE IS > "a", 5 TO 7, 9: x% = 1: END SELECT
+2569	SELECT CASE x%: CASE IS > s$, 5 TO 7, 9: x% = 1: END SELECT
+2570	SELECT CASE x%: CASE IS > x%, 5 TO 7, 9: x% = 1: END SELECT, 1
+2571	SELECT CASE s$: CASE "a": x% = 1: END SELECT
+2572	SELECT CASE "abc": CASE "a": x% = 1: END SELECT
+2573	SELECT CASE LEFT$(s$, 2): CASE "a": x% = 1: END SELECT
+2574	SELECT CASE sa$(1): CASE "a": x% = 1: END SELECT
+2575	SELECT CASE 1: CASE "a": x% = 1: END SELECT
+2576	SELECT CASE x%: CASE "a": x% = 1: END SELECT
+2577	SELECT CASE s$: CASE "a": x% = 1: END SELECT, 1
+2578	SELECT CASE s$: CASE 1: x% = 1: END SELECT
+2579	SELECT CASE "abc": CASE 1: x% = 1: END SELECT
+2580	SELECT CASE LEFT$(s$, 2): CASE 1: x% = 1: END SELECT
+2581	SELECT CASE sa$(1): CASE 1: x% = 1: END SELECT
+2582	SELECT CASE 1: CASE 1: x% = 1: END SELECT
+2583	SELECT CASE x%: CASE 1: x% = 1: END SELECT
+2584	SELECT CASE s$: CASE 1: x% = 1: END SELECT, 1
+2585	SELECT CASE l&: CASE "a": x% = 1: END SELECT
+2586	SELECT CASE s!: CASE "a": x% = 1: END SELECT
+2587	SELECT CASE d#: CASE "a": x% = 1: END SELECT
+2588	SELECT CASE (x% + 1): CASE "a": x% = 1: END SELECT
+2589	SELECT CASE arr%(1): CASE "a": x% = 1: END SELECT
+2590	SELECT CASE -1: CASE "a": x% = 1: END SELECT
+2591	SELECT CASE 100: CASE "a": x% = 1: END SELECT
+2592	SELECT CASE "a": CASE "a": x% = 1: END SELECT
+2593	SELECT CASE x%: CASE "a": x% = 1: END SELECT, 1
+2594	SELECT CASE r: CASE 1: END SELECT
+2595	SELECT CASE r: CASE 1: END SELECT, 1
+2596	GOSUB lab
+2597	GOSUB lab, 1
+2598	GOTO lab
+2599	GOTO lab, 1
+2600	GOTO lab2
+2601	GOTO lab2, 1
+2602	GOTO 10
+2603	GOTO 10, 1
+2604	RETURN
+2605	RETURN, 1
+2606	RETURN lab
+2607	RETURN lab, 1
+2608	ON x% GOTO lab
+2609	ON x% GOTO lab,lab
+2610	ON 1 GOTO lab
+2611	ON l& GOTO lab
+2612	ON s! GOTO lab
+2613	ON d# GOTO lab
+2614	ON (x% + 1) GOTO lab
+2615	ON arr%(1) GOTO lab
+2616	ON -1 GOTO lab
+2617	ON 100 GOTO lab
+2618	ON "a" GOTO lab
+2619	ON s$ GOTO lab
+2620	ON x% GOTO lab, 1
+2621	ON x% GOSUB lab
+2622	ON x% GOSUB lab,lab
+2623	ON 1 GOSUB lab
+2624	ON l& GOSUB lab
+2625	ON s! GOSUB lab
+2626	ON d# GOSUB lab
+2627	ON (x% + 1) GOSUB lab
+2628	ON arr%(1) GOSUB lab
+2629	ON -1 GOSUB lab
+2630	ON 100 GOSUB lab
+2631	ON "a" GOSUB lab
+2632	ON s$ GOSUB lab
+2633	ON x% GOSUB lab, 1
+2634	ON "abc" GOTO lab
+2635	ON LEFT$(s$, 2) GOTO lab
+2636	ON sa$(1) GOTO lab
+2637	ON s$ GOTO lab, 1
+2638	ON x% GOTO
+2639	ON x% GOTO, 1
+2640	ON ERROR GOTO lab
+2641	ON ERROR GOTO lab, 1
+2642	ON ERROR GOTO 0
+2643	ON ERROR GOTO 0, 1
+2644	ON ERROR RESUME NEXT
+2645	ON ERROR RESUME NEXT, 1
+2646	ON LOCAL ERROR GOTO lab
+2647	ON LOCAL ERROR GOTO lab, 1
+2648	RESUME
+2649	RESUME, 1
+2650	RESUME NEXT
+2651	RESUME NEXT, 1
+2652	RESUME lab
+2653	RESUME lab, 1
+2654	RESUME 0
+2655	RESUME 0, 1
+2656	EXIT SUB
+2657	EXIT SUB, 1
+2658	EXIT FUNCTION
+2659	EXIT FUNCTION, 1
+2660	EXIT DO
+2661	EXIT DO, 1
+2662	EXIT FOR
+2663	EXIT FOR, 1
+2664	EXIT WHILE
+2665	EXIT WHILE, 1
+2666	CALL mysub(x%, s$)
+2667	CALL mysub(x%, s$), 1
+2668	CALL mysub
+2669	CALL mysub, 1
+2670	CALL mysub(s$, x%)
+2671	CALL mysub(s$, x%), 1
+2672	CALL mysub(x%)
+2673	CALL mysub(x%), 1
+2674	CALL mysub(x%, s$, 1)
+2675	CALL mysub(x%, s$, 1), 1
+2676	mysub x%, s$
+2677	mysub x%, s$, 1
+2678	mysub(x%, s$)
+2679	mysub(x%, s$), 1
+2680	mysub (x%), s$
+2681	mysub (x%), s$, 1
+2682	mysub x%
+2683	mysub x%, 1
+2684	mysub
+2685	mysub, 1
+2686	CALL nosuch
+2687	CALL nosuch, 1
+2688	nosuch 1, 2
+2689	nosuch 1, 2, 1
+2690	x% = myfn%(x%)
+2691	x% = myfn%(1)
+2692	x% = myfn%(l&)
+2693	x% = myfn%(s!)
+2694	x% = myfn%(d#)
+2695	x% = myfn%((x% + 1))
+2696	x% = myfn%(arr%(1))
+2697	x% = myfn%(-1)
+2698	x% = myfn%(100)
+2699	x% = myfn%("a")
+2700	x% = myfn%(s$)
+2701	x% = myfn%(x%), 1
+2702	x% = myfn%(s$), 1
+2703	x% = myfn%()
+2704	x% = myfn%(), 1
+2705	x% = myfn%(1, 2)
+2706	x% = myfn%(1, 2), 1
+2707	s$ = myfn%(1)
+2708	s$ = myfn%(1), 1
+2709	CALL myfn%(1)
+2710	CALL myfn%(1), 1
+2711	myfn% 1
+2712	myfn% 1, 1
+2713	CALL arrsub(arr%())
+2714	CALL arrsub(arr%()), 1
+2715	CALL arrsub(arl&())
+2716	CALL arrsub(arl&()), 1
+2717	CALL arrsub(x%)
+2718	CALL arrsub(x%), 1
+2719	arrsub arr%()
+2720	arrsub arr%(), 1
+2721	DEF FNa%(z%) = z% * 2
+2722	DEF FNa%(z%) = z% * 2, 1
+2723	x% = FNa%(1)
+2724	x% = FNa%(1), 1
+2725	DEF FNb$(z$) = z$
+2726	DEF FNb$(z$) = z$, 1
+2727	DEF FNa%(z%) = z%
+2728	DEF FNa%(z%) = z%, 1
+2729	ON KEY(x%) GOSUB lab
+2730	ON TIMER(x%) GOSUB lab
+2731	ON PLAY(x%) GOSUB lab
+2732	ON STRIG(x%) GOSUB lab
+2733	ON COM(x%) GOSUB lab
+2734	ON PEN(x%) GOSUB lab
+2735	ON UEVENT(x%) GOSUB lab
+2736	ON SIGNAL(x%) GOSUB lab
+2737	ON KEY(3) GOSUB lab
+2738	ON KEY(arr%(1)) GOSUB lab
+2739	ON KEY((x% * 2)) GOSUB lab
+2740	ON KEY("a") GOSUB lab
+2741	ON KEY(s$) GOSUB lab
+2742	ON KEY(x%) GOSUB lab, 1
+2743	ON PEN GOSUB lab
+2744	ON UEVENT GOSUB lab
+2745	ON PEN GOSUB lab, 1
+2746	KEY(x%) ON
+2747	KEY(x%) OFF
+2748	KEY(x%) STOP
+2749	TIMER(x%) ON
+2750	TIMER(x%) OFF
+2751	TIMER(x%) STOP
+2752	PLAY(x%) ON
+2753	PLAY(x%) OFF
+2754	PLAY(x%) STOP
+2755	STRIG(x%) ON
+2756	STRIG(x%) OFF
+2757	STRIG(x%) STOP
+2758	COM(x%) ON
+2759	COM(x%) OFF
+2760	COM(x%) STOP
+2761	PEN(x%) ON
+2762	PEN(x%) OFF
+2763	PEN(x%) STOP
+2764	UEVENT(x%) ON
+2765	UEVENT(x%) OFF
+2766	UEVENT(x%) STOP
+2767	SIGNAL(x%) ON
+2768	SIGNAL(x%) OFF
+2769	SIGNAL(x%) STOP
+2770	KEY(3) ON
+2771	KEY(arr%(1)) ON
+2772	KEY((x% * 2)) ON
+2773	KEY("a") ON
+2774	KEY(s$) ON
+2775	KEY(x%) ON, 1
+2776	TIMER ON
+2777	TIMER OFF
+2778	TIMER STOP
+2779	PEN ON
+2780	PEN OFF
+2781	PEN STOP
+2782	UEVENT ON
+2783	UEVENT OFF
+2784	UEVENT STOP
+2785	TIMER ON, 1
+2786	KEY ON
+2787	KEY OFF
+2788	KEY LIST
+2789	KEY ON, 1
+2790	KEY 1, s$
+2791	KEY x%, s$
+2792	KEY 10, s$
+2793	KEY "a", s$
+2794	KEY 1, "abc"
+2795	KEY 1, LEFT$(s$, 2)
+2796	KEY 1, sa$(1)
+2797	KEY 1, 1
+2798	KEY 1, x%
+2799	KEY 1, s$, 1
+2800	KEY 1, CHR$(1) + CHR$(2)
+2801	KEY x%, CHR$(1) + CHR$(2)
+2802	KEY 10, CHR$(1) + CHR$(2)
+2803	KEY "a", CHR$(1) + CHR$(2)
+2804	KEY 1, CHR$(1) + CHR$(2), 1
+2805	STRIG ON
+2806	STRIG OFF
+2807	STRIG ON, 1
+2808	x% = ABS(x%)
+2809	x% = ABS(1)
+2810	x% = ABS(l&)
+2811	x% = ABS(s!)
+2812	x% = ABS(d#)
+2813	x% = ABS((x% + 1))
+2814	x% = ABS(arr%(1))
+2815	x% = ABS(-1)
+2816	x% = ABS(100)
+2817	x% = ABS("a")
+2818	x% = ABS(s$)
+2819	x% = ABS(x%), 1
+2820	x% = SGN(x%)
+2821	x% = SGN(1)
+2822	x% = SGN(l&)
+2823	x% = SGN(s!)
+2824	x% = SGN(d#)
+2825	x% = SGN((x% + 1))
+2826	x% = SGN(arr%(1))
+2827	x% = SGN(-1)
+2828	x% = SGN(100)
+2829	x% = SGN("a")
+2830	x% = SGN(s$)
+2831	x% = SGN(x%), 1
+2832	x% = INT(x%)
+2833	x% = INT(1)
+2834	x% = INT(l&)
+2835	x% = INT(s!)
+2836	x% = INT(d#)
+2837	x% = INT((x% + 1))
+2838	x% = INT(arr%(1))
+2839	x% = INT(-1)
+2840	x% = INT(100)
+2841	x% = INT("a")
+2842	x% = INT(s$)
+2843	x% = INT(x%), 1
+2844	x% = FIX(x%)
+2845	x% = FIX(1)
+2846	x% = FIX(l&)
+2847	x% = FIX(s!)
+2848	x% = FIX(d#)
+2849	x% = FIX((x% + 1))
+2850	x% = FIX(arr%(1))
+2851	x% = FIX(-1)
+2852	x% = FIX(100)
+2853	x% = FIX("a")
+2854	x% = FIX(s$)
+2855	x% = FIX(x%), 1
+2856	x% = CINT(x%)
+2857	x% = CINT(1)
+2858	x% = CINT(l&)
+2859	x% = CINT(s!)
+2860	x% = CINT(d#)
+2861	x% = CINT((x% + 1))
+2862	x% = CINT(arr%(1))
+2863	x% = CINT(-1)
+2864	x% = CINT(100)
+2865	x% = CINT("a")
+2866	x% = CINT(s$)
+2867	x% = CINT(x%), 1
+2868	x% = CLNG(x%)
+2869	x% = CLNG(1)
+2870	x% = CLNG(l&)
+2871	x% = CLNG(s!)
+2872	x% = CLNG(d#)
+2873	x% = CLNG((x% + 1))
+2874	x% = CLNG(arr%(1))
+2875	x% = CLNG(-1)
+2876	x% = CLNG(100)
+2877	x% = CLNG("a")
+2878	x% = CLNG(s$)
+2879	x% = CLNG(x%), 1
+2880	x% = CSNG(x%)
+2881	x% = CSNG(1)
+2882	x% = CSNG(l&)
+2883	x% = CSNG(s!)
+2884	x% = CSNG(d#)
+2885	x% = CSNG((x% + 1))
+2886	x% = CSNG(arr%(1))
+2887	x% = CSNG(-1)
+2888	x% = CSNG(100)
+2889	x% = CSNG("a")
+2890	x% = CSNG(s$)
+2891	x% = CSNG(x%), 1
+2892	x% = CDBL(x%)
+2893	x% = CDBL(1)
+2894	x% = CDBL(l&)
+2895	x% = CDBL(s!)
+2896	x% = CDBL(d#)
+2897	x% = CDBL((x% + 1))
+2898	x% = CDBL(arr%(1))
+2899	x% = CDBL(-1)
+2900	x% = CDBL(100)
+2901	x% = CDBL("a")
+2902	x% = CDBL(s$)
+2903	x% = CDBL(x%), 1
+2904	x% = SQR(x%)
+2905	x% = SQR(1)
+2906	x% = SQR(l&)
+2907	x% = SQR(s!)
+2908	x% = SQR(d#)
+2909	x% = SQR((x% + 1))
+2910	x% = SQR(arr%(1))
+2911	x% = SQR(-1)
+2912	x% = SQR(100)
+2913	x% = SQR("a")
+2914	x% = SQR(s$)
+2915	x% = SQR(x%), 1
+2916	x% = SIN(x%)
+2917	x% = SIN(1)
+2918	x% = SIN(l&)
+2919	x% = SIN(s!)
+2920	x% = SIN(d#)
+2921	x% = SIN((x% + 1))
+2922	x% = SIN(arr%(1))
+2923	x% = SIN(-1)
+2924	x% = SIN(100)
+2925	x% = SIN("a")
+2926	x% = SIN(s$)
+2927	x% = SIN(x%), 1
+2928	x% = COS(x%)
+2929	x% = COS(1)
+2930	x% = COS(l&)
+2931	x% = COS(s!)
+2932	x% = COS(d#)
+2933	x% = COS((x% + 1))
+2934	x% = COS(arr%(1))
+2935	x% = COS(-1)
+2936	x% = COS(100)
+2937	x% = COS("a")
+2938	x% = COS(s$)
+2939	x% = COS(x%), 1
+2940	x% = TAN(x%)
+2941	x% = TAN(1)
+2942	x% = TAN(l&)
+2943	x% = TAN(s!)
+2944	x% = TAN(d#)
+2945	x% = TAN((x% + 1))
+2946	x% = TAN(arr%(1))
+2947	x% = TAN(-1)
+2948	x% = TAN(100)
+2949	x% = TAN("a")
+2950	x% = TAN(s$)
+2951	x% = TAN(x%), 1
+2952	x% = ATN(x%)
+2953	x% = ATN(1)
+2954	x% = ATN(l&)
+2955	x% = ATN(s!)
+2956	x% = ATN(d#)
+2957	x% = ATN((x% + 1))
+2958	x% = ATN(arr%(1))
+2959	x% = ATN(-1)
+2960	x% = ATN(100)
+2961	x% = ATN("a")
+2962	x% = ATN(s$)
+2963	x% = ATN(x%), 1
+2964	x% = LOG(x%)
+2965	x% = LOG(1)
+2966	x% = LOG(l&)
+2967	x% = LOG(s!)
+2968	x% = LOG(d#)
+2969	x% = LOG((x% + 1))
+2970	x% = LOG(arr%(1))
+2971	x% = LOG(-1)
+2972	x% = LOG(100)
+2973	x% = LOG("a")
+2974	x% = LOG(s$)
+2975	x% = LOG(x%), 1
+2976	x% = EXP(x%)
+2977	x% = EXP(1)
+2978	x% = EXP(l&)
+2979	x% = EXP(s!)
+2980	x% = EXP(d#)
+2981	x% = EXP((x% + 1))
+2982	x% = EXP(arr%(1))
+2983	x% = EXP(-1)
+2984	x% = EXP(100)
+2985	x% = EXP("a")
+2986	x% = EXP(s$)
+2987	x% = EXP(x%), 1
+2988	s! = ABS(s$)
+2989	s! = ABS("abc")
+2990	s! = ABS(LEFT$(s$, 2))
+2991	s! = ABS(sa$(1))
+2992	s! = ABS(1)
+2993	s! = ABS(x%)
+2994	s! = ABS(s$), 1
+2995	s! = SGN(s$)
+2996	s! = SGN("abc")
+2997	s! = SGN(LEFT$(s$, 2))
+2998	s! = SGN(sa$(1))
+2999	s! = SGN(1)
+3000	s! = SGN(x%)
+3001	s! = SGN(s$), 1
+3002	s! = INT(s$)
+3003	s! = INT("abc")
+3004	s! = INT(LEFT$(s$, 2))
+3005	s! = INT(sa$(1))
+3006	s! = INT(1)
+3007	s! = INT(x%)
+3008	s! = INT(s$), 1
+3009	s! = RND
+3010	s! = RND, 1
+3011	s! = RND(x%)
+3012	s! = RND(1)
+3013	s! = RND(l&)
+3014	s! = RND(s!)
+3015	s! = RND(d#)
+3016	s! = RND((x% + 1))
+3017	s! = RND(arr%(1))
+3018	s! = RND(-1)
+3019	s! = RND(100)
+3020	s! = RND("a")
+3021	s! = RND(s$)
+3022	s! = RND(x%), 1
+3023	s! = RND(1,2)
+3024	s! = RND(1,2), 1
+3025	x% = LEN(s$)
+3026	x% = LEN("abc")
+3027	x% = LEN(LEFT$(s$, 2))
+3028	x% = LEN(sa$(1))
+3029	x% = LEN(1)
+3030	x% = LEN(x%)
+3031	x% = LEN(s$), 1
+3032	x% = LEN(l&)
+3033	x% = LEN(s!)
+3034	x% = LEN(d#)
+3035	x% = LEN((x% + 1))
+3036	x% = LEN(arr%(1))
+3037	x% = LEN(-1)
+3038	x% = LEN(100)
+3039	x% = LEN("a")
+3040	x% = LEN(x%), 1
+3041	x% = LEN(r)
+3042	x% = LEN(r), 1
+3043	x% = ASC(s$)
+3044	x% = ASC("abc")
+3045	x% = ASC(LEFT$(s$, 2))
+3046	x% = ASC(sa$(1))
+3047	x% = ASC(1)
+3048	x% = ASC(x%)
+3049	x% = ASC(s$), 1
+3050	x% = ASC(1), 1
+3051	s! = VAL(s$)
+3052	s! = VAL("abc")
+3053	s! = VAL(LEFT$(s$, 2))
+3054	s! = VAL(sa$(1))
+3055	s! = VAL(1)
+3056	s! = VAL(x%)
+3057	s! = VAL(s$), 1
+3058	s! = VAL(l&)
+3059	s! = VAL(s!)
+3060	s! = VAL(d#)
+3061	s! = VAL((x% + 1))
+3062	s! = VAL(arr%(1))
+3063	s! = VAL(-1)
+3064	s! = VAL(100)
+3065	s! = VAL("a")
+3066	s! = VAL(x%), 1
+3067	x% = INSTR(s$,s$)
+3068	x% = INSTR("abc",s$)
+3069	x% = INSTR(LEFT$(s$, 2),s$)
+3070	x% = INSTR(sa$(1),s$)
+3071	x% = INSTR(1,s$)
+3072	x% = INSTR(x%,s$)
+3073	x% = INSTR(s$,"abc")
+3074	x% = INSTR(s$,LEFT$(s$, 2))
+3075	x% = INSTR(s$,sa$(1))
+3076	x% = INSTR(s$,1)
+3077	x% = INSTR(s$,x%)
+3078	x% = INSTR(s$,s$), 1
+3079	x% = INSTR(x%,s$,s$)
+3080	x% = INSTR(3,s$,s$)
+3081	x% = INSTR(arr%(1),s$,s$)
+3082	x% = INSTR((x% * 2),s$,s$)
+3083	x% = INSTR("a",s$,s$)
+3084	x% = INSTR(s$,s$,s$)
+3085	x% = INSTR(x%,"abc",s$)
+3086	x% = INSTR(x%,LEFT$(s$, 2),s$)
+3087	x% = INSTR(x%,sa$(1),s$)
+3088	x% = INSTR(x%,1,s$)
+3089	x% = INSTR(x%,x%,s$)
+3090	x% = INSTR(x%,s$,"abc")
+3091	x% = INSTR(x%,s$,LEFT$(s$, 2))
+3092	x% = INSTR(x%,s$,sa$(1))
+3093	x% = INSTR(x%,s$,1)
+3094	x% = INSTR(x%,s$,x%)
+3095	x% = INSTR(x%,s$,s$), 1
+3096	x% = INSTR("abc",s$,s$)
+3097	x% = INSTR(LEFT$(s$, 2),s$,s$)
+3098	x% = INSTR(sa$(1),s$,s$)
+3099	x% = INSTR(1,s$,s$)
+3100	x% = INSTR(s$,"abc",s$)
+3101	x% = INSTR(s$,LEFT$(s$, 2),s$)
+3102	x% = INSTR(s$,sa$(1),s$)
+3103	x% = INSTR(s$,1,s$)
+3104	x% = INSTR(s$,x%,s$)
+3105	x% = INSTR(s$,s$,"abc")
+3106	x% = INSTR(s$,s$,LEFT$(s$, 2))
+3107	x% = INSTR(s$,s$,sa$(1))
+3108	x% = INSTR(s$,s$,1)
+3109	x% = INSTR(s$,s$,x%)
+3110	x% = INSTR(s$,s$,s$), 1
+3111	x% = INSTR(1)
+3112	x% = INSTR(1), 1
+3113	x% = CVI(s$)
+3114	x% = CVI("abc")
+3115	x% = CVI(LEFT$(s$, 2))
+3116	x% = CVI(sa$(1))
+3117	x% = CVI(1)
+3118	x% = CVI(x%)
+3119	x% = CVI(s$), 1
+3120	l& = CVL(s$)
+3121	l& = CVL("abc")
+3122	l& = CVL(LEFT$(s$, 2))
+3123	l& = CVL(sa$(1))
+3124	l& = CVL(1)
+3125	l& = CVL(x%)
+3126	l& = CVL(s$), 1
+3127	s! = CVS(s$)
+3128	s! = CVS("abc")
+3129	s! = CVS(LEFT$(s$, 2))
+3130	s! = CVS(sa$(1))
+3131	s! = CVS(1)
+3132	s! = CVS(x%)
+3133	s! = CVS(s$), 1
+3134	d# = CVD(s$)
+3135	d# = CVD("abc")
+3136	d# = CVD(LEFT$(s$, 2))
+3137	d# = CVD(sa$(1))
+3138	d# = CVD(1)
+3139	d# = CVD(x%)
+3140	d# = CVD(s$), 1
+3141	s! = CVSMBF(s$)
+3142	s! = CVSMBF("abc")
+3143	s! = CVSMBF(LEFT$(s$, 2))
+3144	s! = CVSMBF(sa$(1))
+3145	s! = CVSMBF(1)
+3146	s! = CVSMBF(x%)
+3147	s! = CVSMBF(s$), 1
+3148	d# = CVDMBF(s$)
+3149	d# = CVDMBF("abc")
+3150	d# = CVDMBF(LEFT$(s$, 2))
+3151	d# = CVDMBF(sa$(1))
+3152	d# = CVDMBF(1)
+3153	d# = CVDMBF(x%)
+3154	d# = CVDMBF(s$), 1
+3155	s$ = MKI$(x%)
+3156	s$ = MKI$(3)
+3157	s$ = MKI$(arr%(1))
+3158	s$ = MKI$((x% * 2))
+3159	s$ = MKI$("a")
+3160	s$ = MKI$(s$)
+3161	s$ = MKI$(x%), 1
+3162	s$ = MKL$(x%)
+3163	s$ = MKL$(1)
+3164	s$ = MKL$(l&)
+3165	s$ = MKL$(s!)
+3166	s$ = MKL$(d#)
+3167	s$ = MKL$((x% + 1))
+3168	s$ = MKL$(arr%(1))
+3169	s$ = MKL$(-1)
+3170	s$ = MKL$(100)
+3171	s$ = MKL$("a")
+3172	s$ = MKL$(s$)
+3173	s$ = MKL$(x%), 1
+3174	s$ = MKS$(x%)
+3175	s$ = MKS$(1)
+3176	s$ = MKS$(l&)
+3177	s$ = MKS$(s!)
+3178	s$ = MKS$(d#)
+3179	s$ = MKS$((x% + 1))
+3180	s$ = MKS$(arr%(1))
+3181	s$ = MKS$(-1)
+3182	s$ = MKS$(100)
+3183	s$ = MKS$("a")
+3184	s$ = MKS$(s$)
+3185	s$ = MKS$(x%), 1
+3186	s$ = MKD$(x%)
+3187	s$ = MKD$(1)
+3188	s$ = MKD$(l&)
+3189	s$ = MKD$(s!)
+3190	s$ = MKD$(d#)
+3191	s$ = MKD$((x% + 1))
+3192	s$ = MKD$(arr%(1))
+3193	s$ = MKD$(-1)
+3194	s$ = MKD$(100)
+3195	s$ = MKD$("a")
+3196	s$ = MKD$(s$)
+3197	s$ = MKD$(x%), 1
+3198	s$ = MKSMBF$(x%)
+3199	s$ = MKSMBF$(1)
+3200	s$ = MKSMBF$(l&)
+3201	s$ = MKSMBF$(s!)
+3202	s$ = MKSMBF$(d#)
+3203	s$ = MKSMBF$((x% + 1))
+3204	s$ = MKSMBF$(arr%(1))
+3205	s$ = MKSMBF$(-1)
+3206	s$ = MKSMBF$(100)
+3207	s$ = MKSMBF$("a")
+3208	s$ = MKSMBF$(s$)
+3209	s$ = MKSMBF$(x%), 1
+3210	s$ = MKDMBF$(x%)
+3211	s$ = MKDMBF$(1)
+3212	s$ = MKDMBF$(l&)
+3213	s$ = MKDMBF$(s!)
+3214	s$ = MKDMBF$(d#)
+3215	s$ = MKDMBF$((x% + 1))
+3216	s$ = MKDMBF$(arr%(1))
+3217	s$ = MKDMBF$(-1)
+3218	s$ = MKDMBF$(100)
+3219	s$ = MKDMBF$("a")
+3220	s$ = MKDMBF$(s$)
+3221	s$ = MKDMBF$(x%), 1
+3222	s$ = LEFT$(s$,x%)
+3223	s$ = LEFT$("abc",x%)
+3224	s$ = LEFT$(LEFT$(s$, 2),x%)
+3225	s$ = LEFT$(sa$(1),x%)
+3226	s$ = LEFT$(1,x%)
+3227	s$ = LEFT$(x%,x%)
+3228	s$ = LEFT$(s$,3)
+3229	s$ = LEFT$(s$,arr%(1))
+3230	s$ = LEFT$(s$,(x% * 2))
+3231	s$ = LEFT$(s$,"a")
+3232	s$ = LEFT$(s$,s$)
+3233	s$ = LEFT$(s$,x%), 1
+3234	s$ = RIGHT$(s$,x%)
+3235	s$ = RIGHT$("abc",x%)
+3236	s$ = RIGHT$(LEFT$(s$, 2),x%)
+3237	s$ = RIGHT$(sa$(1),x%)
+3238	s$ = RIGHT$(1,x%)
+3239	s$ = RIGHT$(x%,x%)
+3240	s$ = RIGHT$(s$,3)
+3241	s$ = RIGHT$(s$,arr%(1))
+3242	s$ = RIGHT$(s$,(x% * 2))
+3243	s$ = RIGHT$(s$,"a")
+3244	s$ = RIGHT$(s$,s$)
+3245	s$ = RIGHT$(s$,x%), 1
+3246	s$ = MID$(s$,x%)
+3247	s$ = MID$(s$,x%,x%)
+3248	s$ = MID$("abc",x%,x%)
+3249	s$ = MID$(LEFT$(s$, 2),x%,x%)
+3250	s$ = MID$(sa$(1),x%,x%)
+3251	s$ = MID$(1,x%,x%)
+3252	s$ = MID$(x%,x%,x%)
+3253	s$ = MID$(s$,3,x%)
+3254	s$ = MID$(s$,arr%(1),x%)
+3255	s$ = MID$(s$,(x% * 2),x%)
+3256	s$ = MID$(s$,"a",x%)
+3257	s$ = MID$(s$,s$,x%)
+3258	s$ = MID$(s$,x%,3)
+3259	s$ = MID$(s$,x%,arr%(1))
+3260	s$ = MID$(s$,x%,(x% * 2))
+3261	s$ = MID$(s$,x%,"a")
+3262	s$ = MID$(s$,x%,s$)
+3263	s$ = MID$(s$,x%,x%), 1
+3264	s$ = LEFT$(s$)
+3265	s$ = LEFT$("abc")
+3266	s$ = LEFT$(LEFT$(s$, 2))
+3267	s$ = LEFT$(sa$(1))
+3268	s$ = LEFT$(1)
+3269	s$ = LEFT$(x%)
+3270	s$ = LEFT$(s$), 1
+3271	s$ = LEFT$(3,x%)
+3272	s$ = LEFT$(arr%(1),x%)
+3273	s$ = LEFT$((x% * 2),x%)
+3274	s$ = LEFT$("a",x%)
+3275	s$ = LEFT$(x%,3)
+3276	s$ = LEFT$(x%,arr%(1))
+3277	s$ = LEFT$(x%,(x% * 2))
+3278	s$ = LEFT$(x%,"a")
+3279	s$ = LEFT$(x%,s$)
+3280	s$ = LEFT$(x%,x%), 1
+3281	s$ = STR$(x%)
+3282	s$ = STR$(1)
+3283	s$ = STR$(l&)
+3284	s$ = STR$(s!)
+3285	s$ = STR$(d#)
+3286	s$ = STR$((x% + 1))
+3287	s$ = STR$(arr%(1))
+3288	s$ = STR$(-1)
+3289	s$ = STR$(100)
+3290	s$ = STR$("a")
+3291	s$ = STR$(s$)
+3292	s$ = STR$(x%), 1
+3293	s$ = STR$("abc")
+3294	s$ = STR$(LEFT$(s$, 2))
+3295	s$ = STR$(sa$(1))
+3296	s$ = STR$(s$), 1
+3297	s$ = CHR$(x%)
+3298	s$ = CHR$(3)
+3299	s$ = CHR$(arr%(1))
+3300	s$ = CHR$((x% * 2))
+3301	s$ = CHR$("a")
+3302	s$ = CHR$(s$)
+3303	s$ = CHR$(x%), 1
+3304	s$ = SPACE$(x%)
+3305	s$ = SPACE$(3)
+3306	s$ = SPACE$(arr%(1))
+3307	s$ = SPACE$((x% * 2))
+3308	s$ = SPACE$("a")
+3309	s$ = SPACE$(s$)
+3310	s$ = SPACE$(x%), 1
+3311	s$ = STRING$(x%,x%)
+3312	s$ = STRING$(3,x%)
+3313	s$ = STRING$(arr%(1),x%)
+3314	s$ = STRING$((x% * 2),x%)
+3315	s$ = STRING$("a",x%)
+3316	s$ = STRING$(s$,x%)
+3317	s$ = STRING$(x%,3)
+3318	s$ = STRING$(x%,arr%(1))
+3319	s$ = STRING$(x%,(x% * 2))
+3320	s$ = STRING$(x%,"a")
+3321	s$ = STRING$(x%,s$)
+3322	s$ = STRING$(x%,x%), 1
+3323	s$ = STRING$(3,s$)
+3324	s$ = STRING$(arr%(1),s$)
+3325	s$ = STRING$((x% * 2),s$)
+3326	s$ = STRING$("a",s$)
+3327	s$ = STRING$(s$,s$)
+3328	s$ = STRING$(x%,"abc")
+3329	s$ = STRING$(x%,LEFT$(s$, 2))
+3330	s$ = STRING$(x%,sa$(1))
+3331	s$ = STRING$(x%,1)
+3332	s$ = STRING$(x%,s$), 1
+3333	s$ = HEX$(x%)
+3334	s$ = HEX$(1)
+3335	s$ = HEX$(l&)
+3336	s$ = HEX$(s!)
+3337	s$ = HEX$(d#)
+3338	s$ = HEX$((x% + 1))
+3339	s$ = HEX$(arr%(1))
+3340	s$ = HEX$(-1)
+3341	s$ = HEX$(100)
+3342	s$ = HEX$("a")
+3343	s$ = HEX$(s$)
+3344	s$ = HEX$(x%), 1
+3345	s$ = OCT$(x%)
+3346	s$ = OCT$(1)
+3347	s$ = OCT$(l&)
+3348	s$ = OCT$(s!)
+3349	s$ = OCT$(d#)
+3350	s$ = OCT$((x% + 1))
+3351	s$ = OCT$(arr%(1))
+3352	s$ = OCT$(-1)
+3353	s$ = OCT$(100)
+3354	s$ = OCT$("a")
+3355	s$ = OCT$(s$)
+3356	s$ = OCT$(x%), 1
+3357	s$ = LTRIM$(s$)
+3358	s$ = LTRIM$("abc")
+3359	s$ = LTRIM$(LEFT$(s$, 2))
+3360	s$ = LTRIM$(sa$(1))
+3361	s$ = LTRIM$(1)
+3362	s$ = LTRIM$(x%)
+3363	s$ = LTRIM$(s$), 1
+3364	s$ = RTRIM$(s$)
+3365	s$ = RTRIM$("abc")
+3366	s$ = RTRIM$(LEFT$(s$, 2))
+3367	s$ = RTRIM$(sa$(1))
+3368	s$ = RTRIM$(1)
+3369	s$ = RTRIM$(x%)
+3370	s$ = RTRIM$(s$), 1
+3371	s$ = UCASE$(s$)
+3372	s$ = UCASE$("abc")
+3373	s$ = UCASE$(LEFT$(s$, 2))
+3374	s$ = UCASE$(sa$(1))
+3375	s$ = UCASE$(1)
+3376	s$ = UCASE$(x%)
+3377	s$ = UCASE$(s$), 1
+3378	s$ = LCASE$(s$)
+3379	s$ = LCASE$("abc")
+3380	s$ = LCASE$(LEFT$(s$, 2))
+3381	s$ = LCASE$(sa$(1))
+3382	s$ = LCASE$(1)
+3383	s$ = LCASE$(x%)
+3384	s$ = LCASE$(s$), 1
+3385	x% = PEEK(x%)
+3386	x% = PEEK(1)
+3387	x% = PEEK(l&)
+3388	x% = PEEK(s!)
+3389	x% = PEEK(d#)
+3390	x% = PEEK((x% + 1))
+3391	x% = PEEK(arr%(1))
+3392	x% = PEEK(-1)
+3393	x% = PEEK(100)
+3394	x% = PEEK("a")
+3395	x% = PEEK(s$)
+3396	x% = PEEK(x%), 1
+3397	x% = INP(x%)
+3398	x% = INP(1)
+3399	x% = INP(l&)
+3400	x% = INP(s!)
+3401	x% = INP(d#)
+3402	x% = INP((x% + 1))
+3403	x% = INP(arr%(1))
+3404	x% = INP(-1)
+3405	x% = INP(100)
+3406	x% = INP("a")
+3407	x% = INP(s$)
+3408	x% = INP(x%), 1
+3409	x% = POS(x%)
+3410	x% = POS(3)
+3411	x% = POS(arr%(1))
+3412	x% = POS((x% * 2))
+3413	x% = POS("a")
+3414	x% = POS(s$)
+3415	x% = POS(x%), 1
+3416	x% = CSRLIN
+3417	x% = CSRLIN, 1
+3418	s! = TIMER
+3419	s! = TIMER, 1
+3420	s$ = DATE$
+3421	s$ = DATE$, 1
+3422	s$ = TIME$
+3423	s$ = TIME$, 1
+3424	s$ = COMMAND$
+3425	s$ = COMMAND$, 1
+3426	s$ = ENVIRON$(s$)
+3427	s$ = ENVIRON$("abc")
+3428	s$ = ENVIRON$(LEFT$(s$, 2))
+3429	s$ = ENVIRON$(sa$(1))
+3430	s$ = ENVIRON$(1)
+3431	s$ = ENVIRON$(x%)
+3432	s$ = ENVIRON$(s$), 1
+3433	s$ = ENVIRON$(3)
+3434	s$ = ENVIRON$(arr%(1))
+3435	s$ = ENVIRON$((x% * 2))
+3436	s$ = ENVIRON$("a")
+3437	s$ = ENVIRON$(x%), 1
+3438	s$ = INKEY$
+3439	s$ = INKEY$, 1
+3440	s$ = INPUT$(x%)
+3441	s$ = INPUT$(3)
+3442	s$ = INPUT$(arr%(1))
+3443	s$ = INPUT$((x% * 2))
+3444	s$ = INPUT$("a")
+3445	s$ = INPUT$(s$)
+3446	s$ = INPUT$(x%), 1
+3447	s$ = INPUT$(x%,#1)
+3448	s$ = INPUT$(3,#1)
+3449	s$ = INPUT$(arr%(1),#1)
+3450	s$ = INPUT$((x% * 2),#1)
+3451	s$ = INPUT$("a",#1)
+3452	s$ = INPUT$(s$,#1)
+3453	s$ = INPUT$(x%,#x%)
+3454	s$ = INPUT$(x%,#3)
+3455	s$ = INPUT$(x%,"a")
+3456	s$ = INPUT$(x%,s$)
+3457	s$ = INPUT$(x%,#1), 1
+3458	x% = EOF(1)
+3459	x% = EOF(x%)
+3460	x% = EOF("a")
+3461	x% = EOF(s$)
+3462	x% = EOF(1), 1
+3463	l& = LOF(1)
+3464	l& = LOF(x%)
+3465	l& = LOF("a")
+3466	l& = LOF(s$)
+3467	l& = LOF(1), 1
+3468	l& = LOC(1)
+3469	l& = LOC(x%)
+3470	l& = LOC("a")
+3471	l& = LOC(s$)
+3472	l& = LOC(1), 1
+3473	l& = SEEK(1)
+3474	l& = SEEK(x%)
+3475	l& = SEEK("a")
+3476	l& = SEEK(s$)
+3477	l& = SEEK(1), 1
+3478	x% = FILEATTR(1,x%)
+3479	x% = FILEATTR(x%,x%)
+3480	x% = FILEATTR("a",x%)
+3481	x% = FILEATTR(s$,x%)
+3482	x% = FILEATTR(1,3)
+3483	x% = FILEATTR(1,arr%(1))
+3484	x% = FILEATTR(1,(x% * 2))
+3485	x% = FILEATTR(1,"a")
+3486	x% = FILEATTR(1,s$)
+3487	x% = FILEATTR(1,x%), 1
+3488	x% = FREEFILE
+3489	x% = FREEFILE, 1
+3490	l& = FRE(x%)
+3491	l& = FRE(3)
+3492	l& = FRE(arr%(1))
+3493	l& = FRE((x% * 2))
+3494	l& = FRE("a")
+3495	l& = FRE(s$)
+3496	l& = FRE(x%), 1
+3497	l& = FRE("abc")
+3498	l& = FRE(LEFT$(s$, 2))
+3499	l& = FRE(sa$(1))
+3500	l& = FRE(1)
+3501	l& = FRE(s$), 1
+3502	x% = LBOUND(arr%())
+3503	x% = LBOUND(ars!())
+3504	x% = LBOUND(sa$())
+3505	x% = LBOUND(m%())
+3506	x% = LBOUND(x%)
+3507	x% = LBOUND(1)
+3508	x% = LBOUND(arr%()), 1
+3509	x% = LBOUND(arr%(),x%)
+3510	x% = LBOUND(ars!(),x%)
+3511	x% = LBOUND(sa$(),x%)
+3512	x% = LBOUND(m%(),x%)
+3513	x% = LBOUND(x%,x%)
+3514	x% = LBOUND(1,x%)
+3515	x% = LBOUND(arr%(),3)
+3516	x% = LBOUND(arr%(),arr%(1))
+3517	x% = LBOUND(arr%(),(x% * 2))
+3518	x% = LBOUND(arr%(),"a")
+3519	x% = LBOUND(arr%(),s$)
+3520	x% = LBOUND(arr%(),x%), 1
+3521	x% = UBOUND(arr%())
+3522	x% = UBOUND(ars!())
+3523	x% = UBOUND(sa$())
+3524	x% = UBOUND(m%())
+3525	x% = UBOUND(x%)
+3526	x% = UBOUND(1)
+3527	x% = UBOUND(arr%()), 1
+3528	x% = UBOUND(arr%(),x%)
+3529	x% = UBOUND(ars!(),x%)
+3530	x% = UBOUND(sa$(),x%)
+3531	x% = UBOUND(m%(),x%)
+3532	x% = UBOUND(x%,x%)
+3533	x% = UBOUND(1,x%)
+3534	x% = UBOUND(arr%(),3)
+3535	x% = UBOUND(arr%(),arr%(1))
+3536	x% = UBOUND(arr%(),(x% * 2))
+3537	x% = UBOUND(arr%(),"a")
+3538	x% = UBOUND(arr%(),s$)
+3539	x% = UBOUND(arr%(),x%), 1
+3540	x% = UBOUND(x%), 1
+3541	x% = VARPTR(x%)
+3542	x% = VARPTR(l&)
+3543	x% = VARPTR(s!)
+3544	x% = VARPTR(d#)
+3545	x% = VARPTR(arr%(1))
+3546	x% = VARPTR(r.a)
+3547	x% = VARPTR(1)
+3548	x% = VARPTR("a")
+3549	x% = VARPTR(s$)
+3550	x% = VARPTR(x%), 1
+3551	x% = VARSEG(x%)
+3552	x% = VARSEG(l&)
+3553	x% = VARSEG(s!)
+3554	x% = VARSEG(d#)
+3555	x% = VARSEG(arr%(1))
+3556	x% = VARSEG(r.a)
+3557	x% = VARSEG(1)
+3558	x% = VARSEG("a")
+3559	x% = VARSEG(s$)
+3560	x% = VARSEG(x%), 1
+3561	s$ = VARPTR$(x%)
+3562	s$ = VARPTR$(l&)
+3563	s$ = VARPTR$(s!)
+3564	s$ = VARPTR$(d#)
+3565	s$ = VARPTR$(arr%(1))
+3566	s$ = VARPTR$(r.a)
+3567	s$ = VARPTR$(1)
+3568	s$ = VARPTR$("a")
+3569	s$ = VARPTR$(s$)
+3570	s$ = VARPTR$(x%), 1
+3571	x% = SADD(s$)
+3572	x% = SADD(sa$(1))
+3573	x% = SADD(r.s)
+3574	x% = SADD(x%)
+3575	x% = SADD(1)
+3576	x% = SADD("a")
+3577	x% = SADD(s$), 1
+3578	x% = SADD(1), 1
+3579	x% = POINT(x%,x%)
+3580	x% = POINT(1,x%)
+3581	x% = POINT(l&,x%)
+3582	x% = POINT(s!,x%)
+3583	x% = POINT(d#,x%)
+3584	x% = POINT((x% + 1),x%)
+3585	x% = POINT(arr%(1),x%)
+3586	x% = POINT(-1,x%)
+3587	x% = POINT(100,x%)
+3588	x% = POINT("a",x%)
+3589	x% = POINT(s$,x%)
+3590	x% = POINT(x%,1)
+3591	x% = POINT(x%,l&)
+3592	x% = POINT(x%,s!)
+3593	x% = POINT(x%,d#)
+3594	x% = POINT(x%,(x% + 1))
+3595	x% = POINT(x%,arr%(1))
+3596	x% = POINT(x%,-1)
+3597	x% = POINT(x%,100)
+3598	x% = POINT(x%,"a")
+3599	x% = POINT(x%,s$)
+3600	x% = POINT(x%,x%), 1
+3601	x% = POINT(x%)
+3602	x% = POINT(3)
+3603	x% = POINT(arr%(1))
+3604	x% = POINT((x% * 2))
+3605	x% = POINT("a")
+3606	x% = POINT(s$)
+3607	x% = POINT(x%), 1
+3608	x% = PMAP(x%,x%)
+3609	x% = PMAP(1,x%)
+3610	x% = PMAP(l&,x%)
+3611	x% = PMAP(s!,x%)
+3612	x% = PMAP(d#,x%)
+3613	x% = PMAP((x% + 1),x%)
+3614	x% = PMAP(arr%(1),x%)
+3615	x% = PMAP(-1,x%)
+3616	x% = PMAP(100,x%)
+3617	x% = PMAP("a",x%)
+3618	x% = PMAP(s$,x%)
+3619	x% = PMAP(x%,3)
+3620	x% = PMAP(x%,arr%(1))
+3621	x% = PMAP(x%,(x% * 2))
+3622	x% = PMAP(x%,"a")
+3623	x% = PMAP(x%,s$)
+3624	x% = PMAP(x%,x%), 1
+3625	x% = SCREEN(x%,x%)
+3626	x% = SCREEN(3,x%)
+3627	x% = SCREEN(arr%(1),x%)
+3628	x% = SCREEN((x% * 2),x%)
+3629	x% = SCREEN("a",x%)
+3630	x% = SCREEN(s$,x%)
+3631	x% = SCREEN(x%,3)
+3632	x% = SCREEN(x%,arr%(1))
+3633	x% = SCREEN(x%,(x% * 2))
+3634	x% = SCREEN(x%,"a")
+3635	x% = SCREEN(x%,s$)
+3636	x% = SCREEN(x%,x%), 1
+3637	x% = SCREEN(x%,x%,x%)
+3638	x% = SCREEN(3,x%,x%)
+3639	x% = SCREEN(arr%(1),x%,x%)
+3640	x% = SCREEN((x% * 2),x%,x%)
+3641	x% = SCREEN("a",x%,x%)
+3642	x% = SCREEN(s$,x%,x%)
+3643	x% = SCREEN(x%,3,x%)
+3644	x% = SCREEN(x%,arr%(1),x%)
+3645	x% = SCREEN(x%,(x% * 2),x%)
+3646	x% = SCREEN(x%,"a",x%)
+3647	x% = SCREEN(x%,s$,x%)
+3648	x% = SCREEN(x%,x%,3)
+3649	x% = SCREEN(x%,x%,arr%(1))
+3650	x% = SCREEN(x%,x%,(x% * 2))
+3651	x% = SCREEN(x%,x%,"a")
+3652	x% = SCREEN(x%,x%,s$)
+3653	x% = SCREEN(x%,x%,x%), 1
+3654	x% = STICK(x%)
+3655	x% = STICK(3)
+3656	x% = STICK(arr%(1))
+3657	x% = STICK((x% * 2))
+3658	x% = STICK("a")
+3659	x% = STICK(s$)
+3660	x% = STICK(x%), 1
+3661	x% = STRIG(x%)
+3662	x% = STRIG(3)
+3663	x% = STRIG(arr%(1))
+3664	x% = STRIG((x% * 2))
+3665	x% = STRIG("a")
+3666	x% = STRIG(s$)
+3667	x% = STRIG(x%), 1
+3668	x% = PEN(x%)
+3669	x% = PEN(3)
+3670	x% = PEN(arr%(1))
+3671	x% = PEN((x% * 2))
+3672	x% = PEN("a")
+3673	x% = PEN(s$)
+3674	x% = PEN(x%), 1
+3675	x% = PLAY(x%)
+3676	x% = PLAY(3)
+3677	x% = PLAY(arr%(1))
+3678	x% = PLAY((x% * 2))
+3679	x% = PLAY("a")
+3680	x% = PLAY(s$)
+3681	x% = PLAY(x%), 1
+3682	x% = ERR
+3683	x% = ERR, 1
+3684	x% = ERL
+3685	x% = ERL, 1
+3686	x% = ERDEV
+3687	x% = ERDEV, 1
+3688	s$ = ERDEV$
+3689	s$ = ERDEV$, 1
+3690	x% = LPOS(x%)
+3691	x% = LPOS(3)
+3692	x% = LPOS(arr%(1))
+3693	x% = LPOS((x% * 2))
+3694	x% = LPOS("a")
+3695	x% = LPOS(s$)
+3696	x% = LPOS(x%), 1
+3697	x% = SETMEM(x%)
+3698	x% = SETMEM(1)
+3699	x% = SETMEM(l&)
+3700	x% = SETMEM(s!)
+3701	x% = SETMEM(d#)
+3702	x% = SETMEM((x% + 1))
+3703	x% = SETMEM(arr%(1))
+3704	x% = SETMEM(-1)
+3705	x% = SETMEM(100)
+3706	x% = SETMEM("a")
+3707	x% = SETMEM(s$)
+3708	x% = SETMEM(x%), 1
+3709	s$ = TAB(3)
+3710	s$ = TAB(3), 1
+3711	x% = FOO(1)
+3712	x% = FOO(1), 1
+3713	x% = x% + x%
+3714	x% = 1 + x%
+3715	x% = l& + x%
+3716	x% = s! + x%
+3717	x% = d# + x%
+3718	x% = (x% + 1) + x%
+3719	x% = arr%(1) + x%
+3720	x% = -1 + x%
+3721	x% = 100 + x%
+3722	x% = "a" + x%
+3723	x% = s$ + x%
+3724	x% = x% + 1
+3725	x% = x% + l&
+3726	x% = x% + s!
+3727	x% = x% + d#
+3728	x% = x% + (x% + 1)
+3729	x% = x% + arr%(1)
+3730	x% = x% + -1
+3731	x% = x% + 100
+3732	x% = x% + "a"
+3733	x% = x% + s$
+3734	x% = x% + x%, 1
+3735	s$ = s$ + s$
+3736	s$ = "abc" + s$
+3737	s$ = LEFT$(s$, 2) + s$
+3738	s$ = sa$(1) + s$
+3739	s$ = 1 + s$
+3740	s$ = x% + s$
+3741	s$ = s$ + "abc"
+3742	s$ = s$ + LEFT$(s$, 2)
+3743	s$ = s$ + sa$(1)
+3744	s$ = s$ + 1
+3745	s$ = s$ + x%
+3746	s$ = s$ + s$, 1
+3747	s$ = "abc" + x%
+3748	s$ = LEFT$(s$, 2) + x%
+3749	s$ = sa$(1) + x%
+3750	s$ = 1 + x%
+3751	s$ = x% + x%
+3752	s$ = s$ + l&
+3753	s$ = s$ + s!
+3754	s$ = s$ + d#
+3755	s$ = s$ + (x% + 1)
+3756	s$ = s$ + arr%(1)
+3757	s$ = s$ + -1
+3758	s$ = s$ + 100
+3759	s$ = s$ + "a"
+3760	s$ = s$ + x%, 1
+3761	x% = "abc" + x%
+3762	x% = LEFT$(s$, 2) + x%
+3763	x% = sa$(1) + x%
+3764	x% = s$ + 1
+3765	x% = s$ + l&
+3766	x% = s$ + s!
+3767	x% = s$ + d#
+3768	x% = s$ + (x% + 1)
+3769	x% = s$ + arr%(1)
+3770	x% = s$ + -1
+3771	x% = s$ + 100
+3772	x% = s$ + "a"
+3773	x% = s$ + s$
+3774	x% = s$ + x%, 1
+3775	x% = s$ < s$
+3776	x% = "abc" < s$
+3777	x% = LEFT$(s$, 2) < s$
+3778	x% = sa$(1) < s$
+3779	x% = 1 < s$
+3780	x% = x% < s$
+3781	x% = s$ < "abc"
+3782	x% = s$ < LEFT$(s$, 2)
+3783	x% = s$ < sa$(1)
+3784	x% = s$ < 1
+3785	x% = s$ < x%
+3786	x% = s$ < s$, 1
+3787	x% = "abc" < x%
+3788	x% = LEFT$(s$, 2) < x%
+3789	x% = sa$(1) < x%
+3790	x% = 1 < x%
+3791	x% = x% < x%
+3792	x% = s$ < l&
+3793	x% = s$ < s!
+3794	x% = s$ < d#
+3795	x% = s$ < (x% + 1)
+3796	x% = s$ < arr%(1)
+3797	x% = s$ < -1
+3798	x% = s$ < 100
+3799	x% = s$ < "a"
+3800	x% = s$ < x%, 1
+3801	x% = s$ AND x%
+3802	x% = "abc" AND x%
+3803	x% = LEFT$(s$, 2) AND x%
+3804	x% = sa$(1) AND x%
+3805	x% = 1 AND x%
+3806	x% = x% AND x%
+3807	x% = s$ AND 1
+3808	x% = s$ AND l&
+3809	x% = s$ AND s!
+3810	x% = s$ AND d#
+3811	x% = s$ AND (x% + 1)
+3812	x% = s$ AND arr%(1)
+3813	x% = s$ AND -1
+3814	x% = s$ AND 100
+3815	x% = s$ AND "a"
+3816	x% = s$ AND s$
+3817	x% = s$ AND x%, 1
+3818	x% = NOT x%
+3819	x% = NOT 1
+3820	x% = NOT l&
+3821	x% = NOT s!
+3822	x% = NOT d#
+3823	x% = NOT (x% + 1)
+3824	x% = NOT arr%(1)
+3825	x% = NOT -1
+3826	x% = NOT 100
+3827	x% = NOT "a"
+3828	x% = NOT s$
+3829	x% = NOT x%, 1
+3830	x% = NOT "abc"
+3831	x% = NOT LEFT$(s$, 2)
+3832	x% = NOT sa$(1)
+3833	x% = NOT s$, 1
+3834	x% = -s$
+3835	x% = -"abc"
+3836	x% = -LEFT$(s$, 2)
+3837	x% = -sa$(1)
+3838	x% = -x%
+3839	x% = -s$, 1
+3840	x% = x% MOD x%
+3841	x% = 1 MOD x%
+3842	x% = l& MOD x%
+3843	x% = s! MOD x%
+3844	x% = d# MOD x%
+3845	x% = (x% + 1) MOD x%
+3846	x% = arr%(1) MOD x%
+3847	x% = -1 MOD x%
+3848	x% = 100 MOD x%
+3849	x% = "a" MOD x%
+3850	x% = s$ MOD x%
+3851	x% = x% MOD 1
+3852	x% = x% MOD l&
+3853	x% = x% MOD s!
+3854	x% = x% MOD d#
+3855	x% = x% MOD (x% + 1)
+3856	x% = x% MOD arr%(1)
+3857	x% = x% MOD -1
+3858	x% = x% MOD 100
+3859	x% = x% MOD "a"
+3860	x% = x% MOD s$
+3861	x% = x% MOD x%, 1
+3862	x% = x% \ x%
+3863	x% = 1 \ x%
+3864	x% = l& \ x%
+3865	x% = s! \ x%
+3866	x% = d# \ x%
+3867	x% = (x% + 1) \ x%
+3868	x% = arr%(1) \ x%
+3869	x% = -1 \ x%
+3870	x% = 100 \ x%
+3871	x% = "a" \ x%
+3872	x% = s$ \ x%
+3873	x% = x% \ 1
+3874	x% = x% \ l&
+3875	x% = x% \ s!
+3876	x% = x% \ d#
+3877	x% = x% \ (x% + 1)
+3878	x% = x% \ arr%(1)
+3879	x% = x% \ -1
+3880	x% = x% \ 100
+3881	x% = x% \ "a"
+3882	x% = x% \ s$
+3883	x% = x% \ x%, 1
+3884	s! = x% / x%
+3885	s! = 1 / x%
+3886	s! = l& / x%
+3887	s! = s! / x%
+3888	s! = d# / x%
+3889	s! = (x% + 1) / x%
+3890	s! = arr%(1) / x%
+3891	s! = -1 / x%
+3892	s! = 100 / x%
+3893	s! = "a" / x%
+3894	s! = s$ / x%
+3895	s! = x% / 1
+3896	s! = x% / l&
+3897	s! = x% / s!
+3898	s! = x% / d#
+3899	s! = x% / (x% + 1)
+3900	s! = x% / arr%(1)
+3901	s! = x% / -1
+3902	s! = x% / 100
+3903	s! = x% / "a"
+3904	s! = x% / s$
+3905	s! = x% / x%, 1
+3906	d# = x% ^ x%
+3907	d# = 1 ^ x%
+3908	d# = l& ^ x%
+3909	d# = s! ^ x%
+3910	d# = d# ^ x%
+3911	d# = (x% + 1) ^ x%
+3912	d# = arr%(1) ^ x%
+3913	d# = -1 ^ x%
+3914	d# = 100 ^ x%
+3915	d# = "a" ^ x%
+3916	d# = s$ ^ x%
+3917	d# = x% ^ 1
+3918	d# = x% ^ l&
+3919	d# = x% ^ s!
+3920	d# = x% ^ d#
+3921	d# = x% ^ (x% + 1)
+3922	d# = x% ^ arr%(1)
+3923	d# = x% ^ -1
+3924	d# = x% ^ 100
+3925	d# = x% ^ "a"
+3926	d# = x% ^ s$
+3927	d# = x% ^ x%, 1
+3928	x% = s$ * 2
+3929	x% = "abc" * 2
+3930	x% = LEFT$(s$, 2) * 2
+3931	x% = sa$(1) * 2
+3932	x% = 1 * 2
+3933	x% = x% * 2
+3934	x% = s$ * 2, 1
+3935	s$ = s$ - s$
+3936	s$ = "abc" - s$
+3937	s$ = LEFT$(s$, 2) - s$
+3938	s$ = sa$(1) - s$
+3939	s$ = 1 - s$
+3940	s$ = x% - s$
+3941	s$ = s$ - "abc"
+3942	s$ = s$ - LEFT$(s$, 2)
+3943	s$ = s$ - sa$(1)
+3944	s$ = s$ - 1
+3945	s$ = s$ - x%
+3946	s$ = s$ - s$, 1
+3947	x% = x% XOR x%
+3948	x% = 1 XOR x%
+3949	x% = l& XOR x%
+3950	x% = s! XOR x%
+3951	x% = d# XOR x%
+3952	x% = (x% + 1) XOR x%
+3953	x% = arr%(1) XOR x%
+3954	x% = -1 XOR x%
+3955	x% = 100 XOR x%
+3956	x% = "a" XOR x%
+3957	x% = s$ XOR x%
+3958	x% = x% XOR 1
+3959	x% = x% XOR l&
+3960	x% = x% XOR s!
+3961	x% = x% XOR d#
+3962	x% = x% XOR (x% + 1)
+3963	x% = x% XOR arr%(1)
+3964	x% = x% XOR -1
+3965	x% = x% XOR 100
+3966	x% = x% XOR "a"
+3967	x% = x% XOR s$
+3968	x% = x% XOR x%, 1
+3969	x% = x% EQV x%
+3970	x% = 1 EQV x%
+3971	x% = l& EQV x%
+3972	x% = s! EQV x%
+3973	x% = d# EQV x%
+3974	x% = (x% + 1) EQV x%
+3975	x% = arr%(1) EQV x%
+3976	x% = -1 EQV x%
+3977	x% = 100 EQV x%
+3978	x% = "a" EQV x%
+3979	x% = s$ EQV x%
+3980	x% = x% EQV 1
+3981	x% = x% EQV l&
+3982	x% = x% EQV s!
+3983	x% = x% EQV d#
+3984	x% = x% EQV (x% + 1)
+3985	x% = x% EQV arr%(1)
+3986	x% = x% EQV -1
+3987	x% = x% EQV 100
+3988	x% = x% EQV "a"
+3989	x% = x% EQV s$
+3990	x% = x% EQV x%, 1
+3991	x% = x% IMP x%
+3992	x% = 1 IMP x%
+3993	x% = l& IMP x%
+3994	x% = s! IMP x%
+3995	x% = d# IMP x%
+3996	x% = (x% + 1) IMP x%
+3997	x% = arr%(1) IMP x%
+3998	x% = -1 IMP x%
+3999	x% = 100 IMP x%
+4000	x% = "a" IMP x%
+4001	x% = s$ IMP x%
+4002	x% = x% IMP 1
+4003	x% = x% IMP l&
+4004	x% = x% IMP s!
+4005	x% = x% IMP d#
+4006	x% = x% IMP (x% + 1)
+4007	x% = x% IMP arr%(1)
+4008	x% = x% IMP -1
+4009	x% = x% IMP 100
+4010	x% = x% IMP "a"
+4011	x% = x% IMP s$
+4012	x% = x% IMP x%, 1
+4013	x% = (1 + 2
+4014	x% = (1 + 2, 1
+4015	x% = 1 +
+4016	x% = 1 +, 1
+4017	x% = ()
+4018	x% = (), 1
+4019	x% = 1 2
+4020	x% = 1 2, 1
+4021	x% = 32768
+4022	x% = 32768, 1
+4023	x% = 40000
+4024	x% = 40000, 1
+4025	l& = 2147483648
+4026	l& = 2147483648, 1
+4027	x% = 1E40
+4028	x% = 1E40, 1
+4029	s! = 1D+40
+4030	s! = 1D+40, 1
+4031	x% = &HFFFF
+4032	x% = &HFFFF, 1
+4033	x% = &H10000
+4034	x% = &H10000, 1
+4035	l& = &HFFFFFFFF&
+4036	l& = &HFFFFFFFF&, 1
+4037	x% = 1..2
+4038	x% = 1..2, 1
+4039	x% = .
+4040	x% = ., 1
+4041	s$ = "abc
+4042	s$ = "abc, 1

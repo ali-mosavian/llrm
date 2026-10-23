@@ -3297,6 +3297,8 @@ impl Compiler {
                 self.begin_resumable_statement(line);
             }
             match statement {
+                Statement::OnErrorResumeNext { .. } => return self.fail("ON ERROR RESUME NEXT is not supported"),
+                Statement::Common { .. } => return self.fail("COMMON is not supported"),
                 Statement::Dim(items) => {
                     for item in items {
                         self.allocate(item)?;
@@ -3546,6 +3548,12 @@ impl Compiler {
                         self.tag_last(Tag::SetSegment);
                     }
                 }
+                Statement::OpenClassic { .. } => return self.fail("the classic OPEN mode$, #file, path$ form is not supported"),
+                Statement::Open { access, lock, record_length, mode_written, mode, .. }
+                    if access.is_some() || lock.is_some() || record_length.is_some() || !mode_written || *mode == FileMode::Random =>
+                {
+                    return self.fail("OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported");
+                }
                 Statement::Open { path, mode, file, .. } => {
                     let path = self.string_descriptor(path)?;
                     let (file, file_type) = self.expression(file)?;
@@ -3555,6 +3563,7 @@ impl Compiler {
                         FileMode::Output => 2,
                         FileMode::Append => 8,
                         FileMode::Binary => 0x20,
+                        FileMode::Random => unreachable!(),
                     };
                     self.emit_runtime_call(
                         "B$OPEN",
@@ -3607,6 +3616,9 @@ impl Compiler {
                 Statement::FileTransfer { write, file, position, target, .. } => {
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
+                    let Some(target) = target else {
+                        return self.fail("GET and PUT without a variable are not supported");
+                    };
                     let (target, target_type) = self.destination(target)?;
                     let address = self.far_address(target, target_type);
                     let width = self.string_width(target_type).unwrap_or_else(|| self.width(target_type));
@@ -6266,6 +6278,7 @@ impl Compiler {
                     Unary::Negative => "neg",
                     Unary::Not => "not",
                     Unary::Positive | Unary::Grouped => unreachable!(),
+                    Unary::ByValue | Unary::Segmented => return self.fail("BYVAL and SEG arguments are not supported"),
                 };
                 if *op == Unary::Not && !integral(type_id) {
                     return self.fail("NOT requires an integral operand");
@@ -8860,6 +8873,7 @@ impl Compiler {
                     (Unary::Negative, Number::Real(value)) => Ok((type_id, real(-parse_real(&value)?, type_id))),
                     (Unary::Not, Number::Integer(value)) => Ok((type_id, Number::Integer(narrow(!value, type_id)))),
                     (Unary::Not, Number::Real(_)) => self.fail("NOT requires an integral constant"),
+                    (Unary::ByValue | Unary::Segmented, _) => self.fail("BYVAL and SEG are not constants"),
                 }
             }
             Expr::Binary { op, left, right, .. } => {
