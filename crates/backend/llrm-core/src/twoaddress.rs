@@ -63,10 +63,10 @@
 //! does in the pin): a value a load defines is not the operand that is tied
 //! (`is_profitable_to_commute`).
 //!
-//! The kills are `isPlainlyKilled` on one `LiveIntervals` the pass edits (`handleMove`,
-//! `rewrite_instr`, the intervals of a tied copy made afresh) and hands to the
-//! coalescer (DEVIATE TA-6 retired: a backward scan of the live-out rows stood in
-//! for it).
+//! The kills are `isPlainlyKilled` on one `LiveIntervals` the pass edits
+//! (`handleMove`, `rewrite_instr`, the intervals of a tied copy made afresh)
+//! and hands to the coalescer (DEVIATE TA-6 retired: a backward scan of the
+//! live-out rows stood in for it).
 //!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
