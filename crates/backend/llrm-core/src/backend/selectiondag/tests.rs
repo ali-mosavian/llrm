@@ -28,6 +28,7 @@ mod i1_branch;
 mod i1_m16;
 mod int_to_fp;
 mod legalize_dag;
+mod mem_space;
 mod legalize_types;
 mod m16_coverage;
 mod pair_arith;
