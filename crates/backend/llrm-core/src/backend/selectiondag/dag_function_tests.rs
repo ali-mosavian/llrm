@@ -544,3 +544,78 @@ fn an_indexed_cell_carries_a_literal_address() {
     assert!(cell.base.is_some() && cell.addr.is_some(), "{cell:?}");
     assert_eq!(cell.offset, 1);
 }
+
+/// An index that makes up the rest of a displacement past the object
+/// (`[ebp+ecx+126]` for 8192 bytes below BP) is no frame position: the layout
+/// takes a positive one for the arguments' and left it unmoved, so fill_nest
+/// read 12 bytes off. The object's address is made and the cell based on it.
+#[test]
+fn a_displacement_past_a_frame_object_is_based_on_its_address() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+b1:
+  %o = alloca [8192 x i8]
+  br label %b10
+b9:
+  ret i32 %s2
+b10:
+  %n = phi i32 [ -8192, %b1 ], [ %nx, %b10 ]
+  %acc = phi i32 [ %s2, %b10 ], [ 0, %b1 ]
+  %g1 = getelementptr i8, ptr %o, i32 %n
+  %g2 = getelementptr i8, ptr %g1, i32 8192
+  %l1 = load i16, ptr %g2
+  %g3 = getelementptr i8, ptr %o, i32 %n
+  %g4 = getelementptr i8, ptr %g3, i32 8318
+  %l2 = load i16, ptr %g4
+  %x1 = sext i16 %l1 to i32
+  %x2 = sext i16 %l2 to i32
+  %s1 = add i32 %acc, %x1
+  %s2 = add i32 %s1, %x2
+  %nx = add nsw i32 %n, 128
+  %exitcond = icmp ne i32 %nx, 0
+  br i1 %exitcond, label %b10, label %b9
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    assert!(whats.iter().any(|w| w.op == crate::model::ir::Operation::Address), "the object's address is made");
+    let past = whats
+        .iter()
+        .flat_map(|w| w.sources.iter())
+        .find_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) if m.offset == 8318 => Some(m.clone()),
+            _ => None,
+        })
+        .expect("the cell past the object");
+    assert!(past.base.is_some() && past.index.is_some(), "{past:?}");
+}
+
+const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @bar(ptr)
+define void @f(ptr %z, ptr byval([20 x i8]) %x, ptr %y) {
+entry:
+  call void @bar(ptr %x)
+  ret void
+}
+";
+
+/// The builder numbers a byval parameter's fixed object like any other; the
+/// frame left it out, so the address of `x` was the next parameter's, 20 bytes
+/// up (byvalue_struct_address passed `y`'s place to `bar`).
+#[test]
+fn a_byval_parameter_is_a_fixed_object_of_its_own() {
+    let module = llrm_mir::parse::module(BYVAL_ADDRESS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let lea = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Address)
+        .expect("the address of x");
+    let crate::model::ir::Loc::Address(a) = &lea.sources[0] else { panic!("{lea:?}") };
+    assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
+}
