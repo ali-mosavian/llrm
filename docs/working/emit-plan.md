@@ -1,6 +1,6 @@
 # Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC
 
-Owner w-8. Ledger command (docs/working/ledger-command.md): qbq-llrm render/d_faces.c, `-m32 -mabi=sysv -march=i486 -O2`, callgrind, dist of 0ed9c77f6b. Bucket: 15.5 M ours, 4.1 M pin (`X86AsmPrinter::runOnMachineFunction` + `AsmPrinter::doFinalization`), 3.77x, +11.4 M. QCport 13.1 M vs 3.8 M (ledger `ledger-qcport-0ed9c77f6b-O2.txt`; not re-profiled below).
+Owner w-8. Ledger command (docs/working/ledger-command.md): qbq-llrm render/d_faces.c, `-m32 -mabi=sysv -march=i486 -O2`, callgrind, dist of 0ed9c77f6b. Bucket: 15.5 M ours, 4.1 M pin (`X86AsmPrinter::runOnMachineFunction` + `AsmPrinter::doFinalization`), 3.77x, +11.4 M. QCport 13.1 M vs 3.8 M (ledger `ledger-qcport-0ed9c77f6b-O2.txt`; profiled the same way below).
 
 ## Attribution
 
@@ -19,6 +19,8 @@ Taken with `valgrind --tool=callgrind --toggle-collect=llrm_core::backend::objbu
 | `IndexMap<String,i64>` insert/get, `BodyRoots` fact | 0.64 | | name table and a per-procedure fact |
 | `_relaxed` | 0.46 | 1 | jump relaxation |
 
+QCport render/d_faces.c, same command and toggle: 13,061,556 Ir, the same shape. Self cost: `frame_omitted` 2.11 M (16%), `Semantics::clone` 1.21 M + `memcpy` 0.86 M + drop 0.34 M (2.4 M), `_items` 0.51 M, `Vec<Loc>` collect 0.47 M, `_assemble` 0.43 M, `format!`/`write_str`/`fmt::write`/`pad_integral` 1.2 M, `omf::write` 0.35 M, `BodyRoots` fact 0.25 M, `_relaxed` 0.22 M. Each row's PR states both figures.
+
 What the pin does and ours does not: lowers each `MachineInstr` to an `MCInst` once (`X86MCInstLower`), encodes it table-driven with its fixup offsets recorded as it goes (`X86MCCodeEmitter`), and has the frame already eliminated (PrologEpilogInserter) before the printer runs. Ours eliminates the frame register at emit, copies each instruction several times, builds a string per operand, and decodes what it just encoded. At `-Os` `frame_omitted` also encodes the whole procedure twice to compare sizes, which this `-O2` ledger does not show.
 
 ## Rows
@@ -34,7 +36,7 @@ One translated change each, in the order they land. A row is measured with the c
 | EM-5 | `spelled` and the name table: operands are built once, names keyed by id | `X86MCInstLower` operand lowering | 1.0 | 11-13 |
 | EM-6 | The OMF writer writes record bytes directly, no `format!` per record name | `MCObjectWriter` (ELF/COFF; OMF has none) | 0.8 | 11-13 |
 
-Sum of the estimates 10.5 M of the 11.4 M; the remainder is `_relaxed` and what the rows leave. EM-1 and EM-2 overlap (the clones are inside `frame_omitted`): the second is measured after the first lands. The QCport ledger is taken with the same `--toggle-collect` before EM-1 and after every row.
+Sum of the estimates 10.5 M of the 11.4 M; the remainder is `_relaxed` and what the rows leave. EM-1 and EM-2 overlap (the clones are inside `frame_omitted`): the second is measured after the first lands. The QCport profile is taken with the same `--toggle-collect` after every row.
 
 ## Doubts
 
