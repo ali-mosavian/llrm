@@ -640,3 +640,25 @@ fn a_legalizers_stack_slot_is_a_frame_object() {
         .map(|e| e.0);
     assert!(why.as_deref().is_none_or(|why| !why.contains("frame index")), "{why:?}");
 }
+
+const VARIADIC: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f(i32 %n, ...) {
+entry:
+  %ap = alloca ptr, align 4
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 %n
+}
+";
+
+/// `va_start` stores the address of the next fixed object, the first variadic
+/// argument; the frame had no cell for it ("frame index -2" in the variadic
+/// programs).
+#[test]
+fn va_start_finds_the_first_variadic_argument() {
+    let module = llrm_mir::parse::module(VARIADIC).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.is_none(), "{why:?}");
+}

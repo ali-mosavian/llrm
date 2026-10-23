@@ -341,6 +341,12 @@ pub fn selected(
             Parameter::Registers(_) => {}
         }
     }
+    // `LowerFormalArguments`: the first variadic argument is the next fixed
+    // object, where the convention puts the first stack argument it does not
+    // name.
+    if module.signature(function.ty).2 {
+        cells.push(convention.stack_arguments);
+    }
     let frame = Frame::new(cells);
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
