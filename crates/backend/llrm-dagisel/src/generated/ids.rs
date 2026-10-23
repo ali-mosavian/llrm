@@ -8,6 +8,7 @@ use crate::matcher::Vt;
 
 pub mod isd {
     pub const ABS: u16 = 196;
+    pub const ABS_MIN_POISON: u16 = 197;
     pub const ADD: u16 = 59;
     pub const ADDC: u16 = 71;
     pub const ADDE: u16 = 73;
@@ -65,8 +66,14 @@ pub mod isd {
     pub const ExternalSymbol: u16 = 19;
     pub const FABS: u16 = 261;
     pub const FADD: u16 = 99;
+    pub const FATAN: u16 = 269;
     pub const FCOPYSIGN: u16 = 158;
+    pub const FCOS: u16 = 265;
     pub const FDIV: u16 = 102;
+    pub const FEXP: u16 = 281;
+    pub const FEXP2: u16 = 282;
+    pub const FLOG: u16 = 278;
+    pub const FLOG2: u16 = 279;
     pub const FMA: u16 = 155;
     pub const FMUL: u16 = 101;
     pub const FNEG: u16 = 260;
@@ -78,8 +85,10 @@ pub mod isd {
     pub const FP_TO_UINT_SAT: u16 = 243;
     pub const FREEZE: u16 = 55;
     pub const FREM: u16 = 103;
+    pub const FRINT: u16 = 286;
     pub const FSHL: u16 = 203;
     pub const FSHR: u16 = 204;
+    pub const FSIN: u16 = 264;
     pub const FSQRT: u16 = 262;
     pub const FSUB: u16 = 100;
     pub const FrameIndex: u16 = 16;

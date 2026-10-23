@@ -276,9 +276,28 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_32(), features, ptr)
+    }
+
+    /// m16: the same constructor calls over the 386 register file, with `i16`
+    /// pointers and the far pointer's type action. The pin has no 16-bit
+    /// mode, so its 32-bit tables are the oracle for everything but the
+    /// pointer type.
+    pub fn x86_16(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_16(), features, ptr)
+    }
+
+    fn x86(
+        types: TargetLoweringInfo,
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
         use Action::*;
         use ISD::*;
-        let mut t = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        let mut t = TargetLowering::empty(types);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];

@@ -3,7 +3,7 @@
 //!
 //! # Example
 //! ```
-//! use llrm_mir::lowering::{Isd, LoadExt, Lowering};
+//! use llrm_mir::lowering::Lowering;
 //! use llrm_x86::lowering::X86;
 //! assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
 //! assert!(X86 { is_64bit: false }.is_truncate_free(32, 16));
@@ -14,7 +14,19 @@
 //! # Runs
 //! `cargo test -p llrm-x86 lowering`.
 
+use std::sync::OnceLock;
+
 use llrm_mir::lowering::{Isd, LoadExt, Lowering};
+
+use crate::dag::actions::{Features, TargetLowering};
+use crate::dag::isd::ISD;
+use crate::dag::mvt::MVT;
+
+/// The DAG's tables for i486, built once.
+fn table() -> &'static TargetLowering {
+    static TABLE: OnceLock<TargetLowering> = OnceLock::new();
+    TABLE.get_or_init(|| TargetLowering::x86_32(Features::default(), MVT::I32))
+}
 
 /// The x86 family's answers. `is_64bit` is `Subtarget.is64Bit()`.
 pub struct X86 {
@@ -27,16 +39,42 @@ impl Lowering for X86 {
         true
     }
 
-    // The registers: i8, i16 and i32 (i64 on a 64-bit target). Divide and
-    // remainder are `Expand` (L327: `SDIVREM` does them), every other scalar
-    // operation here is `Legal` or `Custom` (`Select` and `SetCC` L361).
+    // `isOperationLegalOrCustom` from the DAG's action table (`dag::actions`):
+    // one copy of what the legalizer does with each operation on each type.
+    // DEVIATE TL2: the table translates the 32-bit arms only, so a 64-bit
+    // target answers as before the table: the divides `Expand` (L327), the
+    // rest legal on the register types. Owner sdag-b, 2027-02-04.
     fn is_operation_legal_or_custom(
         &self,
         op: Isd,
         bits: u32,
     ) -> bool {
-        let legal_type = matches!(bits, 8 | 16 | 32) || (bits == 64 && self.is_64bit);
-        legal_type && !matches!(op, Isd::UDiv | Isd::SDiv | Isd::URem | Isd::SRem)
+        if self.is_64bit {
+            let legal_type = matches!(bits, 8 | 16 | 32 | 64);
+            return legal_type && !matches!(op, Isd::UDiv | Isd::SDiv | Isd::URem | Isd::SRem);
+        }
+        let Some(vt) = MVT::integer(bits) else { return false };
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        table().is_operation_legal_or_custom(node, vt.into())
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L186-L187
