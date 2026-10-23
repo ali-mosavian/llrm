@@ -1064,3 +1064,12 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
     import inspect
 
     assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
+
+
+def test_a_squash_github_refuses_prints_the_reason(capsys):
+    """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n")  # noqa: E731
+    assert ps.squash("4108", info, "body", run=refuse) is False
+    out = capsys.readouterr().out
+    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
