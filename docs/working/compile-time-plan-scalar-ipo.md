@@ -11,7 +11,7 @@ Inclusive per pass, M Ir.
 |---|--:|--:|--:|
 | GVN | 40.6 | 49.2 | -8.6 (off the list) |
 | EarlyCSE | 32.5 | 7.8 | 24.7 |
-| SCCP | 11.7 | 4.2 | 7.5 |
+| SCCP + IPSCCP (pin: SCCPPass 11x 4.2 + IPSCCP 1x 4.1) | 11.7 | 8.3 | 3.4 |
 | MemCpyOpt | 10.7 | 0.47 | 10.2 |
 | SROA | 9.3 | 9.8 | -0.5 (parity) |
 | functionattrs post-order | 8.2 | 1.4 | 6.8 |
@@ -27,14 +27,14 @@ The MemorySSA rows overlap EarlyCSE and MemCpyOpt: EarlyCse 32.5 = MemorySSA 18.
 
 One PR per step, ledger pair in each body. Dates are land dates.
 
-| land | step | pin source | M removed |
-|---|---|---|--:|
-| 10-30 | EarlyCse walks the live function, no `fork` + `Context` clone | EarlyCSE.cpp `EarlyCSE::run` | 3.4 |
-| 11-03 | MemCpyOpt without `Pointers::run` | MemCpyOptimizer.cpp `runImpl` | 2.7 |
-| 11-06 | SCCP to the pin's cost | SCCPSolver.cpp, SCCP.cpp `runSCCP` | up to 7.5 |
-| 11-10 | MemorySSA once per function: w-3's S3; this plan only if S3 leaves it | MemorySSA.cpp | up to 22 |
-| 11-13 | functionattrs post-order as one SCC walk | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | up to 6.8 |
-| 11-17 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), with w-6; llrm-only, no pin pass | none | up to 14 |
-| 11-20 | Bounded callers cleanup, delete `Bounded` | none | ~7 |
+| land | owner | step | pin source | M removed |
+|---|---|---|---|--:|
+| 10-30 | funcattrs-port | functionattrs post-order: 44 calls to `post_order` (8.2 M) against the pin's 1.4 M | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | up to 6.8 |
+| 11-06 | funcattrs-port | SCCP to the pin's SCCPPass + IPSCCP | SCCPSolver.cpp, SCCP.cpp `runSCCP` | up to 3.4 |
+| 11-20 | funcattrs-port | Bounded callers cleanup, delete `Bounded` | none (llrm-only) | ~7 |
+| 11-20 | w-3 | EarlyCse fork + `Context` clone: `AliasQuery` takes the function per call (alias.rs), with S2's exit | EarlyCSE.cpp `EarlyCSE::run` | 3.4 |
+| 11-27 | w-5 | MemCpyOpt without `Pointers::run` (the llrm-only points-to solve AA reads), with AA call pairs | MemCpyOptimizer.cpp `runImpl` | 2.7 |
+| 11-10 | w-3 | MemorySSA once per function (S3) | MemorySSA.cpp | up to 22 |
+| 11-17 | w-6 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), llrm-only | none | up to 14 |
 
 Row-23 back half follows, 11-23 to 12-10. `Homes` 8.4 and `Spares` 8.0 are llrm-only module passes on w-6's retire list.
