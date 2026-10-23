@@ -25,6 +25,9 @@ use super::mvt::{EVT, MVT};
 
 /// `CreateStackTemporary`: where the stack slots come from.
 pub trait FrameObjects {
+    /// How many frame objects there are: the index the next one gets.
+    fn objects(&self) -> i32;
+
     /// A new frame object of `size` bytes, aligned to `align`; its index.
     fn create_stack_temporary(
         &mut self,
