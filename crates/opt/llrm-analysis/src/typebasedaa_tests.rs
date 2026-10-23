@@ -149,3 +149,33 @@ fn every_corpus_tag_pair_agrees_with_the_name_rule() {
     // Premise: the corpus has tagged accesses and some pairs are apart.
     assert!(pairs > 0 && apart > 0, "{pairs} pairs, {apart} apart");
 }
+
+/// `AAResults::getModRefInfo(Store, Loc)` asks the aggregate's `alias`
+/// (AliasAnalysis.cpp), so a store and a load of unrelated types through
+/// different pointers do not touch each other. The aggregate met the members'
+/// answers instead: BasicAA's store case asked BasicAA alone, and TBAA's
+/// said anything for a store.
+#[test]
+fn a_store_and_a_load_of_unrelated_types_do_not_touch_through_the_aggregate() {
+    let module = parsed(&format!(
+        "define void @f(ptr %p, ptr %q) {{\nb:\n  store i32 1, ptr %p, !tbaa !11\n  %b = load i32, ptr %q, !tbaa !13\n  %c = load i32, ptr %q, !tbaa !7\n  ret void\n}}\n{TREE}"
+    ));
+    let layout = layout(&module);
+    let f = function(&module, "f");
+    let unit = Unit::of(&module, &layout, f);
+    let store = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Store { .. }))
+        .unwrap();
+    let load = |name: &str| {
+        let llrm_mir::module::ValueDef::Instruction(inst) = f.value(value(f, name)).def else { panic!() };
+        MemoryLocation::get(&unit, inst).expect("a load")
+    };
+    let mut chain = AggregateAA::new().with_unit(&unit);
+    chain.add_aa_result(TypeBasedAA::new(&unit));
+    chain.add_aa_result(BasicAA::new(&unit));
+    let aaqi = &mut AAQueryInfo::default();
+    assert_eq!(chain.get_mod_ref_info(store, Some(&load("b")), aaqi), ModRefInfo::NoModRef, "int against float");
+    assert_eq!(chain.get_mod_ref_info(store, Some(&load("c")), aaqi), ModRefInfo::Mod, "int against char");
+}
