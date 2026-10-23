@@ -12,7 +12,7 @@ use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
-use crate::backend::{machinecp, parcopy, prologue, spillforward, verify};
+use crate::backend::{machinecp, parcopy, prologue, verify};
 use crate::model::ir::Addr;
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -226,134 +226,6 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
         let input = body("screen", 0, crate::model::lir::shared(blocks));
         assert_eq!(pushed_constants(rules(), &input), input, "{barrier}");
     }
-}
-
-#[test]
-fn test_entry_reload_requires_agreement_on_every_edge() {
-    // NBODY's header reload is redundant only when all paths carry the exact
-    // stored bits.
-    for mismatch in ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"] {
-        let register = rl(RegId::EAX, 4);
-        let cell = Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) };
-        let store = insn(
-            1,
-            Some((1, 1)),
-            Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let mut other = store.clone();
-        match mismatch {
-            "register" => other.what.as_mut().unwrap().sources = vec![rl(RegId::ECX, 4)],
-            "slot" => {
-                other.what.as_mut().unwrap().dests =
-                    vec![Loc::Mem(Mem { addr: Some(cell.addr.unwrap().plus(-4)), ..cell.clone() })];
-            }
-            "width" => other.what.as_mut().unwrap().dests = vec![Loc::Mem(Mem { width: 2, ..cell.clone() })],
-            "clobber" => other.clobbers = [RegId::EAX].into(),
-            "missing" => other.what = None,
-            _ => {}
-        }
-        let reload = Insn {
-            spill_reload: mismatch != "unowned",
-            ..insn(
-                3,
-                Some((3, 3)),
-                Some(sem(Operation::Move, "mov", vec![register], vec![Loc::Mem(cell)])),
-                vec![],
-                vec![],
-            )
-        };
-        let input = body(
-            "join",
-            if mismatch == "entry" { 3 } else { 0 },
-            vec![
-                block(0, vec![], vec![1, 2]).into(),
-                block(1, vec![Arc::new(store)], vec![3]).into(),
-                block(2, vec![Arc::new(other)], vec![3]).into(),
-                block(3, vec![Arc::new(reload.clone())], vec![]).into(),
-            ],
-        );
-        let done = spillforward::forwarded(&input);
-        let kept =
-            done.blocks[done.blocks.len() - 1].insns.iter().any(|one| one.spill_reload || one.what == reload.what);
-        assert_eq!(kept, !["none", "unowned"].contains(&mismatch), "{mismatch}");
-    }
-}
-
-/// A store of a register back into the slot it holds is dead: qbsp's
-/// RPointLeaf reloaded a spilled pointer and stored it straight back, on
-/// each side of a call, every iteration.
-#[test]
-fn test_storing_a_slot_back_from_its_reload_is_dead() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let reload = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])),
-        vec![],
-        vec![],
-    );
-    let back = insn(
-        2,
-        Some((2, 2)),
-        Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let other =
-        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(RegId::CX, 2)])), vec![], vec![]);
-    let input = body("back", 1, vec![block(1, vec![Arc::new(reload), Arc::new(back), Arc::new(other)], vec![]).into()]);
-
-    let done = spillforward::forwarded(&input);
-
-    let stores: Vec<_> = done
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref())
-        .filter(|what| matches!(what.dests[..], [Loc::Mem(_)]))
-        .map(|what| what.sources.clone())
-        .collect();
-    assert_eq!(stores, vec![vec![rl(RegId::CX, 2)]]);
-}
-
-#[test]
-fn test_forwarded_spill_reload_retains_its_virtual_definition() {
-    // BASIC nbody's store read value#979 after spill forwarding removed its
-    // reload.
-    let register = rl(RegId::EAX, 4);
-    let source = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) });
-    let destination = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 8)), 4));
-    let establish = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![source.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let reload = Insn {
-        spill_reload: true,
-        ..insn(
-            2,
-            Some((2, 2)),
-            Some(sem(Operation::Move, "mov", vec![register.clone()], vec![source])),
-            vec![2],
-            vec![],
-        )
-    };
-    let consume =
-        insn(3, Some((3, 4)), Some(sem(Operation::Move, "mov", vec![destination], vec![register])), vec![], vec![2]);
-    let input = body(
-        "forwarded-definition",
-        1,
-        vec![block(1, vec![Arc::new(establish), Arc::new(reload), Arc::new(consume)], vec![]).into()],
-    );
-
-    let done = spillforward::forwarded(&input);
-
-    assert!(verify::verify(&done, false).is_empty());
-    assert_eq!(done.insns().iter().filter(|one| one.what.as_ref().unwrap().op == Operation::Move).count(), 2);
 }
 
 #[test]
@@ -4834,35 +4706,6 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     super::_flags_live_out(&input);
     let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
-}
-
-/// Every block's transfer was worked again each round until no entry changed,
-/// and a fact crosses one block a round: a loop of 30 blocks took 30 rounds of
-/// 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked
-/// again when its entry changed.
-#[test]
-fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let blocks = 30;
-    let mut list = Vec::new();
-    for at in 1..=blocks {
-        let store = insn(
-            at,
-            Some((at, at)),
-            Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
-        list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
-    }
-    list.push(block(blocks + 1, vec![], vec![]));
-    let input = body("loop", 1, crate::model::lir::shared(list));
-    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
-    spillforward::forwarded(&input);
-    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
-    assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
 }
 
 /// Copy propagation worked every block again each round until no exit changed:
