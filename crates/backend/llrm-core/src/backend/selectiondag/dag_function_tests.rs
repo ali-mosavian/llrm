@@ -857,3 +857,25 @@ fn a_call_of_far_code_is_marked_far() {
     let far: Vec<&str> = sites.iter().filter(|(at, _)| done.far.contains(at)).map(|(_, name)| name.as_str()).collect();
     assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
 }
+
+/// A call of a 16-bit callee destroys the upper half of `esi` and `edi` (it
+/// pushes only `si` and `di`). The DAG path left `clobbers_high` empty, so a
+/// 32-bit value kept in `esi` across a call came back with a stale upper half
+/// (call_keeps, frameless, div_constants_*, phi_slot_unknown_arm under
+/// `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let high: Vec<_> = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.call.is_some())
+        .map(|one| one.clobbers_high.clone())
+        .collect();
+    let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
+    assert_eq!(high, [expected.clone(), expected]);
+}

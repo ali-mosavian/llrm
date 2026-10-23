@@ -91,6 +91,15 @@ pub trait Conventions {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>>;
+
+    /// The registers a call of `callee` keeps only the pushed part of (a
+    /// 16-bit push of a 32-bit register): their upper half is destroyed.
+    fn clobbers_high(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        Default::default()
+    }
 }
 
 /// No convention is known: every call destroys `EmitContext::caller_saved`.
@@ -637,8 +646,14 @@ impl Emitter<'_, '_> {
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
         uses.extend(requires.iter().map(|(held, _)| held.value));
-        let insn =
-            Insn { call: Some(memory), clobbers, requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        let clobbers_high = self.ctx.conventions.clobbers_high(callee);
+        let insn = Insn {
+            call: Some(memory),
+            clobbers,
+            clobbers_high,
+            requires,
+            ..Insn::new(at, Some((at, at)), Some(what), vec![], uses)
+        };
         let block = self.blocks.last_mut().expect("a block");
         block.insns.push(Arc::new(insn));
         self.last_call = Some((self.blocks.len() - 1, self.blocks.last().expect("a block").insns.len() - 1));
