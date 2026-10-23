@@ -122,7 +122,7 @@ impl CombineHooks for X86Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Mul || op == x86isd::CMOV
+        op == ISD::Mul || op == x86isd::CMOV || op == x86isd::SETCC || op == x86isd::BRCOND
     }
 
     fn perform_dag_combine(
@@ -134,6 +134,8 @@ impl CombineHooks for X86Lowering {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
             x86isd::CMOV => combine_cmov(dag, node),
+            x86isd::SETCC => combine_setcc(dag, node),
+            x86isd::BRCOND => combine_brcond(dag, node),
             _ => None,
         }
     }
@@ -632,6 +634,78 @@ fn lower_float_brcond(
     }
 }
 
+/// `checkBoolTestSetCCCombine`: `cmp (setcc c, f), 0` with `==` or `!=` (or
+/// against 1, through zero extends, truncates and `and 1`) tests the flags `f`
+/// of the inner compare: its condition, or the opposite one.
+fn check_bool_test(
+    dag: &SelectionDAG,
+    cmp: SDValue,
+    code: u128,
+) -> Option<(SDValue, u128)> {
+    let is_cmp = dag.opcode(cmp) == x86isd::CMP
+        || (dag.opcode(cmp) == x86isd::SUB
+            && cmp.res == 1
+            && dag.users(SDValue { node: cmp.node, res: 0 }).next().is_none());
+    if !is_cmp || !matches!(code, cond::E | cond::NE) {
+        return None;
+    }
+    let (a, b) = (dag.operand(cmp, 0), dag.operand(cmp, 1));
+    let (constant, mut test) = match (dag.constant(a), dag.constant(b)) {
+        (Some(c), _) => (c, b),
+        (None, Some(c)) => (c, a),
+        _ => return None,
+    };
+    let mut opposite = code == cond::E;
+    let against_true = constant == 1;
+    if against_true {
+        opposite = !opposite;
+    } else if constant != 0 {
+        return None;
+    }
+    while matches!(dag.opcode(test), ISD::ZeroExtend | ISD::Truncate | ISD::And) {
+        if dag.opcode(test) == ISD::And {
+            let at = if dag.constant(dag.operand(test, 0)) == Some(1) {
+                1
+            } else if dag.constant(dag.operand(test, 1)) == Some(1) {
+                0
+            } else {
+                break;
+            };
+            test = dag.operand(test, at);
+        } else {
+            test = dag.operand(test, 0);
+        }
+    }
+    if dag.opcode(test) != x86isd::SETCC {
+        return None;
+    }
+    let inner = dag.constant(dag.operand(test, 0))?;
+    Some((dag.operand(test, 1), if opposite { inner ^ 1 } else { inner }))
+}
+
+/// `combineX86SetCC`: a `setcc` of a boolean test reads the inner flags.
+fn combine_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let code = dag.constant(dag.operand(node, 0))?;
+    let (flags, code) = check_bool_test(dag, dag.operand(node, 1), code)?;
+    let code = cond_code(dag, code);
+    Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `combineBrCond`: the same for a branch.
+fn combine_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let code = dag.constant(dag.operand(node, 2))?;
+    let (flags, code) = check_bool_test(dag, dag.operand(node, 3), code)?;
+    let code = cond_code(dag, code);
+    let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
+    Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select
 /// between two integer constants becomes the condition, widened, shifted,
 /// added to or scaled: `c ? 8 : 0` is `zext(setcc) << 3`, `c ? k+1 : k` is
@@ -648,6 +722,11 @@ fn combine_cmov(
     let flags = dag.operand(node, 3);
     if true_op == false_op {
         return Some(true_op);
+    }
+    // The flags of a boolean test are the inner compare's.
+    if let Some((flags, simpler)) = check_bool_test(dag, flags, code) {
+        let simpler = cond_code(dag, simpler);
+        return Some(dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, simpler, flags]));
     }
     let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
     if !vt.is_integer() {

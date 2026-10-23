@@ -210,6 +210,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
             ISD::MergeValues => self.visit_merge_values(node),
+            ISD::Xor => self.visit_xor(node),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
@@ -238,6 +239,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.replace_value(SDValue { node: node.node, res: res as u8 }, operand);
         }
         Some(SDValue { node: node.node, res: 0 })
+    }
+
+    /// `visitXOR`'s `not (setcc x, y, cc)` fold ([L10560][pin]): `xor (setcc x,
+    /// y, cc), true` is `setcc x, y, !cc`, so a branch on the inverted
+    /// condition tests the compare, not a materialized and flipped boolean.
+    /// Booleans are zero-or-one here, so `true` is 1 (`-1` of an
+    /// `i1`). Only the integer compare is translated; the other `visitXOR`
+    /// folds are not (SD208).
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L10560
+    fn visit_xor(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
+            return None;
+        }
+        let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+        if !self.dag.value_type(lhs).is_integer() {
+            return None;
+        }
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
+        let vt = self.dag.value_type(node);
+        Some(self.dag.get_setcc(vt, lhs, rhs, cc.inverse_integer()))
     }
 
     /// The users of `old` read `new`, and are looked at again.

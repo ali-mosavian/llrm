@@ -17,6 +17,7 @@ mod and_fold;
 mod bit_counts;
 mod bit_test;
 mod bitcast_float;
+mod bool_test_flags;
 mod br_jt;
 mod builder;
 mod cmov_constants;
