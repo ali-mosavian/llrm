@@ -1311,12 +1311,20 @@ fn stack_addressed(
         .filter(|pair| !pair[0].succ.contains(&pair[1].at))
         .map(|pair| label(number, pair[1].at))
         .collect();
+    // The passes that only learn the depths copy nothing; the one that settles
+    // them is made again to build the items (a pass that built them each time
+    // cloned every instruction once per pass: 3 M of the 15.5 M the emitter
+    // cost on d_faces).
     loop {
         let before = known.len();
-        match addressed_pass(procedure, number, items.clone(), &mut known, dead, &after_dead_end) {
+        match addressed_pass(procedure, number, &items, &mut known, dead, &after_dead_end, false) {
             // A label taken for dead that a later branch reached was addressed
             // at the wrong depth: again, with what that branch taught.
-            Ok((out, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => return Some(out),
+            Ok((_, assumed)) if assumed.iter().all(|one| !known.contains_key(one)) => {
+                return addressed_pass(procedure, number, &items, &mut known, dead, &after_dead_end, true)
+                    .ok()
+                    .map(|(out, _)| out);
+            }
             Ok(_) => {}
             Err(Stop::Refused) => return None,
             // What nothing reaches is dead code: no depth is wrong for it, and
@@ -1349,21 +1357,26 @@ fn stop(
 fn addressed_pass(
     procedure: &Procedure,
     number: usize,
-    items: Vec<Item>,
+    items: &[Item],
     known: &mut IndexMap<String, i64>,
     dead_ok: bool,
     after_dead_end: &BTreeSet<String>,
+    build: bool,
 ) -> Result<(Vec<Item>, Vec<String>), Stop> {
     let registers = &procedure.registers;
     let slot = registers.slot;
-    let mut out = Vec::with_capacity(items.len());
+    let mut out = Vec::with_capacity(if build { items.len() } else { 0 });
     let mut depth: Option<i64> = Some(0);
     let mut in_dead = false;
     let mut assumed: Vec<String> = Vec::new();
     let name_of = |target: i64| label(number, target);
     for item in items {
         match item {
-            Item::Align(align) => out.push(Item::Align(align)),
+            Item::Align(align) => {
+                if build {
+                    out.push(Item::Align(*align));
+                }
+            }
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -1399,14 +1412,22 @@ fn addressed_pass(
                 if !in_dead {
                     known.insert(label.name.clone(), depth.ok_or(Stop::Refused)?);
                 }
-                out.push(Item::Label(label));
+                if build {
+                    out.push(Item::Label(label.clone()));
+                }
             }
             Item::Callee(callee) => {
                 depth = Some(depth.ok_or(Stop::Refused)? - callee.pops);
-                out.push(Item::Callee(callee));
+                if build {
+                    out.push(Item::Callee(callee.clone()));
+                }
             }
-            Item::Mark(mark) => out.push(Item::Mark(mark)),
-            Item::Semantics(mut what) => {
+            Item::Mark(mark) => {
+                if build {
+                    out.push(Item::Mark(mark.clone()));
+                }
+            }
+            Item::Semantics(what) => {
                 let here = depth.ok_or(Stop::Refused)?;
                 // `pop` to memory addresses the cell with the stack already
                 // taken back.
@@ -1414,16 +1435,19 @@ fn addressed_pass(
                     (Operation::Pop, [place @ Loc::Mem(_)]) => here - width_of(place).unwrap_or(0),
                     _ => here,
                 };
-                for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
-                    *place = match through_stack(place, at, slot, registers.pointer, registers.free) {
-                        Some(placed) => placed,
-                        None => {
-                            return Err(stop(
-                                procedure,
-                                &format!("the frame register is read as a value in {place:?}"),
-                            ));
-                        }
+                // Every operand is checked; only the pass that builds copies
+                // the item, and only that one rewrites its places.
+                let mut placed = build.then(|| what.clone());
+                let rewritten =
+                    placed.as_mut().map(|one| one.dests.iter_mut().chain(one.sources.iter_mut()).collect::<Vec<_>>());
+                let mut rewritten = rewritten.map(Vec::into_iter);
+                for place in what.dests.iter().chain(what.sources.iter()) {
+                    let Some(through) = through_stack(place, at, slot, registers.pointer, registers.free) else {
+                        return Err(stop(procedure, &format!("the frame register is read as a value in {place:?}")));
                     };
+                    if let Some(target) = rewritten.as_mut().and_then(Iterator::next) {
+                        *target = through.into_owned();
+                    }
                 }
                 match what.op {
                     Operation::Push | Operation::Pop => {
@@ -1514,7 +1538,9 @@ fn addressed_pass(
                     }
                     _ => {}
                 }
-                out.push(Item::Semantics(what));
+                if let Some(one) = placed {
+                    out.push(Item::Semantics(one));
+                }
             }
         }
     }
@@ -1554,31 +1580,31 @@ fn writes_stack_pointer(place: &Loc) -> bool {
 /// have held the entry's stack pointer less `slot`. A frame cell is
 /// `Space::Frame`, indexed or not; a register of the frame register's name in
 /// any other address is a value (`FrameRegisters::free`).
-fn through_stack(
-    place: &Loc,
+fn through_stack<'a>(
+    place: &'a Loc,
     depth: i64,
     slot: i64,
     pointer: RegId,
     free: bool,
-) -> Option<Loc> {
+) -> Option<std::borrow::Cow<'a, Loc>> {
     let shift = |_disp: i64| depth - slot;
     let is_pointer = |one: RegId| (one == FRAME || one == pointer) && !(free && one != RegId::None);
     if matches!(place, Loc::Reg(one) if is_pointer(one.register)) {
         return None;
     }
-    let Some(at) = place.address() else { return Some(place.clone()) };
+    let Some(at) = place.address() else { return Some(std::borrow::Cow::Borrowed(place)) };
     if is_pointer(at.index_through) {
         return None;
     }
     if let Some(addr) = at.addr.filter(|addr| addr.space == Space::Frame) {
-        return Some(place.map_address(|one| ir::AddressRef {
+        return Some(std::borrow::Cow::Owned(place.map_address(|one| ir::AddressRef {
             through: STACK,
             addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr }),
             disp_width: 0,
             ..one
-        }));
+        })));
     }
-    (!is_pointer(at.through)).then(|| place.clone())
+    (!is_pointer(at.through)).then(|| std::borrow::Cow::Borrowed(place))
 }
 
 /// `item` with the frame register and stack pointer LIR calls BP and SP as the
