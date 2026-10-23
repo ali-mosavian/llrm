@@ -1592,3 +1592,39 @@ mod fcmp_without_fcomi {
         assert!(machine.contains(&x86::UCOM_Fpr64) && machine.contains(&x86::FNSTSW16r), "{machine:?}");
     }
 }
+
+mod pop_from_x87 {
+    use super::*;
+    use crate::generated::ids::x86isd;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// A call's float result is `POP_FROM_X87_REG chain, $fp0, glue`: no
+    /// pattern, the pin's `Select` turns it into a `CopyFromReg` (7 m32
+    /// execution programs stopped at `CannotSelect`).
+    #[test]
+    fn a_float_call_result_becomes_a_copy_from_the_x87_register() {
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let fp0 = dag.input(9, mvt::f64);
+        let glue = dag.input(10, mvt::Glue);
+        let pop = dag.node(x86isd::POP_FROM_X87_REG, &[mvt::f64, mvt::Other, mvt::Glue], &[chain, fp0, glue]);
+        let user = dag.node(isd::FADD, &[mvt::f64], &[SDValue::new(pop, 0), fp0]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, pop), Outcome::Selected);
+
+        let read = dag.nodes[user as usize].ops[0];
+        let copy = &dag.nodes[read.node as usize];
+        assert_eq!((copy.opcode, copy.ops.clone()), (isd::CopyFromReg, vec![chain, fp0, glue]));
+        assert_eq!(copy.vts, vec![mvt::f64, mvt::Other, mvt::Glue]);
+    }
+}

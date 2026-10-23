@@ -44,3 +44,24 @@ pub fn select_fcmp<D: AddrDag>(
     dag.remove_dead_node(node);
     true
 }
+
+/// `X86ISD::POP_FROM_X87_REG chain, $fp0 [, glue]` ([L7069][case]): a call's
+/// floating-point result is the copy from the x87 register; the node becomes a
+/// `CopyFromReg` of the same operands.
+///
+/// [case]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L7069
+pub fn select_pop_from_x87<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) {
+    let (chain, register) = (dag.operand(node, 0), dag.operand(node, 1));
+    let values = dag.num_values(node);
+    let glue = (values == 3).then(|| dag.operand(node, 2));
+    let vt = dag.value_type(SDValue::new(node, 0));
+    let copy = dag.copy_from_reg_node(chain, register, vt, glue);
+    for res in 0..values {
+        dag.replace_uses(SDValue::new(node, res as u8), SDValue::new(copy, res as u8));
+    }
+    dag.remove_dead_node(node);
+}
