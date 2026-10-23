@@ -857,7 +857,9 @@ Primary: Tree = {
     PrimaryNP,
     "tkLParen" <e:Exp> "tkRParen" => Tree::node("Paren", vec![e]),
 };
-PrimaryNP: Tree = { PrimaryBase, ErrName };
+PrimaryNP: Tree = { PrimaryBase, ErrName, ModName };
+// `mod.ems`: a name that starts like the operator; not in a joined PRINT item, where MOD continues the one before
+ModName: Tree = "tkMOD" "period" <f:FieldName> => Tree::node("Field", vec![Tree::node("Name", vec![]), f]);
 PrimaryBase: Tree = { IntLit, RealLit, StrLit, Function, NameRef, CtxName };
 // ERROR is a name in an expression (`ERROR$`), but not first after ON, where
 // `ON ERROR GOTO` is the trap.
