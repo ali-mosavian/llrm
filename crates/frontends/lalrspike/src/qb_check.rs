@@ -1414,6 +1414,33 @@ impl Checker {
         }
     }
 
+    /// PAINT: a background needs a string tile; empty trailing slots only follow a tile, and not in VBDOS.
+    fn paint(&mut self, arguments: &[Expr], span: Span) {
+        let mut stripped = arguments;
+        while matches!(stripped.last(), Some(Expr::Omitted(_))) {
+            stripped = &stripped[..stripped.len() - 1];
+        }
+        let trailing = stripped.len() != arguments.len();
+        let before = self.errors.len();
+        if !self.spec(stripped, "n n x? n? s?", span) {
+            return;
+        }
+        let tile = match stripped.get(2) {
+            Some(Expr::Omitted(_)) | None => false,
+            Some(paint) => {
+                let paint = self.unwrap_step(paint).clone();
+                let typed = self.expr(&paint);
+                self.errors.truncate(before);
+                typed.is_some_and(|typed| typed.ty.string())
+            }
+        };
+        let vbdos = matches!(self.dialect, Dialect::VbDos | Dialect::Quickr);
+        let dangling = trailing && (!tile || vbdos || arguments.len() < 5);
+        if (stripped.len() > 4 && !tile) || dangling {
+            self.err(span, "Syntax error");
+        }
+    }
+
     fn runtime(&mut self, name: &str, arguments: &[Expr], span: Span) {
         let spec = match name {
             "SCREEN" => "n? n? n? n?",
@@ -1456,6 +1483,17 @@ impl Checker {
                 return;
             }
         };
+        if name == "PAINT" {
+            self.paint(arguments, span);
+            return;
+        }
+        if name == "LINE" {
+            // `,color,` and `,,` are BC's; VBDOS refuses the dangling comma
+            if matches!(arguments.last(), Some(Expr::Omitted(_))) && arguments.len() == 6 && matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+                self.err(span, "Syntax error");
+                return;
+            }
+        }
         if name == "SWAP" {
             if let [a, b] = arguments {
                 let (a_typed, b_typed) = (self.argument_of_class(Class::Var, a), self.argument_of_class(Class::Var, b));
