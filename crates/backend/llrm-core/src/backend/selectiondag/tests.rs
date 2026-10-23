@@ -25,6 +25,7 @@ mod extract_element;
 mod far_access;
 mod far_call;
 mod far_load;
+mod far_register;
 mod flag_reuse;
 mod float_constants;
 mod fp_to_int;
