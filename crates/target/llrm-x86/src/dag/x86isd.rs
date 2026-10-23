@@ -27,6 +27,14 @@ pub const LLRM_CODE: ISD = ISD::Target(24582);
 /// object, `(far, far) -> i32`, expanded by the type legalizer with the
 /// machine's selector stride.
 pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
+/// A call through a far pointer: `X86ISD::CALL` with the callee's offset and
+/// selector in a 4-byte stack cell, `chain, TargetFrameIndex cell, ...` as
+/// `CALL`'s other operands; printed `call far [cell]`.
+///
+/// DEVIATE SD208: the pin has no far call. The old selector stored the offset
+/// then the selector to a 4-byte temporary and did `call m16:16` through it.
+/// Exit: none (m16 only). Owner sdag-b. Review 2026-12-10.
+pub const LLRM_FARCALL: ISD = ISD::Target(24584);
 
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
@@ -40,6 +48,7 @@ pub fn name(code: u16) -> String {
         24580 => "X86ISD::SEGMENT_OF".into(),
         24581 => "X86ISD::LLRM_WINDOW".into(),
         24582 => "X86ISD::LLRM_CODE".into(),
+        24584 => "X86ISD::LLRM_FARCALL".into(),
         24583 => "X86ISD::LLRM_PTRDIFF".into(),
         other => format!("X86ISD#{other}"),
     }

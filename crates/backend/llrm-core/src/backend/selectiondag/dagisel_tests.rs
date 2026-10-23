@@ -233,3 +233,24 @@ fn a_load_in_space_259_addresses_through_es() {
     let segment = dag.nodes()[load.node as usize].ops[4];
     assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::ES));
 }
+
+/// Every `f80` constant was class `Other`, so `fldz` and `fld1` never matched a
+/// long double 0.0 or 1.0 and the `ConstantFP` stayed unselected
+/// (long_double_variadic).
+#[test]
+fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let zero = dag.get_constant_fp(0, EVT::Simple(super::mvt::MVT::F80));
+    let one = dag.get_constant_fp((0x3fff << 64) | (1 << 63), EVT::Simple(super::mvt::MVT::F80));
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    for (value, name) in [(zero, "LD_Fp080"), (one, "LD_Fp180")] {
+        assert_eq!(
+            select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), value.node),
+            Outcome::Selected,
+            "{name}"
+        );
+    }
+    assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
+    assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
+}

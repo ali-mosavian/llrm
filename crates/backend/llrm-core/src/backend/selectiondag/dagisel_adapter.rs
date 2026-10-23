@@ -568,6 +568,8 @@ impl Dag for DagisAdapter<'_> {
         let (zero, neg_zero, one, minus_one) = match self.dag.value_type(ours(value)) {
             EVT::Simple(MVT::F32) => (0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000),
             EVT::Simple(MVT::F64) => (0, 1 << 63, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000),
+            // x87 extended: sign, 15-bit exponent, an explicit integer bit.
+            EVT::Simple(MVT::F80) => (0, 1 << 79, (0x3fff << 64) | (1 << 63), (0xbfff << 64) | (1 << 63)),
             _ => return Some(FpClass::Other),
         };
         Some(if bits == zero {

@@ -386,6 +386,19 @@ impl Builder<'_> {
         }
     }
 
+    /// `parts` for a value carried across blocks in virtual registers: a far
+    /// pointer is two `i16` registers (offset, then selector), as the pin
+    /// splits any expanded type (`RegsForValue`).
+    fn register_parts(
+        &self,
+        vt: EVT,
+    ) -> Result<(EVT, usize), Refused> {
+        if vt == MVT::Far.into() {
+            return Ok((EVT::I16, 2));
+        }
+        self.parts(vt)
+    }
+
     /// `getNumRegistersForCallingConv`: an integer a convention returns in
     /// `registers` registers is that many equal parts, even when it is a
     /// register type itself (an `i32` in `dx:ax` at real mode).
@@ -1065,7 +1078,7 @@ impl Builder<'_> {
         reg: u32,
         vt: EVT,
     ) -> Result<SDValue, Refused> {
-        let (reg_vt, parts) = self.parts(vt)?;
+        let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
             // each part's copy chained to the one before; the halves paired
@@ -1087,7 +1100,7 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let value = self.non_register_value(operand)?;
         let vt = self.dag.value_type(value);
-        let (reg_vt, parts) = self.parts(vt)?;
+        let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
             let regs = self.info.part_regs(reg, 2);
@@ -1820,7 +1833,7 @@ impl Builder<'_> {
                     Operand::Block(_) => return Err(Refused("block as a phi input")),
                 };
                 let phi_type = self.type_of(instruction.ty)?;
-                let (_, parts) = self.parts(phi_type)?;
+                let (_, parts) = self.register_parts(phi_type)?;
                 for reg in self.info.part_regs(reg, parts) {
                     self.phi_updates.push((result, reg));
                 }

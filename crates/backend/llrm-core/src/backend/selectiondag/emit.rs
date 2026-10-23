@@ -263,7 +263,112 @@ pub fn emit_in(
             emitter.node(node)?;
         }
     }
-    Ok(Emitted { blocks: emitter.blocks, classes: emitter.classes, calls: emitter.calls })
+    let mut blocks = emitter.blocks;
+    if ctx.address_mode == AddrMode::Real16 {
+        for block in &mut blocks {
+            pushed_arguments(&mut block.insns, ctx.stack_pointer)?;
+        }
+    }
+    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls })
+}
+
+/// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
+/// stack are pushed, last first, where the lowering stored them into the area
+/// it made (`sub sp, n` and a store to each cell before the call): the
+/// pin's `X86CallFrameOptimization`, which also turns those stores into
+/// pushes. The stores must cover the area; one left over is refused, as an
+/// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
+/// from assembling).
+fn pushed_arguments(
+    insns: &mut Vec<Arc<Insn>>,
+    sp: llrm_lir::registers::RegId,
+) -> Result<(), EmitError> {
+    let through_sp =
+        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
+    let is_store = |insn: &Insn| match insn.what.as_ref() {
+        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
+        None => false,
+    };
+    let is_area = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| what.name.as_deref() == Some("sub")
+                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
+                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
+            )
+    };
+    let mut at = 0;
+    while at < insns.len() {
+        if !is_area(&insns[at]) {
+            at += 1;
+            continue;
+        }
+        let Some(Loc::Imm(size)) = insns[at].what.as_ref().and_then(|what| what.sources.get(1)).cloned() else {
+            at += 1;
+            continue;
+        };
+        let end = insns[at..]
+            .iter()
+            .position(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+            .map(|found| at + found);
+        let Some(end) = end else {
+            at += 1;
+            continue;
+        };
+        let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
+            .filter(|&place| is_store(&insns[place]))
+            .map(|place| {
+                let Some(Loc::Mem(cell)) = insns[place].what.as_ref().and_then(|what| what.dests.first()) else {
+                    unreachable!("a store has its cell")
+                };
+                (place, cell.offset, cell.width)
+            })
+            .collect();
+        stores.sort_by_key(|&(_, offset, _)| offset);
+        let mut next = 0;
+        for &(_, offset, width) in &stores {
+            if offset != next {
+                return Err(EmitError::Unsupported("an outgoing argument area with a gap at m16".to_owned()));
+            }
+            next += i64::from(width);
+        }
+        if next != size.value {
+            return Err(EmitError::Unsupported("an outgoing argument area the stores do not cover at m16".to_owned()));
+        }
+        // The pushes go where the last store was; the area and the stores go.
+        let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
+        let mut pushes = Vec::new();
+        for &(place, _, _) in stores.iter().rev() {
+            let old = &insns[place];
+            let what = old.what.as_ref().expect("a store");
+            let source = what.sources[0].clone();
+            let uses = old.uses.clone();
+            let push =
+                Semantics { name: Some("push".into()), sources: vec![source], ..Semantics::new(Operation::Push) };
+            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], uses)));
+        }
+        let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).chain([at]).collect();
+        let mut rebuilt = Vec::with_capacity(insns.len());
+        for (place, insn) in insns.drain(..).enumerate() {
+            if place == last {
+                rebuilt.append(&mut pushes);
+            } else if !gone.contains(&place) {
+                rebuilt.push(insn);
+            }
+        }
+        *insns = rebuilt;
+        // Back to the start: indices moved.
+        at = 0;
+        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
+            at += 1;
+        }
+        at += 1;
+    }
+    if insns.iter().any(|insn| is_store(insn)) {
+        return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
+    }
+    Ok(())
 }
 
 /// `X86::CondCode` order, the jump on each.
@@ -1082,7 +1187,16 @@ impl Emitter<'_, '_> {
         // the index is dropped (strlen_idiom looped forever).
         if index.is_some() {
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
-            return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
+            // Dword address registers at real mode (the 67h form) take a
+            // dword displacement.
+            let wide = [base, index].into_iter().flatten().any(|held| held.width == 4);
+            if self.ctx.address_mode == AddrMode::Real16
+                && base.zip(index).is_some_and(|(base, index)| base.width != index.width)
+            {
+                return Err(EmitError::Unsupported("an address of registers of two widths at m16".to_owned()));
+            }
+            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 { 4 } else { 2 };
+            return Ok(Mem { base, index, scale, offset: disp, disp_width, ..Mem::new(Some(address), cell_width) });
         }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
@@ -1131,7 +1245,7 @@ impl Emitter<'_, '_> {
         if let Some((start, size)) = self.ctx.frame.extent(index_of)
             && !(start..=start + size).contains(&(start + disp))
         {
-            let object = self.fresh(4);
+            let object = self.fresh(if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 });
             let whole = Mem { index: None, ..cell.clone() };
             self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
             let address = Addr::new(crate::model::ir::Space::Literal, disp);

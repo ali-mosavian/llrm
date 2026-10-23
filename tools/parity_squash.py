@@ -676,8 +676,8 @@ def new_lib_failures(
     return failed - also
 
 
-# Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds,
-# and #4039 landed an unlinked page red because no scanner ran at all.
+# Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
+# without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
 ALWAYS_SCANNERS = ("docs_links",)
 
 
@@ -704,7 +704,7 @@ def new_scanner_failures(
     own = {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
     targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
-    print(scanner_tests_line(targets, failed))
+    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
     if not failed:
         return set()
     return failed - (on_head or _scanners_failing_on_head)(targets)
@@ -770,9 +770,11 @@ def rescanned_refusal(number: str, info: dict, late_drops: list[str], rescan=res
 def scanner_tests_line(
     targets: list[str],
     failed: set[str],
+    tree: str = "",
 ) -> str:
-    """What the scanner layer did, printed on every batch it sees: a gate silent on a pass cannot be told from one that never ran."""
-    return f"scanners: {len(targets)} targets, {len(failed)} red"
+    """What the scanner layer did, printed on every batch it sees: a gate silent on a pass cannot be told from one that never ran. `tree` is the commit it scanned: #4039 landed an unlinked page
+    after a batch line `0 red` that replaying the batch's PRs does not reproduce, and the log did not say which tree was scanned."""
+    return f"scanners: {len(targets)} targets, {len(failed)} red" + (f" (tree {tree})" if tree else "")
 
 
 def _scanners_failing_on_head(targets: list[str]) -> set[str]:
