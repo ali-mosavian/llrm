@@ -541,3 +541,17 @@ impl<'s> Iterator for Stream<'s> {
         Some(Ok((at, piece.tok, at + 1)))
     }
 }
+
+/// Every token of a source, kinds and spans, before any parsing: for a parser that wants the vector.
+pub fn prelex(source: &str, dialect: Dialect) -> Option<Result<(Vec<Tok>, Vec<Span>), LexError>> {
+    let lines = Lines::new(source, dialect)?;
+    let mut spans = Vec::with_capacity(source.len() / 4);
+    let mut toks = Vec::with_capacity(source.len() / 4);
+    for item in lines.stream(&mut spans) {
+        match item {
+            Ok((_, tok, _)) => toks.push(tok),
+            Err(error) => return Some(Err(error)),
+        }
+    }
+    Some(Ok((toks, spans)))
+}
