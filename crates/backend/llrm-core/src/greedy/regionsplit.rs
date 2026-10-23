@@ -928,13 +928,7 @@ impl Splitter<'_> {
 
         cost = cost + self.calc_global_split_cost(cand);
         if trace {
-            let bundles: String = self.ss.global_cand[cand]
-                .live_bundles
-                .iter()
-                .enumerate()
-                .filter(|(_, live)| **live)
-                .map(|(at, _)| format!(" EB#{at}"))
-                .collect();
+            let bundles = bundles_shown(&self.ss.global_cand[cand].live_bundles);
             eprintln!(", total = {} with bundles{bundles}.", self.shown(cost));
         }
         if cost < *best_cost {
@@ -1366,5 +1360,21 @@ impl Splitter<'_> {
         virt: &Rc<LiveInterval>,
     ) -> bool {
         self.matrix.crosses_reg_mask(virt)
+    }
+}
+
+/// The live bundles of a candidate as the pin prints them: ` EB#1 EB#14`.
+fn bundles_shown(live: &[bool]) -> String {
+    live.iter().enumerate().filter(|(_, live)| **live).map(|(at, _)| format!(" EB#{at}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The candidate line of `LLRM_GREEDY_DECISIONS` names the live bundles as
+    /// the pin does (`with bundles EB#1 EB#14`), so two builds' lines diff.
+    #[test]
+    fn test_a_candidates_live_bundles_are_shown_as_the_pin_prints_them() {
+        assert_eq!(super::bundles_shown(&[false, true, false, true]), " EB#1 EB#3");
+        assert_eq!(super::bundles_shown(&[false, false]), "");
     }
 }
