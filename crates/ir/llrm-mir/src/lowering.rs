@@ -10,6 +10,8 @@
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial());
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial_for(Some(0x100)));
 //! assert!(!Plain.is_truncate_free(32, 16));
+//! assert!(Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 8));
+//! assert!(!Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 24));
 //! assert!(!Plain.is_ext_free(llrm_mir::lowering::Ext::ZExt, 32, 64));
 //! ```
 //!
@@ -24,8 +26,36 @@ pub enum Ext {
     FpExt,
 }
 
+/// The kind of extending load (`ISD::LoadExtType`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoadExt {
+    Any,
+    Zero,
+    Sign,
+}
+
+/// Whether an integer of `bits` is a simple value type (`MVT`), the only ones
+/// `getLoadExtAction` has an entry for; any other is `Expand`.
+fn simple_int(bits: u32) -> bool {
+    matches!(bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
+}
+
 /// `TargetLowering`'s hooks. Each default is the base class's.
 pub trait Lowering {
+    /// `isLoadExtLegal` (`getLoadExtAction(..) == Legal`,
+    /// [TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// whether a load of `memory_bits` extended to `value_bits` is one
+    /// operation. The base class's table is all `Legal` for simple integers.
+    fn is_load_ext_legal(
+        &self,
+        ext: LoadExt,
+        value_bits: u32,
+        memory_bits: u32,
+    ) -> bool {
+        let _ = ext;
+        simple_int(value_bits) && simple_int(memory_bits)
+    }
+
     /// `isTruncateFree(Type*, Type*)`
     /// ([TargetLowering.h#L3209](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L3209)):
     /// whether narrowing an integer of `from_bits` to `to_bits` costs nothing.
