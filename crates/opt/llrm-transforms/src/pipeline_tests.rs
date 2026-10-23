@@ -1530,8 +1530,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
     let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
@@ -2296,13 +2295,12 @@ fn test_a_slot_of_the_order_can_be_run_alone_when_the_level_builds_it() {
 }
 
 /// The order had no SimplifyCFG after the Simplify stage: L1438 (hoist and
-/// sink common code, loops need not stay canonical) and L2376 (hoist) were
-/// Missing. Their slots are built, in the pin's order around
-/// `instsimplify@1662`.
+/// sink common code, loops need not stay canonical) and L1682 were Missing.
+/// Their slots are built, in the pin's order around `instsimplify@1662`.
 #[test]
 fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     let o2 = Applied::default();
-    for slot in ["simplifycfg@1438", "simplifycfg@1682", "simplifycfg@2376"] {
+    for slot in ["simplifycfg@1438", "simplifycfg@1682"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
@@ -2320,8 +2318,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "tailrec@1677",
-            "simplifycfg@1682",
-            "simplifycfg@2376"
+            "simplifycfg@1682"
         ]
     );
 }
