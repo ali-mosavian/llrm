@@ -438,7 +438,8 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
             ISD::Select => {
-                // `PromoteIntRes_SELECT`: the arms promoted, the condition as is.
+                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+                // is.
                 let (cond, then, other) =
                     (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
                 let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
