@@ -844,8 +844,12 @@ fn staged(
         }
     };
     let selected = if let Some(done) = dag {
+        if done.is_ok() {
+            shadow::record(name, Selector::Dag);
+        }
         done
     } else {
+        shadow::record(name, Selector::Old);
         timed("isel", || {
             isel::selected_with(
                 module,

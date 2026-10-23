@@ -11,8 +11,9 @@
 //! `[isel] NAME selector=old instructions=21 copies=3 executed=40 memory=12`.
 //! `executed` and `memory` are `executed::executed`'s estimate (`-` where the
 //! body has no finite one); `copies` are register-to-register `mov`s.
-//! `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after selection,
-//! before any machine phase.
+//! `LLRM_ISEL_REPORT=FILE` appends `NAME dag|old` per function: who selected
+//! it. `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after
+//! selection, before any machine phase.
 //!
 //! # Example
 //! A function of 3 instructions holding one register copy:
@@ -66,6 +67,39 @@ impl Selector {
             _ => Err(format!("unknown --isel={text}; choose old, dag or shadow")),
         }
     }
+}
+
+/// `LLRM_ISEL_REPORT=FILE`: one line `NAME dag` or `NAME old` appended per
+/// function, for the one that selected it (a shadow run's refused function is
+/// `old`). A run that reports a selection percentage or an execution count
+/// proves with it which selector compiled what: the flag alone does not.
+pub fn record(
+    name: &str,
+    by: Selector,
+) {
+    if let Some(path) = std::env::var_os("LLRM_ISEL_REPORT") {
+        record_to(std::path::Path::new(&path), name, by);
+    }
+}
+
+fn record_to(
+    path: &std::path::Path,
+    name: &str,
+    by: Selector,
+) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{name} {}", by.name());
+    }
+}
+
+#[cfg(test)]
+pub(super) fn recorded_to(
+    path: &std::path::Path,
+    name: &str,
+    by: Selector,
+) {
+    record_to(path, name, by);
 }
 
 /// The `isel` channel's row for `body`, finished by `selector`.
