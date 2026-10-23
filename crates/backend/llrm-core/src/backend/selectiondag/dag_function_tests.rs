@@ -1209,3 +1209,46 @@ fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
     let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
     assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
 }
+
+const GLOBAL_INDEXED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [64 x i8] zeroinitializer
+define ptr @f(i32 %i, i32 %j) {
+entry:
+  %p = getelementptr i8, ptr @a, i32 %i
+  %q = getelementptr i8, ptr %p, i32 %j
+  ret ptr %q
+}
+define i8 @g(i32 %i) {
+entry:
+  %p = getelementptr i8, ptr @a, i32 %i
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+";
+
+/// A cell of a symbol has a displacement field to carry the relocation: a `lea`
+/// of a symbol and two registers had none and the object encoder refused it
+/// ("no field for", memfuncs_runtime did not assemble).
+#[test]
+fn a_symbol_cell_has_a_displacement_field() {
+    use crate::model::ir::{Loc, Operation, Space};
+    let module = llrm_mir::parse::module(GLOBAL_INDEXED).expect("parses");
+    for name in ["g"] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let cells: Vec<_> = insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .flat_map(|w| w.sources.iter().chain(&w.dests))
+            .filter_map(|l| match l {
+                Loc::Mem(m) if m.addr.is_some_and(|a| a.space == Space::Segment) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!cells.is_empty(), "{name} has a cell of the symbol");
+        assert!(cells.iter().all(|m| m.disp_width >= 2), "{name}: {cells:?}");
+        let _ = Operation::Move;
+    }
+}

@@ -1540,7 +1540,9 @@ impl Emitter<'_, '_> {
             if self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
-            return Ok(Mem { base, index, scale, ..Mem::new(Some(addr), cell_width) });
+            // A symbol takes a displacement field to carry its relocation, as
+            // the old selector's global cells do.
+            return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(addr), cell_width) });
         }
         if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
             if self.address_register(group[4], Role::Segment)?.is_some() {

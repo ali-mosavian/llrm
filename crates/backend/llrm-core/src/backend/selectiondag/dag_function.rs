@@ -693,7 +693,7 @@ fn float_across_call(
     regs: llrm_lir::registers::Regs,
 ) -> Option<&'static str> {
     use std::collections::{BTreeSet, HashMap};
-    let floating: BTreeSet<u32> = blocks
+    let mut floating: BTreeSet<u32> = blocks
         .iter()
         .flat_map(|block| block.insns.iter())
         .filter_map(|insn| insn.what.as_ref())
@@ -705,6 +705,18 @@ fn float_across_call(
         .collect();
     if floating.is_empty() {
         return None;
+    }
+    // A phi of floating values is floating.
+    loop {
+        let before = floating.len();
+        for phi in blocks.iter().flat_map(|block| block.phis.iter()) {
+            if phi.incoming.iter().any(|(_, value)| floating.contains(value)) {
+                floating.insert(phi.result);
+            }
+        }
+        if floating.len() == before {
+            break;
+        }
     }
     let index: HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
     // The floating values each block reads at its end for its successors' phis.
