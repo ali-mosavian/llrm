@@ -376,6 +376,18 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => Some(vec![self.expand_min_max(node)]),
+            ISD::BuildPair => {
+                // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
+                //
+                // [pin]:
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L4318
+                let (lo, hi) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let low = self.dag.get_node(ISD::ZeroExtend, vt, &[lo]);
+                let high = self.dag.get_node(ISD::AnyExtend, vt, &[hi]);
+                let half = self.dag.get_constant(u128::from(vt.size_in_bits() / 2), EVT::I8);
+                let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
+                Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
+            }
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),

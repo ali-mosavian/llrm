@@ -33,10 +33,18 @@ pub const LLRM_ASM_OPCODE: u16 = 30010;
 /// `DGROUP`.
 pub const SEGMENT_OF_OPCODE: u16 = 30011;
 
+/// `X86ISD::LLRM_FARCALL` (sdag-b, SD208): a far call, chain and glue as the
+/// near `CALL`.
+pub const LLRM_FARCALL: u16 = 24584;
+
+/// The machine opcode `LLRM_FARCALL` becomes; the emitter prints `call far`.
+pub const FARCALL_OPCODE: u16 = 30012;
+
 /// The pseudo opcode an llrm node of this id becomes.
 pub fn llrm_opcode(node: u16) -> Option<u16> {
     match node {
         SEGMENT_OF => Some(SEGMENT_OF_OPCODE),
+        LLRM_FARCALL => Some(FARCALL_OPCODE),
         n if LLRM_NODES.contains(&n) => Some(LLRM_ASM_OPCODE),
         _ => None,
     }

@@ -141,3 +141,17 @@ fn address_operations_are_custom_at_the_pointer_type() {
         }
     }
 }
+
+/// Only `i32` has the two-result multiply: an `i16` divide by a constant used
+/// `SMUL_LOHI` (legal by default), which the matcher cannot take, and 12
+/// execution programs stopped at "unselected SMulLoHi". The pin's `BuildSDIV`
+/// finds neither `MULHS` nor `SMUL_LOHI` at `i16` and widens.
+#[test]
+fn the_two_result_multiply_is_legal_at_i32_only() {
+    let t = p5();
+    for op in [ISD::SMulLoHi, ISD::UMulLoHi] {
+        assert_eq!(act(&t, op, MVT::I32), Action::Legal, "{op:?} i32");
+        assert_eq!(act(&t, op, MVT::I16), Action::Expand, "{op:?} i16");
+        assert_eq!(act(&t, op, MVT::I8), Action::Expand, "{op:?} i8");
+    }
+}

@@ -654,6 +654,29 @@ fn a_switch_is_a_chain_of_compare_and_branch_blocks() {
     }
 }
 
+const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+";
+
+/// An `i64` divide is a call to the target's inline routine; the DAG path left
+/// the call without the routine's bytes, so the object had an undefined
+/// `divN_s` (link failures in c/int64_division.c, c/data_int64.c of the m32
+/// run). The routine's code must travel with the selected function, at the
+/// call.
+#[test]
+fn an_i64_divide_carries_the_routines_code_at_its_call() {
+    let module = llrm_mir::parse::module(DIV64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let routine = llrm_target::Target::divide_routine(&llrm_x86_m32::M32, true, true).expect("a routine");
+    let at = done.calls.iter().find(|(_, name)| name.as_str() == routine.name).map(|(at, _)| *at).expect("a call");
+    assert_eq!(done.inline.get(&at), Some(&routine.code));
+}
+
 const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define float @f(i32 %a) {
 entry:
@@ -695,4 +718,135 @@ fn va_start_finds_the_first_variadic_argument() {
         .err()
         .map(|e| e.0);
     assert!(why.is_none(), "{why:?}");
+}
+
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16)
+define cc 1005 i16 @f(i16 %a) addrspace(1) {
+entry:
+  %r = call cc 1005 i16 @g(i16 %a)
+  ret i16 %r
+}
+";
+
+/// At m16 a call of a symbol is `CALL16r` of its address; it was emitted as a
+/// call through an immediate (`call offset _report`), the biggest cause in the
+/// m16 execution run (79 programs).
+#[test]
+fn an_m16_call_of_a_symbol_is_a_direct_call() {
+    let module = llrm_mir::parse::module(M16_DIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
+    let insns = done.body.insns();
+    let call =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == crate::model::ir::Operation::Call).unwrap();
+    assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
+}
+
+const VARIABLE_SHIFT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %n) {
+entry:
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+";
+
+/// The matcher copies the shift amount to `CL` with a glued `CopyToReg`, which
+/// the adapter turned into a copy to a virtual register (`CL` had no physical
+/// id): the shift read a `CL` nothing defined, and the LIR verifier said
+/// "value defined N times" (about 20 m32 programs once #4074 let them past
+/// "missing source").
+#[test]
+fn a_variable_shift_reads_the_amount_the_matcher_copied_to_cl() {
+    let module = llrm_mir::parse::module(VARIABLE_SHIFT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let shl = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("shl")).expect("a shl");
+    assert!(shl.sources.iter().all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "held values: {shl:?}");
+}
+
+const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare i16 @g(i16, i16)
+define i16 @f(i16 %a) {
+entry:
+  %r = call i16 @g(i16 %a, i16 233)
+  ret i16 %r
+}
+";
+
+/// Real mode has no `[sp+k]`: the outgoing arguments are pushed. The stores
+/// into the area stopped 32 QCport modules from assembling.
+#[test]
+fn an_m16_call_pushes_its_stack_arguments() {
+    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Push).count();
+    assert_eq!(pushes, 2);
+    let through_sp = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .any(
+            |w| w.dests
+                .iter()
+                .any(
+                    |l| matches!(
+                        l,
+                        crate::model::ir::Loc::Mem(m) if m.through == llrm_lir::registers::RegId::SP
+                    ),
+                ),
+        );
+    assert!(!through_sp, "no store through SP");
+}
+
+const BYTE_MULTIPLY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i8 @f(i8 zeroext %a, i8 zeroext %b) {
+entry:
+  %r = mul i8 %a, %b
+  ret i8 %r
+}
+";
+
+/// A byte multiply is `mul r8`: AL times the operand into AX. The copy of AL
+/// the matcher makes was invisible to the emitter (its glue users came from
+/// the DAG's use lists, which the matcher's nodes are not in, and its register
+/// was a pin number), so idiom_edges and byte_multiply's `main` were refused.
+#[test]
+fn a_byte_multiply_is_mul_on_al() {
+    let module = llrm_mir::parse::module(BYTE_MULTIPLY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let mul = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("mul")).expect("a mul");
+    assert!(mul.dests.iter().chain(&mul.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "{mul:?}");
+}
+
+const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @far() addrspace(1)
+declare void @near()
+define void @f() {
+entry:
+  call addrspace(1) void @far()
+  call void @near()
+  ret void
+}
+";
+
+/// A call of far code is a far call: the call sites are marked in `far`, as
+/// the old selector marks them. The DAG path left the set empty, so every
+/// call was a near `call` of a far routine and the program crashed at once
+/// (99 real-mode programs under `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_far_code_is_marked_far() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(i64, String)> = done.calls.iter().map(|(at, name)| (*at, name.clone())).collect();
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let far: Vec<&str> = sites.iter().filter(|(at, _)| done.far.contains(at)).map(|(_, name)| name.as_str()).collect();
+    assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
 }

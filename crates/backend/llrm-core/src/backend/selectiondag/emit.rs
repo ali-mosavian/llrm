@@ -177,6 +177,9 @@ struct Emitter<'a, 'd> {
     calls: Vec<(i64, Callee)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
+    /// The nodes that read each value of a glue chain, from their operands (the
+    /// matcher's nodes are not in the DAG's use lists).
+    glue_users: HashMap<SDValue, Vec<u32>>,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -257,13 +260,127 @@ pub fn emit_in(
         arguments: Vec::new(),
         calls: Vec::new(),
         last_call: None,
+        glue_users: {
+            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
+            for (at, one) in dag.nodes().iter().enumerate() {
+                for op in &one.ops {
+                    users.entry(*op).or_default().push(at as u32);
+                }
+            }
+            users
+        },
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             emitter.node(node)?;
         }
     }
-    Ok(Emitted { blocks: emitter.blocks, classes: emitter.classes, calls: emitter.calls })
+    let mut blocks = emitter.blocks;
+    if ctx.address_mode == AddrMode::Real16 {
+        for block in &mut blocks {
+            pushed_arguments(&mut block.insns, ctx.stack_pointer)?;
+        }
+    }
+    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls })
+}
+
+/// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
+/// stack are pushed, last first, where the lowering stored them into the area
+/// it made (`sub sp, n` and a store to each cell before the call): the
+/// pin's `X86CallFrameOptimization`, which also turns those stores into
+/// pushes. The stores must cover the area; one left over is refused, as an
+/// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
+/// from assembling).
+fn pushed_arguments(
+    insns: &mut Vec<Arc<Insn>>,
+    sp: llrm_lir::registers::RegId,
+) -> Result<(), EmitError> {
+    let through_sp =
+        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
+    let is_store = |insn: &Insn| match insn.what.as_ref() {
+        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
+        None => false,
+    };
+    let is_area = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| what.name.as_deref() == Some("sub")
+                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
+                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
+            )
+    };
+    let mut at = 0;
+    while at < insns.len() {
+        if !is_area(&insns[at]) {
+            at += 1;
+            continue;
+        }
+        let Some(Loc::Imm(size)) = insns[at].what.as_ref().and_then(|what| what.sources.get(1)).cloned() else {
+            at += 1;
+            continue;
+        };
+        let end = insns[at..]
+            .iter()
+            .position(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+            .map(|found| at + found);
+        let Some(end) = end else {
+            at += 1;
+            continue;
+        };
+        let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
+            .filter(|&place| is_store(&insns[place]))
+            .map(|place| {
+                let Some(Loc::Mem(cell)) = insns[place].what.as_ref().and_then(|what| what.dests.first()) else {
+                    unreachable!("a store has its cell")
+                };
+                (place, cell.offset, cell.width)
+            })
+            .collect();
+        stores.sort_by_key(|&(_, offset, _)| offset);
+        let mut next = 0;
+        for &(_, offset, width) in &stores {
+            if offset != next {
+                return Err(EmitError::Unsupported("an outgoing argument area with a gap at m16".to_owned()));
+            }
+            next += i64::from(width);
+        }
+        if next != size.value {
+            return Err(EmitError::Unsupported("an outgoing argument area the stores do not cover at m16".to_owned()));
+        }
+        // The pushes go where the last store was; the area and the stores go.
+        let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
+        let mut pushes = Vec::new();
+        for &(place, _, _) in stores.iter().rev() {
+            let old = &insns[place];
+            let what = old.what.as_ref().expect("a store");
+            let source = what.sources[0].clone();
+            let uses = old.uses.clone();
+            let push =
+                Semantics { name: Some("push".into()), sources: vec![source], ..Semantics::new(Operation::Push) };
+            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], uses)));
+        }
+        let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).chain([at]).collect();
+        let mut rebuilt = Vec::with_capacity(insns.len());
+        for (place, insn) in insns.drain(..).enumerate() {
+            if place == last {
+                rebuilt.append(&mut pushes);
+            } else if !gone.contains(&place) {
+                rebuilt.push(insn);
+            }
+        }
+        *insns = rebuilt;
+        // Back to the start: indices moved.
+        at = 0;
+        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
+            at += 1;
+        }
+        at += 1;
+    }
+    if insns.iter().any(|insn| is_store(insn)) {
+        return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
+    }
+    Ok(())
 }
 
 /// `X86::CondCode` order, the jump on each.
@@ -416,10 +533,13 @@ impl Emitter<'_, '_> {
                 Some(k) if memory_dest => dests.get(k).cloned(),
                 _ => rest.next(),
             };
-            // a shift by `cl` reads `CL` without an operand: the `CopyToReg`
-            // glued to it wrote the register
-            let implicit =
-                || name.ends_with("rCL").then(|| Loc::Reg(Reg { register: llrm_lir::registers::RegId::CL, width: 1 }));
+            // a shift by `cl` has the amount as the value the `CopyToReg` glued
+            // to it wrote to `CL`; the form pins that source to `cx`
+            let implicit = || {
+                name.ends_with("rCL")
+                    .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
+                    .flatten()
+            };
             sources.push(
                 taken.or_else(implicit).ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?,
             );
@@ -543,6 +663,19 @@ impl Emitter<'_, '_> {
         true
     }
 
+    /// The function a call's target operand names, if it names one.
+    fn direct_callee(
+        &self,
+        target: SDValue,
+    ) -> Option<Callee> {
+        match self.dag.node(target).data {
+            NodeData::Global { symbol, .. } => Some(Callee::Global(symbol)),
+            // A runtime routine the lowering named (`memcpy_`).
+            NodeData::Symbol(id) => Some(Callee::Named(self.dag.symbol_names[id as usize].clone())),
+            _ => None,
+        }
+    }
+
     /// `value` as a held value, copied into one if it is a constant or a cell.
     fn held_operand(
         &mut self,
@@ -582,11 +715,12 @@ impl Emitter<'_, '_> {
             if usize::from(glue.res) >= self.dag.node(glue).values.len() {
                 continue;
             }
-            for user in self.dag.users(glue) {
+            for &user in self.glue_users.get(&glue).into_iter().flatten() {
                 match self.dag.opcode(SDValue { node: user, res: 0 }) {
                     ISD::CopyToReg => work.push(SDValue { node: user, res: 1 }),
                     ISD::Machine(op) => {
-                        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+                        let name =
+                            self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
                         if wanted(name) {
                             return true;
                         }
@@ -604,7 +738,10 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_"))
+        self.glue_reaches(n, |name| {
+            let name = name.split('|').next().unwrap_or(name);
+            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+        })
     }
 
     /// Whether the `CopyToReg` node `n` passes an argument in a register to
@@ -624,7 +761,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         let Some(glue) = glue else { return false };
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
-        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+        let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
         matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
     }
 
@@ -672,12 +809,9 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "CALLpcrel32" => {
-                let callee = match self.dag.node(node.ops[0]).data {
-                    NodeData::Global { symbol, .. } => Callee::Global(symbol),
-                    // A runtime routine the lowering named (`memcpy_`).
-                    NodeData::Symbol(id) => Callee::Named(self.dag.symbol_names[id as usize].clone()),
-                    _ => return Err(EmitError::Unsupported("a call of a non-global".to_owned())),
-                };
+                let callee = self
+                    .direct_callee(node.ops[0])
+                    .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
                 let at = self.push_call(
                     Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
                     Some(&callee),
@@ -688,6 +822,19 @@ impl Emitter<'_, '_> {
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
             | "CALL16m_NT" => {
+                // At real mode the matcher spells a call of a symbol `CALL16r`
+                // of its address: a direct call, not one through an immediate
+                // (`call offset _report`; 79 programs of the m16 run).
+                if name[6..].starts_with('r')
+                    && let Some(callee) = self.direct_callee(node.ops[0])
+                {
+                    let at = self.push_call(
+                        Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                        Some(&callee),
+                    );
+                    self.calls.push((at, callee));
+                    return Ok(Some(()));
+                }
                 let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
                 let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
@@ -761,10 +908,16 @@ impl Emitter<'_, '_> {
             }
             _ if is_div_or_mul(name) => {
                 let (signed, divide, bytes, memory) = div_or_mul(name);
-                if bytes == 1 {
-                    return Err(EmitError::Unsupported(format!("{name}: the byte forms work in AH:AL")));
+                if bytes == 1 && divide {
+                    return Err(EmitError::Unsupported(format!("{name}: the byte divide works in AH:AL")));
                 }
-                let (low, high, wide) = self.accumulator_pair(bytes == 4)?;
+                // The byte multiply is AL times the operand into AX: the form
+                // pins AX and DX like the wider ones, the product is AX.
+                let (low, high, wide) = if bytes == 1 {
+                    (llrm_lir::registers::RegId::AL, llrm_lir::registers::RegId::DX, 2)
+                } else {
+                    self.accumulator_pair(bytes == 4)?
+                };
                 let divisor = if memory {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
                     Loc::Mem(self.cell(group, bytes)?)
@@ -798,7 +951,8 @@ impl Emitter<'_, '_> {
                         vec![Loc::Held(lo), divisor],
                     );
                 }
-                self.accumulator.insert(low, first);
+                // The product of the byte form is the word AX.
+                self.accumulator.insert(if bytes == 1 { llrm_lir::registers::RegId::AX } else { low }, first);
                 self.accumulator.insert(high, second);
                 return Ok(Some(()));
             }
@@ -1043,7 +1197,16 @@ impl Emitter<'_, '_> {
         // the index is dropped (strlen_idiom looped forever).
         if index.is_some() {
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
-            return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
+            // Dword address registers at real mode (the 67h form) take a
+            // dword displacement.
+            let wide = [base, index].into_iter().flatten().any(|held| held.width == 4);
+            if self.ctx.address_mode == AddrMode::Real16
+                && base.zip(index).is_some_and(|(base, index)| base.width != index.width)
+            {
+                return Err(EmitError::Unsupported("an address of registers of two widths at m16".to_owned()));
+            }
+            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 { 4 } else { 2 };
+            return Ok(Mem { base, index, scale, offset: disp, disp_width, ..Mem::new(Some(address), cell_width) });
         }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
@@ -1092,7 +1255,7 @@ impl Emitter<'_, '_> {
         if let Some((start, size)) = self.ctx.frame.extent(index_of)
             && !(start..=start + size).contains(&(start + disp))
         {
-            let object = self.fresh(4);
+            let object = self.fresh(if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 });
             let whole = Mem { index: None, ..cell.clone() };
             self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
             let address = Addr::new(crate::model::ir::Space::Literal, disp);

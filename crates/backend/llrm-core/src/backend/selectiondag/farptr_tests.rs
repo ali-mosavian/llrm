@@ -128,3 +128,42 @@ fn a_far_pointer_in_two_registers_is_two_parts() {
     let copies: Vec<&str> = dump.lines().filter(|line| line.contains("CopyToReg") && line.contains("$")).collect();
     assert!(copies.iter().any(|line| line.contains("$ax")) && copies.iter().any(|line| line.contains("$dx")), "{dump}");
 }
+
+/// A far pointer used in a later block is carried in two `i16` registers
+/// (offset, selector), as any expanded type is. One `CopyToReg` of the whole
+/// far stopped the type legalizer ("CopyToReg: expand operand", 12 programs
+/// of the m16 execution run).
+#[test]
+fn a_far_pointer_leaves_its_block_in_two_word_registers() {
+    let dag = built(
+        "define i16 @f(ptr addrspace(1) %p, i1 %c) {\n  br i1 %c, label %a, label %b\na:\n  %v = load i16, ptr addrspace(1) %p\n  ret i16 %v\nb:\n  ret i16 0\n}\n",
+    );
+    let copies: Vec<_> = dag.nodes().iter().filter(|node| node.opcode == ISD::CopyToReg).collect();
+    let far = MVT::Far.into();
+    assert!(copies.iter().all(|copy| dag.value_type(copy.ops[2]) != far), "a far copied whole:\n{}", dag.dump());
+    let words = copies.iter().filter(|copy| dag.value_type(copy.ops[2]) == super::mvt::EVT::I16).count();
+    assert!(words >= 2, "the offset and the selector:\n{}", dag.dump());
+}
+
+/// An inline copy between far pointers steps the offset word and reads and
+/// writes through `ES` (space 259). It panicked making `Constant: Far` for
+/// the step (bitfield_long_long, 2 m16 programs) and, past that, would have
+/// addressed the far data through `DS`.
+#[test]
+fn an_inline_copy_between_far_pointers_moves_the_offset_word() {
+    let dag = built(
+        "declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)\n\
+         define void @f(ptr addrspace(1) %d, ptr addrspace(1) %s) {\n  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %d, ptr addrspace(1) %s, i16 8, i1 false)\n  ret void\n}\n",
+    );
+    let spaces: Vec<u32> = dag
+        .nodes()
+        .iter()
+        .filter(|node| matches!(node.opcode, ISD::Load | ISD::Store))
+        .filter_map(|node| match node.data {
+            super::dag::NodeData::Mem(info) if info.mem_vt == super::mvt::EVT::I16 => Some(info.space),
+            _ => None,
+        })
+        .collect();
+    assert!(spaces.len() >= 8, "four word loads and four stores: {}", dag.dump());
+    assert!(spaces.iter().all(|space| *space == 259), "{spaces:?}\n{}", dag.dump());
+}

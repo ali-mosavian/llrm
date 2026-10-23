@@ -286,8 +286,27 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
-/// `name` of `module` selected by the DAG path.
+/// `name` of `module` selected by the DAG path. A panic in a stage (a builder
+/// meeting a type it does not know) is a refusal of the function, as any other
+/// gap: it stopped 18 QCport modules from compiling in the shadow.
 pub fn selected(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+) -> Result<Selected, Unselected> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selected_in(module, name, arch, cpu, libcalls)))
+        .unwrap_or_else(|why| {
+            let why = why
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
+            refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
+        })
+}
+
+fn selected_in(
     module: &Module,
     name: &str,
     arch: &dyn Target,
@@ -432,6 +451,8 @@ pub fn selected(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    // the call sites whose callee is far code (address space 1): a far call
+    let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
@@ -477,7 +498,11 @@ pub fn selected(
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
-                    module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned()
+                    let global = module.global(llrm_mir::context::GlobalId(*symbol));
+                    if crate::backend::isel::far(global).unwrap_or(false) {
+                        far.insert(*at);
+                    }
+                    global.name.as_deref().unwrap_or_default().to_owned()
                 }
                 Callee::Named(name) => name.clone(),
             };
@@ -536,14 +561,28 @@ pub fn selected(
     body.sealed_arguments = true;
     body.ordered = true;
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
+    // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
+    // their bytes are laid down at the call, as the old route did.
+    let mut inline = IndexMap::default();
+    for (at, name) in &calls {
+        for signed in [true, false] {
+            for wide in [true, false] {
+                if let Ok(routine) = arch.divide_routine(signed, wide) {
+                    if routine.name == name.as_str() {
+                        inline.insert(*at, routine.code);
+                    }
+                }
+            }
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
-        inline: IndexMap::default(),
+        inline,
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),
-        far: Default::default(),
+        far,
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),

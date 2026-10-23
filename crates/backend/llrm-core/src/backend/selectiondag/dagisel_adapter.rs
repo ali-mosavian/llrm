@@ -236,9 +236,16 @@ pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::fr
 pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
+    // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
+    // AL 2, AX 3, ... EDX 27, ES 31); the ids
+    // module only names the ones some pattern mentions.
+    const AL: u16 = 2;
     Some(match register {
+        AL => RegId::AL,
         x86::AH => RegId::AH,
         x86::AX => RegId::AX,
+        x86::CL => RegId::CL,
+        x86::CX => RegId::CX,
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
         x86::EDX => RegId::EDX,
@@ -566,6 +573,8 @@ impl Dag for DagisAdapter<'_> {
         let (zero, neg_zero, one, minus_one) = match self.dag.value_type(ours(value)) {
             EVT::Simple(MVT::F32) => (0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000),
             EVT::Simple(MVT::F64) => (0, 1 << 63, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000),
+            // x87 extended: sign, 15-bit exponent, an explicit integer bit.
+            EVT::Simple(MVT::F80) => (0, 1 << 79, (0x3fff << 64) | (1 << 63), (0xbfff << 64) | (1 << 63)),
             _ => return Some(FpClass::Other),
         };
         Some(if bits == zero {

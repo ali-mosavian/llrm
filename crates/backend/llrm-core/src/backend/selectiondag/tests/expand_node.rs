@@ -79,3 +79,21 @@ fn a_word_bswap_is_a_rotate_by_eight() {
     let amount = dag.operand(root, 1);
     assert_eq!((dag.constant(amount), dag.value_type(amount)), (Some(8), EVT::I8));
 }
+
+/// At m16 an `i32` is a register type, so a pair of `i16` halves made one (a
+/// far call's `ax:dx`) reached selection as `build_pair`, which nothing selects
+/// (4 execution programs).
+#[test]
+fn a_build_pair_is_the_low_half_or_the_shifted_high_half() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let (lo, hi) = (load(&mut dag, EVT::I16, 1), load(&mut dag, EVT::I16, 2));
+    let pair = dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+    dag.set_root(pair);
+    DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Or);
+    let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
+    assert_eq!((dag.opcode(low), dag.operand(low, 0)), (ISD::ZeroExtend, lo));
+    assert_eq!((dag.opcode(high), dag.constant(dag.operand(high, 1))), (ISD::Shl, Some(16)));
+}
