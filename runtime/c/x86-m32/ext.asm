@@ -125,6 +125,28 @@ keep32_ proc
     ret
 keep32_ endp
 
+; void *memcpy(void *dst, const void *src, unsigned long n), regions apart: dst in EAX, src in EDX, n in EBX; dst
+; comes back in EAX. A callee that keeps ECX, ESI, EDI and EBP; EDX and EBX are its arguments. The direction flag is
+; clear on entry and left so. `rep movsd` for n / 4, `rep movsb` for the rest: n = 0 and n past 64 KiB copy right.
+public memcpy_
+memcpy_ proc
+    push ecx
+    push esi
+    push edi
+    mov edi, eax
+    mov esi, edx
+    mov ecx, ebx
+    shr ecx, 2
+    rep movsd
+    mov ecx, ebx
+    and ecx, 3
+    rep movsb
+    pop edi
+    pop esi
+    pop ecx
+    ret
+memcpy_ endp
+
 ; The same routines for a program in the stack convention (-mabi=sysv): arguments on the stack, which the caller removes.
 public _report
 _report proc
@@ -150,5 +172,27 @@ _keep32 proc
     mov eax, dword ptr [esp+4]
     ret
 _keep32 endp
+
+
+; memcpy in the stack convention: dst, src and n on the stack, which the caller removes; dst in EAX; EBX, ESI, EDI and
+; EBP kept.
+public _memcpy
+_memcpy proc
+    push esi
+    push edi
+    mov edi, dword ptr [esp+12]
+    mov esi, dword ptr [esp+16]
+    mov ecx, dword ptr [esp+20]
+    mov edx, ecx
+    shr ecx, 2
+    rep movsd
+    mov ecx, edx
+    and ecx, 3
+    rep movsb
+    mov eax, dword ptr [esp+12]
+    pop edi
+    pop esi
+    ret
+_memcpy endp
 
 end
