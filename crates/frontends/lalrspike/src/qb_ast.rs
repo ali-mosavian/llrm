@@ -136,6 +136,15 @@ fn span_of(a: Span, b: Span) -> Span {
     Span { line: a.line, start: a.start, end: b.end }
 }
 
+/// `A.B.C` as one name, where the expression is nothing but names and fields.
+fn dotted_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Field { base, name, .. } => Some(format!("{}.{name}", dotted_name(base)?)),
+        Expr::Name(name, _) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 fn name_of_suffix(name: &str) -> Option<TypeName> {
     match name.as_bytes().last() {
         Some(b'%') => Some(TypeName::Integer),
@@ -582,8 +591,11 @@ impl Ast<'_> {
         let fn_word = matches!(self.tok_n(0), Some(Tok::FnWord));
         if fn_word || matches!(self.tok_n(0), Some(Tok::Ident)) {
             let (name, start) = if fn_word {
+                // `FN twice`: the name is FNTWICE
+                let fn_span = self.span(self.i);
                 self.i += 1;
-                self.identifier()?
+                let (name, ident) = self.identifier()?;
+                (format!("FN{name}"), span_of(fn_span, ident))
             } else {
                 self.identifier()?
             };
@@ -787,6 +799,12 @@ impl Ast<'_> {
                 self.out.push(Statement::Assign { target, value, span });
                 return Ok(());
             }
+            // `Graphics.Init` and `obj.Method a, b`: a call by a dotted name
+            if let Some(name) = dotted_name(&target) {
+                let arguments = self.call_arguments()?;
+                self.out.push(Statement::Call { name, arguments, explicit: false, span: start_span });
+                return Ok(());
+            }
         }
         self.i = start;
         let (name, span) = match self.kinds[start] {
@@ -890,6 +908,7 @@ impl Ast<'_> {
             Kw::TYPE => return self.type_statement(),
             Kw::END => return self.end(),
             Kw::DIM | Kw::REDIM | Kw::STATIC | Kw::SHARED => return self.declaration_statement(k),
+            Kw::COMMON => return self.common(),
             Kw::CONST => return self.const_statement(),
             Kw::DEFINT | Kw::DEFLNG | Kw::DEFSNG | Kw::DEFDBL | Kw::DEFSTR => return self.def_type(k),
             Kw::OPTION => return self.option(),
@@ -1406,11 +1425,16 @@ impl Ast<'_> {
 
     fn declaration(&mut self, shared: bool, require_array: bool) -> R<Declaration> {
         let at = self.i;
-        let name = self.name_at(at).ok_or(at)?;
+        let mut name = self.name_at(at).ok_or(at)?;
         if !matches!(self.tok_n(0), Some(Tok::Ident | Tok::Kw(_))) {
             return self.fail();
         }
         self.i += 1;
+        while matches!(self.tok_n(0), Some(Tok::Period)) {
+            self.i += 1;
+            name.push('.');
+            name.push_str(&self.field_name()?.0);
+        }
         let mut bounds = Vec::new();
         let mut array = false;
         if self.eat(Kw::LParen) {
@@ -1474,6 +1498,23 @@ impl Ast<'_> {
             Kw::STATIC => Statement::Static(declarations),
             _ => Statement::Shared(declarations),
         });
+        Ok(())
+    }
+
+    /// `COMMON [SHARED] [/block/] a, b AS INTEGER`: variables a CHAINed program would keep. With no
+    /// CHAIN to carry them it declares them, shared where SHARED says so.
+    fn common(&mut self) -> R<()> {
+        self.i += 1;
+        let shared = self.eat(Kw::SHARED);
+        if self.eat(Kw::Div) {
+            self.identifier()?;
+            self.expect(Kw::Div)?;
+        }
+        let mut declarations = vec![self.declaration(shared, false)?];
+        while self.eat(Kw::Comma) {
+            declarations.push(self.declaration(shared, false)?);
+        }
+        self.out.push(Statement::Dim(declarations));
         Ok(())
     }
 
@@ -1777,10 +1818,13 @@ impl Ast<'_> {
             self.out.push(Statement::DefSeg { value, span });
             return Ok(());
         }
-        if matches!(self.tok_n(0), Some(Tok::FnWord)) {
+        let (name, _) = if matches!(self.tok_n(0), Some(Tok::FnWord)) {
             self.i += 1;
-        }
-        let (name, _) = self.identifier()?;
+            let (name, at) = self.identifier()?;
+            (format!("FN{name}"), at)
+        } else {
+            self.identifier()?
+        };
         if !name.starts_with("FN") {
             return self.fail();
         }

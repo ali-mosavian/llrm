@@ -56,3 +56,39 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
     assert!(same > 1500, "{same} programs compared");
     assert!(compiled > 1000, "{compiled} programs compiled to the same output");
 }
+
+fn value_of(source: &str) -> qbfront::syntax::Expr {
+    let module = lalrspike::qb_ast::parse(&format!("x = {source}\n"), Dialect::QuickBasic45).expect("parses");
+    match module.statements.into_iter().next() {
+        Some(qbfront::syntax::Statement::Assign { value, .. }) => value,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// QB 4.5 itself (BC and LINK, run under DOSBox-X) printed, for
+///   PRINT 2 ^ 3 ^ 2          64     (^ is left to right)
+///   PRINT NOT 1 = 2          -1     (NOT is below the relations)
+///   PRINT NOT 0 + 1          -2
+///   PRINT -2 ^ 2             -4     (^ is above the sign)
+///   PRINT -3 * 2 ^ 2         -12
+///   PRINT 7 MOD 3 * 2        1      (MOD is below *)
+/// The table-driven parser reads the first three the other way (512, 0, 0).
+#[test]
+fn precedence_is_the_compilers() {
+    use qbfront::syntax::{Binary, Expr, Unary};
+    let Expr::Binary { op: Binary::Power, left, .. } = value_of("2 ^ 3 ^ 2") else { panic!("not a power") };
+    assert!(matches!(*left, Expr::Binary { op: Binary::Power, .. }), "a ^ b ^ c is (a ^ b) ^ c");
+
+    let Expr::Unary { op: Unary::Not, operand, .. } = value_of("NOT 1 = 2") else { panic!("not a NOT") };
+    assert!(matches!(*operand, Expr::Binary { op: Binary::Eq, .. }), "NOT takes the comparison");
+    let Expr::Unary { op: Unary::Not, operand, .. } = value_of("NOT 0 + 1") else { panic!("not a NOT") };
+    assert!(matches!(*operand, Expr::Binary { op: Binary::Add, .. }), "NOT takes the sum");
+
+    let Expr::Unary { op: Unary::Negative, operand, .. } = value_of("-2 ^ 2") else { panic!("not a negation") };
+    assert!(matches!(*operand, Expr::Binary { op: Binary::Power, .. }), "the sign is below ^");
+    let Expr::Binary { op: Binary::Multiply, left, .. } = value_of("-3 * 2 ^ 2") else { panic!("not a product") };
+    assert!(matches!(*left, Expr::Unary { op: Unary::Negative, .. }), "the sign is above *");
+
+    let Expr::Binary { op: Binary::Modulo, right, .. } = value_of("7 MOD 3 * 2") else { panic!("not a MOD") };
+    assert!(matches!(*right, Expr::Binary { op: Binary::Multiply, .. }), "MOD is below *");
+}
