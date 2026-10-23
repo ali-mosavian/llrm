@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pairs"))
 import pin  # noqa: E402
 
 FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
+M16_FLAGS = ["-m16", "-march=i386", "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
 FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
 BOOKKEEPING = {"COPY", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTACKUP32", "KILL"}
@@ -33,7 +34,7 @@ BOOKKEEPING = {"COPY", "PHI", "IMPLICIT_DEF", "ADJCALLSTACKDOWN32", "ADJCALLSTAC
 
 def defined(ir: str) -> list[str]:
     """The functions the IR defines: the fixed total, whatever either side later does with them."""
-    return re.findall(r"^define\b[^\n]*@(\S+?)\(", ir, re.M)
+    return [name.strip('"') for name in re.findall(r'^define\b[^@\n]*@("[^"\n]+"|[^\s(]+)\(', ir, re.M)]
 
 
 def whole_program(program: str, ir: str, bucket: str) -> list[tuple[str, str, str]]:
@@ -113,6 +114,8 @@ def rows_of(program, funcs, refused, pinned, ir=""):
             bucket = f"refused {kind}: " + short(why)
         elif f["unselected"]:
             bucket = "unselected " + max(f["unselected"], key=f["unselected"].get)
+        elif pinned is None:
+            bucket = "selects"  # m16: the pin has no oracle, the old selector's output is compared later
         else:
             want = Counter({k: v for k, v in pinned.get(name, Counter()).items() if k not in BOOKKEEPING})
             have = Counter({k: v for k, v in f["machine"].items() if k not in BOOKKEEPING})
@@ -138,12 +141,13 @@ def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
     return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout), ir.read_text())
 
 
-def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
+def one(llrm_c: str, shadow: str, source: Path, m16: bool = False) -> list[tuple[str, str, str]]:
     """[(program, function, bucket)]."""
     with tempfile.TemporaryDirectory() as tmp:
         dump = Path(tmp) / "d"
         dump.mkdir()
-        done = subprocess.run([llrm_c, *FLAGS, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600)
+        flags = M16_FLAGS if m16 else FLAGS
+        done = subprocess.run([llrm_c, *flags, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600)
         ir = last_ir(dump)
         if done.returncode != 0 or ir is None:
             return whole_program(source.stem, ir.read_text() if ir else "", "compile failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:60])
@@ -151,10 +155,13 @@ def one(llrm_c: str, shadow: str, source: Path) -> list[tuple[str, str, str]]:
         clean = Path(tmp) / "clean.ll"
         clean.write_text(re.sub(r"\b(?:watcallcc|sysvcc|regparm3cc|cdeclcc|pascalcc|ia16cc) ", "", ir.read_text()))
         ir = clean
-        mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600)
+        env = {**os.environ, "M16": "1"} if m16 else None
+        mine = subprocess.run([shadow, str(ir)], capture_output=True, text=True, timeout=600, env=env)
         if mine.returncode != 0:
             return whole_program(source.stem, ir.read_text(), "shadow crashed: " + (mine.stderr.strip().splitlines() or ["?"])[-1][:60])
         funcs, refused = ours(mine.stdout)
+        if m16:
+            return rows_of(source.stem, funcs, refused, None, ir.read_text())
         theirs = pin.llc(["-O2", "-stop-after=finalize-isel", "-o", "-"], ir.read_text(), pin.target("m32"))
         if theirs.returncode != 0:
             return whole_program(source.stem, ir.read_text(), "pin llc failed: " + (theirs.stderr.strip().splitlines() or ["?"])[-1][:60])
@@ -171,6 +178,7 @@ def main() -> int:
     parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-c)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     parser.add_argument("--out", default="")
+    parser.add_argument("--m16", action="store_true", help="real mode: no pin; a function that builds and selects is `selects`")
     args = parser.parse_args()
     if args.ir:
         rows = compare(args.shadow, Path(args.ir), Path(args.ir).stem)
@@ -182,14 +190,15 @@ def main() -> int:
         want = set(args.programs.split(","))
         sources = [s for s in sources if s.stem in want]
     with ThreadPoolExecutor(args.jobs) as pool:
-        rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s), sources) for row in part]
+        rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
-    print(f"{buckets['equal']} equal of {len(rows)} defined functions in {len(sources)} programs")
+    good = "selects" if args.m16 else "equal"
+    print(f"{buckets[good]} {good} of {len(rows)} defined functions in {len(sources)} programs")
     for bucket, n in buckets.most_common():
         print(f"{n:6d}  {bucket}")
     if args.out:
         Path(args.out).write_text("".join(f"{p}\t{f}\t{b}\n" for p, f, b in rows))
-    return 0 if buckets["equal"] == len(rows) else 1
+    return 0 if buckets[good] == len(rows) else 1
 
 
 if __name__ == "__main__":
