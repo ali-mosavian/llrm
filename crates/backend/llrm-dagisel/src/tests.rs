@@ -1443,3 +1443,19 @@ mod llrm_intrinsics {
         }
     }
 }
+
+mod instruction_names {
+    use crate::generated::ids::x86;
+
+    /// The hand matchers' opcodes (`CDQ`, `DIV32r`, `MUL32r`) were not in the
+    /// per-cpu name table, so the emitter refused 25 functions with "opcode
+    /// 1202".
+    #[test]
+    fn the_hand_matchers_instructions_have_names() {
+        let name = |opcode| x86::NAMES.iter().find(|(o, _)| *o == opcode).map(|(_, n)| *n);
+        assert_eq!(name(x86::CDQ), Some("CDQ"));
+        assert_eq!(name(x86::DIV32r), Some("DIV32r"));
+        assert_eq!(name(x86::MUL32r), Some("MUL32r"));
+        assert_eq!(name(x86::EAX), None, "a register is not an instruction");
+    }
+}
