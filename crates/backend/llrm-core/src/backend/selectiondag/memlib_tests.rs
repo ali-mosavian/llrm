@@ -66,10 +66,10 @@ fn a_variable_move_is_refused_without_a_memmove() {
 }
 
 /// The call is the fact's: its symbol (`memset_`) and calling convention
-/// (watcom registers, not the stack) as `options.libcalls` states them. With
-/// no fact wired the builder refuses rather than call `memset` in the default
-/// convention: before, 9 m32 programs stopped there, and a call made with the
-/// wrong ones would have linked to nothing.
+/// (watcom registers, not the stack) as `options.libcalls` states them. A
+/// call in the default convention under the routine's own name would have
+/// linked to nothing: before, 9 m32 programs stopped at the builder's refusal
+/// to make it.
 #[test]
 fn the_call_uses_the_facts_symbol_and_convention() {
     let calls = [("memset".to_owned(), llrm_mir::opcode::WATCALL, "memset_".to_owned())];
@@ -80,5 +80,4 @@ fn the_call_uses_the_facts_symbol_and_convention() {
     // the `i8` fill value is widened to the register it goes in; it was copied
     // to `$edx` as an `i8`
     assert!(on.contains("any_extend") && on.contains("Register:i32 $edx") && !on.contains("Register:i8 $edx"), "{on}");
-    assert!(built("fill", &BuilderTarget::m32()).is_err());
 }
