@@ -19,6 +19,7 @@ mod builder;
 mod combiner;
 mod expand_node;
 mod extract_element;
+mod i1_m16;
 mod far_load;
 mod float_constants;
 mod fp_to_int;
