@@ -69,6 +69,27 @@ impl Selector {
     }
 }
 
+/// Whether `LLRM_ISEL_ONLY` (a comma-separated list of function names; unset,
+/// every function) lets the DAG path select `name`.
+pub fn only(name: &str) -> bool {
+    only_in(std::env::var("LLRM_ISEL_ONLY").ok().as_deref(), name)
+}
+
+fn only_in(
+    list: Option<&str>,
+    name: &str,
+) -> bool {
+    list.is_none_or(|list| list.split(',').any(|one| one == name))
+}
+
+#[cfg(test)]
+pub(super) fn only_listed(
+    list: Option<&str>,
+    name: &str,
+) -> bool {
+    only_in(list, name)
+}
+
 /// `LLRM_ISEL_REPORT=FILE`: one line `NAME dag` or `NAME old` appended per
 /// function, for the one that selected it (a shadow run's refused function is
 /// `old`). A run that reports a selection percentage or an execution count

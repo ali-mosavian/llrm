@@ -97,3 +97,13 @@ fn test_the_report_names_the_selector_that_selected_each_function() {
     assert_eq!(std::fs::read_to_string(&path).expect("a report"), "f old\ng dag\n");
     let _ = std::fs::remove_file(&path);
 }
+
+/// `LLRM_ISEL_ONLY` limits the DAG path to the named functions, so a wrong
+/// result bisects to one: unset, every function; set, only those.
+#[test]
+fn test_isel_only_lists_the_functions_the_dag_path_selects() {
+    assert!(shadow::only_listed(None, "f"));
+    assert!(shadow::only_listed(Some("f,g"), "g"));
+    assert!(!shadow::only_listed(Some("f,g"), "h"));
+    assert!(!shadow::only_listed(Some(""), "f"));
+}
