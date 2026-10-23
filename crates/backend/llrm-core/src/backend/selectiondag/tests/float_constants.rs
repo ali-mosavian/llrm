@@ -34,6 +34,9 @@ fn other_constants_are_loaded_from_the_pool() {
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, EVT::Simple(MVT::F64)));
     let NodeData::Mem(info) = dag.node(root).data else { panic!("a load") };
     assert_eq!(info.mem_vt, EVT::Simple(MVT::F32), "2.5 fits a float: the pool holds the float");
+    // a plain f64 load of the 4-byte entry read 8 bytes: wc_mixed passed 3.0 as
+    // a garbage double (want 234, got 224)
+    assert!(info.ext.is_some(), "the float entry is read by an extending load");
     let address = dag.operand(root, 1);
     assert_eq!(dag.opcode(address), x86isd::WRAPPER);
     assert_eq!(dag.opcode(dag.operand(address, 0)), ISD::TargetConstantPool);
