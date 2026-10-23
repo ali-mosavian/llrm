@@ -241,6 +241,24 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
+    partial(
+        "combine@1403",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
+    partial(
+        "combine@1464",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
+    partial(
+        "combine@1499",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
     entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",
