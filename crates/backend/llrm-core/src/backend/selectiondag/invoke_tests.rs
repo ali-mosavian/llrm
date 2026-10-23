@@ -2,9 +2,10 @@
 //! `landingpad` builds nothing (DEVIATE SD102). Before, both stopped the
 //! builder: 897 `invoke` and 75 `landingpad` m16 corpus blocks.
 
+use llrm_mir::datalayout::DataLayout;
+
 use super::builder::{BuilderTarget, build_block};
 use super::function_lowering::FunctionLoweringInfo;
-use llrm_mir::datalayout::DataLayout;
 
 #[test]
 fn an_invoke_is_a_call_then_a_branch_to_the_normal_block() {
@@ -15,8 +16,10 @@ fn an_invoke_is_a_call_then_a_branch_to_the_normal_block() {
         pad:\n  %l = landingpad { ptr, i32 } catch ptr null\n  ret void\n}\n";
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-    let (id, _, function) =
-        module.functions().find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f")).unwrap();
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .unwrap();
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let build = |info: &mut FunctionLoweringInfo, block| {
