@@ -524,11 +524,25 @@ pub fn selected(
     body.sealed_arguments = true;
     body.ordered = true;
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
+    // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
+    // their bytes are laid down at the call, as the old route did.
+    let mut inline = IndexMap::default();
+    for (at, name) in &calls {
+        for signed in [true, false] {
+            for wide in [true, false] {
+                if let Ok(routine) = arch.divide_routine(signed, wide) {
+                    if routine.name == name.as_str() {
+                        inline.insert(*at, routine.code);
+                    }
+                }
+            }
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
-        inline: IndexMap::default(),
+        inline,
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),
         far: Default::default(),
