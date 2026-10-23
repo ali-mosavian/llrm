@@ -268,7 +268,8 @@ impl Emitter<'_, '_> {
                     NodeData::PhysReg(register) => {
                         let phys = Reg { register, width: width_of(self.dag, result) };
                         let held = self.fresh(width_of(self.dag, result));
-                        // The result of a call is what the call delivers in that register.
+                        // The result of a call is what the call delivers in
+                        // that register.
                         if self.deliver(held, register) {
                             self.values.insert(result, held.value);
                             return Ok(());

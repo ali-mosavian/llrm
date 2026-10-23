@@ -161,7 +161,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     let mut slot = TABLES.lock().expect("the DAG tables");
     slot.get_or_insert_with(|| {
         let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-        std::sync::Arc::new(Tables { map: OpcodeMap::new(forms), names: MACHINE_OPCODES.iter().copied().chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied()).collect() })
+        std::sync::Arc::new(Tables {
+            map: OpcodeMap::new(forms),
+            names: MACHINE_OPCODES
+                .iter()
+                .copied()
+                .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
+                .collect(),
+        })
     })
     .clone()
 }
@@ -247,8 +254,12 @@ pub fn selected(
     // What a call destroys: the general registers the convention does not
     // keep for the caller.
     let regs = llrm_lir::registers::Regs(arch.registers());
-    let kept: std::collections::BTreeSet<_> =
-        arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| regs.root(full)).collect();
+    let kept: std::collections::BTreeSet<_> = arch
+        .callee_saved()
+        .into_iter()
+        .filter(|(full, pushed)| full == pushed)
+        .map(|(full, _)| regs.root(full))
+        .collect();
     let stack_pointer = arch.register_named("esp");
     let frame_registers = [stack_pointer, llrm_lir::registers::RegId::BP].map(|r| regs.root(r));
     let caller_saved: std::collections::BTreeSet<_> = cpu
@@ -294,7 +305,9 @@ pub fn selected(
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
         let from = emitted.len();
-        calls.extend(done.calls.iter().map(|(at, symbol)| (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())));
+        calls.extend(done.calls.iter().map(|(at, symbol)| {
+            (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())
+        }));
         emitted.extend(done.blocks);
         made.insert(block.0, from..emitted.len());
         exports.push((block, built.phi_updates));

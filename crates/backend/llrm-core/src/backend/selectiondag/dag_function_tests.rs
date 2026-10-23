@@ -10,7 +10,8 @@ entry:
 
 fn names(text: &str) -> Result<Vec<String>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu")).map_err(|e| e.0)?;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .map_err(|e| e.0)?;
     Ok(done
         .body
         .insns()
@@ -52,7 +53,8 @@ done:
 #[test]
 fn a_loop_is_blocks_with_phis_and_branches() {
     let module = llrm_mir::parse::module(LOOP).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu")).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let blocks = &done.body.blocks;
     assert_eq!(blocks.len(), 4, "{blocks:#?}");
     let addresses: Vec<i64> = blocks.iter().map(|b| b.at).collect();
@@ -88,7 +90,8 @@ entry:
 #[test]
 fn a_load_of_a_global_names_its_symbol() {
     let module = llrm_mir::parse::module(GLOBAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu")).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let first = done.body.insns()[0].what.clone().expect("semantics");
     // The symbol is the operand's address: folded into the load's cell, or (as
     // selected today, sdag-c's wrapper fold being open) moved into a register.
@@ -137,7 +140,8 @@ entry:
 #[test]
 fn a_subregister_is_the_same_value_viewed_narrower() {
     let module = llrm_mir::parse::module(BYTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu")).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let add = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("add"))).expect("an add");
     let ext =
@@ -171,11 +175,18 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call)).expect("a call");
+    let call = insns
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+        .expect("a call");
     assert_eq!(done.calls.values().collect::<Vec<_>>(), ["bar"]);
     assert!(done.calls.contains_key(&call.at));
     assert_eq!(call.delivers.len(), 1, "the result is what the call delivers");
-    assert!(call.clobbers.contains(&llrm_lir::registers::RegId::EAX), "the call destroys the registers the convention does not keep: {:?}", call.clobbers);
+    assert!(
+        call.clobbers.contains(&llrm_lir::registers::RegId::EAX),
+        "the call destroys the registers the convention does not keep: {:?}",
+        call.clobbers
+    );
     let names: Vec<String> =
         insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
     let (down, up) = (names.iter().position(|n| n == "sub").unwrap(), names.iter().rposition(|n| n == "add").unwrap());
@@ -201,7 +212,13 @@ fn an_indirect_call_names_its_target() {
     let module = llrm_mir::parse::module(INDIRECT).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
         .unwrap_or_else(|e| panic!("{}", e.0));
-    let call = done.body.insns().iter().filter_map(|i| i.what.clone()).find(|w| w.op == crate::model::ir::Operation::Call).expect("a call");
+    let call = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.clone())
+        .find(|w| w.op == crate::model::ir::Operation::Call)
+        .expect("a call");
     assert!(call.indirect && call.sources.len() == 1, "{call:?}");
     assert!(done.calls.is_empty());
 }
@@ -221,10 +238,15 @@ fn an_absolute_address_has_a_four_byte_displacement() {
     let module = llrm_mir::parse::module(ABSOLUTE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
         .unwrap_or_else(|e| panic!("{}", e.0));
-    let cell = done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
-        crate::model::ir::Loc::Mem(cell) => Some(cell),
-        _ => None,
-    });
+    let cell =
+        done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
+            crate::model::ir::Loc::Mem(cell) => Some(cell),
+            _ => None,
+        });
     let cell = cell.expect("a memory operand");
-    assert_eq!((cell.addr.map(|a| (a.space, a.disp)), cell.disp_width), (Some((crate::model::ir::Space::Literal, 753664)), 4), "{cell:?}");
+    assert_eq!(
+        (cell.addr.map(|a| (a.space, a.disp)), cell.disp_width),
+        (Some((crate::model::ir::Space::Literal, 753664)), 4),
+        "{cell:?}"
+    );
 }
