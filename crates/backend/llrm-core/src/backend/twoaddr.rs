@@ -396,10 +396,27 @@ fn _untied(
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
+    // An undef source is dealt with at once: its operand is the destination,
+    // read as undef, and no copy is made (`collectTiedOperands`: "rewrite
+    // undef").
+    if let Some(value) = first_value.filter(|value| one.undefs.contains(value))
+        && !what.sources[1..].iter().flat_map(ir::values).any(|held| held.value == value)
+    {
+        let mut fixed = one.clone();
+        let mut sources = vec![Loc::Held(*into)];
+        sources.extend(what.sources[1..].iter().cloned());
+        fixed.what = Some(Semantics { sources, ..what.clone() });
+        fixed.uses.retain(|used| *used != value);
+        fixed.undefs.retain(|undef| *undef != value);
+        if !fixed.undefs.contains(&into.value) {
+            fixed.undefs.push(into.value);
+        }
+        return Some(vec![Arc::new(fixed)]);
+    }
     let mut movement =
         _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
-    // The copy of an undef source reads it as undef
-    // (TwoAddressInstructionPass.cpp: `RegBUndef`).
+    // A source the instruction reads again as another operand is still copied,
+    // reading it as undef where the instruction did (`RegBUndef`).
     if let Some(value) = first_value.filter(|value| one.undefs.contains(value)) {
         let copy = Arc::make_mut(&mut movement);
         copy.uses.retain(|used| *used != value);
@@ -1375,5 +1392,25 @@ mod tests {
         call.clobbers = [RegId::EAX].into_iter().collect();
         let (_, asked) = walked(vec![arrival(0, &[(1, RegId::EAX), (2, RegId::EDX)]), Arc::new(call)]);
         assert_eq!((asked[0].1, asked[1].1), (None, Some(RegId::EDX)), "{asked:?}");
+    }
+
+    /// A tied add whose first source is read as undef needs no copy: its
+    /// operand is the destination, read as undef (`collectTiedOperands`);
+    /// the copy of an undef gave the allocator a `mov` of nothing.
+    #[test]
+    fn test_a_tied_add_of_an_undef_source_is_made_with_no_copy() {
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Imm(Imm { value: 5, width: 4, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        let mut add = Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![]);
+        add.undefs = vec![7];
+        let made = fixed(&add).expect("rewritten");
+        assert_eq!(made.len(), 1, "no copy: {made:?}");
+        let sources = &made[0].what.as_ref().expect("an add").sources;
+        assert_eq!(sources[0], held(8, 4));
+        assert_eq!((made[0].undefs.clone(), made[0].uses.clone()), (vec![8], vec![]));
     }
 }
