@@ -135,7 +135,9 @@ fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
                 letters.push('r');
                 tail = &tail[1..];
             }
-            '1' => letters.push('i'),
+            // A lone `1` is the shift-by-one immediate (`SHL32r1`); a digit run
+            // (`rr16`, `ri8`) is a size.
+            '1' if !tail[1..].starts_with(|d: char| d.is_ascii_digit()) => letters.push('i'),
             '0'..='9' => {}
             _ => return None,
         }
