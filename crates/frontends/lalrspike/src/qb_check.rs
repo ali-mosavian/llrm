@@ -609,7 +609,13 @@ impl Checker {
             }
             Expr::Index { base, indices, span } => {
                 let base_typed = self.expr(base)?;
-                let _ = (base_typed, indices, span);
+                // an indexed property of a VBDOS form or control
+                if base_typed.ty == Ty::Variant {
+                    for index in indices {
+                        self.expr(index);
+                    }
+                    return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+                }
                 self.err(*span, "Syntax error");
                 None
             }
@@ -656,6 +662,10 @@ impl Checker {
 
     fn binary(&mut self, op: Binary, l: &Typed, r: &Typed, right: &Expr, span: Span) -> Option<Typed> {
         use Binary::*;
+        // a property of a form or control may be either a number or text
+        if l.ty == Ty::Variant || r.ty == Ty::Variant {
+            return Some(Typed::value(if matches!(op, Eq | NotEqual | Less | LessEqual | Greater | GreaterEqual) { Ty::Int } else { Ty::Variant }));
+        }
         let both_strings = l.ty.string() && r.ty.string();
         match op {
             Add if both_strings => return Some(Typed::value(Ty::Str(None))),
@@ -2110,6 +2120,7 @@ impl Checker {
             "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT" => "",
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => "",
             "CHDRIVE" => "s",
+            "LOAD" | "UNLOAD" => "",
             "STACK" => "n?",
             "EVENT_SWITCH" => "k",
             "ROLLBACK" => "n?",
@@ -2126,6 +2137,37 @@ impl Checker {
         };
         if matches!(name, "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT") {
             self.isam_list(name, arguments, span);
+            return;
+        }
+        if matches!(name, "LOAD" | "UNLOAD") {
+            // the form to load or unload is a variable of the form type
+            // (a control array element too: LOAD frmFont.chkFonts(i%))
+            let mut root = arguments.first();
+            while let Some(expr) = root {
+                root = match expr {
+                    Expr::Field { base, .. } => Some(&**base),
+                    Expr::Index { base, .. } => Some(&**base),
+                    Expr::Apply { name, .. } => {
+                        if !self.lookup_record_var(name.split('.').next().unwrap_or(name)) {
+                            self.err(span, "Form variable already in use or illegal");
+                        }
+                        break;
+                    }
+                    Expr::Name(form, at) => {
+                        if !self.lookup_record_var(form) {
+                            self.err(*at, "Form variable already in use or illegal");
+                        }
+                        break;
+                    }
+                    _ => {
+                        self.err(span, "Syntax error");
+                        break;
+                    }
+                };
+            }
+            if arguments.len() != 1 {
+                self.err(span, "Syntax error");
+            }
             return;
         }
         if name == "FIELD" {
