@@ -142,7 +142,9 @@ def warning_failures(
     """`RUSTFLAGS="-D warnings" cargo check -p <crates> --tests`: its errors, one line each (a dead-code error refused a landing)."""
     if not packages:
         return []
-    command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)]])
+    # A package whose tests exist only with a feature (llrm-c's `toolchain`) is checked with it: without, its lib tests are a compile_error.
+    features = [f"{package}/{feature}" for package in packages for feature in parity_smoke.LIB_FEATURES.get(package, ())]
+    command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)], *(["--features", ",".join(features)] if features else [])])
     done = run(command, cwd=root, capture_output=True, text=True, env={**(env or {}), "RUSTFLAGS": "-D warnings"})
     if not done.returncode:
         return []
@@ -181,7 +183,8 @@ def _failing(
     filter_: str | None,
     run,
 ) -> set[str]:
-    command = ["cargo", "test", "-q", "--no-fail-fast", "-p", package, "--lib"] + (["--", filter_] if filter_ else [])
+    base = parity_smoke.lib_command(package)
+    command = [base[0], base[1], "-q", *base[2:]] + (["--", filter_] if filter_ else [])
     done = run(slotted(command), cwd=root, capture_output=True, text=True)
     output = done.stdout + done.stderr
     found = set(parity_smoke.failed_tests(output))
