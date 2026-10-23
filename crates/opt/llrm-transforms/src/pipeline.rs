@@ -731,7 +731,6 @@ pub(crate) fn llvm_order(
                 },
             }),
             combine("combine@1242"),
-            fold("fold@1242"),
             dead("dead@1242"),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
