@@ -17,6 +17,7 @@ mod and_fold;
 mod bit_counts;
 mod builder;
 mod combiner;
+mod div_by_constant;
 mod expand_node;
 mod ext_of_load;
 mod extract_element;
