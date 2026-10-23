@@ -899,7 +899,14 @@ impl Emitter<'_, '_> {
                     Operation::Address,
                     "lea",
                     vec![Loc::Held(held)],
-                    vec![if cell.addr.is_some() { Loc::Address(cell.address()) } else { Loc::Mem(cell) }],
+                    // An `AddressRef` names registers, not the values a base or
+                    // an index is: a symbol plus a value (`lea [sym + 12 - x]`)
+                    // stays a cell.
+                    vec![if cell.addr.is_some() && cell.base.is_none() && cell.index.is_none() {
+                        Loc::Address(cell.address())
+                    } else {
+                        Loc::Mem(cell)
+                    }],
                 );
                 Ok(Some(()))
             }
