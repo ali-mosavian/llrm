@@ -84,3 +84,26 @@ fn test_isel_takes_old_and_dag_and_refuses_the_rest() {
     assert_eq!(Selector::parse("old").unwrap(), Selector::Old);
     assert!(Selector::parse("fast").is_err());
 }
+
+/// A run that reports who selected proves it with `LLRM_ISEL_REPORT`: one
+/// line per function, `old` or `dag`. 445 of 449 programs "passed" under
+/// `--isel=dag` while the old selector compiled them.
+#[test]
+fn test_the_report_names_the_selector_that_selected_each_function() {
+    let path = std::env::temp_dir().join(format!("isel-report-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    shadow::recorded_to(&path, "f", Selector::Old);
+    shadow::recorded_to(&path, "g", Selector::Dag);
+    assert_eq!(std::fs::read_to_string(&path).expect("a report"), "f old\ng dag\n");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `LLRM_ISEL_ONLY` limits the DAG path to the named functions, so a wrong
+/// result bisects to one: unset, every function; set, only those.
+#[test]
+fn test_isel_only_lists_the_functions_the_dag_path_selects() {
+    assert!(shadow::only_listed(None, "f"));
+    assert!(shadow::only_listed(Some("f,g"), "g"));
+    assert!(!shadow::only_listed(Some("f,g"), "h"));
+    assert!(!shadow::only_listed(Some(""), "f"));
+}

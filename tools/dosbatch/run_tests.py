@@ -324,8 +324,16 @@ def main() -> int:
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
+    mode = os.environ.get("LLRM_ISEL")
+    report = work.with_name(work.name + "-isel.txt")
+    if mode:
+        report.unlink(missing_ok=True)
+        os.environ["LLRM_ISEL_REPORT"] = str(report)
     with ThreadPoolExecutor() as pool:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
+    if mode:
+        dag, old = dosbatch.isel_proof(report, mode)
+        print(f"isel proof ({report.name}): LLRM_ISEL={mode}: {dag} functions selected by the DAG path, {old} by the old selector")
     launches = []
     for dialect, tools in TOOLS.items():
         jobs = [dataclasses.replace(built[p.name], args=f"< {p.stdin.upper()}") if p.stdin else built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]

@@ -23,6 +23,7 @@ mod expand_node;
 mod ext_of_load;
 mod extract_element;
 mod far_load;
+mod flag_reuse;
 mod float_constants;
 mod fp_to_int;
 mod get_node;
