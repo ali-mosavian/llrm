@@ -44,6 +44,16 @@ run. Exit: spill cells carry an index and one pass resolves them with
 `frameobjects::calculate_frame_object_offsets`; then `emitPrologue` and
 `emitEpilogue` (PEI-2) replace `prologue.rs` and `masm::parts`.
 
+## FI-1, how (w-5, 2026-10-23; supersedes "spill cells carry an index")
+
+The cells already carry their object: `Frame::tagged` gives every frame cell `Addr::in_slot(home)` (`home` is the first byte of the slot the selector or the spiller laid out) and marks the body `slotted`. So the frame index exists; what is missing is that the displacement is final only after `calculateFrameObjectOffsets`. The step:
+
+1. **Objects** (`FrameFinalize`, after allocation, before `Prologue`): the fixed ones are the incoming arguments (above BP) and the return address; the others are each `Frame::extents` entry (selector allocas) and each spill slot (`Frame::slots`, size `capacities`), keyed by `home`; the callee-saved registers `parts` pushes are the callee-saved objects.
+2. **Layout** by `frameobjects::calculate_frame_object_offsets` (the pin's order and alignment), giving each `home` a new displacement.
+3. **Resolve** (`replaceFrameIndices`): every cell tagged with `home` moves by `new - old`, its offset inside the object kept; `Frame::size()`/`parts`' reserve are the pin's stack size.
+4. **PEI-2** then replaces `prologue.rs`/`masm::parts` for flat m32 with `emit_prologue`/`emit_epilogue`; m16 and BC runtime frames (`B$ENRA`) stay a named DEVIATE (the runtime lays them).
+
+Dates: oracle (a dry run of 1-2 on the corpus: how many functions' layout and size differ from today's, and by how much) 10-30; 3 behind its pair 11-06; PEI-2 11-13. The SelectionDAG port's frame indices (`TargetFrameIndex`, sdag-d's emitter) replace step 1's `extents` when it lands.
 ### Oracle result (w-5, 2026-10-23)
 
 `LLRM_FRAME_ORACLE=1 llrm-c ...` prints, per function, the bytes below BP as ours lays them (`reserve`) and as `calculate_frame_object_offsets` lays the same objects (selector extents then spill slots, natural alignment up to the frame's; no callee-saved object, call frame or stack alignment). Rows corpus, m32 -O2, 158 functions: 153 equal, 4 pin larger (-2, -4, -8, -44 B), 1 ours larger (+4); totals ours 16,986, pin 17,040. The objects' layout is the pin's; what differs in the frame is the callee-saved pushes, the call frame and the stack-alignment rounding (PEI-2), and the alignment the selector gave an object (the 5 above: the oracle assumes the natural one).

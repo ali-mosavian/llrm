@@ -300,7 +300,8 @@ impl Emitter<'_, '_> {
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
-        let mut operands = self.operands(node.ops.as_slice(), desc, width_of_node(self.dag, n))?;
+        let cell_width = super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.dag, n));
+        let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
         let memory_dest = dests.is_empty() && form.dests.first().is_some_and(|d| d.allows('m'));
