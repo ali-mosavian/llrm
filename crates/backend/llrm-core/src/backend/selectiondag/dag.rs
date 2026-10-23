@@ -734,6 +734,10 @@ impl SelectionDAG {
         offset: i64,
     ) -> SDValue {
         let vt = self.value_type(ptr);
+        // a two-word pointer is not an integer: its zero offset is no add
+        if offset == 0 && !vt.is_integer() {
+            return ptr;
+        }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
     }
