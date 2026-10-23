@@ -24,6 +24,27 @@ fn a_far_pointer_returned_in_a_register_pair_is_read_as_the_dword() {
     assert!(legalizer.all_legal());
 }
 
+/// A far pointer returned in the register pair (`CopyToReg $eax, far`, the
+/// `mk8` of the regparm3 matrix) stopped the type legalizer: "CopyToReg:
+/// expand operand". The halves are joined into the dword the pair names.
+#[test]
+fn a_far_pointer_copied_to_a_register_pair_is_the_dword_of_its_halves() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
+    let (entry, eax) = (dag.entry_node(), dag.get_phys_register(EVT::I32, llrm_lir::registers::RegId::MM0));
+    let copy = dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &[entry, eax, far]);
+    dag.set_root(SDValue { node: copy.node, res: 0 });
+    let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+    legalizer.run().unwrap();
+    assert!(legalizer.all_legal());
+    let root = dag.get_root();
+    let dword = dag.operand(root, 2);
+    assert_eq!((dag.opcode(dword), dag.value_type(dword)), (ISD::BuildPair, EVT::I32));
+    assert_eq!((dag.operand(dword, 0), dag.operand(dword, 1)), (offset, selector));
+}
+
 /// A far pointer loaded through a far pointer (`les` at `es:[bx]`) stopped
 /// the type legalizer at the `les` itself: "Target(24576): expand operand"
 /// (c/fsgs_call.c). `ES` takes the selector first, the `les` is at the offset.

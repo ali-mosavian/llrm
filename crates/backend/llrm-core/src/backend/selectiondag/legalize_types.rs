@@ -1423,6 +1423,17 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
             }
             ISD::Store if at == 1 => self.expand_store(node),
+            ISD::CopyToReg if at == 2 => {
+                // A far pointer copied to the register pair a dword stands for
+                // (a return or an argument in `dx:ax`): the halves joined into
+                // that dword.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 2));
+                let dword = self.dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+                let mut ops = self.dag.node(node).ops.clone();
+                ops[2] = dword;
+                let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
             ISD::Load if at == 1 => self.expand_far_address(node, at),
             x86isd::LES | x86isd::LDS if at == 1 => self.expand_far_address(node, at),
             ISD::Store if at == 2 => self.expand_far_address(node, at),
