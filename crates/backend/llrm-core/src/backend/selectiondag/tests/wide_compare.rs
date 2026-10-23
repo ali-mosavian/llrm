@@ -1,5 +1,6 @@
 use super::super::legalize_types::TypeLegalizer;
 use super::*;
+use crate::backend::selectiondag::x86_lowering::x86isd;
 
 fn legalized(
     build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue,
@@ -66,4 +67,30 @@ fn wide_bitcast_from_a_word_splits_low_and_high() {
     TypeLegalizer::new(&mut dag, &tli).run().unwrap();
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::Truncate, word));
+}
+
+/// A huge pointer plus a dword carries into the selector: offset low word
+/// of the dword sum, selector stepped by the sum's high word times the DOS
+/// stride (shift 12). Without the expansion the node stayed unexpanded and
+/// the function was not selected.
+#[test]
+fn huge_add_steps_the_selector_by_the_carry() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
+    let delta = dag.get_register(EVT::I32, 9);
+    let moved = dag.get_node(x86isd::HUGE_ADD, MVT::Far.into(), &[far, delta]);
+    let pair = dag.get_node(ISD::BitCast, EVT::I32, &[moved]);
+    dag.set_root(pair);
+    TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m16::M16).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::BuildPair);
+    let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
+    let sum = dag.operand(low, 0);
+    assert_eq!((dag.opcode(low), dag.opcode(sum)), (ISD::Truncate, ISD::Add));
+    assert_eq!((dag.opcode(high), dag.operand(high, 0)), (ISD::Add, selector));
+    let shl = dag.operand(dag.operand(high, 1), 0);
+    assert_eq!((dag.opcode(shl), dag.constant(dag.operand(shl, 1))), (ISD::Shl, Some(12)));
+    assert_eq!(dag.opcode(dag.operand(shl, 0)), ISD::Sra);
 }
