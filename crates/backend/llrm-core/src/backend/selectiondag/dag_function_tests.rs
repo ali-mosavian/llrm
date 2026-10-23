@@ -226,5 +226,5 @@ fn an_absolute_address_has_a_four_byte_displacement() {
         _ => None,
     });
     let cell = cell.expect("a memory operand");
-    assert_eq!((cell.offset, cell.disp_width), (753664, 4), "{cell:?}");
+    assert_eq!((cell.addr.map(|a| (a.space, a.disp)), cell.disp_width), (Some((crate::model::ir::Space::Literal, 753664)), 4), "{cell:?}");
 }

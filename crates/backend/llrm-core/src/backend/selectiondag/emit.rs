@@ -723,9 +723,12 @@ impl Emitter<'_, '_> {
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
-        // An absolute address (`[0xB8000]`) has only its displacement: four bytes.
-        let disp_width = if base.is_none() && index.is_none() { 4 } else { 0 };
-        Ok(Mem { base, index, scale, offset: disp, disp_width, ..Mem::new(None, cell_width) })
+        // An absolute address (`[0xB8000]`) is a literal address of four bytes.
+        if base.is_none() && index.is_none() {
+            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            return Ok(Mem { disp_width: 4, ..Mem::new(Some(address), cell_width) });
+        }
+        Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
 
     /// A cell addressed through the register `through` (the stack pointer):
