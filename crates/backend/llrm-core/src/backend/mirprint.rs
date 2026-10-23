@@ -181,6 +181,7 @@ fn instruction(
 /// does not know.
 pub fn mir(body: &LirBody) -> Result<String, String> {
     let at: Vec<i64> = body.blocks.iter().map(|b| b.at).collect();
+    let odds = crate::liveness::blockfrequency::MachineBranchProbabilityInfo::of(body);
     let mut symbols = BTreeSet::new();
     let mut text = String::new();
     let mut widths = BTreeSet::new();
@@ -193,7 +194,19 @@ pub fn mir(body: &LirBody) -> Result<String, String> {
             .collect::<Result<_, _>>()?;
         writeln!(text, "  bb.{n}:").unwrap();
         if !targets.is_empty() {
-            let list: Vec<String> = targets.iter().map(|t| format!("%bb.{t}")).collect();
+            // The odds llrm's own frequencies use, so the pin weighs the same
+            // blocks the same way.
+            let mut distinct: Vec<usize> = Vec::new();
+            for to in &targets {
+                if !distinct.contains(to) {
+                    distinct.push(to.to_owned());
+                }
+            }
+            let list: Vec<String> = distinct
+                .iter()
+                .enumerate()
+                .map(|(k, t)| format!("%bb.{t}(0x{:08x})", odds.get_edge_probability(n, k).get_numerator()))
+                .collect();
             writeln!(text, "    successors: {}", list.join(", ")).unwrap();
         }
         let mut jumps = 0;
@@ -291,6 +304,10 @@ mod tests {
         assert!(
             text.contains("JCC_1 %bb.1, 5, implicit $eflags\n    JMP_1 %bb.3"),
             "the taken edge, then the far fallthrough: {text}"
+        );
+        assert!(
+            text.contains("successors: %bb.1(0x"),
+            "the edges carry llrm's odds; without them the pin weighs both 50/50: {text}"
         );
         assert!(mir(&LirBody::new("none", 0, vec![], IndexMap::default(), IndexMap::default())).is_ok());
     }
