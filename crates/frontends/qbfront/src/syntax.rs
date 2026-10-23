@@ -436,11 +436,21 @@ pub enum Statement {
         arguments: Vec<Expr>,
         span: Span,
     },
+    /// PDS and VBDOS's `OPEN database FOR ISAM RecordType "table" AS [#]file`.
+    OpenIsam {
+        database: Expr,
+        record_type: String,
+        table: Expr,
+        file: Expr,
+        span: Span,
+    },
     /// `ON [LOCAL] ERROR RESUME NEXT`.
     OnErrorResumeNext {
         local: bool,
         span: Span,
     },
+    /// PDS and VBDOS's `REDIM PRESERVE a(n)`: the array keeps its contents.
+    RedimPreserve(Vec<Declaration>),
     /// `COMMON [SHARED] [/block/] a, b AS INTEGER`.
     Common {
         shared: bool,
@@ -475,7 +485,7 @@ impl Statement {
 
     pub fn span(&self) -> Span {
         match self {
-            Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) => {
+            Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) | Self::RedimPreserve(items) => {
                 items.first().map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span)
             }
             Self::Erase(items) => items.first().map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
@@ -500,6 +510,7 @@ impl Statement {
             | Self::OnError { span, .. }
             | Self::Resume { span, .. }
             | Self::Open { span, .. }
+            | Self::OpenIsam { span, .. }
             | Self::Close { span, .. }
             | Self::LineInput { span, .. }
             | Self::FileTransfer { span, .. }

@@ -2973,7 +2973,7 @@ fn previous_end(state: &ParseState) -> usize {
 
 fn statement_end(statement: &Statement) -> usize {
     match statement {
-        Statement::Dim(items) | Statement::Static(items) | Statement::Shared(items) | Statement::Redim(items) => {
+        Statement::Dim(items) | Statement::Static(items) | Statement::Shared(items) | Statement::Redim(items) | Statement::RedimPreserve(items) => {
             items.last().map_or(0, |item| item.span.end)
         }
         Statement::Erase(items) => items.last().map_or(0, |item| item.span().end),
@@ -2999,6 +2999,7 @@ fn statement_end(statement: &Statement) -> usize {
         | Statement::Resume { span, .. }
         | Statement::Open { span, .. }
         | Statement::OpenClassic { span, .. }
+        | Statement::OpenIsam { span, .. }
         | Statement::Close { span, .. }
         | Statement::LineInput { span, .. }
         | Statement::FileTransfer { span, .. }

@@ -13,6 +13,12 @@ fn strip_spans(text: &str) -> String {
         rest = &rest[close..];
     }
     out.push_str(rest);
+    // deliberate differences: CURRENCY is a type of its own here; a NEXT's variable is recorded
+    let mut out = out.replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
+    while let Some(at) = out.find("next_variable: Some((") {
+        let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
+        out.replace_range(at..close, "next_variable: None");
+    }
     out
 }
 
