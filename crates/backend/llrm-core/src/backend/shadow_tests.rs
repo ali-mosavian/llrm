@@ -122,4 +122,13 @@ fn test_report_lines_from_many_writers_stay_whole() {
     assert_eq!(report.lines().count(), 8 * 300);
     assert!(report.lines().all(|line| line.starts_with("function_") && line.ends_with(" dag")), "a torn line");
     let _ = std::fs::remove_file(&path);
+
+/// `LLRM_ISEL_ONLY` limits the DAG path to the named functions, so a wrong
+/// result bisects to one: unset, every function; set, only those.
+#[test]
+fn test_isel_only_lists_the_functions_the_dag_path_selects() {
+    assert!(shadow::only_listed(None, "f"));
+    assert!(shadow::only_listed(Some("f,g"), "g"));
+    assert!(!shadow::only_listed(Some("f,g"), "h"));
+    assert!(!shadow::only_listed(Some(""), "f"));
 }
