@@ -1,6 +1,6 @@
 # TwoAddress and LiveIntervals: compile cost against the pin (owner w-1)
 
-d_faces `-m32 -mabi=sysv -march=i486 -O2`, dist build at parity e45901155 + #4120 (callgrind, inclusive Ir); the pin's numbers are `clang -O2` of the same file (`~/scratch/ledger2/clang.incl`, the ledger's run).
+d_faces `-m32 -mabi=sysv -march=i486 -O2`, dist build at parity e45901155 + #4120 (callgrind, inclusive Ir); the pin's numbers are `clang -O2` of the same file (the ledger's clang run, inclusive table).
 
 | function | ours | pin |
 |---|--:|--:|
