@@ -259,6 +259,9 @@ impl Emitter<'_, '_> {
         if name == "COPY" {
             return self.copy(n);
         }
+        if let Some(done) = self.special(n, name)? {
+            return Ok(done);
+        }
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -350,6 +353,48 @@ impl Emitter<'_, '_> {
 
     fn next_address(&mut self) -> i64 {
         self.state.next_address()
+    }
+
+    /// Opcodes `x86.instr` has no row for but LIR has a form of: the constant
+    /// loads (`MOV32r0` is `mov r, 0`, which a later pass makes `xor r, r`),
+    /// `MOV32ImmSExti8`, and `LEA32r`/`LEA16r` (`lea r, [address]`). `None`:
+    /// not one of them.
+    fn special(
+        &mut self,
+        n: u32,
+        name: &str,
+    ) -> Result<Option<()>, EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let width = width(node.values[0]);
+        let constant = match name {
+            "MOV32r0" => Some(0),
+            "MOV32r1" => Some(1),
+            "MOV32r_1" => Some(-1),
+            _ => None,
+        };
+        if let Some(value) = constant {
+            let held = self.fresh(width);
+            self.values.insert(SDValue { node: n, res: 0 }, held.value);
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value, width, address: None })]);
+            return Ok(Some(()));
+        }
+        match name {
+            "MOV32ImmSExti8" => {
+                let held = self.fresh(width);
+                self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                let source = self.operand(node.ops[0])?;
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
+                Ok(Some(()))
+            }
+            "LEA32r" | "LEA16r" => {
+                let cell = self.cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                let held = self.fresh(width);
+                self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                self.push(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(cell.address())]);
+                Ok(Some(()))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// `JMP_1 dest` and `JCC_1 dest, cc`: a jump or a conditional branch to a
