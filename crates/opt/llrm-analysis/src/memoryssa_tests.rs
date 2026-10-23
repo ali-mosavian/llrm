@@ -472,7 +472,11 @@ b0:
     let (store, ended, load, given, again) =
         (site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4), site(&unit, "b0", 5), site(&unit, "b0", 6));
     let graph = graph(&unit);
-    assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(store).id]), "lifetime.end {ended:?}");
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(store).id]),
+        "lifetime.end {ended:?}"
+    );
     assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(given).id]));
 }
 

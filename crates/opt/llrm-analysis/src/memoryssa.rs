@@ -1236,7 +1236,10 @@ impl MemorySSA<'_> {
         if cell.pointer.is_some()
             && !invariant
             && !cell.unwritable()
-            && matches!(self.unit.function.instruction(site).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+            && matches!(
+                self.unit.function.instruction(site).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
         {
             return self.clobbered(slot, cell, access, site);
         }
@@ -1253,7 +1256,10 @@ impl MemorySSA<'_> {
         cell: &MemRef,
     ) -> Option<bool> {
         use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
-        if !matches!(self.unit.function.instruction(site).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+        if !matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
             return None;
         }
         let location = MemoryLocation::new(cell.pointer?, LocationSize::Precise(u64::from(cell.width)));
@@ -1717,9 +1723,7 @@ impl MemorySSA<'_> {
                             }
                             _ => false,
                         };
-                    if !apart
-                        && self.site_changes(queried, invariant, site, queried_slot, current)
-                    {
+                    if !apart && self.site_changes(queried, invariant, site, queried_slot, current) {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
