@@ -250,6 +250,23 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            // `vaend` has nothing to do; `vacopy` is a load of the source list
+            // and a store to the destination.
+            ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
+            ISD::VACopy => {
+                let (chain, dest, src) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let pointer = self.dag.config().pointer;
+                let info = MemInfo {
+                    mem_vt: pointer,
+                    align: pointer.size_in_bits() / 8,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                };
+                let loaded = self.dag.get_load(pointer, chain, src, info);
+                Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
+            }
             _ => None,
         }
     }

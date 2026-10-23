@@ -381,6 +381,9 @@ impl TargetLowering {
         t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[ptr], Custom);
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        // L559..L566: 32-bit va_list is a pointer
+        t.set_operation_action(VAStart, MVT::Other, Custom);
+        t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
         // L720..L760: x87 float classes (no SSE)
         for vt in [MVT::F32, MVT::F64] {
             t.set_ops(&[Undef, Poison], &[vt], Expand);
