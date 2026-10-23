@@ -739,10 +739,10 @@ no:
             "and dl, cl",
             "je L0_8",
             "L0_6:",
-            "movzx dx, al",
-            "neg dx",
-            "movzx ax, cl",
-            "add ax, dx",
+            "movzx ax, al",
+            "neg ax",
+            "movzx cx, cl",
+            "add ax, cx",
             "pop bp",
             "retf",
             "L0_8:",
@@ -1629,10 +1629,11 @@ b1:
             "sar eax, 31",
             "shr eax, 22",
             "xor ebx, ebx",
-            "add eax, ecx",
+            "add ecx, eax",
             "adc edx, ebx",
-            "shrd eax, edx, 10",
-            "shld edx, eax, 16",
+            "shrd ecx, edx, 10",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -3478,7 +3479,7 @@ define i16 @g() addrspace(1) {
     let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
     assert!(f[add + 1].starts_with("adc e"), "{f:?}");
     let g = listing(text, "g");
-    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or edx, eax"] {
+    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
     }
 }
@@ -4656,7 +4657,7 @@ fn test_far_pointers_compare_by_words() {
             "xor ax, word ptr [bp+10]",
             "mov cx, word ptr [bp+8]",
             "xor cx, word ptr [bp+12]",
-            "or cx, ax",
+            "or ax, cx",
             "sete al",
             "movzx ax, al",
             "pop bp",
@@ -4813,10 +4814,9 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "movzx eax, word ptr [bp+6]",
-            "mov ebx, dword ptr [bp+10]",
-            "add ebx, ebx",
-            "add ebx, eax",
+            "movzx ebx, word ptr [bp+6]",
+            "mov eax, dword ptr [bp+10]",
+            "lea ebx, [ebx+eax*2]",
             "mov eax, ebx",
             "sar eax, 16",
             "shl eax, 12",
@@ -4827,7 +4827,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
             "retf"
         ]
     );
-    assert_eq!(counts(&got), (14, 4));
+    assert_eq!(counts(&got), (13, 5));
 }
 
 /// Huge pointers are canonical, so an order is the selector's then the
@@ -4876,14 +4876,14 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "movzx ecx, word ptr [bp+6]",
-            "movzx eax, word ptr [bp+10]",
-            "sub ecx, eax",
-            "movzx eax, word ptr [bp+8]",
+            "movzx eax, word ptr [bp+6]",
+            "movzx ecx, word ptr [bp+10]",
+            "sub eax, ecx",
+            "movzx ecx, word ptr [bp+8]",
             "movzx edx, word ptr [bp+12]",
-            "sub eax, edx",
-            "sar eax, 12",
-            "shl eax, 16",
+            "sub ecx, edx",
+            "sar ecx, 12",
+            "shl ecx, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
             "pop bp",

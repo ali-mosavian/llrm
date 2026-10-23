@@ -318,9 +318,12 @@ def oracle_env() -> dict[str, str]:
 
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
-    """None where the compile succeeded; else its first line of complaint."""
+    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: llrm-c encodes only for an `.o` or
+    `.obj` output, so the null device never reached the encoder."""
     try:
-        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+        with tempfile.TemporaryDirectory(prefix="smoke-") as work:
+            command = [str(Path(work) / "out.obj") if after == "-o" and arg == os.devnull else arg for after, arg in zip(["", *command], command)]
+            done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
     except cpulimit.MemoryLimit as error:
         return f"memory limit: {error}"
     except subprocess.TimeoutExpired:
