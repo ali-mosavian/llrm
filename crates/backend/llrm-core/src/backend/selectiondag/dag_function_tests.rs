@@ -431,7 +431,7 @@ entry:
 fn a_call_destroys_what_its_conventions_says() {
     use llrm_target::Target;
     let module = llrm_mir::parse::module(BOTH_CALLS).expect("parses");
-    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let calls: Vec<_> = insns.iter().filter(|i| i.call.is_some()).collect();
