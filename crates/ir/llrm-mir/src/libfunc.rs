@@ -390,3 +390,17 @@ thread_local! {
 #[cfg(test)]
 #[path = "libfunc_tests.rs"]
 mod tests;
+
+/// A library routine a compile states the program links, as the front end's
+/// profile spells it: what `TargetLibraryInfo` states of a triple, here of a
+/// target and its ABI. The pass that forms a call of it declares it
+/// (`getOrInsertFunction`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Routine {
+    /// The standard name: `strlen`.
+    pub standard: &'static str,
+    /// The symbol it is called by, decorated as the ABI does.
+    pub symbol: String,
+    /// The MIR calling convention number of the ABI's C convention.
+    pub calling_convention: u32,
+}

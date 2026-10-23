@@ -255,7 +255,7 @@ pub(crate) fn move_of(
     out_of: Held,
 ) -> Semantics {
     Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![Loc::Held(into)],
         sources: vec![Loc::Held(out_of)],
         ..Semantics::new(Operation::Move)
@@ -263,7 +263,7 @@ pub(crate) fn move_of(
 }
 
 fn jump_to(target: i64) -> Semantics {
-    Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) }
+    Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) }
 }
 
 /// `body` with every phi it can lower replaced by copies.
@@ -285,7 +285,7 @@ pub fn eliminated_priced(
     let widths = _widths(body);
     // Renaming a phi whose copies the predecessor could hold saves nothing
     // (only an edge block); an x87 value has no copy to save.
-    let floating = crate::backend::ssaspill::floating(body);
+    let floating = crate::backend::regclass::floating(body);
 
     // `copies` copies on the edge from `from` to `into` cost less than in
     // `from`.
@@ -1443,7 +1443,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) })
     }
 
     fn block(

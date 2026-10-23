@@ -143,3 +143,70 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
         if source.parent == corpus:
             machines.setdefault(source.name, set()).add(machine)
     assert machines == {"flat.bas": {"-m16", "-m32"}, "far.bas": {"-m16"}, "huge.bas": {"-m16"}, "frames.bas": {"-m16"}, "vb.bas": {"-m16"}, "ms_runtime.bas": {"-m16"}}, machines
+
+
+def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
+    """origin/feat/parity moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
+    binary.chmod(0o755)
+    moved = "f" * 40
+    real_run = q.subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return real_run(["echo", moved], *args, **kwargs)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(q.subprocess, "run", run)
+    monkeypatch.setattr(q, "sweep", lambda *a, **k: [])
+    monkeypatch.setattr(q, "sweep_extra", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    q.main()
+    header = capsys.readouterr().out.splitlines()[0]
+    assert "aaaaaaaaa" in header and "fffffffff" not in header
+
+
+def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
+    binary = tmp_path / "llrm-c"
+    binary.write_text("#!/bin/sh\necho usage: llrm-c [-h] source\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
+    try:
+        q.main()
+    except SystemExit as why:
+        assert "no build stamp" in str(why)
+    else:
+        raise AssertionError("an unstamped binary was swept")
+
+
+def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
+    """An interrupt handler with Borland's nine register parameters was refused from 10-19 to 10-23 (`a fact of no parameter`): no sweep compiled a C file of that kind."""
+    jobs = q.extra_jobs()
+    callconv = [job for job in jobs if job[0] == "llrm-c"]
+    assert {job[1].name for job in callconv} >= {"cfcallee.c", "cncallee.c"}
+    assert {job[2:] for job in callconv} == {("-m16", "-O1"), ("-m16", "-O2")}
+
+
+def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
+    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    fixtures = tmp_path / "tests/fixtures/callconv/c"
+    fixtures.mkdir(parents=True)
+    (fixtures / "harness.c").write_text('#include <stdio.h>\nint main(void) { return 0; }\n')
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    for tool in ("llrm-c", "llrm-qb", "llrm-nib"):
+        (bins / tool).write_text('#!/bin/sh\ncase "$*" in *"-I /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
+        (bins / tool).chmod(0o755)
+    failed = q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
+    assert "harness.c" not in {program for program, _, _ in failed}, failed
+
+
+def test_a_failure_is_keyed_by_its_error_not_by_a_warning_printed_after_it():
+    """The 22:00 sweep keyed `Unable to open 'stdio.h'` as `Warning! WN: No prototype found for function 'printf'`: the last line was a warning."""
+    text = "wccq failed:\nx.c(3): Error! E1055: Unable to open 'stdio.h'\nx.c(36): Warning! W131: No prototype found for function 'printf'\n"
+    assert q.kind(text) == "x.c(...): Error! EN: Unable to open 'stdio.h'"

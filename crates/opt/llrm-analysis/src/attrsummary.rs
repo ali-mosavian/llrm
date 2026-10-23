@@ -57,7 +57,7 @@ pub fn summaries(
     let mut out = IndexMap::default();
     for (id, global, function) in module.functions() {
         // A declaration is not described: a call to one is answered from its
-        // own attributes (`calls_annotated`).
+        // own attributes (`calls_by_attributes`).
         let Some(name) = global.name.as_ref().filter(|_| !function.is_declaration()) else { continue };
         let me = MemoryEffects::of_attrs(&function.attrs);
         let elsewhere = [IRMemLocation::Other, IRMemLocation::InaccessibleMem, IRMemLocation::ErrnoMem]

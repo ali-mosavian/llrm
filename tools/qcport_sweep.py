@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+import stamp  # noqa: E402
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 
@@ -39,7 +40,8 @@ def kind(message: str) -> str:
         if "panicked at" in line and i + 1 < len(lines):  # the message under a panic, not rustc's trailing backtrace note
             where = re.sub(r"^.*panicked at ", "", line).rstrip(":")
             return re.sub(r"\d+", "N", f"panic {where}: {lines[i + 1].strip()}")[:160]
-    last = next((line for line in reversed(lines) if line.strip() and not line.startswith("note: run with")), "no message")
+    last = next((line for line in reversed(lines) if "Error!" in line), None)  # a compiler's warnings follow its errors
+    last = last or next((line for line in reversed(lines) if line.strip() and not line.startswith("note: run with")), "no message")
     last = re.sub(r"@?\w+@\d+:?", "F", last)
     last = re.sub(r"\bL\d+_\d+\b", "L", last)
     last = re.sub(r"\(\s*[\d, ]+\)", "(...)", last)
@@ -98,7 +100,9 @@ def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
     found = {tomllib.loads(path.read_text())["mode"] for path in (root / "crates/target").glob("*/src/machines/datalayout.toml")}
     machines = [f"-m{mode}" for mode in sorted(found & set(FRONT_END_MODES))]
     benches = [(tool, root / f"bench/bintree/bintree.{ext}", machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in machines for level in LEVELS]
-    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")]
+    # Borland's call-boundary fixtures (C): an `interrupt` handler with nine register parameters was refused for four days (#2936) because nothing compiled it outside a lib test.
+    callconv = [("llrm-c", source, "-m16", level) for source in sorted((root / "tests/fixtures/callconv/c").glob("*.c")) for level in ("-O1", "-O2")]
+    return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")] + callconv
 
 
 # A refusal the compiler states as policy: a program that needs a second address space is not compiled for the flat target.
@@ -114,13 +118,14 @@ def program_flags(source: Path) -> list[str]:
     return run_tests.compiler_arguments(source) if source.suffix == ".bas" and "tests/run" in source.as_posix() else []
 
 
-def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT) -> list[tuple[str, str, str]]:
+def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT, include: Path | None = None) -> list[tuple[str, str, str]]:
     """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on."""
     env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
 
     def one(job):
         tool, source, machine, level = job
-        done = subprocess.run([str(bins / tool), str(source), *program_flags(source), level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
+        headers = ["-I", str(include)] if include and source.suffix == ".c" else []
+        done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
         if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
             return None
         return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
@@ -214,13 +219,14 @@ def main() -> int:
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
-    head = subprocess.run(["git", "rev-parse", "origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs)
+    # The binary names what was swept: origin/feat/parity moves during a run, and a report must not name a sha it did not test.
+    head, dirty = stamp.read(compiler)
+    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
     modules = len(list((qcport / "render").glob("*.c"))) + sum(len(list((qcport / p).glob("*.c"))) for p in MODULES if p != "render")
-    print(f"QCport sweep of feat/parity {head[:9]}: {modules} modules x {len(LEVELS)} levels + {len(extra_jobs())} front-end compiles ({len([s for s in qb_flat_programs() if m16_only(s)])} m16-only programs not compiled at -m32), {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
+    print(f"QCport sweep of {head[:9]}{"+dirty" if dirty else ""}: {modules} modules x {len(LEVELS)} levels + {len(extra_jobs())} front-end compiles ({len([s for s in qb_flat_programs() if m16_only(s)])} m16-only programs not compiled at -m32), {len(failures)} failed compiles, {len(groups)} kinds, {len(fresh)} new")
     for why, where in groups.items():
         entry = next((e for e in known if e["match"] in why), None)
         print(f"  {'KNOWN #' + str(entry['issue']) if entry else 'NEW'}: {why} -- {', '.join(sorted({f'{m} {l}' for m, l in where})[:8])}")

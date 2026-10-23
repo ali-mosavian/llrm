@@ -80,7 +80,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("fold@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
@@ -113,12 +113,25 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
         &[
+            "cmpsub@1",
+            "processimpdefs@2",
             "optimizephis@1",
+            "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
+            "callframe@5",
+            "fixupbw@14",
             "machinecse@4",
             "machinesink@4",
+            "combiner@4",
+            "liverangeshrink@4",
             "floatalloc@8",
+            "pushfold@6",
             "coalesce@10",
+            "latecleanup@13",
+            "leaopt@5",
             "jumps@17",
+            "copyprop@18",
             "allocate@11",
             "unknown@1",
         ],
@@ -288,7 +301,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
     };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
-    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
 }
 
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt

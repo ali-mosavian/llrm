@@ -6,7 +6,7 @@ architecture-order: 520
 
 Base: phi-placement merged with feat/parity (9dc9d6d0c, #2954). 820 C/QB/Nib objects, m16/m32, O2/Os. 52 differ.
 
--Os bytes: none larger (15 smaller, -177 B). Operand-free defs are not shared (DEVIATE E3), which removed the earlier -Os rows and grep.
+-Os bytes: none larger (15 smaller, -177 B). Operand-free defs are not shared (DEVIATE CSE2), which removed the earlier -Os rows and grep.
 
 Method `est`: executed instructions from llrm's own cost estimate (`--dump` cost; heuristic odds, understates hot loops). Method `real`: callgrind on the native m32 run.
 

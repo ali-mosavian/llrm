@@ -250,7 +250,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) })
     }
 
     fn block(

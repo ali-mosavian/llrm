@@ -81,7 +81,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::Loc;
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, IndexMap};
@@ -147,7 +147,16 @@ impl Coalescer {
         pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
         let pins: IndexMap<u32, RegId> =
             pins.into_iter().map(|(value, register)| (value, body.regs().root(register))).collect();
-        let where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        let mut where_of = regclass::classes(body, &BTreeSet::new(), &self.segments, &self.classes);
+        // A value made in another's class (a phi's temporary, in its result's)
+        // has that one where its own uses give it none.
+        for (value, like) in body.class_like.iter() {
+            if !where_of.contains_key(value)
+                && let Some(class) = where_of.get(like).cloned()
+            {
+                where_of.insert(*value, class);
+            }
+        }
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
         let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
         for block in &body.blocks {
@@ -393,7 +402,7 @@ pub fn _interference_among(
                 index = first as i64 - 1;
                 continue;
             }
-            let copy = _copy(one);
+            let copy = one.copy_of();
             let mut equal = None;
             if let Some(copy) = copy {
                 if one.defines == [copy.0] && one.uses == [copy.1] {
@@ -615,21 +624,6 @@ pub fn _merged(
     Interval { value: one.value, segments: out, weight }
 }
 
-/// The (written, read) pair this instruction is a plain move of.
-pub fn _copy(one: &Insn) -> Option<(u32, u32)> {
-    let what = one.what.as_ref()?;
-    if what.op != Operation::Move {
-        return None;
-    }
-    if what.dests.len() != 1 || what.sources.len() != 1 {
-        return None;
-    }
-    match (&what.dests[0], &what.sources[0]) {
-        (Loc::Held(into), Loc::Held(out_of)) => Some((into.value, out_of.value)),
-        _ => None,
-    }
-}
-
 /// One instruction with every joined value naming its survivor.
 pub(crate) fn _renamed(
     one: &Arc<Insn>,
@@ -648,7 +642,7 @@ mod tests {
 
     use super::{_interference, _merged};
     use crate::analysis::intervals;
-    use crate::backend::{allocate, cpu::ProfileOrName, select, target};
+    use crate::backend::{allocate, select};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -659,7 +653,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -703,7 +697,7 @@ mod tests {
         at: i64,
         to: i64,
     ) -> Insn {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) };
         Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![])
     }
 
@@ -728,21 +722,20 @@ mod tests {
         Insn { group: Some(group), ..one }
     }
 
+    /// The assignment the pins give: nothing here needs an allocator.
     fn allocated(
-        body: &LirBody,
+        _body: &LirBody,
         pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
-        allocate::allocate(
-            body,
-            Some(pins),
-            None,
-            None,
-            None,
-            ProfileOrName::Name("386"),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("allocates")
+        let mut values = pins.clone();
+        values.insert(3, RegId::ES);
+        allocate::Assignment {
+            r#where: values,
+            spilled: Default::default(),
+            cost: 0.0,
+            optimal: false,
+            why: "pins".to_owned(),
+        }
     }
 
     /// HARR's hoisted selector copy became unencodable mov es,es across a
@@ -750,9 +743,12 @@ mod tests {
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, RegId::ES)]);
-        let result =
-            allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::m16())
-                .expect("applies");
+        let result = crate::backend::rewriter::rewrite(
+            &body,
+            &allocated(&body, &body.pins),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("applies");
         let insns = result.insns();
         assert_eq!(insns.len(), 1);
         assert_eq!(insns[0].covers, body.insns()[0].covers);

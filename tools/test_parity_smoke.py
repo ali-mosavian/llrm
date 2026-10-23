@@ -558,3 +558,34 @@ def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
     assert why and "new.rs" in why[0], why
     assert sq.subset_refusals(head, set(head), fixes=False) == []
     assert sq.new_names({"ratchet:docs"}, merged) == []  # a head cached before the lines were named covers them
+
+
+def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_without():
+    """`cargo test -p llrm-c --lib` never ran the call-boundary and compile-listing tests (feature `toolchain`): an interrupt handler was refused from 10-19 to 10-23 and 16 listings went red unseen."""
+    assert ps.lib_command("llrm-c") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-c", "--lib", "--features", "toolchain"]
+    assert ps.lib_command("llrm-core") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-core", "--lib"]
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command)
+        return Done()
+
+    ps.dependants_lib_failures({"llrm-c", "llrm-core"}, run=run)
+    assert any("--features" in command and "llrm-c" in command for command in ran)
+    assert not any("--features" in command and "llrm-core" in command for command in ran)
+
+
+def test_a_selectiondag_change_runs_the_selectiondag_registry():
+    """#3899 landed with tests/selectiondag_registry.rs red (SD403 had no row): the target read no crate, was in neither SCANNERS nor NIGHTLY_ONLY, so no selection
+    of a PR's targets ever named it."""
+    mapping = ps.integration_map()
+    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs"]
+    packages, _ = ps.workspace_graph()
+    chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
+    assert "selectiondag_registry" in chosen, chosen

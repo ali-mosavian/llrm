@@ -117,6 +117,9 @@ struct Range {
     start: i64,
     end: i64,
     start_ptr: Operand,
+    /// The alignment of the access at `start_ptr`: the memset made keeps it
+    /// (`MemsetRange::Alignment`).
+    align: Option<u64>,
     stores: Vec<(InstId, bool)>,
 }
 
@@ -154,13 +157,14 @@ fn add_range(
     start: i64,
     size: i64,
     ptr: Operand,
+    align: Option<u64>,
     inst: (InstId, bool),
 ) {
     let end = start + size;
     let at = ranges.partition_point(|one| one.end < start);
     // Nothing to merge with: a new range.
     if at == ranges.len() || end < ranges[at].start {
-        ranges.insert(at, Range { start, end, start_ptr: ptr, stores: vec![inst] });
+        ranges.insert(at, Range { start, end, start_ptr: ptr, align, stores: vec![inst] });
         return;
     }
     ranges[at].stores.push(inst);
@@ -171,6 +175,7 @@ fn add_range(
     if start < ranges[at].start {
         ranges[at].start = start;
         ranges[at].start_ptr = ptr;
+        ranges[at].align = align;
     }
     if end > ranges[at].end {
         ranges[at].end = end;
@@ -208,6 +213,25 @@ fn simple_store(
     Some((op.operands[0], op.operands[1]))
 }
 
+/// The alignment a store or memset states of its address, a store without one
+/// the type's (`StoreInst::getAlign`).
+fn alignment(
+    unit: &Unit,
+    inst: InstId,
+) -> Option<u64> {
+    let op = unit.function.instruction(inst);
+    match &op.opcode {
+        Opcode::Store { align, .. } => {
+            align.or_else(|| Some(unit.layout.align(&unit.context.types, unit.operand_type(op.operands[0])?)))
+        }
+        Opcode::Call(info) => info.argument_attrs.first()?.iter().find_map(|attr| match attr {
+            llrm_mir::opcode::Attribute::Int(name, bytes) if name == "align" => Some(*bytes),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
 /// A `llvm.memset` of a constant length that is not volatile: its destination,
 /// byte and length.
 fn constant_memset(
@@ -243,6 +267,7 @@ fn create_memset(
     function: &mut Function,
     (space, width): (u32, u32),
     (pointer, byte, length): (Operand, Operand, i64),
+    align: Option<u64>,
     before: InstId,
 ) -> InstId {
     let (callee, function_type) = _memset(context, declared, space, width);
@@ -255,7 +280,12 @@ fn create_memset(
         function_type,
         calling_convention: 0,
         return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 4],
+        argument_attrs: vec![
+            align.map(|bytes| llrm_mir::opcode::Attribute::Int("align".to_owned(), bytes)).into_iter().collect(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ],
         attrs: Vec::new(),
         tail: Default::default(),
     };
@@ -273,7 +303,7 @@ fn create_memset(
 /// What `try_merging_into_memset` decided: the memsets to make, in range order,
 /// and the instruction they go before.
 struct Plan {
-    memsets: Vec<(Operand, i64, (u32, u32))>,
+    memsets: Vec<(Operand, i64, (u32, u32), Option<u64>)>,
     stores: Vec<Vec<InstId>>,
     before: InstId,
 }
@@ -333,14 +363,14 @@ fn try_merging_into_memset(
             if next.root != base.root {
                 break at;
             }
-            add_range(&mut ranges, next.disp - base.disp, size, pointer, (at, is_store));
+            add_range(&mut ranges, next.disp - base.disp, size, pointer, alignment(&unit, at), (at, is_store));
             at = function.next_in_block(at)?;
         };
         // Only the start: a single store with nothing to merge.
         if ranges.is_empty() {
             return None;
         }
-        add_range(&mut ranges, 0, start_size, start_ptr, start_inst);
+        add_range(&mut ranges, 0, start_size, start_ptr, alignment(&unit, start), start_inst);
         let mut plan = Plan { memsets: Vec::new(), stores: Vec::new(), before: stopped };
         for range in &ranges {
             if range.stores.len() == 1 || !profitable(range, widest) {
@@ -348,15 +378,15 @@ fn try_merging_into_memset(
             }
             let space = unit.space(range.start_ptr).unwrap_or(0);
             let width = layout.pointer(space).index_bits;
-            plan.memsets.push((range.start_ptr, range.end - range.start, (space, width)));
+            plan.memsets.push((range.start_ptr, range.end - range.start, (space, width), range.align));
             plan.stores.push(range.stores.iter().map(|(inst, _)| *inst).collect());
         }
         plan
     };
     let mut last = None;
-    for ((pointer, length, space), stores) in plan.memsets.into_iter().zip(plan.stores) {
+    for ((pointer, length, space, align), stores) in plan.memsets.into_iter().zip(plan.stores) {
         let operand = byte_operand(context, byte);
-        last = Some(create_memset(context, declared, function, space, (pointer, operand, length), plan.before));
+        last = Some(create_memset(context, declared, function, space, (pointer, operand, length), align, plan.before));
         for store in stores {
             function.erase(store).expect("a store or call has no result to use");
         }

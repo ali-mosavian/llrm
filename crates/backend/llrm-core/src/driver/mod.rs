@@ -82,6 +82,8 @@ pub struct Options {
     /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
     /// attribute), whichever frontend made them.
     pub no_inline: Vec<String>,
+    /// `--isel=`: the instruction selector.
+    pub isel: crate::backend::shadow::Selector,
 }
 
 impl Options {
@@ -108,6 +110,7 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
+            isel: Default::default(),
         }
     }
 
@@ -234,6 +237,7 @@ pub fn compiled(
                 ProfileOrName::Profile(options.cpu()?),
                 &segments,
                 options.selection,
+                options.isel,
                 &*options.arch,
             )
         })?;
@@ -314,6 +318,7 @@ pub fn compiled_module(
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
+            options.isel,
             &*options.arch,
         )
     })?;
@@ -453,6 +458,11 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    if options.isel == crate::backend::shadow::Selector::Dag {
+        timed("mir memset patterns", || {
+            program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
+        })?;
+    }
     timed("mir bit counts", || {
         program
             .modules
@@ -495,13 +505,13 @@ pub fn optimized(
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let profile = options.cpu()?;
         timed("mir selects", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(
-                    |module| crate::backend::selects::lowered(module, &*tti, &|ty| layout.expands_for("select", ty)),
-                )
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::selects::priced(module, &*tti, &|ty| layout.expands_for("select", ty), &|name| {
+                    profile.cost(name).ok()
+                })
+            })
         })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
@@ -598,7 +608,7 @@ pub fn statement_table(
         code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
     code.push(masm::InlinePart::Bytes(vec![0; word]));
-    let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
+    let what = Semantics { name: Some("statement-table".into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let mut body = lir::LirBody::new(
         "$QB$STAT",

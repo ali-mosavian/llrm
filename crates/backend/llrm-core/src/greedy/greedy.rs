@@ -1287,7 +1287,7 @@ mod tests {
             &self,
             instr: &Insn,
         ) -> Option<(u32, u32)> {
-            crate::backend::coalesce::_copy(instr)
+            instr.copy_of()
         }
 
         fn pinned(

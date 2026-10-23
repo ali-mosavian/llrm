@@ -245,6 +245,13 @@ mod tests {
             // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
             // to flag the constant that replaces it.
             "constantfolding.rs",
+            // LowerMemIntrinsics.cpp makes the pattern loop's GEP `inbounds`;
+            // `memsetpattern.rs` sets the flag on it and reads none.
+            "memsetpattern.rs",
+            // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
+            // `inbounds` into the node's SDNodeFlags (`visitBinary`,
+            // `visitGetElementPtr`); the DAG grants no promise from them.
+            "builder.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).

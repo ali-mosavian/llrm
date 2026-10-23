@@ -387,7 +387,7 @@ b0:
     assert!(after.contains("ret i16 9"), "{after}");
 }
 
-/// SROA over `n` split-and-promoted structs, best of three, in milliseconds.
+/// SROA over `n` split-and-promoted structs: the least work of three runs.
 fn split_all(n: usize) -> f64 {
     let mut body = String::from("define i32 @f(i32 %a) {\nb0:\n");
     for i in 0..n {
@@ -399,9 +399,7 @@ fn split_all(n: usize) -> f64 {
     (0..3)
         .map(|_| {
             let mut m = module(&body);
-            let start = std::time::Instant::now();
-            managed(&mut m, Sroa);
-            start.elapsed().as_secs_f64() * 1000.0
+            llrm_support::debug::work_of(|| managed(&mut m, Sroa)).1 as f64
         })
         .fold(f64::MAX, f64::min)
 }
@@ -413,7 +411,7 @@ fn split_all(n: usize) -> f64 {
 #[test]
 fn test_four_times_the_allocas_take_about_four_times_as_long() {
     let (small, large) = (split_all(1000), split_all(4000));
-    assert!(large / small < 6.0, "{small:.1} ms for 1000, {large:.1} ms for 4000: {:.2}x", large / small);
+    assert!(large / small < 6.0, "{small:.0} work for 1000, {large:.0} for 4000: {:.2}x", large / small);
 }
 
 /// A load at a variable offset escapes the pointer read-only, so the alloca
@@ -596,4 +594,73 @@ b0:
     let (plain, declared) = (sroa(&body(false)), sroa(&body(true)));
     assert!(!declared.contains("alloca"), "{declared}");
     assert_eq!(code(&declared).trim_end(), code(&plain).trim_end(), "{declared}\n----\n{plain}");
+}
+
+/// QCport `_ent_lights_selftest@3`: the local is read and written through an
+/// `addrspacecast` (the far-data view of the stack). The pin's slice builder
+/// follows the cast (`visitAddrSpaceCastInst`, SROA.cpp#L1091); ours treated
+/// it as a use it could not follow, so 26 stores and 92 loads stayed.
+#[test]
+fn test_an_alloca_read_through_an_addrspacecast_is_split_and_promoted() {
+    let after = sroa(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  %s = alloca [8 x i8]
+  %p1 = getelementptr inbounds nuw i8, ptr %s, i16 4
+  store i16 %a, ptr %s
+  store i16 %b, ptr %p1
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  %q1 = getelementptr inbounds nuw i8, ptr addrspace(1) %c, i16 4
+  %x = load i16, ptr addrspace(1) %c
+  %y = load i16, ptr addrspace(1) %q1
+  %r = add i16 %x, %y
+  ret i16 %r
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("add i16 %a, %b"), "{after}");
+}
+
+/// The same with a store through the cast and a load through the alloca.
+#[test]
+fn test_a_store_through_an_addrspacecast_reaches_a_load_of_the_alloca() {
+    let after = sroa(
+        "define i16 @f(i16 %a) {
+b0:
+  %s = alloca i16
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  store i16 %a, ptr addrspace(1) %c
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("ret i16 %a"), "{after}");
+}
+
+/// Seeing through an `addrspacecast` makes an alloca splittable by a memcpy
+/// that takes the cast pointer: the rewritten call still takes the pointer
+/// type it declares (`getNewAllocaSlicePtr`'s
+/// `CreatePointerBitCastOrAddrSpaceCast`, SROA.cpp#L2042). The first version
+/// passed the new alloca's `ptr` where the callee wants `ptr addrspace(1)`:
+/// LLRM_VERIFY refused nib-examples-entries.
+#[test]
+fn test_a_memcpy_through_an_addrspacecast_keeps_its_pointer_type() {
+    let after = sroa(
+        "declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)
+
+define i16 @f(ptr addrspace(1) %src) {
+b0:
+  %s = alloca [8 x i8]
+  %c = addrspacecast ptr %s to ptr addrspace(1)
+  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %c, ptr addrspace(1) %src, i16 8, i1 false)
+  %v = load i16, ptr %s
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("= addrspacecast ptr %s.sroa.1 to ptr addrspace(1)"), "{after}");
+    assert!(!after.contains("memcpy.p1.p1.i16(ptr %"), "{after}");
 }

@@ -120,7 +120,7 @@ fn _lir_body(
                 notes.push(format!("clobbers {}", parts.join(",")));
             }
             let annotation = if notes.is_empty() { String::new() } else { format!("  ; {}", notes.join("; ")) };
-            let name = what.name.clone().unwrap_or_else(|| "None".to_owned());
+            let name = what.name.as_deref().map_or_else(|| "None".to_owned(), str::to_owned);
             let line = format!("      {}  {said}{name} {sources}{annotation}", hex6(one.at));
             let _ = writeln!(out, "{}", line.trim_end());
         }

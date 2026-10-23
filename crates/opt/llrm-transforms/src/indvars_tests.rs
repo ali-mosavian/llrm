@@ -91,14 +91,61 @@ fn a_counter_extended_to_the_index_width_is_that_wide() {
     assert!(after.contains("ult i32"), "{after}");
 }
 
+/// shellsort's gap loops once the gaps are unrolled: the inner counter steps
+/// down by a gap from `i`, its test is `narrow < gap`, and it is read through
+/// `zext`. The extension of the counter's recurrence is distributed when
+/// `isKnownOnEveryIteration` holds; that was a stub that said no, so the 16-bit
+/// counter stayed (`movzx; cmp dx,15` a trip in shellsort -O3 m32).
+const STEPPING_DOWN: &str = "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %buf = alloca [128 x i8]
+  br label %outer
+
+outer:
+  %iv = phi i32 [ 16, %b0 ], [ %iv.next, %outer.latch ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc.out, %outer.latch ]
+  %start = trunc nuw nsw i32 %iv to i16
+  br label %inner
+
+inner:
+  %m = phi i16 [ %start, %outer ], [ %narrow, %inner ]
+  %sum = phi i32 [ %acc, %outer ], [ %sum.next, %inner ]
+  %narrow = sub nuw i16 %m, 16
+  %idx = zext i16 %narrow to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %idx
+  store i8 1, ptr %p
+  %sum.next = add i32 %sum, %idx
+  %done = icmp ult i16 %narrow, 16
+  br i1 %done, label %outer.latch, label %inner
+
+outer.latch:
+  %acc.out = phi i32 [ %sum.next, %inner ]
+  %iv.next = add nuw nsw i32 %iv, 1
+  %ec = icmp ne i32 %iv.next, 64
+  br i1 %ec, label %outer, label %exit
+
+exit:
+  ret i32 %acc.out
+}
+";
+
+#[test]
+fn a_counter_stepping_down_by_a_gap_and_read_through_zext_is_widened() {
+    let (changed, after) = widening(STEPPING_DOWN);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32") && !after.contains("icmp ult i16"), "{after}");
+}
+
 #[test]
 fn a_counter_extended_past_the_index_width_stays() {
     // 16-bit addresses (a segment's offset): `zext` to 32 is no index.
     let text = clearing("e-p:16:16-n8:16:32")
         .replace("i32 %w", "i16 %w16")
         .replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// `clearing` for `short i`: signed, tested by `slt`, read through `sext`.
@@ -142,8 +189,10 @@ fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() 
 #[test]
 fn an_unsigned_counter_read_through_sext_is_not_widened() {
     let text = clearing("e-p:32:32-n8:16:32").replace("zext i16 %i to i32", "sext i16 %i to i32");
-    let (changed, after) = widening(&text);
-    assert!(!changed, "{after}");
+    // The pin stamps `nuw` on the step (its context inference) and widens
+    // nothing.
+    let (_, after) = widening(&text);
+    assert!(after.contains("icmp ult i16") && !after.contains("phi i32"), "{after}");
 }
 
 /// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the
@@ -699,7 +748,7 @@ fn counted_loops(loops: usize) -> String {
     for at in 0..loops {
         let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
         text += &format!(
-            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
+            "p{at}:\n  br label %h{at}\n\nh{at}:\n  %i{at} = phi i32 [ 0, %p{at} ], [ %n{at}, %l{at} ]\n  %g{at} = icmp ult i32 %i{at}, %n\n  br i1 %g{at}, label %l{at}, label %x{at}\n\nl{at}:\n  %n{at} = add nuw nsw i32 %i{at}, 1\n  br label %h{at}\n\nx{at}:\n  br label %{next}\n\n"
         );
     }
     text + "done:\n  ret i32 0\n}\n"

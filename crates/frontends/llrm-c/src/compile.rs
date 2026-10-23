@@ -161,8 +161,10 @@ pub fn selected_checking(
     wrapv: bool,
     entry_requests: bool,
 ) -> Result<masm::Module, CompileError> {
+    let mut library = Vec::new();
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let (unit, profile) = prepared(text, codegen, wrapv, entry_requests)?;
+        library = library_routines(codegen, &profile);
         let program = translate::program(&unit, module, codegen.arch.calling(), &profile)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
@@ -170,11 +172,39 @@ pub fn selected_checking(
         Ok(llrm_core::hir::model::Program { stack_check, ..program })
     })?;
     let mut options = codegen.clone();
+    options.pipeline.library = library;
     if let Some(dump) = dump {
         fs::create_dir_all(dump)?;
         options.dump = Some(dump.to_path_buf());
     }
     Ok(llrm_core::driver::compiled(&program, &options)?.pop().expect("one module"))
+}
+
+/// The library routines the program is linked with under this compile's ABI
+/// (the pin's `TargetLibraryInfo`, which reads them from the triple): `strlen`
+/// where the C convention is the System V one of the host's libc, spelled as
+/// the ABI decorates it. DEVIATE D11 (see `pipeline::Options::library`): no
+/// other ABI states it, so no pass forms a call of it there (Open Watcom's
+/// register convention and the 16-bit runtimes are not proven to link it).
+fn library_routines(
+    codegen: &llrm_core::driver::Options,
+    profile: &Profile,
+) -> Vec<llrm_mir::libfunc::Routine> {
+    let calling = codegen.arch.calling();
+    let Some(convention) = calling.named(&profile.cdecl).filter(|one| one.cc.as_deref() == Some("sysv")) else {
+        return Vec::new();
+    };
+    let (Some(number), Some(pattern)) = (
+        llrm_target::calling::Calling::number_of(convention.cc.as_deref()),
+        convention.symbol.get(codegen.object_format),
+    ) else {
+        return Vec::new();
+    };
+    vec![llrm_mir::libfunc::Routine {
+        standard: "strlen",
+        symbol: pattern.replace('*', "strlen"),
+        calling_convention: number,
+    }]
 }
 
 /// `bytes.fromhex(raw)`.
@@ -385,6 +415,41 @@ pub fn recorded(
     )
 }
 
+/// The Open Watcom front end of each CPU, carried in the binary.
+const WCCQ: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/wccq.rs"));
+
+/// The headers the front end is forced to include, by file name.
+const HEADERS: &[(&str, &str)] = &[
+    ("borland.h", include_str!("borland.h")),
+    ("flat.h", include_str!("flat.h")),
+    ("watcom.h", include_str!("watcom.h")),
+    ("owkeywords.h", include_str!("owkeywords.h")),
+];
+
+/// `run`, again while the image just written is held open for writing by a
+/// forked child of another thread (ETXTBSY, until that child execs).
+fn exec_busy(run: impl Fn() -> std::io::Result<std::process::Output>) -> std::io::Result<std::process::Output> {
+    let mut tries = 0;
+    loop {
+        match run() {
+            Err(error) if error.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
+fn write_executable(
+    path: &Path,
+    image: &[u8],
+) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, image)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+}
+
 /// `source` recorded by the front end of `profile`'s tree, asked as it says.
 pub fn recorded_for(
     source: &Path,
@@ -393,11 +458,16 @@ pub fn recorded_for(
     watcom: &[&str],
     profile: &Profile,
 ) -> Result<String, hir::Unsupported> {
-    let root = Path::new(env!("LLRM_ROOT"));
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
-    let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
+    let image = WCCQ.iter().find(|(cpu, _)| *cpu == profile.cpu).map(|(_, image)| *image).ok_or_else(unbuilt)?;
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
+    for (name, text) in HEADERS {
+        fs::write(scratch.path().join(name), text).map_err(|error| failed(error.to_string()))?;
+    }
+    let wccq = scratch.path().join("wccq");
+    write_executable(&wccq, image).map_err(|error| failed(error.to_string()))?;
+    let header = Path::new(&profile.header).file_name().and_then(|name| name.to_str()).unwrap_or_default();
     // One forced include (a second `-fi=` replaces the first): what GCC
     // predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`,
     // `__BYTE_ORDER__`), as the target's sizes make them, and then the target's
@@ -406,7 +476,7 @@ pub fn recorded_for(
     let text = format!(
         "{}#include \"{}\"\n",
         crate::predefined::header(profile.cpu == "386", profile.long_double_bytes),
-        root.join(&profile.header).display()
+        scratch.path().join(header).display()
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());
@@ -423,19 +493,22 @@ pub fn recorded_for(
         .collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
+    let searched: Vec<String> =
+        includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display())).collect();
     // In the scratch directory, where wccq also leaves its .err file.
-    let done = std::process::Command::new(&wccq)
-        .args(flags)
-        .args(debug.then_some("-d2"))
-        .args(watcom)
-        .args(searched)
-        .arg(format!("-fo={}/unit.obj", scratch.path().display()))
-        .arg(absolute(source))
-        .env("QBOPT_CG_STREAM", &out)
-        .current_dir(scratch.path())
-        .output()
-        .map_err(|error| failed(error.to_string()))?;
+    let run = || {
+        std::process::Command::new(&wccq)
+            .args(&flags)
+            .args(debug.then_some("-d2"))
+            .args(&watcom)
+            .args(&searched)
+            .arg(format!("-fo={}/unit.obj", scratch.path().display()))
+            .arg(absolute(source))
+            .env("QBOPT_CG_STREAM", &out)
+            .current_dir(scratch.path())
+            .output()
+    };
+    let done = exec_busy(run).map_err(|error| failed(error.to_string()))?;
     if !done.status.success() || !out.exists() {
         let text = String::from_utf8_lossy(&done.stdout).into_owned() + &String::from_utf8_lossy(&done.stderr);
         return Err(failed(text));
@@ -670,6 +743,24 @@ mod tests {
     /// `stack.toml` names, and the C start-up the tests link defines both:
     /// a description naming a word start-up never fills would compare with
     /// zero. The default build checks nothing.
+    /// Embedding wccq made 13 parallel compiles fail with "Text file busy": a
+    /// thread forked while another held the image open for writing. The run is
+    /// asked again.
+    #[test]
+    fn test_a_run_refused_as_text_file_busy_is_asked_again() {
+        let calls = std::cell::Cell::new(0);
+        let run = || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err(std::io::Error::from_raw_os_error(26))
+            } else {
+                std::process::Command::new("true").output()
+            }
+        };
+        assert!(super::exec_busy(run).unwrap().status.success());
+        assert_eq!(calls.get(), 3);
+    }
+
     #[test]
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));

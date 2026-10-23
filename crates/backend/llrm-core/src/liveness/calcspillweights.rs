@@ -448,7 +448,7 @@ mod tests {
             &self,
             instr: &Insn,
         ) -> Option<(u32, u32)> {
-            crate::backend::coalesce::_copy(instr)
+            instr.copy_of()
         }
 
         fn pinned(
@@ -540,7 +540,7 @@ mod tests {
     fn test_a_copy_hints_each_end_to_the_other() {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![2], vec![1]))).clone();
         copy.what = Some(crate::model::ir::Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 2, width: 4 })],
             sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)

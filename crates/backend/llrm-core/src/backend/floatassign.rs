@@ -134,7 +134,6 @@ use crate::backend::frame::Frame;
 use crate::backend::overlap;
 use crate::backend::parcopy;
 use crate::backend::select;
-use crate::backend::spiller::_next_value;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -179,7 +178,7 @@ fn _integer_loads(
                         && let Some((name, _)) = constpool::x87_constant(value as f64)
                     {
                         let mut made = (*one).clone();
-                        made.what = Some(Semantics { name: Some(name.to_owned()), sources: Vec::new(), ..what });
+                        made.what = Some(Semantics { name: Some(name.into()), sources: Vec::new(), ..what });
                         insns.push(Arc::new(made));
                         changed = true;
                         continue;
@@ -188,8 +187,7 @@ fn _integer_loads(
                         let value = if *width == 2 { *value as i16 as i32 } else { *value as i32 };
                         let cell = pool.cell(constpool::narrowest(f64::from(value)));
                         let mut made = (*one).clone();
-                        made.what =
-                            Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
+                        made.what = Some(Semantics { name: Some("fld".into()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
                         changed = true;
                         continue;
@@ -377,7 +375,7 @@ fn _may_write(
         }
         let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
         if one.call.as_ref().is_some_and(|call| {
-            call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))
+            call.writes() && !(framed && call.spares(crate::backend::bodyfacts::_frame_disp(cell), cell.width))
         }) {
             return true;
         }
@@ -491,7 +489,7 @@ pub(crate) fn _equivalent_loads(
     sequence: &[Arc<Insn>],
     live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> IndexMap<u32, u32> {
-    let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
+    let mut available: IndexMap<(Option<std::sync::Arc<str>>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
         // A volatile load is observable and may be backed by changing device
@@ -1492,7 +1490,7 @@ fn _rereadable_across(
     // As the integer spiller asks it: in a sealed body only the frame's own
     // stores reach an incoming argument's cell.
     let written =
-        |one: &Insn| crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
+        |one: &Insn| crate::backend::bodyfacts::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
     if body.blocks.iter().flat_map(|one| &one.insns).any(|one| !Arc::ptr_eq(one, load) && written(one)) {
         return false;
     }
@@ -1810,7 +1808,7 @@ impl Plan<'_> {
             && select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some()
         {
             Semantics {
-                name: Some(_compare_name(home).to_owned()),
+                name: Some(_compare_name(home).into()),
                 sources: vec![what.sources[0].clone(), cell],
                 ..what.clone()
             }
@@ -2039,7 +2037,7 @@ pub fn assigned(
         written: RefCell::default(),
         shaped: RefCell::default(),
         stepped: RefCell::default(),
-        first_fresh: _next_value(&body),
+        first_fresh: body.next_value(),
     };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
@@ -2189,7 +2187,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
     if !body.insns().iter().any(|one| float_copy(one).is_some()) {
         return body.clone();
     }
-    let mut fresh = _next_value(body);
+    let mut fresh = body.next_value();
     let blocks = body
         .blocks
         .iter()

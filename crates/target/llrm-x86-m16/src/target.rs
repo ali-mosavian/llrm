@@ -155,7 +155,7 @@ impl Machine for Dos {
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
-        Some(std::rc::Rc::new(llrm_x86::lowering::X86))
+        Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
 
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {

@@ -159,7 +159,7 @@ pub(super) fn semantics(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 /// `lir.Insn(at, (at, at), what, (), ())`.
@@ -533,7 +533,7 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    let loaded_id = super::spiller::_next_value(body);
+    let loaded_id = body.next_value();
     let chopped_id = loaded_id + 1;
     let loaded = Held { value: loaded_id, width: 2 };
     let chopped = Held { value: chopped_id, width: 2 };
@@ -618,7 +618,7 @@ pub(super) fn _truncating(
                 let mut made = (**one).clone();
                 let kept = name_is(one.what.as_ref().expect("checked above"), "fistt");
                 made.what = Some(Semantics {
-                    name: Some(if kept { "fist" } else { "fistp" }.to_owned()),
+                    name: Some(if kept { "fist" } else { "fistp" }.into()),
                     ..one.what.clone().expect("checked above")
                 });
                 insns.push(Arc::new(made));

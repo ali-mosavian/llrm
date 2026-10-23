@@ -29,9 +29,10 @@
 //! 2. The private bodies nothing reaches any more, the ones the walk
 //!    ([`crate::walk::Walk`]) inlined into every caller, lose their bodies
 //!    (`bare_the_unreached`). Inlining is the walk's alone.
-//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]):
-//!    a pointer a body only reads is passed as the fields it reads; a far
-//!    pointer every call fills from DGROUP is passed as its offset.
+//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]),
+//!    `globalsra.` ([`crate::globalsra`]): a pointer a body only reads is
+//!    passed as the fields it reads; a far pointer every call fills from DGROUP
+//!    is passed as its offset.
 //! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
 //!    results replaced by it (`llrm_analysis::interprocedural`); the call
 //!    stays.
@@ -135,7 +136,7 @@
 //!
 //! # Needs
 //! [`crate::inline`], [`crate::ipacp`], [`crate::profit`], and
-//! `llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+//! `llrm_analysis`' `Summaries`, `GlobalsAA`,
 //! `interprocedural` and `parameter_ranges`.
 //!
 //! # See also
@@ -147,7 +148,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::aa::ModRefInfo;
 use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
@@ -352,10 +353,10 @@ pub fn managers(
                 one = one.carrying(before);
             }
             one.require::<Summaries>();
+            one.require::<GlobalsModRefAnalysis>();
             // As the first run's: a body sent back through reads what no code
             // outside reaches.
             one.require::<GlobalsAA>();
-            one.require::<Callbacks>();
             one
         })
         .collect()
@@ -682,6 +683,24 @@ pub fn optimized_with<E: From<String>>(
         }
     }
 
+    // An internal variable is split into the pieces its loads read, and one a
+    // body that does not recurse writes before it reads is that body's stack
+    // slot: GlobalOpt's `SRAGlobal` and its localizing branch.
+    for at in 0..count {
+        let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::globalsra::split(module, &program.layout)
+        });
+        // Every body is told changed before the first runs again: the global
+        // analyses see the new variables once, not once per body.
+        edited(&mut modules[at], &ids);
+        if !ids.is_empty() {
+            modules[at].invalidate(&PreservedAnalyses::none());
+        }
+        for id in ids {
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "globalsra.")?;
+        }
+    }
+
     let mut return_round = 0;
 
     // Materialize every newly constant result.
@@ -782,8 +801,11 @@ pub fn optimized_with<E: From<String>>(
     }
     // What its callers pass bounds each parameter of a body only they call:
     // stated as a range, which the body's own proofs then read.
+    // A calling body is solved again only where it, its own parameters or the
+    // module's facts moved since: the rounds share the solves.
+    let mut solves = llrm_analysis::parameter_ranges::Cache::default();
     for round in 0..if ranges { 4 } else { 0 } {
-        let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
+        let stamped = llrm_analysis::parameter_ranges::stamp_with(program, &unexported, &mut solves);
         if stamped.is_empty() {
             break;
         }

@@ -35,6 +35,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod handlemove;
+
 use super::cfg::{Cfg, DomTree};
 use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
@@ -42,6 +44,13 @@ use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet};
+
+// How many `LiveIntervals` this thread has built, for a test that a phase that
+// does not need the intervals builds none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
@@ -66,6 +75,8 @@ pub struct LiveIntervals {
 
 impl LiveIntervals {
     pub fn new(body: &LirBody) -> Self {
+        #[cfg(test)]
+        BUILT.with(|one| one.set(one.get() + 1));
         assert!(body.blocks.iter().all(|block| block.phis.is_empty()), "phis are eliminated before allocation");
         let indexes = SlotIndexes::new(body);
         let cfg = Cfg::of(body);
@@ -106,6 +117,11 @@ impl LiveIntervals {
         }
         for &value in &one.uses {
             self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false });
+        }
+        // An operand flagged undef names the register and reads nothing
+        // (`MachineOperand::isUndef`): it starts and extends no live range.
+        for &value in &one.undefs {
+            self.push_operand(value, Operand { instr, is_def: false, reads_reg: false, early_clobber: false });
         }
     }
 
@@ -1050,6 +1066,38 @@ mod tests {
         uses: &[u32],
     ) -> Arc<Insn> {
         Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    fn undef_reader(
+        defines: &[u32],
+        undefs: &[u32],
+    ) -> Arc<Insn> {
+        let mut one = Insn::new(0, None, None, defines.to_vec(), Vec::new());
+        one.undefs = undefs.to_vec();
+        Arc::new(one)
+    }
+
+    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and
+    /// none is needed: no segment is made for it, where a plain read of a
+    /// value nothing defines stops the calculation ("a unique value"),
+    /// and the values around it keep theirs.
+    #[test]
+    fn test_a_value_read_as_undef_has_no_live_range_and_costs_its_reader_nothing() {
+        let insns = [insn(&[1], &[]), undef_reader(&[2], &[9]), insn(&[], &[1, 2])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        assert!(lis.interval(9).empty(), "an undef read starts no range");
+        assert!(!lis.interval(1).empty() && !lis.interval(2).empty());
+        assert_eq!(lis.operands(9).len(), 1, "the operand is there for the register rewrite to find");
+        assert!(!lis.operands(9)[0].reads_reg);
+    }
+
+    /// A join that renames a value renames the one an operand reads as undef
+    /// too: left alone, the operand would name a value nothing places.
+    #[test]
+    fn test_renaming_a_value_renames_the_undef_reads_of_it() {
+        let one = undef_reader(&[2], &[9]);
+        let renamed = one.renamed(&|value| if value == 9 { 4 } else { value });
+        assert_eq!(renamed.undefs, vec![4]);
     }
 
     /// An instruction put after the last use of `%1` that reads it, without

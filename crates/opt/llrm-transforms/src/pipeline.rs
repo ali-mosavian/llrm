@@ -32,7 +32,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -73,8 +73,8 @@
 //! passes; `hoist`
 //! runs again to lift what a rotated loop (run at least once) may now leave;
 //! `gepoffset` follows it because it would move a constant `gep` out of its
-//! loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
-//! `sink` follows `addresssink`, once the passes that move work up have run.
+//! loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
+//! `sink` follows `cgpaddr`, once the passes that move work up have run.
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
@@ -102,7 +102,7 @@
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
-//! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -116,7 +116,7 @@
 //! unroller.
 //!
 //! # Needs
-//! `Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+//! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 //! up front, and frozen at the end of D so the passes of E read them without
 //! recomputing after each edit.
 //!
@@ -129,7 +129,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -141,7 +141,7 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, deadstore, decide, extload, fixednarrow,
+    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
     loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
     promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
@@ -151,6 +151,14 @@ use crate::{
 /// is -O2.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
+    /// The library routines the compile states the program links (the pin's
+    /// `TargetLibraryInfo`, which it reads from the triple: here the front
+    /// end's profile states them, as the ABI chosen by `-mabi` spells and
+    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// System V convention only, llrm-qb and llrm-nib none, so no other
+    /// compile forms a call of a library routine. Exit: a `Target::library`
+    /// of each target that states its routines. Owner w-6, review 2026-11-30.
+    pub library: Vec<llrm_mir::libfunc::Routine>,
     /// Off at -O0: no pass runs.
     pub optimize: bool,
     pub limits: Limits,
@@ -267,6 +275,7 @@ const ROUNDS: usize = 4;
 impl Default for Options {
     fn default() -> Self {
         Self {
+            library: Vec::new(),
             optimize: true,
             llvm_order: llvm_order_default(),
             rotate_slot: true,
@@ -457,8 +466,8 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" | "addresssink" => self.strength,
+            "lsr" | "canonfreeze" => self.strength && self.lsr,
+            "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -586,6 +595,10 @@ impl FunctionPass for Slot {
 
     fn reads(&self) -> llrm_mir::footprint::Footprint {
         self.inner.reads()
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.inner.wants_sizes()
     }
 
     fn run(
@@ -783,11 +796,12 @@ pub(crate) fn llvm_order(
             list.extend([
                 slot("jumpthreading@668", Box::new(crate::jumpthreading::JumpThreading::from_env())),
                 slot("cvp@669", Box::new(crate::cvp::Cvp)),
+                // JumpTableToSwitchPass, PassBuilderPipelines.cpp#L672.
+                slot("jumptableswitch@672", Box::new(crate::jumptableswitch::JumpTableToSwitch)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L675:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                fold("fold@677"),
                 dead("dead@677"),
                 slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
@@ -834,14 +848,16 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                fold("fold@768"),
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             list.extend([
-                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
+                slot(
+                    "loopidiom@737",
+                    Box::new(crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())),
+                ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default() })),
                 slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
@@ -866,7 +882,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
@@ -898,7 +913,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                fold("fold@837"),
                 dead("dead@837"),
             ]);
             list
@@ -994,7 +1008,7 @@ pub fn recorded(
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
-    manager.require::<Callbacks>();
+    manager.require::<GlobalsModRefAnalysis>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
@@ -1081,7 +1095,10 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
-                rerun(module, analyses, id, &mut again, false).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                // The stage that only retargets loads and stores of globals
+                // keeps GlobalsAA past its bodies, as the walk's runs do.
+                rerun(module, analyses, id, &mut again, stage == "globalsra.")
+                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1109,6 +1126,7 @@ pub fn recorded(
     // summaries it made there.
     manager.freeze::<Summaries>();
     manager.freeze::<GlobalsAA>();
+    manager.freeze::<GlobalsModRefAnalysis>();
     // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
     // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
     // The loops it guards are re-simplified for the passes that follow. Not at
@@ -1146,10 +1164,12 @@ pub fn recorded(
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
-    if applied.options.wanted("addresssink") {
-        manager.add(addresssink::AddressSink);
+    // CodeGenPrepare's sinking: compares, masks, address phis and the address
+    // arithmetic of a block's accesses, made in the block that uses them.
+    if applied.options.wanted("cgpaddr") {
+        manager.add(cgpaddr::CgpAddr);
     }
-    // After addresssink, with the other passes that make the forms isel sees:
+    // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     if applied.options.wanted("extload") {
@@ -1192,6 +1212,8 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
         passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin runs canon-freeze with loop-reduce, before it.
+        passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
@@ -1250,6 +1272,9 @@ fn rerun(
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    if fixed.wants_sizes() {
+        declared.count_referenced(module);
+    }
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
@@ -1523,6 +1548,10 @@ impl FunctionPass for Fixed {
         true
     }
 
+    fn wants_sizes(&self) -> bool {
+        self.passes.iter().any(|pass| pass.wants_sizes())
+    }
+
     fn name(&self) -> &'static str {
         "pipeline"
     }
@@ -1792,6 +1821,7 @@ impl Run {
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || llrm_mir::passes::run_checked(&mut *pass, unit, analyses));
         drop(running);
+        analyses.declared(unit.context, unit.declared);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);

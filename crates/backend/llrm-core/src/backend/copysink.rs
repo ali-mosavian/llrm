@@ -42,7 +42,7 @@
 //!
 //! # Runs
 //! Inside the peephole phase, after copy propagation and extension
-//! rewrites, before `spillforward`. Once per peephole run. No flag of its own.
+//! rewrites, before `postrasink`. Once per peephole run. No flag of its own.
 //!
 //! # Needs
 //! [`crate::analysis::loops`] for loops and dominance, and
@@ -426,7 +426,7 @@ mod tests {
         Arc::new(Insn::new(
             at,
             Some((at, at)),
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) }),
+            Some(Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) }),
             vec![],
             vec![],
         ))
@@ -591,7 +591,7 @@ mod tests {
         sources: Vec<Loc>,
         target: Option<i64>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) }
     }
 
     fn imm(value: i64) -> Loc {

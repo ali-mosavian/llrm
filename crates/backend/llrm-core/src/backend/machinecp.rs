@@ -1162,3 +1162,26 @@ pub fn propagated(body: &LirBody) -> LirBody {
 #[cfg(test)]
 #[path = "machinecp_tests.rs"]
 mod tests;
+
+/// `MachineCopyPropagation` as a phase of its own: the pin runs it a second
+/// time after tail duplication and block placement (`-disable-copyprop` costs
+/// it 122 instructions at -O2 on the QCport modules), the first being the
+/// `peephole`'s.
+pub struct CopyPropagation;
+
+impl crate::model::passes::LIRTransform for CopyPropagation {
+    fn class_name(&self) -> &'static str {
+        "CopyPropagation"
+    }
+
+    fn name(&self) -> &str {
+        "machinecp"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        Ok(propagated(&body))
+    }
+}

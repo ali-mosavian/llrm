@@ -98,6 +98,14 @@ pub fn free(
     one: &Insn,
     fields: u32,
 ) -> bool {
+    free_fields(one, fields)
+}
+
+/// `free`, for a caller with no context (`fixupbw.rs`).
+pub fn free_fields(
+    one: &Insn,
+    fields: u32,
+) -> bool {
     let has = |bit: u32| fields & bit != 0;
     !(has(field::CLOBBERS) && !one.clobbers.is_empty()
         || has(field::CLOBBERS_HIGH) && !one.clobbers_high.is_empty()
@@ -209,6 +217,33 @@ pub fn no_longer(
     )
 }
 
+/// `after` encodes, and in real mode in no more bytes than `before`: the
+/// dword form takes the operand-size prefix there. DEVIATE W1 of the byte/word
+/// fixup (`peephole.peep`).
+pub fn short_in_real_mode(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    after: &Arc<Insn>,
+) -> bool {
+    short_in_real_mode_at(cx.bits(), before, after)
+}
+
+/// `short_in_real_mode` at `bits`, for a caller with no context.
+pub fn short_in_real_mode_at(
+    bits: u32,
+    before: &Insn,
+    after: &Insn,
+) -> bool {
+    if bits == 16 {
+        matches!(
+            (emitted(bits, before), emitted(bits, after)),
+            (Some(before), Some(after)) if after.code.len() <= before.code.len()
+        )
+    } else {
+        emitted(bits, after).is_some()
+    }
+}
+
 /// Both encode, in as many bytes.
 pub fn same_length(
     cx: &Cx,
@@ -229,7 +264,7 @@ pub fn split_push_smaller(
 ) -> bool {
     let push = |width: u32, value: i64| {
         let what = ir::Semantics {
-            name: Some("push".to_owned()),
+            name: Some("push".into()),
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };
@@ -283,6 +318,21 @@ pub fn byte_loadable(
     d.width == 4
         && regs.named(d.register, 1) != d.register
         && [src.through, src.index_through].iter().all(|one| ir::root(*one) != root)
+}
+
+/// `d` is the low part of its root (not `ah`): the byte or word starts the
+/// dword, so a dword access to the root keeps its place.
+pub fn low_view(
+    cx: &Cx,
+    d: Reg,
+) -> bool {
+    let regs = cx.regs();
+    _lanes(regs, d.register).iter().all(|lane| lane.1 < d.width as u32)
+}
+
+/// The code is for size (`shouldOptimizeForSize`).
+pub fn for_size(cx: &Cx) -> bool {
+    cx.cpu().size
 }
 
 /// The target prices `add r,r` below `shl r,1`.
@@ -494,9 +544,9 @@ fn delayed(
         return false;
     }
     // A write to memory crosses where the cell still holds after it
-    // (`spiller::_keeps`: the optimizer's proofs included); anything else
-    // must write registers alone, which the lane check below keeps from the
-    // load's.
+    // (`crate::backend::bodyfacts::_keeps`: the optimizer's proofs included);
+    // anything else must write registers alone, which the lane check below
+    // keeps from the load's.
     let writes_memory = crossed_what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)));
     let load_cell = match load.what.as_ref().map(|what| what.sources.as_slice()) {
         Some([Loc::Mem(cell)]) => Some(cell),
@@ -504,7 +554,7 @@ fn delayed(
     };
     if writes_memory {
         let Some(cell) = load_cell else { return false };
-        if !crate::backend::spiller::_keeps(crossed, load, cell, true, cx.facts.body()) {
+        if !crate::backend::bodyfacts::_keeps(crossed, load, cell, true, cx.facts.body()) {
             return false;
         }
     } else if !(matches!(
@@ -562,6 +612,33 @@ pub fn operand(
             one,
             Loc::Reg(value) if ir::root(value.register) != ir::root(r.register)
         )
+}
+
+/// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
+/// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
+pub fn sums_into(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none()
+        && a.scale == 1
+        && a.offset == 0
+        && a.through != RegId::None
+        && a.index_through != RegId::None
+        && (a.through == d.register || a.index_through == d.register)
+}
+
+/// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment
+/// (`optTwoAddrLEA`, case 2).
+pub fn steps_in_place(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Loc::Address(a) = one else { return false };
+    a.addr.is_none() && a.through == d.register && a.index_through == RegId::None
 }
 
 /// `r` is how the cell is reached.

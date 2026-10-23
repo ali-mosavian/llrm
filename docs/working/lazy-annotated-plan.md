@@ -1,7 +1,7 @@
 # Lazy Annotated and the MemorySSA cost: plan
 
 Owner: funcattrs-port. Written 2026-10-22 (due 10-28, a document only). Numbers: the compile ledger
-`~/scratch/results/ledger-c4fade734-O2.txt` (d_faces -O2, callgrind Ir, ours 1318 M against the pin's 509 M, 2.59x) and the
+`ledger-c4fade734-O2.txt` (d_faces -O2, callgrind Ir, ours 1318 M against the pin's 509 M, 2.59x) and the
 coordinator's MemorySSA findings (w-1's #3471 plan).
 
 ## What costs
@@ -54,10 +54,12 @@ built in my own worktree, HEAD == sha checked), objects identical (`tools/pairs/
 
 | step | what | files | date |
 |---|---|---|---|
-| A | `Annotated` lazy per instruction (2), nothing else changes | manager.rs, alias.rs | 11-04, after w-8's 11-02 `_numbers` deletion (Fold's callers go first) |
-| B | `Accesses` without `MemRef`s (1) | memoryssa.rs | 11-06 |
+| A | `Annotated` lazy per instruction (2), and carried across edits by the change set (A', below) | manager.rs, alias.rs | 11-04, after w-8's 11-02 `_numbers` deletion (Fold's callers go first) |
+| B | `Accesses` without `MemRef`s (1): `PlainAccesses::run` 15.0 M | memoryssa.rs | first code 11-06, first Ir drop 11-06 |
 | C | Homes/Spares fetch accesses per candidate function (4), with w-6 | homes.rs, spares.rs | 11-09 |
-| D | shared solve (3), only if #3436 has not landed | alias.rs, manager.rs | after #3436 |
+| D | #3436 (delete `CallEffects`) lands; `Writes` (17.9 M) then reads the one solve | alias.rs, manager.rs | first code 11-02 (rebase, Ir measured), first Ir drop with it |
+
+A' (2026-10-22, from w-3's licm-compile-cost.md): `PlainAccesses::update` (manager.rs:1339) fetches all of `Annotated` and `Writes` to compare them with the held ones, 39 calls, 43.5 M of d_faces -O2's 1435 M, so a lazy map alone is defeated by the comparison. `Annotated` is therefore updated from the change set (only instructions whose address inputs changed are re-annotated; the keep-or-drop contract of #3518). Covers at most `Annotated`'s 24.7 M; `Writes` (17.9 M, a `CallEffects` solve) goes with D and `PlainAccesses::run` (15.0 M) with B. Measured in the PR, not estimated.
 
 Not in this plan: w-1's lever B (EarlyCSE, DSE and MemCpyOpt preserve MemorySSA, 11-04, their files); `ThroughMemory`'s calls from
 Fold, which w-8's `_numbers` deletion (11-02) removes first.

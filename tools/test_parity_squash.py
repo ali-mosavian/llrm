@@ -47,7 +47,8 @@ def stale_merge(tmp_path: Path) -> tuple[Path, str]:
     return repo, sh(repo, "rev-parse", "HEAD")
 
 
-def test_a_stale_merge_that_reverts_a_test_is_refused(tmp_path):
+def test_a_stale_merge_that_reverts_a_test_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo, head = stale_merge(tmp_path)
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "tests.rs" in why[0] and "1 test function" in why[0], why
@@ -130,15 +131,17 @@ def squash_of_a_stale_tree(tmp_path: Path):
     return repo, sh(repo, "rev-parse", "HEAD")
 
 
-def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_description_names_it(tmp_path):
+def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_description_names_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo, head = squash_of_a_stale_tree(tmp_path)
     why = ps.refusals(head, "", base="main", cwd=repo)
     assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
     assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
 
 
-def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path):
+def test_a_rewritten_generated_page_is_not_a_deletion(tmp_path, monkeypatch):
     """#2760, #2873 and #2925 were refused as 'deletes docs/optimizations/backend/jumps.md' (30-35 lines) for a regenerated page: three PRs sat out of the queue."""
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo = tmp_path / "r"
     repo.mkdir()
     sh(repo, "init", "-q", "-b", "main")
@@ -473,12 +476,14 @@ def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(t
     assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
 
 
-def test_a_red_head_file_refuses_neither_a_clean_pr_nor_the_fix_but_a_new_red_file_is_named(tmp_path, monkeypatch):
-    """precheck refused five PRs for fmt files that feat/parity itself fails (saverestore.rs, flow.rs ...): with any red head file nothing passed, the fixes included."""
-    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1") == "1: PASS"  # head red in A, PR adds none
-    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR fixes A
+def test_a_red_head_file_no_longer_excuses_an_unformatted_pr_file_but_the_fix_passes(tmp_path, monkeypatch):
+    """The user's order: tools/fmt.sh applies to every PR. precheck had excused any fmt failure the head already had (92 files of parity were unformatted that way): a PR that leaves a head-red file unformatted is refused,
+    the PR that formats it passes, and a new red file is named as before. Ratchets keep the old excuse."""
+    line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs"}), number="1")  # head red in A, the PR leaves A red
+    assert line.startswith("1: REFUSED: fmt") and "a.rs" in line, line
+    assert run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, set()), number="2") == "2: PASS"  # the PR formats A
     line = run_precheck(tmp_path, monkeypatch, Tree({"a.rs"}, {"a.rs", "b.rs"}), number="3")  # the PR adds B
-    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line and "a.rs" not in line, line
+    assert line.startswith("3: REFUSED: fmt") and "b.rs" in line, line
 
 
 def test_a_precheck_logs_the_seconds_each_check_took(tmp_path, monkeypatch):
@@ -551,6 +556,7 @@ def test_a_stray_untracked_page_does_not_turn_a_pr_that_adds_it_into_a_conflict(
     assert merge.returncode == 0 and (repo / "page.md").read_text() == "from the pr\n", merge.stderr
 def test_fast_mode_lets_a_refactor_delete_lines_but_not_a_file(tmp_path, monkeypatch):
     """#2855, #2856, #2881, #2942, #2958, #3010 and #3028 sat out a 02:37 batch: each deleted 21-76 lines of its own file, and nothing landed for 27 minutes."""
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")  # the switch turned back on: the description checks refuse
     repo = tmp_path / "r"
     repo.mkdir()
     sh(repo, "init", "-q", "-b", "main")
@@ -740,3 +746,266 @@ def test_a_new_failing_test_inside_an_already_red_step_is_refused_and_a_fixed_on
 def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     """A failure set cached before steps named their tests holds `ratchet:x`: the tests inside it are not new for that head."""
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
+
+
+def test_a_red_test_in_a_changed_crate_is_refused_and_one_the_head_fails_too_is_not():
+    """#3578 landed with four red llrm-transforms lib tests: the fast path ran no test. With LAND_FAST_TESTS the changed crates' lib tests run on the merged tree and a failing one the head
+    passes refuses the batch. Control on the real functions (a planted `assert!(false)` in llrm-transforms): refused naming it in 88 s; none on the clean head."""
+    files = ["crates/opt/llrm-transforms/src/memcpyoptimizer.rs", "docs/x.md"]
+    red = {"unit llrm-transforms::memcpyoptimizer::tests::four_byte_stores_are_one_memset"}
+    asked = {}
+
+    def on_merged(packages):
+        asked["packages"] = set(packages)
+        return set(red)
+
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: set()) == red
+    assert asked["packages"] == {"llrm-transforms", "llrm-mir"}
+    assert ps.new_lib_failures(files, on_merged=on_merged, on_head=lambda by_package: {next(iter(red))}) == set()
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+
+
+def test_a_passing_batch_prints_what_the_lib_layer_ran(capsys):
+    """A gate silent on a pass cannot be told from one that never ran: the layer prints crates, tests passed, a hash of the test names and the seconds, on a pass too."""
+    smoke = ps.parity_smoke_module()
+
+    def on_merged(packages):
+        smoke.LAST_LIB.update(crates=len(packages), passed=940, names="abcd1234", seconds=11.6)
+        return set()
+
+    assert ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 2 crates, 940 tests passed (abcd1234), 12s" in capsys.readouterr().out
+    assert ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set()) == set()
+    assert "lib tests: 0 crates, 0 tests passed (no crate changed)" in capsys.readouterr().out
+
+
+def test_a_change_to_any_crate_source_also_runs_the_scan_crates_lib_tests():
+    """extload.rs, booleans.rs and selectiondag/ landed three red scans (`no_file_gains_*` in llrm-mir) because only the changed crates' lib tests ran."""
+    asked = []
+
+    def on_merged(packages):
+        asked.append(set(packages))
+        return set()
+
+    ps.new_lib_failures(["crates/opt/llrm-transforms/src/extload.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    ps.new_lib_failures(["docs/x.md"], on_merged=on_merged, on_head=lambda by_package: set())
+    assert asked == [{"llrm-transforms", "llrm-mir"}]
+
+
+def test_a_unit_the_head_passes_names_the_offender_and_the_rest_are_tested_once():
+    """19:12, 19:22 and 19:37: batches failed `no_file_gains_*` and were halved and halved again. With the offender named by the failing unit alone, 8 PRs cost 2 tests, not 7."""
+    landed, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return "6" not in group
+
+    ps.batch([str(n) for n in range(1, 9)], passes, landed.append, refused.append, lambda group: ["6"])
+    assert refused == ["6"] and landed == ["1", "2", "3", "4", "5", "7", "8"]
+    assert tested == [[str(n) for n in range(1, 9)], ["1", "2", "3", "4", "5", "7", "8"]]
+
+
+def test_an_offender_hook_that_names_nobody_or_everybody_falls_back_to_halving():
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: "3" not in group, landed.append, refused.append, lambda group: [])
+    assert landed == ["1", "2", "4"] and refused == ["3"]
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: "3" not in group, landed.append, refused.append, lambda group: list(group))
+    assert landed == ["1", "2", "4"] and refused == ["3"]
+
+
+def test_two_offenders_are_both_dropped_and_the_others_land():
+    landed, refused = [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: not {"2", "3"} & set(group), landed.append, refused.append, lambda group: ["2", "3"])
+    assert refused == ["2", "3"] and landed == ["1", "4"]
+
+
+def test_a_refusal_line_names_the_prs_own_reason_not_the_batchs_first_failure():
+    """22:26: the queue printed the log's first REFUSED line (#3841's `mut`) for eight PRs; seven of them had been refused for failing units."""
+    named = {"3841": "alone on the head it does not build: how_many.rs:1527: variable does not need to be mutable"}
+    build = ["how_many.rs:1527:17: error: variable does not need to be mutable"]
+    assert "does not build" in ps.refusal_line("3841", named, build, set())
+    assert "how_many" not in ps.refusal_line("3843", named, [], {"unit llrm-mir::tests::no_file_gains_a_slice_read_of_a_use_list"})
+    assert "no_file_gains" in ps.refusal_line("3843", named, [], {"unit llrm-mir::tests::no_file_gains_a_slice_read_of_a_use_list"})
+    assert ps.refusal_line("3846", {}, [], set()).startswith("#3846: REFUSED: ")
+
+
+def test_a_head_with_a_conflict_marker_in_an_added_line_is_left_out_by_name(tmp_path):
+    """sdag-a pushed markers to open branches twice in a day."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "base")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (tmp_path / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.rs").write_text("fn a() {}\n" + "<" * 7 + " HEAD\nfn b() {}\n=======\nfn c() {}\n" + ">" * 7 + " origin\n")
+    (tmp_path / "ok.rs").write_text("let x = 1 << 7; // " + "<" * 8 + "\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    why = ps.conflict_markers("base", "pr", tmp_path)
+    assert why == ["a.rs: an added line is a merge conflict marker; resolve the merge and push again"]
+    assert any("conflict marker" in line for line in ps.refusals("pr", "Owner: x", "base", tmp_path, "fix: x"))
+
+
+def test_a_missing_deletes_line_is_a_warning_by_default_and_a_refusal_when_the_switch_is_on(tmp_path, monkeypatch):
+    """The user's call (20:2x): description checks warn until the backend parts land; BODY_CHECKS=refuse turns them back into refusals."""
+    repo, head = stale_merge(tmp_path)
+    monkeypatch.setattr(ps, "BODY_CHECKS", "warn")
+    assert ps.refusals(head, "", base="main", cwd=repo) == []
+    warned = ps.warnings(head, "", base="main", cwd=repo)
+    assert warned and "tests.rs" in warned[0]
+    monkeypatch.setattr(ps, "BODY_CHECKS", "refuse")
+    assert ps.warnings(head, "", base="main", cwd=repo) == []
+    assert ps.refusals(head, "", base="main", cwd=repo)
+
+
+def test_a_line_naming_the_assistant_stays_a_refusal_under_the_warning_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "BODY_CHECKS", "warn")
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "base")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (tmp_path / "a.txt").write_text("one\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.txt").write_text("one\nwritten by " + "Clau" + "de\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    assert any("names the assistant" in line for line in ps.refusals("pr", "", base="base", cwd=tmp_path, title="docs: x"))
+
+
+def fmt_repo(tmp_path, stub):
+    """A repo with a stub tools/fmt.sh, a bare origin, a `base` branch and a `pr` branch that adds a.rs with trailing blanks."""
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "repo"
+
+    def run(*args, cwd=repo):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "--bare", "-b", "base", str(origin), cwd=tmp_path)
+    run("init", "-q", "-b", "base", str(repo), cwd=tmp_path)
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "fmt.sh").write_text(stub)
+    (repo / "tools" / "fmt.sh").chmod(0o755)
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    run("remote", "add", "origin", str(origin))
+    run("push", "-q", "origin", "base")
+    run("checkout", "-q", "-b", "pr")
+    return repo, origin, run
+
+
+STRIP = "#!/bin/sh\nif [ \"$1\" = --stdin ]; then sed 's/[ \\t]*$//'; fi\n"
+
+
+def test_an_unformatted_pr_is_squashed_from_a_formatted_commit_pushed_to_its_branch(tmp_path):
+    """The user's order: tools/fmt.sh applies to every PR; 92 files of parity were unformatted because the runner excused a red head."""
+    repo, origin, run = fmt_repo(tmp_path, STRIP)
+    (repo / "a.rs").write_text("fn a() {}   \nfn b() {}\t\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    head = run("rev-parse", "HEAD")
+    sha, why = ps.format_head(head, "pr", base="base", cwd=repo)
+    assert why == "" and sha != head
+    assert run("show", f"{sha}:a.rs") == "fn a() {}\nfn b() {}"
+    assert subprocess.run(["git", "rev-parse", "refs/heads/pr"], cwd=origin, capture_output=True, text=True).stdout.strip() == sha
+
+
+def test_an_already_formatted_pr_keeps_its_head_and_pushes_nothing(tmp_path):
+    repo, origin, run = fmt_repo(tmp_path, STRIP)
+    (repo / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    head = run("rev-parse", "HEAD")
+    assert ps.format_head(head, "pr", base="base", cwd=repo) == (head, "")
+    assert subprocess.run(["git", "rev-parse", "--verify", "refs/heads/pr"], cwd=origin, capture_output=True).returncode != 0
+
+
+def test_a_formatter_that_crashes_refuses_the_landing(tmp_path):
+    """fmt.sh exit 2 or more is a missing toolchain or a crash: a gate that tolerates 1 must not tolerate the rest."""
+    repo, origin, run = fmt_repo(tmp_path, "#!/bin/sh\nexit 2\n")
+    (repo / "a.rs").write_text("fn a() {}\n")
+    run("add", "-A")
+    run("commit", "-q", "-m", "pr")
+    sha, why = ps.format_head(run("rev-parse", "HEAD"), "pr", base="base", cwd=repo)
+    assert sha == "" and "exit 2" in why and "a.rs" in why
+
+
+def test_a_batch_that_does_not_build_drops_the_pr_that_breaks_the_build_alone_and_lands_the_rest():
+    """The 21:02 batch failed to build (#3763 added ISD variants #3806's code did not cover) and every PR in it was refused."""
+    broken = {"3763"}
+    merged = []
+
+    def merge_alone(number):
+        merged.append(number)
+        return number != "3807"  # cannot join: skipped, not blamed
+
+    check = lambda: "dagisel_adapter.rs:33: non-exhaustive patterns" if merged[-1] in broken else ""  # noqa: E731
+    group = ["3763", "3812", "3736", "3807", "3793"]
+    assert ps.build_offenders(group, merge_alone, check) == ["3763"]
+    landed, refused, tested = [], [], []
+
+    def passes(prs):
+        tested.append(list(prs))
+        return not broken & set(prs)
+
+    ps.batch(group, passes, landed.append, refused.append, lambda prs: ps.build_offenders(prs, merge_alone, check))
+    assert refused == ["3763"] and landed == ["3812", "3736", "3807", "3793"]
+    assert tested == [group, ["3812", "3736", "3807", "3793"]]
+
+
+def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved():
+    group = ["1", "2", "3", "4"]
+    assert ps.build_offenders(group, lambda number: True, lambda: "") == []
+
+def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
+    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+    asked = []
+
+    def on_merged(packages):
+        asked.append(set(packages))
+        return set()
+
+    ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
+    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-c" not in asked[1]
+
+
+def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
+    """#3817 changed parity_smoke while the batch that held the old parity_squash was running: half old, half new tools refused the 15 known llrm-c reds as new."""
+    (tmp_path / "fake_tool.py").write_text("VERSION = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("fake_tool", None)
+    ps.preload_tools(("fake_tool",))
+    (tmp_path / "fake_tool.py").write_text("VERSION = 2\n")  # a landing merged into the checkout
+    import importlib
+
+    assert importlib.import_module("fake_tool").VERSION == 1
+    assert {"parity_smoke", "xfail", "buildslot"} <= set(ps.TOOL_MODULES)
+
+
+def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_registry(capsys):
+    """#3899 landed with tests/selectiondag_registry.rs red: the fast layer ran lib tests only. It now runs the root scanners and a test file the batch changes."""
+    asked = []
+    red = {"integration selectiondag_registry::a_number_with_no_row_is_reported"}
+
+    def merged(targets):
+        asked.append(list(targets))
+        return set(red)
+
+    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
+    assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
+    assert "scanners: " in capsys.readouterr().out

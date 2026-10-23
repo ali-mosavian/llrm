@@ -27,7 +27,7 @@ fn copy(
     src: u32,
 ) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(dst)],
         sources: vec![held(src)],
         ..Semantics::new(Operation::Move)
@@ -38,7 +38,7 @@ fn copy(
 /// A definition of `v` from nothing: not a copy.
 fn def(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width: 4, address: None })],
         ..Semantics::new(Operation::Move)
@@ -50,7 +50,7 @@ fn def(v: u32) -> Arc<Insn> {
 /// make again.
 fn load(v: u32) -> Arc<Insn> {
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(v)],
         sources: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
         ..Semantics::new(Operation::Move)
@@ -304,7 +304,7 @@ fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
     let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
     let what = Semantics {
-        name: Some("mov".to_owned()),
+        name: Some("mov".into()),
         dests: vec![held(3)],
         sources: vec![Loc::Mem(memory)],
         ..Semantics::new(Operation::Move)
@@ -364,7 +364,7 @@ fn swap_loop() -> LirBody {
     };
     let step = {
         let what = Semantics {
-            name: Some("idiv".to_owned()),
+            name: Some("idiv".into()),
             dests: vec![held(t)],
             sources: vec![held(a), held(b)],
             ..Semantics::new(Operation::Binary)
@@ -372,7 +372,7 @@ fn swap_loop() -> LirBody {
         Arc::new(Insn::new(0, None, Some(what), vec![t], vec![a, b]))
     };
     let branch = {
-        let what = Semantics { name: Some("jne".to_owned()), target: Some(1), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(1), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
     };
     body_of(vec![
@@ -417,7 +417,7 @@ fn body_of(blocks: Vec<LirBlock>) -> LirBody {
 }
 
 fn jump(target: i64) -> Arc<Insn> {
-    let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+    let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
     Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
 }
 
@@ -530,4 +530,141 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     assert_eq!(join_copy(&mut lis, &env, &mut state, &mut Default::default(), base.id()), JoinResult::Joined);
     let index = state.current(index.id());
     assert_eq!(join_copy(&mut lis, &env, &mut state, &mut Default::default(), index), JoinResult::Rejected);
+}
+
+/// `v1 := load; v2 := mov v1; v1 := mov v2; v2 := load; read v1; read v2`: the
+/// second copy cannot join (`v2` is redefined while its copy `v1` is live),
+/// but `v2` holds what `v1` held and `v1` is dead between:
+/// `adjustCopiesBackFrom` extends the first `v1` to the copy, and the copy
+/// goes. The loop-carried segment of a far pointer in `_dl_muzzle@3` kept two
+/// such copies a trip (`mov ax, es` at the latch).
+#[test]
+fn test_a_copy_back_of_a_copy_goes_by_extending_the_first_value() {
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let (r1, r2) = (read(1), read(2));
+    let was = body(&[(
+        &[
+            Arc::clone(&first),
+            Arc::clone(&to),
+            Arc::clone(&back),
+            Arc::clone(&redefined),
+            Arc::clone(&r1),
+            Arc::clone(&r2),
+        ],
+        &[],
+    )]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), back.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(
+        names(&lis),
+        vec![(vec![1], vec![]), (vec![2], vec![1]), (vec![2], vec![]), (vec![], vec![1]), (vec![], vec![2])],
+        "only the copy back is gone"
+    );
+    assert_eq!(lis.interval(1).valnos.iter().filter(|vn| !vn.is_unused()).count(), 1, "one value of v1 is left");
+    assert_consistent(&lis, &was, 2);
+}
+
+/// `pre: v1 := load` and a one-block loop `v2 := mov v1; read v2; v1 := mov v2`
+/// that branches to itself or out: the copy `v2 := mov v1` is redundant on the
+/// way round the loop (`v1` holds `v2` after the reverse copy), so
+/// `removePartialRedundancy` moves it to the preheader and the loop keeps the
+/// reverse copy only. `_dl_muzzle@3` kept this pair for the segment of a far
+/// pointer, two copies a trip.
+#[test]
+fn test_a_copy_at_a_loop_entry_that_the_latch_reverses_moves_to_the_preheader() {
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    // After the loop `v1` is redefined while `v2` is still read: the join of
+    // the two intervals fails, which is when the copy is moved instead.
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let was = body(&[
+        (&[Arc::clone(&first)], &[1]),
+        (&[Arc::clone(&to), Arc::clone(&user), Arc::clone(&back)], &[1, 2]),
+        (&[Arc::clone(&again), Arc::clone(&kept), Arc::clone(&after)], &[]),
+    ]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let copies_before = lis.blocks()[1].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    assert_eq!(copies_before, 1, "the premise: the loop holds the copy");
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), to.id());
+    assert_eq!(result, JoinResult::Joined);
+    let in_loop = lis.blocks()[1].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    let in_preheader = lis.blocks()[0].iter().filter(|one| one.defines == [2] && one.uses == [1]).count();
+    assert_eq!((in_loop, in_preheader), (0, 1), "the copy moved out of the loop");
+    assert_consistent(&lis, &was, 2);
+}
+
+/// A store of a register to memory, the other half of a spill: not a copy.
+fn store(v: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0))],
+        sources: vec![held(v)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![], vec![v]))
+}
+
+/// The probe behind `LLRM_COALESCE_WHY` counted a store of a register to memory
+/// as a left copy: nightmare_selftest read 68 left copies where the pin's 19
+/// were the thing to match, and 13 were copies.
+#[test]
+fn test_a_store_of_a_register_is_no_left_copy() {
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
+    let was = body(&[(&[a, c, b, r1, r2, store(1), store(2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    run(&mut lis, &AnyClass, &[0]);
+    assert_eq!(super::env::why_left(&mut lis, &AnyClass), vec!["conflict (deferred)"]);
+}
+
+/// `v1 := op v1, v2` (tied) is `v1 := load; v1 := mov v3; v1 := add v1, v2;
+/// v2 := mov v1; read v2; read v1`: `v2` dies at the `add` and the copy back
+/// cannot join (the first `v1` overlaps `v2` with another value). The `add` is
+/// commuted to `v2 := add v2, v1`, the readers read `v2` and the copy goes
+/// (`removeCopyByCommutingDef`). Without it the copy stayed: a `mov` a trip in
+/// the loops of `_dl_muzzle@3`.
+#[test]
+fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
+    let (b0, a2, tie, copy_back) = (load(2), load(3), copy(1, 3), copy(2, 1));
+    let what = Semantics {
+        name: Some("add".into()),
+        dests: vec![held(1)],
+        sources: vec![held(1), held(2)],
+        ..Semantics::new(Operation::Binary)
+    };
+    let add = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![1, 2]));
+    let (r2, r1) = (read(2), read(1));
+    let was = body(&[(
+        &[
+            Arc::clone(&b0),
+            Arc::clone(&a2),
+            Arc::clone(&tie),
+            Arc::clone(&add),
+            Arc::clone(&copy_back),
+            Arc::clone(&r2),
+            Arc::clone(&r1),
+        ],
+        &[],
+    )]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), copy_back.id());
+    assert_eq!(result, JoinResult::Joined);
+    assert_eq!(
+        names(&lis),
+        vec![
+            (vec![2], vec![]),
+            (vec![3], vec![]),
+            (vec![1], vec![3]),
+            (vec![2], vec![2, 1]),
+            (vec![], vec![2]),
+            (vec![], vec![2]),
+        ],
+        "the add writes v2 and reads v1; the copy is gone; both readers read v2"
+    );
+    assert_consistent(&lis, &was, 2);
 }

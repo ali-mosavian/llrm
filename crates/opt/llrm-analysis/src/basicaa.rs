@@ -30,7 +30,7 @@
 //! # Provides
 //! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
@@ -108,6 +108,40 @@ pub(crate) fn is_identified_function_local(
     operand: Operand,
 ) -> bool {
     BasicAA::new(unit).is_identified_local(operand)
+}
+
+/// `CallBase::getMemoryEffects`: the site's attributes met with the direct
+/// callee's.
+pub(crate) fn call_memory_effects(
+    unit: &Unit,
+    call: llrm_mir::module::InstId,
+) -> MemoryEffects {
+    let function = unit.function;
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+        return MemoryEffects::unknown();
+    };
+    let site = MemoryEffects::of_attrs(&info.attrs);
+    let callee = llrm_mir::memory::callee(unit.context, function, call)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+}
+
+/// `isIdentifiedObject`: an identified local, or a global variable.
+pub(crate) fn is_identified_object(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    let basic = BasicAA::new(unit);
+    basic.is_identified_local(operand) || basic.global_variable(operand)
+}
+
+/// `getUnderlyingObject`: through geps and casts.
+pub(crate) fn underlying_object(
+    unit: &Unit,
+    operand: Operand,
+) -> Operand {
+    BasicAA::new(unit).underlying(operand)
 }
 
 pub struct BasicAA<'a> {
@@ -190,12 +224,42 @@ impl<'a> BasicAA<'a> {
         operand
     }
 
+    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant
+    /// expression.
+    fn is_gep_operator(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.constant_gep_base(operand).is_some()
+            || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
+    }
+
+    /// The base of a `getelementptr` constant expression, if `operand` is one.
+    fn constant_gep_base(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        match operand {
+            Operand::Constant(id) => match &self.unit.context.get(id).kind {
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+                    Some(Operand::Constant(operands[0]))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// `getUnderlyingObject`: through geps and casts, `MAX_LOOKUP` steps.
     fn underlying(
         &self,
         mut operand: Operand,
     ) -> Operand {
         for _ in 0..MAX_LOOKUP {
+            if let Some(base) = self.constant_gep_base(operand) {
+                operand = base;
+                continue;
+            }
             let Some(one) = self.defining(operand) else { break };
             match one.opcode {
                 Opcode::GetElementPtr { .. } => operand = one.operands[0],
@@ -230,6 +294,30 @@ impl<'a> BasicAA<'a> {
         DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
+            // A `getelementptr` constant expression is a GEPOperator as well:
+            // DecomposeGEPExpression reads it as it reads the instruction.
+            if let Operand::Constant(id) = operand {
+                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) =
+                    &self.unit.context.get(id).kind
+                {
+                    found.inbounds &= *inbounds;
+                    found.nuw &= *nuw;
+                    let indices: Vec<Option<i128>> = operands[1..]
+                        .iter()
+                        .map(|&index| {
+                            let index = Operand::Constant(index);
+                            self.unit.int_constant(index).map(|bits| self.signed(index, bits))
+                        })
+                        .collect();
+                    let (constant, variable) =
+                        self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
+                    debug_assert!(variable.is_empty(), "a constant expression's indices are constants");
+                    found.offset += constant;
+                    operand = Operand::Constant(operands[0]);
+                    found.base = operand;
+                    continue;
+                }
+            }
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
@@ -632,9 +720,7 @@ impl<'a> BasicAA<'a> {
         o2: Operand,
         aaqi: &mut AAQueryInfo,
     ) -> AliasResult {
-        let is_gep = |operand: Operand| {
-            self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::GetElementPtr { .. }))
-        };
+        let is_gep = |operand: Operand| self.is_gep_operator(operand);
         if is_gep(a.ptr) {
             let result = self.alias_gep(a, b, o1, o2, aaqi);
             if result != AliasResult::MayAlias {
@@ -684,12 +770,8 @@ impl<'a> BasicAA<'a> {
                 return AliasResult::MayAlias;
             }
             let joins = |operand| {
-                self.defining(operand).is_some_and(|one| {
-                    matches!(
-                        one.opcode,
-                        Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-                    )
-                })
+                self.is_gep_operator(operand)
+                    || self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Phi | Opcode::Select))
             };
             if joins(other.ptr) || joins(underlying1) || joins(underlying2) {
                 return base_objects(self, aaqi);
@@ -1030,15 +1112,7 @@ impl AAResults for BasicAA<'_> {
         call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        let function = self.unit.function;
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
-            return MemoryEffects::unknown();
-        };
-        let site = MemoryEffects::of_attrs(&info.attrs);
-        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
-            .and_then(|one| self.unit.globals.get(one.0 as usize))
-            .and_then(|one| one.function());
-        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+        call_memory_effects(self.unit, call)
     }
 
     /// A call against a location is `getModRefInfo(Call, Loc)`; every other
@@ -1084,13 +1158,127 @@ impl AAResults for BasicAA<'_> {
         }
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L271
+    /// `AAResults::getModRefInfo(Call1, Call2)` from the effects and argument
+    /// attributes of the two calls. DEVIATE AA-D1: LLVM's reads the aggregate's
+    /// answers; here they are BasicAA's own, which the aggregate meets with
+    /// the others'. Exit: this moves into `AggregateAA`. Owner w-5, review
+    /// 2026-11-19.
     fn get_mod_ref_info_call(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: llrm_mir::module::InstId,
-        _: &mut AAQueryInfo,
+        call1: llrm_mir::module::InstId,
+        call2: llrm_mir::module::InstId,
+        aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        use crate::aa::IRMemLocation::{ArgMem, InaccessibleMem};
+        let is_call = |inst| matches!(
+            self.unit.function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        );
+        if !is_call(call1) || !is_call(call2) {
+            return ModRefInfo::ModRef;
+        }
+        let mut result = ModRefInfo::ModRef;
+        // If either call is readnone, they do not interact.
+        let call1_b = self.get_memory_effects(call1, aaqi);
+        if call1_b.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let call2_b = self.get_memory_effects(call2, aaqi);
+        if call2_b.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        // If they both only read from memory, there is no dependence.
+        if call1_b.only_reads_memory() && call2_b.only_reads_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        // If Call1 only reads memory, the only dependence on Call2 can be
+        // from Call1 reading memory written by Call2.
+        if call1_b.only_reads_memory() {
+            result = result.intersect(ModRefInfo::Ref);
+        } else if !call1_b.overall().is_ref_set() {
+            result = result.intersect(ModRefInfo::Mod);
+        }
+        let argument_count = |call: llrm_mir::module::InstId, this: &Self| {
+            this.unit.function.instruction(call).operands.len().saturating_sub(1)
+        };
+
+        // If Call2 only accesses memory through arguments, accumulate the
+        // mod/ref information from Call1's references to the memory
+        // referenced by Call2's arguments.
+        if call2_b.only_accesses_arg_memory() {
+            if call2_b.mod_ref(ArgMem).is_no_mod_ref() {
+                return ModRefInfo::NoModRef;
+            }
+            let mut r = ModRefInfo::NoModRef;
+            for at in 0..argument_count(call2, self) {
+                if self.unit.space(self.unit.function.instruction(call2).operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call2, at) else { continue };
+                // What Call2 might do to its argument; Call1's dependence on
+                // that location is the inverse.
+                let arg_mod_ref_c2 = self.get_arg_mod_ref_info(call2, at);
+                let mut arg_mask = ModRefInfo::NoModRef;
+                if arg_mod_ref_c2.is_mod_set() {
+                    arg_mask = ModRefInfo::ModRef;
+                } else if arg_mod_ref_c2.is_ref_set() {
+                    arg_mask = ModRefInfo::Mod;
+                }
+                arg_mask = arg_mask.intersect(self.call_mod_ref(call1, &place, aaqi));
+                r = r.union(arg_mask).intersect(result);
+                if r == result {
+                    break;
+                }
+            }
+            return r;
+        }
+
+        // If Call1 only accesses memory through arguments, check if Call2
+        // references any of the memory referenced by Call1's arguments.
+        if call1_b.only_accesses_arg_memory() {
+            if call1_b.mod_ref(ArgMem).is_no_mod_ref() {
+                return ModRefInfo::NoModRef;
+            }
+            let mut r = ModRefInfo::NoModRef;
+            for at in 0..argument_count(call1, self) {
+                if self.unit.space(self.unit.function.instruction(call1).operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call1, at) else { continue };
+                // If Call1 might Mod its argument, Call2's Mod or Ref matters;
+                // if it might Ref, only a Mod by Call2.
+                let arg_mod_ref_c1 = self.get_arg_mod_ref_info(call1, at);
+                let mod_ref_c2 = self.call_mod_ref(call2, &place, aaqi);
+                if (arg_mod_ref_c1.is_mod_set() && (mod_ref_c2.is_mod_set() || mod_ref_c2.is_ref_set()))
+                    || (arg_mod_ref_c1.is_ref_set() && mod_ref_c2.is_mod_set())
+                {
+                    r = r.union(arg_mod_ref_c1).intersect(result);
+                }
+                if r == result {
+                    break;
+                }
+            }
+            return r;
+        }
+
+        // If only inaccessible memory has a set ModRefInfo, relate the same
+        // locations.
+        let only_inaccessible = |effects: crate::aa::MemoryEffects| {
+            [ArgMem, crate::aa::IRMemLocation::ErrnoMem, crate::aa::IRMemLocation::Other]
+                .into_iter()
+                .all(|at| effects.mod_ref(at).is_no_mod_ref())
+        };
+        if only_inaccessible(call1_b) && only_inaccessible(call2_b) {
+            let (use_mr, def_mr) = (call1_b.mod_ref(InaccessibleMem), call2_b.mod_ref(InaccessibleMem));
+            if use_mr.is_no_mod_ref() || def_mr.is_no_mod_ref() || (def_mr == ModRefInfo::Ref && def_mr == use_mr) {
+                return ModRefInfo::NoModRef;
+            }
+            return use_mr;
+        }
+        result
     }
 
     fn call_captures_before(
@@ -1370,6 +1558,47 @@ mod tests {
             .expect("a call");
         let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
         BasicAA::new(&unit).get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default())
+    }
+
+    /// What the first call does to the memory of the second, in the body of
+    /// `@f`, with BasicAA alone (`getModRefInfo(Call1, Call2)`).
+    fn pair_on(body: &str) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let calls: Vec<_> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)))
+            .collect();
+        BasicAA::new(&unit).get_mod_ref_info_call(calls[0], calls[1], &mut AAQueryInfo::default())
+    }
+
+    /// Two calls, as the pinned `opt -passes=aa-eval -aa-pipeline=basic-aa
+    /// -print-all-alias-modref-info` answers them (`AAResults::getModRefInfo(
+    /// Call1, Call2)`). BasicAA said ModRef for every pair, so a client asking
+    /// two read-only calls, or a `memory(none)` call and any other, saw a
+    /// dependence LLVM does not.
+    #[test]
+    fn two_calls_are_related_by_their_effects_as_the_pin_relates_them() {
+        let decls = "declare void @r1() memory(read)\ndeclare void @r2() memory(read)\ndeclare void @n() memory(none)\ndeclare void @any()\ndeclare void @w(ptr) memory(argmem: write)\ndeclare void @ir() memory(inaccessiblemem: read)\ndeclare void @irw() memory(inaccessiblemem: readwrite)\n";
+        let f = |calls: &str| {
+            format!("{decls}define void @f() {{\n  %a = alloca i32\n  %b = alloca i32\n{calls}  ret void\n}}\n")
+        };
+        // Both read: no dependence.
+        assert_eq!(pair_on(&f("  call void @r1()\n  call void @r2()\n")), ModRefInfo::NoModRef);
+        // readnone against anything.
+        assert_eq!(pair_on(&f("  call void @n()\n  call void @any()\n")), ModRefInfo::NoModRef);
+        // Argument memory only: apart slots, then the same slot.
+        assert_eq!(pair_on(&f("  call void @w(ptr %a)\n  call void @w(ptr %b)\n")), ModRefInfo::NoModRef);
+        assert_eq!(pair_on(&f("  call void @w(ptr %a)\n  call void @w(ptr %a)\n")), ModRefInfo::Mod);
+        // Inaccessible memory only: the read against the write and back.
+        assert_eq!(pair_on(&f("  call void @ir()\n  call void @irw()\n")), ModRefInfo::Ref);
+        assert_eq!(pair_on(&f("  call void @irw()\n  call void @ir()\n")), ModRefInfo::ModRef);
+        // bench_floats against report in floats-O2: an unknown callee may touch
+        // inaccessible memory.
+        assert_eq!(pair_on(&f("  call void @irw()\n  call void @any()\n")), ModRefInfo::ModRef);
     }
 
     /// A call touches a local slot nobody holds a pointer to only if the slot

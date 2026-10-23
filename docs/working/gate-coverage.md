@@ -64,6 +64,16 @@ Every layer prints its failures as names and the gate compares them with the hea
 | llrm-elf-arm64 | 2 | 0 | 0 |
 | llrm-env | 1 | 0 | 0 |
 
+## Gaps, numbered
+
+| id | what is not run | measured / estimated cost | what covers it now | proposal |
+|---|---|---|---|---|
+| G1 | integration tests under `crates/*/tests/*.rs` of the changed crates: the layer runs `cargo test -p <crate> --lib` only | `--tests` on the changed crate, debug, load 25-34 (2026-10-23): llrm-core 58 s, llrm-analysis 19 s, llrm-mir 29 s, llrm-transforms 1133 s (queue plus a cold test build; the tests themselves ran in under 4 s) | `tools/gate/nightly_integration.py` runs the workspace targets once a night | map each crate integration target to the files it imports (as #3542 did for the root targets) and run only the targets a PR's files reach; decision: oversight |
+| G2 | llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources; a PR that changes no llrm-mir file never ran them (extload.rs, booleans.rs, selectiondag/: three reds on parity) | llrm-mir lib alone: 23 s | the hourly sweep names the red after it lands | closed by this PR: any `.rs` under `crates/` also runs llrm-mir's lib tests |
+| G3 | a translated pass that passes every unit test and never fires in a real compile (#3732's JumpTableToSwitch: x_funcptr asm identical before and after; the compile runs pipeline.rs's per-body path, not the manager the tests used) | one pipeline-level test per slot | nothing | `precheck.sh`: a PR that adds a pass slot (registry entry or phase-table row) must add a `#[test]` in `pipeline*_tests.rs` or `tests/` showing the pass fires on a real input |
+| G4 | feature-gated lib tests: llrm-c's `toolchain` (44 `cfg(feature = "toolchain")` gates: compile.rs 33, translate.rs 7, callconv_tests.rs 4; 186 lib tests, 16 red on parity unseen, and the interrupt-handler refusal of #2936 for four days); llrm-core's `fixtures` gates no extra test (1588 lib tests with and without it, 636 s to build cold) | `cargo test --release -p llrm-c --lib --features toolchain` on a warm target: 12 s (2 s of tests); the cold build is the cost | the hourly sweep compiles tests/fixtures/callconv/c/*.c since #3812 | closed by this PR: llrm-c's lib run in the layer uses the feature (`parity_smoke.LIB_FEATURES`), and a change under crates/ir/llrm-hir or crates/frontends/llrm-c runs it |
+| G5 | root scanner targets (`tests/*.rs` that read sources and docs) at landing: the fast layer ran lib tests only, and `selectiondag_registry` (and later `no_partial_ecx_counts`) were in no map: #3899 landed with SD403 rowless, #3888 with an unmapped target | 13 scanner targets: 89 s cold on a loaded host; red on parity itself today: docs_links 3, no_local_paths 2, descriptions_are_read 1 (cached per head, so only new reds refuse) | `test_every_integration_target_is_mapped` (a pytest, run only when tools/ changes) | closed by this PR: `SCANNERS` lists both, and the layer runs the scanners and any `tests/*.rs` the batch changes (`parity_squash.new_scanner_failures`) |
+
 ## Ratchets with no per-test names
 
 `ratchet:docs`, `ratchet:prepush-docs|facts|fmt|scans|test docs_links`, `ratchet:warnings` and `workspace` print no test names; a second failure inside one is hidden. Each needs to print its items or be split.
