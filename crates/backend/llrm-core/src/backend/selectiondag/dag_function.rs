@@ -23,7 +23,9 @@
 //! # Runs
 //! `assemble::staged` when `--isel=dag`.
 //!
-//! DEVIATE SD403: no calls, locals, register arguments, switch lowering or
+//! DEVIATE SD403: no branch probabilities (`odds`) or counted-loop trip
+//! counts, so the executed-work estimate of a loop is lower than the old
+//! selector's until they are carried; and no calls, locals, register arguments, switch lowering or
 //! multi-register phis yet. Reason: they need the call sequence and frame
 //! objects in the emitter (D1e). Exit: D1e. Owner: sdag-d. Review 2026-12-03.
 
@@ -271,6 +273,7 @@ pub fn selected(
     body.float_stack = arch.float_stack();
     body.sealed_arguments = true;
     body.ordered = true;
+    body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     Ok(Selected {
         body,
         convention,
