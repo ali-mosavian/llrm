@@ -1079,6 +1079,26 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue) {
         let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        if let Some(ext) = info.ext {
+            // `ExpandIntRes_LOAD`, an extending load from memory no wider than
+            // the half: the low half is the (extending) load of
+            // that memory; the high is zero, the sign, or undefined.
+            let lo = if info.mem_vt == half {
+                self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, ..info })
+            } else {
+                self.dag.get_ext_load(ext, half, chain, ptr, info)
+            };
+            let hi = match ext {
+                super::actions::LoadExt::ZExtLoad => self.dag.get_constant(0, half),
+                super::actions::LoadExt::SExtLoad => {
+                    let sign = self.dag.get_constant(u128::from(half.size_in_bits() - 1), EVT::I8);
+                    self.dag.get_node(ISD::Sra, half, &[lo, sign])
+                }
+                super::actions::LoadExt::ExtLoad => self.dag.get_undef(half),
+            };
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: lo.node, res: 1 });
+            return (lo, hi);
+        }
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
         let pointer = self.dag.value_type(ptr);
