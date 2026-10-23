@@ -95,3 +95,16 @@ fn a_size_after_the_letters_is_not_an_operand() {
     }
     assert_eq!(map.forms()[map.form("SHL32r1").unwrap()].name, "shl", "a lone 1 is still the shift by one");
 }
+
+/// A store of a word is a word-wide cell: `mov [base+index], v` took the
+/// width of the node's first value, the chain, and wrote four bytes from a
+/// 16-bit register (two modules of the vsgcc corpus stopped compiling).
+#[test]
+fn a_memory_operand_has_the_width_the_name_gives() {
+    use super::opcodes::memory_bytes;
+    assert_eq!(
+        [("MOV16mr", 2), ("MOV8mi", 1), ("MOV32rm", 4), ("ADD32mi8", 4), ("MOVZX32rm8", 1), ("MOVSX32rm16", 2)]
+            .map(|(name, _)| memory_bytes(name)),
+        [Some(2), Some(1), Some(4), Some(4), Some(1), Some(2)]
+    );
+}
