@@ -26,6 +26,7 @@ pub mod predicates;
 pub mod x86_addr;
 pub mod x86_classes;
 pub mod x86_divrem;
+pub mod x86_fcmp;
 pub mod x86_hooks;
 pub mod x86_llrm;
 pub mod x86_mul;
