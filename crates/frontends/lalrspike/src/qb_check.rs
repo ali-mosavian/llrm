@@ -281,6 +281,10 @@ impl Checker {
     fn collect_labels(&mut self, statements: &[Statement]) {
         for statement in statements {
             if let Statement::Label(name, span) = statement {
+                // a label in a procedure may not repeat one of the module's
+                if self.procedure.is_some() && self.module_labels.contains(name) {
+                    self.err(*span, "Duplicate label");
+                }
                 if !self.labels.insert(name.clone()) {
                     self.err(*span, "Duplicate label");
                 }
@@ -1124,7 +1128,9 @@ impl Checker {
                 }
             }
             Statement::Goto(label, span) | Statement::CallOrGoto(label, span) => {
-                if !self.labels.contains(label) {
+                // VBDOS takes `GOTO 0`
+                let vbdos_zero = label == "0" && matches!(self.dialect, Dialect::VbDos | Dialect::Quickr);
+                if !vbdos_zero && !self.labels.contains(label) {
                     self.err(*span, "Label not defined");
                 }
             }
@@ -1541,12 +1547,39 @@ impl Checker {
             self.err(span, "Identifier expected");
             return;
         }
+        if Ty::of_suffix(name).is_some() {
+            self.err(span, "Invalid character");
+            return;
+        }
         if self.records.contains_key(name) {
             self.err(span, "Duplicate definition");
             return;
         }
+        if fields.is_empty() {
+            self.err(span, "Element not defined");
+        }
         let mut out: Vec<(String, Ty, Option<usize>)> = Vec::new();
         for field in fields {
+            // array fields are PDS's and VBDOS's, and need bounds
+            if field.array && (field.bounds.is_empty() || matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45)) {
+                self.err(field.span, if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) { "AS missing" } else { "Syntax error" });
+                continue;
+            }
+            if matches!(field.type_name, Some(TypeName::String)) {
+                match &field.fixed_length {
+                    None => {
+                        self.err(field.span, "Asterisk missing");
+                        continue;
+                    }
+                    Some(length) => {
+                        let ok = self.constant_expr(length).and_then(|typed| typed.constant).is_some_and(|c| (1.0..=32767.0).contains(&c));
+                        if !ok {
+                            self.err(field.span, "Integer between 1 and 32767 required");
+                            continue;
+                        }
+                    }
+                }
+            }
             if Ty::of_suffix(&field.name).is_some() {
                 self.err(field.span, "Invalid character");
                 continue;

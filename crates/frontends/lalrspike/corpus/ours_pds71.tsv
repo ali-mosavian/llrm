@@ -8854,7 +8854,7 @@
 8853	syntax	15:11 syntax error
 8854	syntax	15:0 syntax error
 8855	syntax	15:0 syntax error
-8856	semantic	15:0 Statement unrecognizable
+8856	semantic	15:0 Equal sign missing
 8857	ok	
 8858	semantic	15:0 Statement unrecognizable
 8859	syntax	15:0 syntax error
@@ -8880,7 +8880,7 @@
 8879	syntax	15:11 syntax error
 8880	syntax	15:11 syntax error
 8881	syntax	15:3 syntax error
-8882	semantic	15:0 Statement unrecognizable
+8882	semantic	15:0 Equal sign missing
 8883	syntax	24:7 syntax error
 8884	ok	
 8885	syntax	15:0 syntax error
@@ -8901,7 +8901,7 @@
 8900	syntax	15:0 syntax error
 8901	syntax	15:0 syntax error
 8902	syntax	15:5 syntax error
-8903	ok	
+8903	semantic	15:0 Equal sign missing
 8904	syntax	15:5 syntax error
 8905	syntax	15:4 syntax error
 8906	syntax	15:0 syntax error
@@ -8912,12 +8912,12 @@
 8911	syntax	15:0 syntax error
 8912	syntax	15:3 syntax error
 8913	ok	
-8914	ok	
+8914	semantic	15:0 Equal sign missing
 8915	syntax	15:0 syntax error
 8916	syntax	15:0 syntax error
 8917	syntax	15:8 syntax error
 8918	syntax	15:3 syntax error
-8919	semantic	15:0 Statement unrecognizable
+8919	semantic	15:0 Equal sign missing
 8920	ok	
 8921	syntax	15:5 syntax error
 8922	syntax	15:4 syntax error
@@ -8930,7 +8930,7 @@
 8929	syntax	15:0 syntax error
 8930	syntax	15:5 syntax error
 8931	syntax	15:0 syntax error
-8932	ok	
+8932	semantic	15:0 Equal sign missing
 8933	syntax	15:6 syntax error
 8934	syntax	15:0 syntax error
 8935	syntax	15:0 syntax error
@@ -8963,7 +8963,7 @@
 8962	syntax	15:0 syntax error
 8963	syntax	15:4 syntax error
 8964	ok	
-8965	semantic	15:0 Statement unrecognizable
+8965	semantic	15:0 Equal sign missing
 8966	syntax	15:0 syntax error
 8967	syntax	15:5 syntax error
 8968	syntax	15:0 syntax error
@@ -9201,7 +9201,7 @@
 9200	semantic	15:0 Identifier expected
 9201	semantic	15:0 Identifier expected
 9202	semantic	15:0 Identifier expected
-9203	ok	
+9203	semantic	15:0 Invalid character
 9204	semantic	15:0 Identifier expected
 9205	syntax	15:5 syntax error
 9206	semantic	15:0 Identifier expected
@@ -9212,7 +9212,7 @@
 9211	semantic	15:0 Identifier expected
 9212	syntax	15:5 syntax error
 9213	ok	
-9214	ok	
+9214	semantic	15:0 Invalid character
 9215	semantic	15:0 Identifier expected
 9216	semantic	15:0 Identifier expected
 9217	syntax	15:5 syntax error
@@ -9230,7 +9230,7 @@
 9229	semantic	15:0 Identifier expected
 9230	semantic	15:0 Identifier expected
 9231	semantic	15:0 Identifier expected
-9232	ok	
+9232	semantic	15:0 Invalid character
 9233	semantic	15:0 Identifier expected
 9234	semantic	15:0 Identifier expected
 9235	semantic	15:0 Identifier expected
