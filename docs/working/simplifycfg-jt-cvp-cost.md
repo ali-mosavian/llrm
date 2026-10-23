@@ -82,11 +82,11 @@ Steps, one PR each, Ir on both arms and identical objects, the pin pass each mir
 
 | # | step | mirrors | target | date |
 |--:|---|---|--:|---|
-| 1 | `loop_form_blocks` from the manager's cached loop analysis (4.9 M in 36 asks, 137 K each) | `NeedCanonicalLoop` via `LoopInfo` | -3 M | 2026-11-12 |
-| 2 | the per-block visitors take `sole_predecessor`/`has_n_predecessors` in place of `predecessors()` (9,955 calls, 1.7 M) and `branchtocommon::folded` asks the cheap shape first (2.7 M, 3,661 calls) | `simplifyCFG` / `foldBranchToCommonDest`'s early exits | -2 M | 2026-11-17 |
-| 3 | LVI: one evaluation of a branch condition for all the values asked of it in a solve (`get_value_from_condition` 11 K calls at 1.15 K Ir against the pin's 498) | `getValueFromCondition` with its `ValueLatticeElement` cache | -6 M | 2026-11-24 |
-| 4 | CVP: `get_constant_on_edge` (528 calls, 14.8 K Ir each) and `get_constant_range_at_use` (554) reuse the block-value cache across the processed blocks | `CorrelatedValuePropagation::runImpl` order | -4 M | 2026-12-01 |
-| 5 | JumpThreading `process_threadable_edges` (619 calls, 17 K each): `computeValueKnownInPredecessors` memo per (value, block) | `computeValueKnownInPredecessorsImpl` | -3 M | 2026-12-08 |
-| 6 | re-take on the ledger (dist), the remaining top-5 callees by Ir | - | - | 2026-12-10 |
+| 1 | `loop_form_blocks` from the manager's cached loop analysis (4.9 M in 36 asks, 137 K each) | `NeedCanonicalLoop` via `LoopInfo` | -3 M | 2026-11-03 |
+| 2 | the per-block visitors take `sole_predecessor`/`has_n_predecessors` in place of `predecessors()` (9,955 calls, 1.7 M) and `branchtocommon::folded` asks the cheap shape first (2.7 M, 3,661 calls) | `simplifyCFG` / `foldBranchToCommonDest`'s early exits | -2 M | 2026-11-06 |
+| 3 | LVI: one evaluation of a branch condition for all the values asked of it in a solve (`get_value_from_condition` 11 K calls at 1.15 K Ir against the pin's 498) | `getValueFromCondition` with its `ValueLatticeElement` cache | -6 M | 2026-11-10 |
+| 4 | CVP: `get_constant_on_edge` (528 calls, 14.8 K Ir each) and `get_constant_range_at_use` (554) reuse the block-value cache across the processed blocks | `CorrelatedValuePropagation::runImpl` order | -4 M | 2026-11-14 |
+| 5 | JumpThreading `process_threadable_edges` (619 calls, 17 K each): `computeValueKnownInPredecessors` memo per (value, block) | `computeValueKnownInPredecessorsImpl` | -3 M | 2026-11-17 |
+| 6 | re-take on the ledger (dist), the remaining top-5 callees by Ir | - | - | 2026-11-18 |
 
 Each target is a guess from the callee cost until the step is profiled; the PR states the measured number.
