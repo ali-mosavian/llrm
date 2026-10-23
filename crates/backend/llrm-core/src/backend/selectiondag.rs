@@ -135,6 +135,8 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod alloca_tests;
+#[cfg(test)]
 mod asmcall_tests;
 #[cfg(test)]
 mod bundle_tests;
@@ -161,6 +163,8 @@ mod fpround_tests;
 #[cfg(test)]
 mod freeze_tests;
 #[cfg(test)]
+mod gaps_tests;
+#[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]
 mod mathops_tests;
@@ -172,6 +176,8 @@ mod memlib_tests;
 mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
+#[cfg(test)]
+mod overflow_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]

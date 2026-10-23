@@ -43,9 +43,21 @@ pub struct BuilderTarget {
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
     pub libcalls: Option<Vec<(String, u32, String)>>,
+    /// The stack alignment `alloca` rounds to, when not the target's own: the
+    /// pin's i486-linux goldens say 16.
+    pub stack_align: Option<u64>,
 }
 
 impl BuilderTarget {
+    /// This target with a stack alignment, whatever the target's is.
+    pub fn with_stack_alignment(
+        mut self,
+        bytes: u64,
+    ) -> BuilderTarget {
+        self.stack_align = Some(bytes);
+        self
+    }
+
     /// This target with the runtime routines the driver states.
     pub fn with_runtime_calls(
         mut self,
@@ -72,6 +84,7 @@ impl BuilderTarget {
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
+            stack_align: None,
         }
     }
 
@@ -83,6 +96,7 @@ impl BuilderTarget {
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
+            stack_align: None,
         }
     }
 }
@@ -492,7 +506,12 @@ impl Builder<'_> {
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let vt = self.type_of(self.function.value(arg).ty)?;
-            let (part_vt, parts) = self.parts(vt)?;
+            // the registers a convention names split a value as
+            // `getNumRegisters` does
+            let (part_vt, parts) = match self.convention.parameters.get(at) {
+                Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
+                _ => self.parts(vt)?,
+            };
             let entry_node = self.dag.entry_node();
             let mut pieces = Vec::new();
             match self.convention.parameters.get(at) {
@@ -527,7 +546,14 @@ impl Builder<'_> {
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
-            let value = if parts == 2 { self.dag.get_node(ISD::BuildPair, vt, &pieces) } else { pieces[0] };
+            let value = if parts == 2 {
+                self.dag.get_node(ISD::BuildPair, vt, &pieces)
+            } else if vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
+                // a narrow argument arrives in a register-sized slot
+                self.dag.get_node(ISD::Truncate, vt, &[pieces[0]])
+            } else {
+                pieces[0]
+            };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -713,7 +739,11 @@ impl Builder<'_> {
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
         for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
-            let (part_vt, parts) = self.parts(self.dag.value_type(*value))?;
+            let vt = self.dag.value_type(*value);
+            let (part_vt, parts) = match parameter {
+                Parameter::Registers(regs) => self.parts_in(vt, regs.len())?,
+                _ => self.parts(vt)?,
+            };
             let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
                 Parameter::Cell(displacement) => {
@@ -883,6 +913,22 @@ impl Builder<'_> {
                 ops.push(value);
             } else {
                 let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
+                // a narrow integer fills its register (`getCopyToParts`, by the
+                // return's `zeroext`/`signext`)
+                let value = if parts == 1 && vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
+                    let attrs = &self.function.return_attrs;
+                    let code = if llrm_mir::memory::has(attrs, "signext") {
+                        ISD::SignExtend
+                    } else if llrm_mir::memory::has(attrs, "zeroext") {
+                        ISD::ZeroExtend
+                    } else {
+                        ISD::AnyExtend
+                    };
+                    self.dag.get_node(code, part_vt, &[value])
+                } else {
+                    value
+                };
+                let vt = self.dag.value_type(value);
                 if self.convention.returns.len() != parts || (parts == 1 && part_vt != vt) {
                     return Err(Refused("result in registers the value does not fill"));
                 }
@@ -1084,12 +1130,14 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
+            Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. }
                 if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
+            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -1392,6 +1440,61 @@ impl Builder<'_> {
         let vt = self.dag.value_type(operand);
         let node = self.dag.get_node_flags(ISD::FNeg, vt, &[operand], flags_of(instruction.flags));
         self.set_value(instruction.result.expect("an fneg has a result"), node);
+        Ok(())
+    }
+
+    /// `visitExtractValue`: result `k` of the multi-result node the aggregate
+    /// is. Only that is built; an aggregate in memory or registers is not.
+    /// `visitAlloca` for a dynamic one: the size scaled by the element size,
+    /// rounded up to the stack alignment, and `DYNAMIC_STACKALLOC` on the
+    /// root.
+    fn visit_alloca(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let types = &self.module.context.types;
+        let pointer = self.target.dag.pointer;
+        // no operand is the array size 1 of an `i32`
+        let count = match instruction.operands.first() {
+            Some(operand) => self.get_value(*operand)?,
+            None => self.dag.get_constant(1, EVT::I32),
+        };
+        let element = self.layout.alloc_size(types, allocated);
+        let element = self.dag.get_constant(u128::from(element), EVT::I64);
+        let count = self.dag.get_zext_or_trunc(count, pointer);
+        let element = self.dag.get_zext_or_trunc(element, pointer);
+        let size = self.dag.get_node(ISD::Mul, pointer, &[count, element]);
+        let stack_align = self.target.stack_align.unwrap_or_else(|| self.arch.stack_alignment().max(1) as u64);
+        let mask = stack_align - 1;
+        // an alignment no greater than the stack's is the stack's: operand 0
+        let wanted = self.layout.pref_align(types, allocated).max(align.unwrap_or(1));
+        let alignment = if wanted > stack_align { wanted } else { 0 };
+        let mask_node = self.dag.get_constant(u128::from(mask), pointer);
+        let size = self.dag.get_node_flags(ISD::Add, pointer, &[size, mask_node], SDNodeFlags::NO_UNSIGNED_WRAP);
+        let high = self.dag.get_constant(u128::from(!mask) & self::mask(pointer.size_in_bits()), pointer);
+        let size = self.dag.get_node(ISD::And, pointer, &[size, high]);
+        let alignment = self.dag.get_constant(u128::from(alignment), pointer);
+        let root = self.root();
+        let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
+        self.dag.set_root(SDValue { node: node.node, res: 1 });
+        self.set_value(instruction.result.ok_or(Refused("an alloca without a result"))?, node);
+        Ok(())
+    }
+
+    fn visit_extract_value(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        indices: &[u32],
+    ) -> Result<(), Refused> {
+        let &[index] = indices else { return Err(Refused("extractvalue of a nested aggregate")) };
+        let aggregate = self.get_value(instruction.operands[0])?;
+        if aggregate.res as usize + index as usize >= self.dag.node(aggregate).values.len() {
+            return Err(Refused("extractvalue of an aggregate that is not a node's results"));
+        }
+        let picked = SDValue { node: aggregate.node, res: aggregate.res + index as u8 };
+        self.set_value(instruction.result.expect("an extractvalue has a result"), picked);
         Ok(())
     }
 
