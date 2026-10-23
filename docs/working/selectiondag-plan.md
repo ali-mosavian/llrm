@@ -220,6 +220,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
 | SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form), no DIVREM merge | `selectiondag/div_combine.rs` |
 | SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
+| SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
 | SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
