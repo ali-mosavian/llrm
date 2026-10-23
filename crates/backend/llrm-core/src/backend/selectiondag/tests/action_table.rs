@@ -127,3 +127,17 @@ fn m16_has_the_32_bit_actions_and_a_far_pointer_type() {
     }
     assert_eq!(m16.types.type_action(MVT::Far.into()), TypeAction::ExpandInteger);
 }
+
+/// The address operations were Custom at `i32` whatever the pointer type, so an
+/// m16 global address (an `i16`) reached selection as a bare `GlobalAddress`.
+#[test]
+fn address_operations_are_custom_at_the_pointer_type() {
+    let features = Features::default();
+    for (tli, ptr) in
+        [(TargetLowering::x86_32(features, MVT::I32), MVT::I32), (TargetLowering::x86_16(features, MVT::I16), MVT::I16)]
+    {
+        for op in [ISD::GlobalAddress, ISD::ConstantPool, ISD::ExternalSymbol] {
+            assert_eq!(act(&tli, op, ptr), Action::Custom, "{op:?} {ptr:?}");
+        }
+    }
+}
