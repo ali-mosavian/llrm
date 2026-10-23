@@ -233,7 +233,7 @@ pub fn selected(
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
     // type's alignment.
     let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
-        info.static_allocas.iter().map(|(value, index)| (*index, *value)).collect();
+        info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
     allocas.sort();
     for (index, value) in allocas {
         let ValueDef::Instruction(def) = function.value(value).def else { return refuse("an alloca that is not an instruction") };
