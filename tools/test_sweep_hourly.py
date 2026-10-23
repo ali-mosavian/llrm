@@ -170,7 +170,7 @@ def test_a_qbrt_probe_is_given_its_work_directory_and_a_usage_error_is_not_red(t
 
 def test_a_program_that_did_not_link_is_a_build_failure_not_wrong_output():
     """qbrt 183/218 on 50387f114 was `jwlink: memcpy_ is an undefined reference` for 35 programs, reported as 35 WRONG OUTPUTs."""
-    text = "NOTPASS arena_type x86-m32 ok not built jwlink: Error! E2028: memcpy_ is an undefined reference\nNOTPASS bc_draw x86-m16 ok DIFF 3 lines\n"
+    text = "NOTPASS arena_type x86-m32 ok not built jwlink: Error! E2028: memcpy_ is an undefined reference\nNOTPASS bc_draw x86-m16 ok DIFF 3 lines\nRESULT 216 of 218 pass (program x target); 0 did not compile\n"
     reds, _ = s.parse_qbrt(text)
     assert [(one.name, one.kind) for one in reds] == [("qbrt:arena_type:x86-m32", s.BUILD), ("qbrt:bc_draw:x86-m16", s.WRONG)]
     report = s.line("t" * 40, "t" * 40, "", {}, reds, reds, {})
