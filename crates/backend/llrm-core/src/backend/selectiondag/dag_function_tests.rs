@@ -119,3 +119,33 @@ fn stack_temporaries_are_cells_below_the_frame_pointer() {
     assert_eq!((disp(0), disp(1)), (-4, -16), "the 8-byte slot is aligned below the first");
     assert_eq!(disp(-1), 8, "the first parameter keeps its cell");
 }
+
+const BYTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %s = add i32 %a, %b
+  %t = trunc i32 %s to i8
+  %z = zext i8 %t to i32
+  ret i32 %z
+}
+";
+
+/// A truncate then an extend selects `EXTRACT_SUBREG` and a `movzx`: the
+/// subregister is the same value viewed one byte wide, so the `movzx` reads
+/// the value the add wrote. It was refused (`Unmapped(EXTRACT_SUBREG)`) in
+/// 44 functions of the corpora.
+#[test]
+fn a_subregister_is_the_same_value_viewed_narrower() {
+    let module = llrm_mir::parse::module(BYTE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let add = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("add"))).expect("an add");
+    let ext =
+        insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("movzx"))).expect("a movzx");
+    let (add, ext) = (add.what.as_ref().unwrap(), ext.what.as_ref().unwrap());
+    let (crate::model::ir::Loc::Held(written), crate::model::ir::Loc::Held(read)) = (&add.dests[0], &ext.sources[0])
+    else {
+        panic!("{add:?} {ext:?}")
+    };
+    assert_eq!((written.value, written.width, read.value, read.width), (written.value, 4, written.value, 1));
+}
