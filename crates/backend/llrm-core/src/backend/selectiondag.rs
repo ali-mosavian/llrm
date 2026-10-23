@@ -161,6 +161,8 @@ mod fpround_tests;
 #[cfg(test)]
 mod freeze_tests;
 #[cfg(test)]
+mod gaps_tests;
+#[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]
 mod mathops_tests;
@@ -180,7 +182,5 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
-#[cfg(test)]
-mod gaps_tests;
 #[cfg(test)]
 mod vararg_tests;
