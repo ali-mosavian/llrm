@@ -39,3 +39,9 @@ Ours against the pin on the programs the sink moves (clocks, our build 49a8d96bf
 ## Not measured
 
 P5, m16, and the pin's sub-features inside Peephole (`--disable-peephole` is the whole pass). Per-function spill/reload of ours: its listing does not mark spill slots, so ours is compared in clocks and instructions only.
+
+## Peephole: per-function `mov` (2026-10-23, `tools/pairs/premise_mov.py`, -O2, m32 i486, 71 programs, 158 functions matched)
+
+Ours is 72 movs above the pin over all functions (39 above, 98 below, 21 equal). The pin's pass removes 312 movs
+(without minus with). The largest gaps are `recchop:chop` +38, `matmul:bench_matmul` +37, `x_mergesort:msort` +33, `quicksort:sort` +28, `x_radix` +24, `nbody` +23; their `mov` counts include spill and reload moves, so a gap there is allocation first. No function shows a copy the pass's rewriters would remove and ours keeps; the next check is the listing of `chop` and `msort` against the pin's (copy or spill).
+
