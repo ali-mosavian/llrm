@@ -181,4 +181,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ext;
 #[cfg(test)]
+mod overflow_tests;
+#[cfg(test)]
 mod vararg_tests;
