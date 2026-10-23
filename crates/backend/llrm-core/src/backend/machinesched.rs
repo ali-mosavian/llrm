@@ -25,19 +25,27 @@
 //! (a load before a store), and the load of `n` has no edge to the first
 //! load or the add.
 //!
-//! # Used by
-//! The bottom-up list scheduler (pieces 2 and 3 of
-//! docs/working/machine-scheduler-plan.md).
+//! # Runs
+//! `MachineScheduler`, a machine phase after `pressuresink` and before
+//! `floatfold` (`machinesched@5`): each region longer than half the allocatable
+//! registers is ordered by `bottom_up` (pieces 2 and 3 of
+//! docs/working/machine-scheduler-plan.md). DEVIATE MS3: values that pass
+//! through a block are not counted in its pressure, and one limit stands for
+//! every register set.
 
 use std::collections::HashSet;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::Regs;
 
+use crate::backend::allocate::{LiveAt, live_rows};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
 use crate::model::ir::{Loc, Operation};
-use crate::model::lir::Insn;
+use crate::model::lir::{Insn, LirBody};
+use crate::model::passes::LIRTransform;
 
 /// Whether `one` stays where it is, and nothing moves across it.
 fn boundary(
@@ -222,6 +230,92 @@ pub fn bottom_up(
     placed
 }
 
+/// The pre-RA machine scheduler: each region of a block that is longer than
+/// half the allocatable registers is ordered by [`bottom_up`] (DEVIATE MS3:
+/// values that pass through the block are not counted in its pressure; the
+/// limit is the number of allocatable registers, not the pin's per-set limits).
+pub struct MachineScheduler {
+    pub classes: Rc<RegisterClasses>,
+}
+
+impl LIRTransform for MachineScheduler {
+    fn class_name(&self) -> &'static str {
+        "MachineScheduler"
+    }
+
+    fn name(&self) -> &str {
+        "machinesched"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        Ok(scheduled(&body, self.classes.available.len()))
+    }
+}
+
+/// `body` with each long region reordered; `limit` is the pressure it may
+/// reach.
+pub fn scheduled(
+    body: &LirBody,
+    limit: usize,
+) -> LirBody {
+    let (regs, bits) = (body.regs(), body.bits);
+    let mut live = None;
+    let mut changed = false;
+    let blocks: Vec<_> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns = block.insns.to_vec();
+            let regions = regions(&insns, regs, bits);
+            if regions.iter().all(|region| region.len() <= limit / 2) {
+                return block.clone();
+            }
+            let live = live.get_or_insert_with(|| live_rows(body));
+            let mut values: Vec<u32> =
+                insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+            values.sort_unstable();
+            values.dedup();
+            let mut now: HashSet<u32> = values.into_iter().filter(|&value| live.live_out(block.at, value)).collect();
+            let step = |now: &mut HashSet<u32>, one: &Insn| {
+                for value in &one.defines {
+                    now.remove(value);
+                }
+                now.extend(one.uses.iter().copied());
+            };
+            let mut out = insns.clone();
+            let mut end = insns.len();
+            for region in regions.iter().rev() {
+                for one in insns[region.end..end].iter().rev() {
+                    step(&mut now, one);
+                }
+                let slice = &insns[region.clone()];
+                if slice.len() > limit / 2 {
+                    let order = bottom_up(slice, &graph(slice, regs, bits), &now, limit);
+                    if order.iter().enumerate().any(|(place, &node)| place != node) {
+                        let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
+                        ats.sort_unstable();
+                        for (place, &node) in order.iter().enumerate() {
+                            let mut moved = (*slice[node]).clone();
+                            moved.at = ats[place];
+                            out[region.start + place] = Arc::new(moved);
+                        }
+                        changed = true;
+                    }
+                }
+                for one in slice.iter().rev() {
+                    step(&mut now, one);
+                }
+                end = region.start;
+            }
+            block.with_insns(out)
+        })
+        .collect();
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -321,5 +415,37 @@ mod tests {
         assert_eq!(bottom_up(&insns, &found, &live_out, 2), [0, 1, 3, 2, 4, 5]);
         // A limit that is never reached leaves the order alone.
         assert_eq!(bottom_up(&insns, &found, &live_out, 16), [0, 1, 2, 3, 4, 5]);
+    }
+
+    /// The long region of a block was kept in source order whatever the
+    /// pressure: three loads were all live at once (3 values) with a limit
+    /// of 2. Through the pass the third load sits just above its reader.
+    #[test]
+    fn test_the_pass_orders_a_long_region_by_pressure() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(8)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(16)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        insns.push(insn(6, semantics(Operation::Return, "ret", vec![], vec![held(6)]), vec![], vec![6]));
+        let mut body = LirBody::new(
+            "pressure",
+            0,
+            vec![LirBlock::new(0, insns).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let defined: Vec<u32> =
+            scheduled(&body, 2).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(defined, [1, 2, 4, 3, 5, 6]);
+        let kept: Vec<u32> = scheduled(&body, 16).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(kept, [1, 2, 3, 4, 5, 6]);
     }
 }
