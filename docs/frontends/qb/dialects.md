@@ -51,7 +51,11 @@ A profile may affect:
 
 Original QuickBASIC 4.5 and PDS 7.1 reject underscores while VBDOS accepts
 them, but that is compatibility evidence about the historical compilers, not a
-restriction in this frontend. Compiler switches still differ, and VBDOS alone
+restriction in this frontend. The lexer takes three forms only where the measured
+compiler does: a `@` name suffix (CURRENCY) under `pds71` and `vbdos`, which
+semantic analysis then refuses as unsupported; a doubled quote in a string as
+one quote, and an `_` straight after a number as a line continuation, under
+`vbdos`. Compiler switches still differ, and VBDOS alone
 provides the measured `/G3` mode. `/G3` informs ABI compatibility; the new
 compiler always targets 386+ real mode.
 

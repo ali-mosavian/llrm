@@ -2671,6 +2671,9 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             Literal::Integer(value, if suffix == Some('&') { TypeName::Long } else { TypeName::Integer }),
             token.span,
         )),
+        // The compiler has no CURRENCY type: `1@` would otherwise be read as a
+        // SINGLE.
+        TokenKind::Real(_, Some('@')) => Err(ParseResult::BadSyntax),
         TokenKind::Real(value, suffix) => Ok(Expr::Literal(
             Literal::Real(value, if suffix == Some('#') { TypeName::Double } else { TypeName::Single }),
             token.span,
