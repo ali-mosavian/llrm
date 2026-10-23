@@ -114,6 +114,13 @@ impl FrameMap for Frame {
             ..Mem::new(Some(Addr::new(Space::Frame, disp)), width)
         })
     }
+
+    fn extent(
+        &self,
+        index: i32,
+    ) -> Option<(i64, i64)> {
+        self.locals.borrow().get(usize::try_from(index).ok()?).copied()
+    }
 }
 
 /// `CreateStackTemporary`: the preprocess makes its slots here.

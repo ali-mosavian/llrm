@@ -114,6 +114,15 @@ pub trait FrameMap {
         index: i32,
         width: u32,
     ) -> Option<Mem>;
+
+    /// (displacement, size) of local object `index`; `None` for a parameter
+    /// or where the frame does not say.
+    fn extent(
+        &self,
+        _index: i32,
+    ) -> Option<(i64, i64)> {
+        None
+    }
 }
 
 /// The pin's machine opcode names, by number.
@@ -1070,6 +1079,26 @@ impl Emitter<'_, '_> {
             .frame
             .cell(index_of, cell_width)
             .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
+        // A displacement past the object (an index that makes up the rest,
+        // `[ebp+ecx+126]` for 8192 bytes below) is no frame position: the
+        // layout takes a positive one for the arguments' and does not move
+        // it. The object's address is made, and the cell is based on it.
+        if let Some((start, size)) = self.ctx.frame.extent(index_of)
+            && !(start..=start + size).contains(&(start + disp))
+        {
+            let object = self.fresh(4);
+            let whole = Mem { index: None, ..cell.clone() };
+            self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
+            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            return Ok(Mem {
+                base: Some(object),
+                index,
+                scale,
+                offset: disp,
+                disp_width: 2,
+                ..Mem::new(Some(address), cell_width)
+            });
+        }
         // The object's place is its `addr`; the displacement moves that, as
         // `offset` of a cell with an `addr` is only how it is encoded.
         let addr = cell.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });
@@ -1080,7 +1109,7 @@ impl Emitter<'_, '_> {
             _ => cell.through,
         };
         let addr = addr.map(|addr| if index.is_some() { Addr { base: through.iced(), ..addr } } else { addr });
-        Ok(Mem { addr, through, offset: cell.offset + disp, index, scale, ..cell })
+        Ok(Mem { addr, through, index, scale, ..cell })
     }
 
     /// An address component: a value, or the `$noreg` register.
