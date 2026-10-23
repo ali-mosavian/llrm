@@ -251,6 +251,45 @@ b0:
     assert_eq!(aa.alias(&at(global("taken")), &at(argument), &mut aaqi, None), AliasResult::MayAlias, "@taken");
 }
 
+/// `getModRefInfo(Call, Loc)` of the aggregate asks the aggregate's `alias`
+/// for each argument (`AAQI.AAR.alias`, BasicAliasAnalysis.cpp L1030): a
+/// `memcpy` within a tracked array leaves a parameter's field alone. BasicAA
+/// asked its own `alias`, which says "may" for a global against an argument,
+/// so the call stayed a clobber in MemorySSA (22 of 1796 call queries in
+/// qbq's d_faces -O2).
+#[test]
+fn a_call_into_a_tracked_global_leaves_an_argument_through_the_aggregate() {
+    use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
+    let module = parsed(
+        "@g = internal global [4 x i16] zeroinitializer
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f(ptr %p) {
+b0:
+  %x = load i16, ptr %p
+  call void @llvm.memcpy.p0.p0.i16(ptr @g, ptr @g, i16 4, i1 false)
+  ret i16 %x
+}
+",
+    );
+    let info = compute(&module);
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+    let call =
+        f.walk().map(|(_, inst)| inst).find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Call(_))).unwrap();
+    let value = crate::testing::value(f, "x");
+    let load = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+    let location = MemoryLocation::get(&unit, load).expect("a load");
+    let mut alone = crate::basicaa::BasicAA::new(&unit);
+    assert_eq!(alone.get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default()), ModRefInfo::ModRef);
+    let mut aggregate = crate::aggregate::AggregateAA::new();
+    aggregate.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+    aggregate.add_aa_result(GlobalsAAResult::new(&unit, &info));
+    assert_eq!(aggregate.get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default()), ModRefInfo::NoModRef);
+}
+
 /// DEVIATE G8 takes the globals the program does not export as local. QB's
 /// `VARPTR`, `VARSEG` and `@` still make one reachable by a far pointer: the
 /// address passed to a call, turned into an integer or stored is taken, so
