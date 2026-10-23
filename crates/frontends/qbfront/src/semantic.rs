@@ -1325,6 +1325,7 @@ fn event_traps(module: &Module) -> Result<Module, SemanticError> {
                 exported: false,
                 private: false,
                 module_scope: true,
+                unchecked: false,
                 span,
             },
         );
@@ -1591,6 +1592,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
                     exported: false,
                     private: false,
                     module_scope: true,
+                    unchecked: false,
                     span,
                 },
             );

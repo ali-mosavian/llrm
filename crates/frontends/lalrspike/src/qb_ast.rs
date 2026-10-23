@@ -2011,6 +2011,7 @@ impl Ast<'_> {
                 self.i += 1;
             }
         }
+        let unchecked = declaration && !self.is(Kw::LParen);
         let parameters = self.parameters()?;
         if kind == ProcedureKind::Function && self.eat(Kw::AS) {
             result = Some(self.declaration_type()?);
@@ -2029,6 +2030,7 @@ impl Ast<'_> {
             exported: true,
             private: false,
             module_scope: false,
+            unchecked,
             span,
         });
         if !declaration {
@@ -2090,6 +2092,7 @@ impl Ast<'_> {
             exported: !inline,
             private: false,
             module_scope: true,
+            unchecked: false,
             span,
         });
         if !inline {

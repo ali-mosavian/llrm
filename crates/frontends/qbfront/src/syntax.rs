@@ -136,6 +136,8 @@ pub struct Procedure {
     /// DEF FN and an outlined module GOSUB run in the module's variable
     /// scope; SUB and FUNCTION see only what is SHARED.
     pub module_scope: bool,
+    /// `DECLARE SUB name` with no parameter list: calls are not checked against it.
+    pub unchecked: bool,
     pub span: Span,
 }
 
