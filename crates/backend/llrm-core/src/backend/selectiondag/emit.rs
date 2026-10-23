@@ -687,21 +687,16 @@ impl Emitter<'_, '_> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
-            // The global rides in the node's own data.
-            let symbol = match node.data {
-                NodeData::Global { symbol, .. } => Some(symbol),
+            // The global rides as the operand (morph clears the node's data).
+            let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
+            let symbol = match (operand_data, node.data) {
+                (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
                 _ => None,
             };
-            // Naming no global it is DGROUP's, which the builder also writes
-            // for the start of a huge array (`addrspacecast (@big ...)`):
-            // tests/run/c/huge_array crashed. Refused until the builder says
-            // which segment it means.
-            let Some(symbol) = symbol else {
-                return Err(EmitError::Unsupported("SEGMENT_OF no global: DGROUP or a global's segment".to_owned()));
-            };
+            // Naming no global it is DGROUP's.
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(Some(symbol))) };
+            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
             return Ok(());
         }
