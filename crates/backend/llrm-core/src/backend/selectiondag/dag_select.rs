@@ -96,7 +96,7 @@ pub fn legalized(
 /// they read (`allnodes` in the pin is in topological order; here creation
 /// order is not, since a lowering makes the operand it replaces after its
 /// user).
-fn do_instruction_selection(
+pub(crate) fn do_instruction_selection(
     dag: &mut SelectionDAG,
     selector: &Selector,
     hooks: &mut X86Hooks,
