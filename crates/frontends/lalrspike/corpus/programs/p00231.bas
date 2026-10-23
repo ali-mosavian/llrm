@@ -1,0 +1,9 @@
+DIM x%, y%, i%, j%
+WHILE x%
+SELECT CASE x%
+CASE 1
+y% = 1
+CASE ELSE
+y% = 3
+END SELECT
+WEND

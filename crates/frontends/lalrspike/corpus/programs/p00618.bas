@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+DEF FNa% = 1
+END SUB

@@ -1,0 +1,2 @@
+COMMON x%
+x$ = "a"

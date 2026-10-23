@@ -1,0 +1,2 @@
+ERASE x%
+DIM SHARED x%(5)

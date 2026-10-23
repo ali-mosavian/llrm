@@ -1,0 +1,2 @@
+INPUT x%
+COMMON SHARED x%

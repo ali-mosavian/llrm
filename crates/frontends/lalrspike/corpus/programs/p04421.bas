@@ -1,0 +1,3 @@
+DIM x%
+65535 PRINT
+ON x% GOSUB a

@@ -1,0 +1,2 @@
+COMMON x%
+CONST x% = 1

@@ -1,0 +1,2 @@
+DIM SHARED x%(5)
+CONST x$ = "a"

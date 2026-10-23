@@ -1,0 +1,2 @@
+DECLARE SUB p CDECL ALIAS "q" (a%)
+CALL p(1)

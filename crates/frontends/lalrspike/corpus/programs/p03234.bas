@@ -1,0 +1,2 @@
+ERASE x%
+REDIM x(5) AS LONG

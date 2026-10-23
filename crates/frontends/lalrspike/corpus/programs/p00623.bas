@@ -1,0 +1,7 @@
+DIM x%
+FUNCTION f% ()
+ON ERROR GOTO h
+h:
+RESUME NEXT
+f% = 1
+END FUNCTION

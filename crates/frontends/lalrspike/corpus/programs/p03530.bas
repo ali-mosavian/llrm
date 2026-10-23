@@ -1,0 +1,3 @@
+SUB p
+CONST x = 1
+END SUB

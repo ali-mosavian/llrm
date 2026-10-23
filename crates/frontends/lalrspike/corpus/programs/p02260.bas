@@ -1,0 +1,2 @@
+COMMON x%
+PRINT x(1)

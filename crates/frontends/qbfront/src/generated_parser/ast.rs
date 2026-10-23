@@ -1952,7 +1952,7 @@ fn synthesize_statement(
             let Some(body) = block_until_next(state) else {
                 return false;
             };
-            Statement::For { counter, start, end, step, body, span }
+            Statement::For { counter, start, end, step, body, next_variable: None, span }
         }
         StatementShape::Do | StatementShape::DoWhile | StatementShape::DoUntil => {
             let pre = match descriptor {

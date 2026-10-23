@@ -1,0 +1,3 @@
+DIM x%
+ON ERROR GOTO a
+a: PRINT 1

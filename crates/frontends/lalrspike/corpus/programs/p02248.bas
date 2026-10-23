@@ -1,0 +1,2 @@
+COMMON x%
+DIM SHARED x%(5)

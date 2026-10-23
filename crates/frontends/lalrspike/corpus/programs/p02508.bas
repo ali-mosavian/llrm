@@ -1,0 +1,2 @@
+CONST x = y
+DIM SHARED x%(5)

@@ -1,0 +1,2 @@
+COMMON x%
+ERASE x%

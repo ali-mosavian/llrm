@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+COMMON x%
+END SUB

@@ -1,0 +1,2 @@
+COMMON x%
+STATIC x%

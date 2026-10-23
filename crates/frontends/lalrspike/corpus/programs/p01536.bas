@@ -1,0 +1,2 @@
+DIM x$
+DEFDBL A-Z

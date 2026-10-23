@@ -1,0 +1,2 @@
+DEFINT X
+STATIC x%

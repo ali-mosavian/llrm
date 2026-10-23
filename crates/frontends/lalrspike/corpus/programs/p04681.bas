@@ -1,0 +1,3 @@
+DIM x%
+END: 
+GOTO 65535

@@ -1,0 +1,2 @@
+DEFSTR X
+PRINT x

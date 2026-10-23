@@ -1,0 +1,3 @@
+SUB p
+FOR x% = 1 TO 2: NEXT
+END SUB

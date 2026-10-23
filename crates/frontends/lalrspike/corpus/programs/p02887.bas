@@ -1,0 +1,2 @@
+DEFINT X
+DEFSTR X

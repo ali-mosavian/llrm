@@ -1,0 +1,3 @@
+DIM x%
+RESTORE 10
+10 PRINT 1

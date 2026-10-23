@@ -1,0 +1,3 @@
+SUB p
+DIM SHARED x%
+END SUB

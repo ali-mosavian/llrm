@@ -1,0 +1,2 @@
+FOR x% = 1 TO 2: NEXT
+REDIM x(5) AS LONG

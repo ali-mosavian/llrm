@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+DECLARE SUB q
+END SUB

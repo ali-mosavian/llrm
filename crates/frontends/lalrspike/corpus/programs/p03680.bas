@@ -1,0 +1,3 @@
+DIM x%
+GOTO a$
+a: PRINT 1

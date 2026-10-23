@@ -1,0 +1,2 @@
+INPUT x%
+DIM x AS STRING * 4

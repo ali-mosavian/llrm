@@ -1,0 +1,2 @@
+PRINT x$
+CONST y = 2

@@ -1,0 +1,2 @@
+DEF FNa% = 7
+PRINT FNa%

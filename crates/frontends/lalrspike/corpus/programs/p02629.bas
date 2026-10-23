@@ -1,0 +1,2 @@
+PRINT x
+OPTION BASE 1

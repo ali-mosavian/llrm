@@ -1,0 +1,2 @@
+ERASE x
+DIM x AS LONG

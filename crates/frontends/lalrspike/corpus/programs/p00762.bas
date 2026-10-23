@@ -1,0 +1,2 @@
+TYPE T2
+a AS INTEGER

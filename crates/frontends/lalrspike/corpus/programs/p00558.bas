@@ -1,0 +1,7 @@
+TYPE RecT
+a AS INTEGER
+END TYPE
+DIM x%
+CALL p
+SUB p (a%,)
+END SUB

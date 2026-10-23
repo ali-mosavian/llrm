@@ -1,0 +1,2 @@
+DIM x AS STRING * 4
+FOR x% = 1 TO 2: NEXT

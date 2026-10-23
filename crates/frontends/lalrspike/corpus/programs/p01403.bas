@@ -1,0 +1,2 @@
+DIM x AS LONG
+DIM x AS STRING

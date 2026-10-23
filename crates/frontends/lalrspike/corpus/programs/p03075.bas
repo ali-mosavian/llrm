@@ -1,0 +1,2 @@
+OPTION BASE 0
+DIM x(1 TO 5)

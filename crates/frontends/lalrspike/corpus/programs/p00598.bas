@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+RETURN
+END SUB

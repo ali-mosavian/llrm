@@ -1,0 +1,2 @@
+SWAP x%, x
+DIM x(5) AS INTEGER

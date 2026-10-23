@@ -1,0 +1,2 @@
+COMMON x%
+DEFDBL A-Z
