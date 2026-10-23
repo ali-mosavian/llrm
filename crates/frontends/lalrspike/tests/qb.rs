@@ -59,7 +59,7 @@ fn a_print_item_is_followed_by_a_separator_or_the_end() {
 fn a_line_number_and_a_label_are_the_expressions_they_look_like() {
     assert!(rules("RUN 100").contains(&"RUN"));
     assert!(rules("RESUME 0").contains(&"RESUME"));
-    assert!(rules("OPTION BASE 1").contains(&"OPTION"));
+    assert!(rules("OPTION BASE 1").contains(&"OPTIONBASE"));
 }
 
 #[test]
@@ -96,8 +96,9 @@ fn syntax_the_grammar_does_not_have_is_an_error() {
 }
 
 #[test]
-fn dialect_additions_come_from_the_extension_table() {
-    assert!(rules("OPTION EXPLICIT").contains(&"OptionExplicit"));
-    assert!(rules("ON LOCAL ERROR GOTO handler").contains(&"OnLocalError"));
-    assert!(rules("DECLARE FUNCTION f CDECL (a AS INTEGER) AS INTEGER").iter().any(|rule| rule.contains("CdeclFunction")));
+fn dialect_additions_are_productions() {
+    assert!(rules("OPTION EXPLICIT").contains(&"OPTIONEXT"));
+    assert!(rules("ON LOCAL ERROR GOTO handler").contains(&"ONLOCALERROR"));
+    assert!(rules("DECLARE FUNCTION f CDECL ALIAS \"g\" (a AS INTEGER) AS INTEGER").contains(&"DECLARE"));
+    assert!(rules("PRIVATE FUNCTION f (a AS INTEGER) AS INTEGER").contains(&"FUNCTION"));
 }

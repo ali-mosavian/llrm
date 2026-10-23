@@ -2,7 +2,7 @@ use llrm_nib::lexer::TokenKind;
 use crate::ast::*;
 use crate::nib_tokens::Tok;
 
-#[LALR]
+
 grammar;
 
 extern {

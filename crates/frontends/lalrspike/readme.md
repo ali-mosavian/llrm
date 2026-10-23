@@ -4,13 +4,17 @@ Spike: LALR(1) grammars for Nib and the QB family. Wherever the grammar cannot
 tell two readings apart, one node keeps the written shape and a later pass
 (symbol table, semantic) chooses. Not in the workspace; `cargo test` here.
 
-lalrpop in `#[LALR]` mode. Both grammars have no conflicts. The Nib grammar is
-`src/nib.lalrpop`, hand-written from the language spec's grammar. The QB one is
-generated: `python3 prs2lalrpop.py ../qbfront/grammar/qbasbnf.prs > src/qb.lalrpop`
-turns the recovered QBasic grammar (statements, functions, internal
-nonterminals) and `dialect-extensions.toml` into rules building a generic
-tree, and splices in `src/qb_hand.part`, which is the 49 externals plus the
-line structure and expressions. Both parsers reuse the existing lexers.
+Both grammars are hand-written lalrpop files (`src/nib.lalrpop`, from the
+language spec's grammar; `src/qb.lalrpop`, with the recovered `qbasbnf.prs`
+as the reference) and reuse the existing lexers. The QB one is the recovered
+grammar's ordered choices and greedy optionals written as the context-free
+shapes they mean; an earlier version generated from the `.prs` is in git history.
+
+**LALR(1), checked.** lalrpop 0.23 always builds with its lane-table
+algorithm and `#[LALR]` does nothing, so "no conflicts" from it means LR(1).
+`python3 lalrpop2bison.py src/qb.lalrpop` converts a grammar (macros
+expanded, `x?` and `x*` inlined as lalrpop does) and runs bison, which builds
+true LALR(1) tables: no conflicts for either grammar.
 
 ## Against the existing parsers
 
@@ -22,7 +26,7 @@ Nib programs and fences pulled out of the tests' string literals and the docs
 |---|---|---|---|---|
 | Nib, 248 files | 248 | 0 | 0 | 0 |
 | Nib, test snippets and doc fences | 414 | 93 | 0 | 7 |
-| QB family, 591 files | 571 | 8 | 2 | 10 |
+| QB family, 591 files | 572 | 8 | 1 | 10 |
 
 LALR only, Nib: what the hand parser checks while parsing and the grammar
 leaves to later passes: constant folding (`const X = f()`, unknown constant),
@@ -30,9 +34,9 @@ leaves to later passes: constant folding (`const X = f()`, unknown constant),
 LALR only, QB: `COMMON`, `NAME`, `PCOPY` and `OPEN` options, which parse but
 the table-driven builder has no syntax-tree node for.
 
-Old only, QB: `dim point as Point` (a function's name as a variable, which
-the old parser accepts as a "contextual name") and `PRIVATE FUNCTION`
-(QuickrBASIC, a token prepass in the old parser). Not done.
+Old only, QB: `prelude.bas`, which uses QuickrBASIC's `x += 1` (a token
+prepass in the old parser; as a production it clashes with `foo -1`, a call
+with a negative argument). Not done.
 
 ## Deferred to later passes
 
@@ -57,23 +61,24 @@ the old parser accepts as a "contextual name") and `PRIVATE FUNCTION`
 - **Nib `?`**: `a ? b : c` or `x?` needs the `:` further on the same line.
   One token-stream rule (`nib_tokens.rs`, the old parser's own scan) marks the
   conditional's `?`. The same for `a is not b`, where `not` is also a name.
-- **QB: PEG into CFG.** The recovered grammar is ordered choice and greedy
-  optionals; as a context-free grammar these are ambiguous and had to be
-  written as the nesting they mean: `commaOptExp commaOptExp` in `PAINT` and
-  `VIEW`, `LINE`'s tail, `RUN`/`RESUME`/`OPTION BASE`/`ON`, where `Lit0` and
-  `LabLn` are both an integer, and `KEY (n) ON` against `KEY n, text$`. Its
-  `|` joins the items on either side, not whole sequences (`PUT ..., PSET`).
-- **QB: reserved words as names**: a `TYPE` member or a field named `pos`,
-  `name`, `point` takes the word as a name in the places a name must stand.
-  The old parser's "contextual names" are broader than that.
+- **QB: PEG into CFG.** Ordered choice and greedy optionals are ambiguous as
+  a context-free grammar. Trailing optional arguments (`PAINT`, `VIEW`,
+  `LINE`, `CIRCLE`) are one list of `, [exp]` whose length a later pass
+  checks, and `B`/`BF` in `LINE` are names. `Lit0`, `Lit1` and `LabLn` are
+  all an integer; `KEY (n) ON` is `KEY` of an expression. The recovered
+  grammar's `|` joins the items on either side, not whole sequences
+  (`PUT ..., PSET`).
+- **QB: reserved words as names**: a function's name (`point`, `pos`) is a
+  variable where no `(` follows, a `TYPE` member or field may be any word
+  (`name`, `pos`), and `PRIVATE` is a name before `SUB`/`FUNCTION`. The old
+  parser's "contextual names" are broader than that.
 - **QB: `IF`**: the dangling else is gone because nothing nests.
 - **QB: the old parser's token prepasses** (`FUNCTION f() AS type`,
   `VOLATILE`) are productions here.
 
 ## Not done
 
-QuickrBASIC (`+=`, `FOR IN`, tuple assignment, `a IF c ELSE b`, `PRIVATE`,
-f-strings); a typed tree from the QB generic tree (the old builder's
+QuickrBASIC (`+=`, `FOR IN`, tuple assignment, `a IF c ELSE b`, f-strings); a typed tree from the QB generic tree (the old builder's
 `syntax::Module`) and from the Nib one (`llrm_nib::syntax`); error messages;
-speed against the old parsers (the QB tables are a 2 MB generated source, and
-the crate takes about 30 s to build in debug).
+speed against the old parsers (the generated parser sources are large, and the
+crate takes about 30 s to build in debug).
