@@ -396,6 +396,8 @@ pub enum Statement {
     LineInput {
         file: Option<Expr>,
         prompt: Option<Expr>,
+        /// `LINE INPUT ;` leaves the cursor on the line
+        keep_cursor: bool,
         destination: Expr,
         span: Span,
     },

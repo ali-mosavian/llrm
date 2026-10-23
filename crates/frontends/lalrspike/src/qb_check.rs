@@ -2208,7 +2208,7 @@ impl Checker {
             "PUT" => "n n e p?",
             "VIEW" | "VIEW_SCREEN" => "i? i? i? i? i? i?",
             "VIEW_PRINT" => "i? i?",
-            "WINDOW" => "n? n? n? n?",
+            "WINDOW" | "WINDOW_SCREEN" => "n? n? n? n?",
             "PALETTE" => "i? n?",
             "PCOPY" => "i i",
             "SOUND" => "i n",

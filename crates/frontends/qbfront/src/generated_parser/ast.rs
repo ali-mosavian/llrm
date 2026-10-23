@@ -1631,7 +1631,7 @@ fn synthesize_statement(
             if arguments.next().is_some() || (channel && file.is_none()) || (has_prompt && prompt.is_none()) {
                 return false;
             }
-            Statement::LineInput { file, prompt, destination, span }
+            Statement::LineInput { file, prompt, keep_cursor: false, destination, span }
         }
         StatementShape::Input => {
             let mut values = arguments.into_iter();

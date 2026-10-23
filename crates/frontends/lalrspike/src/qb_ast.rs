@@ -2256,12 +2256,16 @@ impl Ast<'_> {
                 let argument = self.exp()?;
                 self.expect(Kw::RParen)?;
                 let arg_span = argument.span();
-                if !(self.eat(Kw::SColon) || self.eat(Kw::Comma)) {
-                    // no separator: the next item follows directly
-                }
+                // no separator: the next item follows directly
+                let separator = if self.eat(Kw::Comma) {
+                    PrintSeparator::Comma
+                } else {
+                    self.eat(Kw::SColon);
+                    PrintSeparator::Semicolon
+                };
                 items.push(PrintItem {
                     value: Expr::Apply { name: name.into(), arguments: vec![argument], span: arg_span },
-                    separator: PrintSeparator::Semicolon,
+                    separator,
                 });
                 continue;
             }
@@ -2373,9 +2377,9 @@ impl Ast<'_> {
         let keyword = self.take();
         let span = self.span(keyword);
         if self.eat(Kw::INPUT) {
-            let (file, prompt, _, _) = self.input_prefix()?;
+            let (file, prompt, _, keep_cursor) = self.input_prefix()?;
             let destination = self.name_ref()?;
-            self.out.push(Statement::LineInput { file, prompt, destination, span });
+            self.out.push(Statement::LineInput { file, prompt, keep_cursor, destination, span });
             return Ok(());
         }
         let (mut arguments, omitted_first) = if self.is(Kw::Minus) {
@@ -2876,7 +2880,7 @@ impl Ast<'_> {
                 }
             }
             Kw::WINDOW => {
-                self.eat(Kw::SCREEN);
+                let screen = self.eat(Kw::SCREEN);
                 let mut arguments = Vec::new();
                 if self.is(Kw::LParen) {
                     let (x, y, _) = self.coordinates()?;
@@ -2884,7 +2888,7 @@ impl Ast<'_> {
                     let (x2, y2, _) = self.coordinates()?;
                     arguments.extend([x, y, x2, y2]);
                 }
-                self.runtime("WINDOW", arguments, span);
+                self.runtime(if screen { "WINDOW_SCREEN" } else { "WINDOW" }, arguments, span);
             }
             Kw::COM | Kw::SIGNAL | Kw::STRIG | Kw::PEN | Kw::TIMER | Kw::UEVENT => {
                 let number = if matches!(k, Kw::COM | Kw::SIGNAL | Kw::STRIG) && self.is(Kw::LParen) {
