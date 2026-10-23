@@ -169,6 +169,14 @@ pub fn tied(
                 insns.push(one);
                 continue;
             };
+            // The copy `into := mov first` and what `first`'s death at `one`
+            // makes of the maps.
+            if let [copy, fixed] = &fix[..]
+                && let (Some(&into), Some(&first)) = (copy.defines.first(), copy.uses.first())
+            {
+                let dies = facts.killed(one.id(), first) && !fixed.uses.contains(&first);
+                walk.tied_pair_processed(copy.id(), fixed.id(), into, first, dies);
+            }
             facts.replace(at, &one, &fix);
             insns.extend(fix);
         }
@@ -1412,5 +1420,53 @@ mod tests {
         let sources = &made[0].what.as_ref().expect("an add").sources;
         assert_eq!(sources[0], held(8, 4));
         assert_eq!((made[0].undefs.clone(), made[0].uses.clone()), (vec![8], vec![]));
+    }
+
+    /// `processTiedPairs`: the copy made before a tied instruction takes the
+    /// distance the instruction had and the instruction the next one
+    /// (`DistanceMap`), so the distances that follow count the copies the
+    /// pin counts.
+    #[test]
+    fn test_a_copy_made_for_a_tied_pair_takes_a_distance_of_its_own() {
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![imm_def(0, 7), sum_into(1, 8, 7, 7), read(2, 8)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let facts = crate::twoaddress::BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, 0);
+        let insns = &body.blocks[0].insns;
+        walk.pass(&insns[0]);
+        let at = walk.pass(&insns[1]);
+        let (copy, mi) = (copy_insn(1, 8, 7), sum_into(1, 8, 8, 7));
+        walk.tied_pair_processed(copy.id(), mi.id(), 8, 7, false);
+        assert_eq!((walk.distance_of(copy.id()), walk.distance_of(mi.id())), (Some(at), Some(at + 1)));
+        assert_eq!(walk.pass(&insns[2]), at + 2, "the next instruction is two after, the copy counted");
+    }
+
+    /// `SrcRegMap[LastCopiedReg] = RegB`: where the source died at the tied
+    /// instruction, the copy's destination arrives as the source did.
+    #[test]
+    fn test_a_tied_copy_of_a_dying_source_arrives_as_the_source_did() {
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![arrival(0, &[(7, RegId::EAX)]), sum_into(1, 8, 7, 7)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let facts = crate::twoaddress::BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, 0);
+        walk.pass(&body.blocks[0].insns[0]);
+        walk.process_copy(&body.blocks[0].insns[0]);
+        walk.pass(&body.blocks[0].insns[1]);
+        // `v9` is a copy's destination the scan of `v7`'s uses did not reach.
+        let (copy, mi) = (copy_insn(1, 9, 7), sum_into(1, 9, 9, 7));
+        walk.tied_pair_processed(copy.id(), mi.id(), 9, 7, false);
+        assert_eq!(walk.src_register(9), None, "a source that lives on maps nothing");
+        walk.tied_pair_processed(copy.id(), mi.id(), 9, 7, true);
+        assert_eq!(walk.src_register(9), Some(RegId::EAX));
     }
 }
