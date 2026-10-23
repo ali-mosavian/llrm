@@ -177,6 +177,9 @@ struct Emitter<'a, 'd> {
     calls: Vec<(i64, Callee)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
+    /// The nodes that read each value of a glue chain, from their operands (the
+    /// matcher's nodes are not in the DAG's use lists).
+    glue_users: HashMap<SDValue, Vec<u32>>,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -257,6 +260,15 @@ pub fn emit_in(
         arguments: Vec::new(),
         calls: Vec::new(),
         last_call: None,
+        glue_users: {
+            let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
+            for (at, one) in dag.nodes().iter().enumerate() {
+                for op in &one.ops {
+                    users.entry(*op).or_default().push(at as u32);
+                }
+            }
+            users
+        },
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
@@ -703,21 +715,12 @@ impl Emitter<'_, '_> {
             if usize::from(glue.res) >= self.dag.node(glue).values.len() {
                 continue;
             }
-            let mut users: Vec<u32> = self.dag.users(glue).collect();
-            // a machine node the matcher made does not always reach the use
-            // lists: a copy to a physical register looks for its user itself
-            if users.is_empty() && matches!(
-                self.dag.node(self.dag.node(glue).ops[1]).data,
-                NodeData::PhysReg(_)
-            ) {
-                let all = self.dag.nodes();
-                users = (0..all.len() as u32).filter(|&one| all[one as usize].ops.contains(&glue)).collect();
-            }
-            for user in users {
+            for &user in self.glue_users.get(&glue).into_iter().flatten() {
                 match self.dag.opcode(SDValue { node: user, res: 0 }) {
                     ISD::CopyToReg => work.push(SDValue { node: user, res: 1 }),
                     ISD::Machine(op) => {
-                        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+                        let name =
+                            self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
                         if wanted(name) {
                             return true;
                         }
@@ -758,7 +761,7 @@ impl Emitter<'_, '_> {
     ) -> bool {
         let Some(glue) = glue else { return false };
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
-        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+        let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
         matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
     }
 
@@ -905,10 +908,16 @@ impl Emitter<'_, '_> {
             }
             _ if is_div_or_mul(name) => {
                 let (signed, divide, bytes, memory) = div_or_mul(name);
-                if bytes == 1 {
-                    return Err(EmitError::Unsupported(format!("{name}: the byte forms work in AH:AL")));
+                if bytes == 1 && divide {
+                    return Err(EmitError::Unsupported(format!("{name}: the byte divide works in AH:AL")));
                 }
-                let (low, high, wide) = self.accumulator_pair(bytes == 4)?;
+                // The byte multiply is AL times the operand into AX: the form
+                // pins AX and DX like the wider ones, the product is AX.
+                let (low, high, wide) = if bytes == 1 {
+                    (llrm_lir::registers::RegId::AL, llrm_lir::registers::RegId::DX, 2)
+                } else {
+                    self.accumulator_pair(bytes == 4)?
+                };
                 let divisor = if memory {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
                     Loc::Mem(self.cell(group, bytes)?)
@@ -942,7 +951,8 @@ impl Emitter<'_, '_> {
                         vec![Loc::Held(lo), divisor],
                     );
                 }
-                self.accumulator.insert(low, first);
+                // The product of the byte form is the word AX.
+                self.accumulator.insert(if bytes == 1 { llrm_lir::registers::RegId::AX } else { low }, first);
                 self.accumulator.insert(high, second);
                 return Ok(Some(()));
             }
