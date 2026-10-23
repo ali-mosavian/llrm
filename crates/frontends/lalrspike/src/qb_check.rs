@@ -96,6 +96,8 @@ struct Var {
     explicit: bool,
     /// The name carried a type character.
     suffixed: bool,
+    /// The array was made by a REDIM, so a later DIM is not a second dimensioning.
+    redimmed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +119,8 @@ struct ProcInfo {
     def_fn: bool,
     /// `DECLARE SUB name` with no parameter list: its calls are not checked.
     unchecked: bool,
+    /// The line where the name first appears (a DECLARE or the definition): calls before it are unchecked.
+    first_line: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -166,6 +170,10 @@ struct Checker {
     procedure: Option<(ProcedureKind, String)>,
     /// The procedure is STATIC, or a STATIC statement is being declared: its arrays are fixed.
     static_scope: bool,
+    /// An OPTION BASE has been read.
+    option_base_seen: bool,
+    /// The counters of the FOR loops being read.
+    for_counters: Vec<String>,
     /// CONSTs and TYPEs registered ahead of the statements that declare them (`const N`, `type N`).
     pre_done: HashSet<String>,
     labels: HashSet<String>,
@@ -189,6 +197,8 @@ impl Checker {
             scope: Scope::default(),
             procedure: None,
             static_scope: false,
+            option_base_seen: false,
+            for_counters: Vec::new(),
             pre_done: HashSet::new(),
             labels: HashSet::new(),
             module_labels: HashSet::new(),
@@ -205,24 +215,53 @@ impl Checker {
     // ---- the module ----------------------------------------------------------------------------
 
     fn module(&mut self, module: &Module) {
-        // what a procedure's signature depends on, in order: DEFtype ranges, CONSTs, record types
+        // A procedure's signature depends on what precedes it: DEFtype ranges, CONSTs, record types. They are
+        // read in order here, on a scratch state that the statement pass starts over from.
+        let before = self.errors.len();
+        let mut pending: Vec<&Procedure> = module.procedures.iter().collect();
+        pending.sort_by_key(|procedure| procedure.span.line);
+        let mut next = 0;
         for statement in &module.statements {
+            while next < pending.len() && pending[next].span.line < statement.span().line {
+                self.declare_procedure(pending[next]);
+                next += 1;
+            }
+            let mark = self.errors.len();
             match statement {
                 Statement::DefType { .. } => self.statement(statement),
-                Statement::Const { name, value, span } => {
-                    self.constant(name, value, *span);
-                    self.pre_done.insert(format!("const {}", stem(name)));
-                }
-                Statement::TypeDecl { name, fields, span } => {
-                    self.type_declaration(name, fields, *span);
-                    self.pre_done.insert(format!("type {name}"));
-                }
+                Statement::Const { name, value, span } => self.constant(name, value, *span),
+                Statement::TypeDecl { name, fields, span } => self.type_declaration(name, fields, *span),
                 _ => {}
             }
+            self.errors.truncate(mark);
         }
-        // procedures next: a call may precede its definition
-        for procedure in &module.procedures {
+        for procedure in &pending[next..] {
             self.declare_procedure(procedure);
+        }
+        let _ = before;
+        self.consts.clear();
+        self.records.clear();
+        self.scope = Scope::default();
+        self.def_types = std::array::from_fn(|_| Ty::Single);
+        // COMMON and DECLARE come before the first executable statement
+        let first_executable = module
+            .statements
+            .iter()
+            .find(|statement| !matches!(statement, Statement::Dim(_) | Statement::Redim(_) | Statement::Const { .. } | Statement::TypeDecl { .. } | Statement::DefType { .. } | Statement::Comment(_) | Statement::OptionBase(..) | Statement::OptionExplicit(_) | Statement::Common { .. } | Statement::Static(_) | Statement::Shared(_) | Statement::Label(..)))
+            .map(|statement| statement.span().line);
+        if let Some(line) = first_executable {
+            for statement in &module.statements {
+                if let Statement::Common { span, .. } = statement {
+                    if span.line > line {
+                        self.err(*span, "COMMON and DECLARE must precede executable statements");
+                    }
+                }
+            }
+            for procedure in module.procedures.iter().filter(|procedure| procedure.declaration) {
+                if procedure.span.line > line {
+                    self.err(procedure.span, "COMMON and DECLARE must precede executable statements");
+                }
+            }
         }
         self.collect_labels(&module.statements);
         let statements = module.statements.clone();
@@ -281,6 +320,10 @@ impl Checker {
         if !procedure.module_scope && self.reserved_name(&procedure.name, procedure.span) {
             return;
         }
+        // `SUB p ()` is VBDOS's; QB 4.5 and PDS take `SUB p`
+        if procedure.empty_list && !procedure.declaration && !procedure.module_scope && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+            self.err(procedure.span, "Formal parameter specification illegal");
+        }
         let params: Vec<ParamInfo> = procedure
             .parameters
             .iter()
@@ -315,6 +358,7 @@ impl Checker {
             declared: procedure.declaration,
             def_fn,
             unchecked: procedure.unchecked,
+            first_line: procedure.span.line,
         };
         match self.procs.get(&key) {
             Some(existing) if existing.defined && info.defined => self.err(procedure.span, "Duplicate definition"),
@@ -325,6 +369,7 @@ impl Checker {
                 info.declared |= existing.declared;
                 info.defined |= existing.defined;
                 info.unchecked |= existing.unchecked;
+                info.first_line = info.first_line.min(existing.first_line);
                 if existing.unchecked && !info.unchecked {
                     info.params = existing.params.clone();
                 }
@@ -332,6 +377,11 @@ impl Checker {
             None => {}
         }
         self.procs.insert(key, info);
+    }
+
+    /// The type a name stands for, spelled: its suffix or its DEFtype's.
+    fn type_key(&self, name: &str) -> String {
+        format!("{:?}", Ty::of_suffix(name).unwrap_or_else(|| self.default_type(name)))
     }
 
     fn default_type(&self, name: &str) -> Ty {
@@ -378,7 +428,7 @@ impl Checker {
             self.err(span, "Array not dimensioned");
             return None;
         }
-        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false, suffixed: suffix.is_some() };
+        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false, suffixed: suffix.is_some(), redimmed: false };
         self.scope.vars.entry(key).or_default().push(var.clone());
         Some(var)
     }
@@ -416,7 +466,7 @@ impl Checker {
             .as_ref()
             .and_then(|name| self.type_of_name(name))
             .unwrap_or_else(|| self.default_type(&declaration.name));
-        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true, suffixed: Ty::of_suffix(&declaration.name).is_some() };
+        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true, suffixed: Ty::of_suffix(&declaration.name).is_some(), redimmed: false };
         self.scope.vars.entry(stem(&declaration.name).to_owned()).or_default().push(var);
     }
 }
@@ -857,12 +907,21 @@ impl Checker {
 
     fn check_arguments(&mut self, procedure: &ProcInfo, arguments: &[Expr], span: Span, is_call: bool) {
         let _ = is_call;
-        if procedure.unchecked {
+        // BC reads top down: a call above the first DECLARE or definition has nothing to be checked against
+        if procedure.unchecked || span.line < procedure.first_line {
             for argument in arguments {
                 let inner = match argument {
                     Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => operand,
                     other => other,
                 };
+                // `a()` passes a whole array
+                if matches!(inner, Expr::Apply { arguments, .. } if arguments.is_empty()) {
+                    if let Expr::Apply { name, .. } = inner {
+                        if self.array_var(name).is_some() {
+                            continue;
+                        }
+                    }
+                }
                 self.expr(inner);
             }
             return;
@@ -1005,12 +1064,14 @@ impl Checker {
                     }
                 }
             }
-            Statement::TypeDecl { name, fields, span } => {
-                if !self.pre_done.remove(&format!("type {name}")) {
-                    self.type_declaration(name, fields, *span);
-                }
-            }
+            Statement::TypeDecl { name, fields, span } => self.type_declaration(name, fields, *span),
             Statement::Dim(items) | Statement::Static(items) => {
+                if matches!(statement, Statement::Static(_)) && self.procedure.is_none() {
+                    self.err(self.span, "Subprogram error");
+                }
+                if matches!(statement, Statement::Dim(_)) && self.procedure.is_some() && items.iter().any(|item| item.shared) {
+                    self.err(self.span, "Simple or array variable expected");
+                }
                 let keep = self.static_scope;
                 self.static_scope |= matches!(statement, Statement::Static(_));
                 for item in items {
@@ -1045,11 +1106,7 @@ impl Checker {
                     self.argument_of_class(Class::Array, name);
                 }
             }
-            Statement::Const { name, value, span } => {
-                if !self.pre_done.remove(&format!("const {}", stem(name))) {
-                    self.constant(name, value, *span);
-                }
-            }
+            Statement::Const { name, value, span } => self.constant(name, value, *span),
             Statement::Assign { target, value, span } => self.assign(target, value, *span),
             Statement::Label(name, span) => {
                 if crate::qb_reserved::is_reserved_name(self.dialect, name) {
@@ -1058,13 +1115,16 @@ impl Checker {
             }
             Statement::Comment(_) | Statement::OptionExplicit(_) => {}
             Statement::OptionBase(_, span) => {
+                if std::mem::replace(&mut self.option_base_seen, true) {
+                    self.err(*span, "Syntax error");
+                }
                 let dimensioned = |scope: &Scope| scope.vars.values().flatten().any(|v| v.rank.is_some());
                 if dimensioned(&self.scope) || dimensioned(&self.module_scope) {
                     self.err(*span, "Array already dimensioned");
                 }
             }
             Statement::Goto(label, span) | Statement::CallOrGoto(label, span) => {
-                if !self.labels.contains(label) && !label.bytes().all(|b| b.is_ascii_digit()) {
+                if !self.labels.contains(label) {
                     self.err(*span, "Label not defined");
                 }
             }
@@ -1096,11 +1156,24 @@ impl Checker {
                 if let Some(step) = step {
                     self.numeric(step);
                 }
+                let counter_key = match counter {
+                    Expr::Name(name, _) => Some(format!("{}{}", stem(name), self.type_key(name))),
+                    _ => None,
+                };
+                if let Some(key) = &counter_key {
+                    if self.for_counters.contains(key) {
+                        self.err(counter.span(), "FOR index variable already in use");
+                    }
+                    self.for_counters.push(key.clone());
+                }
                 self.in_loop.push("FOR");
                 for s in body {
                     self.statement(s);
                 }
                 self.in_loop.pop();
+                if counter_key.is_some() {
+                    self.for_counters.pop();
+                }
             }
             Statement::While { condition, body, .. } => {
                 self.numeric(condition);
@@ -1437,8 +1510,14 @@ impl Checker {
         }
         let Some(typed) = self.constant_expr(value) else { return };
         let key = stem(name).to_owned();
-        if self.consts.contains_key(&key) || self.scope.vars.contains_key(&key) {
+        // arrays have a namespace of their own: a CONST clashes with scalars (and with another CONST)
+        let scalar_in_use = self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none()));
+        if self.consts.contains_key(&key) {
             self.err(span, "Duplicate definition");
+            return;
+        }
+        if scalar_in_use {
+            self.err(span, "Syntax error");
             return;
         }
         let ty = match Ty::of_suffix(name) {
@@ -1538,20 +1617,27 @@ impl Checker {
         }
         let key = stem(&d.name).to_owned();
         let as_declared = d.type_name.is_some() && Ty::of_suffix(&d.name).is_none();
-        if self.consts.contains_key(&key) {
+        if !d.array && self.consts.contains_key(&key) {
             self.err(span, "Duplicate definition");
             return;
         }
         let existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
         if d.array {
-            if let Some(old) = existing.iter().find(|v| v.rank.is_some()) {
+            // an AS-bound array, a suffixed one and a bare one bind the stem as scalars' names do
+            if !existing.iter().any(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared) {
+                if let Some(message) = self.scalar_conflict(&existing, &ty, &d.name, as_declared, true) {
+                    self.err(span, message);
+                    return;
+                }
+            }
+            if let Some(old) = existing.iter().find(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared) {
                 // `COMMON a() AS T` named the array; its DIM gives the bounds
                 if old.rank == Some(usize::MAX) && !d.bounds.is_empty() {
                     if let Some(vars) = self.scope.vars.get_mut(&key) {
                         vars.retain(|v| v.rank != Some(usize::MAX));
                     }
                 } else {
-                    if redim && old.dynamic {
+                    if (redim && old.dynamic) || (!redim && old.redimmed) {
                         // REDIM resizes a dynamic array
                         if old.ty.plain() != ty.plain() {
                             self.err(span, "Duplicate definition");
@@ -1562,12 +1648,12 @@ impl Checker {
                     return;
                 }
             }
-        } else if let Some(message) = self.scalar_conflict(&existing, &ty, &d.name, as_declared) {
+        } else if let Some(message) = self.scalar_conflict(&existing, &ty, &d.name, as_declared, false) {
             self.err(span, message);
             return;
         }
         // a name bound by AS to another type, or a different suffix, is taken
-        if existing.iter().any(|v| v.declared && v.ty.plain() != ty.plain() && v.rank.is_some() == d.array) {
+        if !d.array && existing.iter().any(|v| v.declared && v.ty.plain() != ty.plain() && v.rank.is_none()) {
             self.err(span, "Duplicate definition");
             return;
         }
@@ -1584,16 +1670,17 @@ impl Checker {
                 || (d.array && self.procedure.is_some() && !self.static_scope),
             explicit: true,
             suffixed: Ty::of_suffix(&d.name).is_some(),
+            redimmed: redim,
         };
         self.scope.vars.entry(key).or_default().push(var);
     }
 
     /// Why declaring a scalar `name` of type `ty` clashes with the variables already named by its stem (BC's rules:
     /// `q` and `q%` are two variables, `q AS T` binds the stem, and PDS and VBDOS refuse to mix a suffix with AS).
-    fn scalar_conflict(&self, existing: &[Var], ty: &Ty, name: &str, as_declared: bool) -> Option<&'static str> {
+    fn scalar_conflict(&self, existing: &[Var], ty: &Ty, name: &str, as_declared: bool, arrays: bool) -> Option<&'static str> {
         let suffixed = Ty::of_suffix(name).is_some();
         let mixes = !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
-        for v in existing.iter().filter(|v| v.rank.is_none()) {
+        for v in existing.iter().filter(|v| v.rank.is_some() == arrays) {
             let bare = !v.declared && !v.suffixed;
             if as_declared {
                 if mixes && v.suffixed && v.ty.plain() == ty.plain() {
@@ -1636,7 +1723,7 @@ impl Checker {
             }
             None => {
                 let ty = wanted.clone().unwrap_or_else(|| self.default_type(&d.name));
-                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true, suffixed: Ty::of_suffix(&d.name).is_some() };
+                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true, suffixed: Ty::of_suffix(&d.name).is_some(), redimmed: false };
                 self.scope.vars.entry(key.clone()).or_default().push(var.clone());
                 self.module_scope.vars.entry(key).or_default().push(var);
             }
@@ -1884,7 +1971,11 @@ impl Checker {
         if name == "RUN" {
             // RUN "file", RUN line-number
             if let [argument] = arguments {
-                if !matches!(argument, Expr::Literal(Literal::Integer(..), _)) {
+                if let Expr::Literal(Literal::Integer(number, _), at) = argument {
+                    if !self.labels.contains(&number.to_string()) {
+                        self.err(*at, "Label not defined");
+                    }
+                } else {
                     self.string_expr(argument);
                 }
             }

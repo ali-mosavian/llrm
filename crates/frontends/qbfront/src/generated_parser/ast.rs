@@ -1345,6 +1345,7 @@ fn extension_procedure(
                 private: false,
                 module_scope: false,
                 unchecked: false,
+                empty_list: false,
                 span,
             },
         );
@@ -1515,6 +1516,7 @@ fn synthesize_statement(
             private: false,
             module_scope: def_fn,
             unchecked: false,
+            empty_list: false,
             span: header.span,
         };
         state.procedures.push(procedure);
