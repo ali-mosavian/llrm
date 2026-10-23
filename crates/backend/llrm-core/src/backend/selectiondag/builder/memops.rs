@@ -37,7 +37,9 @@ impl Builder<'_> {
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
             Intrinsic::Window => {
                 let pointer = self.get_value(instruction.operands[0])?;
-                let node = self.dag.get_node(super::super::x86isd::LLRM_WINDOW, EVT::Simple(super::super::mvt::MVT::Far), &[pointer]);
+                let node = self
+                    .dag
+                    .get_node(super::super::x86isd::LLRM_WINDOW, EVT::Simple(super::super::mvt::MVT::Far), &[pointer]);
                 self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
                 Ok(())
             }

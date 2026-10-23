@@ -906,7 +906,10 @@ impl Builder<'_> {
             }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op, value }) => {
                 let operand = self.constant_value(*value)?;
-                if *op == CastOp::AddrSpaceCast || self.dag.value_type(operand) == MVT::Far.into() || vt == MVT::Far.into() {
+                if *op == CastOp::AddrSpaceCast
+                    || self.dag.value_type(operand) == MVT::Far.into()
+                    || vt == MVT::Far.into()
+                {
                     return self.pointer_cast(*op, Operand::Constant(*value), operand, constant.ty);
                 }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
