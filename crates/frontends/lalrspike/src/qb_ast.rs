@@ -1114,7 +1114,8 @@ impl Ast<'_> {
         let span = self.span(at);
         let c = class(k);
         let assigned = c & (CTX_WORD | FN_WORD | FN0_VAR) != 0 || k == Kw::ERROR;
-        if (assigned && self.is_n(1, Kw::EQ)) || (c & OBJ_WORD != 0 && self.period_n(1)) {
+        // (TRON and TROFF swallow the rest of their line, `= 1` and all)
+        if (assigned && self.is_n(1, Kw::EQ) && !matches!(k, Kw::TRON | Kw::TROFF)) || (c & OBJ_WORD != 0 && self.period_n(1)) {
             return self.name_statement();
         }
         match k {
@@ -1949,7 +1950,8 @@ impl Ast<'_> {
             let array = self.eat(Kw::LParen);
             if array && !self.eat(Kw::RParen) {
                 loop {
-                    bounds.push(Bound { lower: None, upper: self.exp()? });
+                    let first = self.exp()?;
+                    bounds.push(if self.eat(Kw::TO) { Bound { lower: Some(first), upper: self.exp()? } } else { Bound { lower: None, upper: first } });
                     if self.eat(Kw::Comma) {
                         continue;
                     }
@@ -2103,7 +2105,15 @@ impl Ast<'_> {
         let empty_list = self.is(Kw::LParen) && self.is_n(1, Kw::RParen);
         let parameters = self.parameters()?;
         if kind == ProcedureKind::Function && self.eat(Kw::AS) {
-            result = Some(self.declaration_type()?);
+            // a type character and an AS clause both name the result: refused; and a record is no result
+            if result.is_some() {
+                return self.fail();
+            }
+            let given = self.declaration_type()?;
+            if matches!(given, TypeName::Named(_)) {
+                return self.fail();
+            }
+            result = Some(given);
         }
         let is_static = self.eat(Kw::STATIC) || is_static_prefix;
         self.procedures.push(Procedure {
