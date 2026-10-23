@@ -686,10 +686,10 @@ const ROWS: &[Row] = &[
     again(
         "Machine Copy Propagation Pass",
         2,
-        Missing,
-        "",
+        Match,
+        "machinecp.rs (flow.rs: after ControlFlow, slot copyprop@18)",
         "-disable-copyprop",
-        "w-2; 2026-11-13: llrm runs it once; the pin runs it again after tail duplication. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
+        "translated: the pass runs again after the control flow, as the pin after tail duplication (de8c6bc87; test in jumps_tests.rs). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
     ),
     row(
         "Post-RA pseudo instruction expansion pass",
