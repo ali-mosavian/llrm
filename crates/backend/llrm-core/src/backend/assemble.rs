@@ -838,7 +838,13 @@ fn staged(
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu, target.libcalls)
+                crate::backend::selectiondag::dag_function::selected(
+                    module,
+                    name,
+                    target.arch,
+                    target.cpu,
+                    target.libcalls,
+                )
             }) {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {

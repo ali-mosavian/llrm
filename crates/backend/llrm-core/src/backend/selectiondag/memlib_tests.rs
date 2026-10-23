@@ -77,7 +77,8 @@ fn the_call_uses_the_facts_symbol_and_convention() {
     assert!(on.contains("TargetExternalSymbol:i32'memset_'") && !on.contains("'memset'"), "{on}");
     assert!(on.contains("$eax") && on.contains("$edx") && on.contains("$ebx"), "register arguments:\n{on}");
     assert!(!on.contains("store"), "no stack arguments:\n{on}");
-    // the `i8` fill value is widened to the register it goes in; it was copied to `$edx` as an `i8`
+    // the `i8` fill value is widened to the register it goes in; it was copied
+    // to `$edx` as an `i8`
     assert!(on.contains("any_extend") && on.contains("Register:i32 $edx") && !on.contains("Register:i8 $edx"), "{on}");
     assert!(built("fill", &BuilderTarget::m32()).is_err());
 }
