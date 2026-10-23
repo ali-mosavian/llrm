@@ -562,6 +562,11 @@ impl Builder<'_> {
                         // runtime lacks would not link
                         return Err(Refused("memmove with no memmove in the runtime"));
                     }
+                    _ if matches!(which, Intrinsic::MemMove)
+                        && self.dag.value_type(dst) == EVT::Simple(super::super::mvt::MVT::Far) =>
+                    {
+                        return Err(Refused("memmove of far pointers: the runtime's routine takes near ones"));
+                    }
                     _ => self.mem_libcall(
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,

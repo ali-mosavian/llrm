@@ -977,3 +977,27 @@ fn two_selects_on_one_compare_are_one_branch() {
     let phis: Vec<usize> = done.body.blocks.iter().map(|b| b.phis.len()).collect();
     assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
+
+const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f(ptr %d, ptr %s, i16 %n) {
+entry:
+  call void @llvm.memmove.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+";
+
+/// A call of the runtime's `memmove` at m16 is a far call: its routine is a far
+/// procedure in another code segment. It was a near `call`, and the program
+/// crashed at once (the memmove_overlap run test under `LLRM_ISEL_REAL`).
+#[test]
+fn a_runtime_routine_is_called_far_at_m16() {
+    let module = llrm_mir::parse::module(VARIABLE_MOVE).expect("parses");
+    let libcalls = [("memmove".to_owned(), 0, "_memmove@3".to_owned())];
+    let done =
+        selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &libcalls)
+            .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(&i64, &String)> = done.calls.iter().collect();
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert!(done.far.contains(sites[0].0), "{sites:?} far={:?}", done.far);
+}
