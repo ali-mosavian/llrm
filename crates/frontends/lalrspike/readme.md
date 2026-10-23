@@ -52,6 +52,22 @@ Old only, QB files: `prelude.bas`, which uses QuickrBASIC's `x += 1` (a token
 prepass in the old parser; as a production it clashes with `foo -1`, a call
 with a negative argument). Not done.
 
+## Against the real BC.EXE
+
+`python3 bcdiff.py [--root DIR] ~/llrm-private-tools/qb45 FILE.bas...` runs
+Microsoft's `BC.EXE` (QB 4.5) and the grammar on each file and lists the
+disagreements. BC runs on the dosrun fork of DOSBox-X (`bcprobe.py`; four
+booted machines per core, a forked job per file, a tqdm bar). 1,300+ programs:
+the QB 4.5 examples, `GORILLA.BAS` and `NIBBLES.BAS`, the repo's files, the
+test sources' programs and mgl (in place, so its `$INCLUDE`s resolve).
+
+**BC accepts and the grammar refuses: none.** BC refuses and the grammar
+accepts: about 250, which are `OPTION EXPLICIT`, the VBDOS/PDS/Quickr forms
+(`AS` return types, `UNSIGNED`, `BYTE`), missing includes, `TYPE not defined`,
+`Duplicate definition`, and a few syntax errors BC 4.5 reports that the
+grammar is too lax to (`DIM a() AS INTEGER` outside `$DYNAMIC`). BC's own
+checks, not the parser's, are what the later passes have to reproduce.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

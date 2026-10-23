@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Compile BASIC sources with the real BC.EXE and say which it accepts.
 
-    bcprobe.py BC_DIR FILE.bas...      # BC_DIR holds BC.EXE (llrm-private-tools/qb45)
+    bcprobe.py [--root DIR] BC_DIR FILE.bas...      # BC_DIR holds BC.EXE (llrm-private-tools/qb45)
 
-Runs on the dosrun fork of DOSBox-X (DOSBOX_BIN, else tools/dosbatch's pick):
-four booted machines per core, every file a job forked from it, so the start-up
-is paid once per core. Prints `ok`, `refused` with BC's first error, or `timeout`.
+Runs on the dosrun fork of DOSBox-X: four booted machines per core, every file
+a job forked from one of them, so the start-up is paid once per machine.
+Prints `ok`, `refused` with BC's first error, or `timeout`.
+
+With --root the sources are compiled in place from that directory, mounted as
+C:, so a `'$INCLUDE: '..\\inc\\x.bi'` finds its file; the files must have CR LF
+line ends and 8.3 names. Without it each source is copied to a directory of
+its own with the .bi/.inc files beside it.
 """
 
 import json
@@ -15,8 +20,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
@@ -36,43 +45,76 @@ def verdict(out):
     return ("refused " if int(severe.group(1)) else "ok ") + first
 
 
-def machine(bc_dir, sources):
+def switches(source):
+    """The switches dosbatch gives: error trapping needs /E and /X."""
+    text = source.read_bytes().upper()
+    return " /E /X" if b"ON ERROR" in text or b"RESUME" in text else ""
+
+
+def machine(bc_dir, sources, root, progress):
     """One booted DOSBox-X, one job per source; the verdicts in order."""
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         script = []
         for at, source in enumerate(sources):
+            head = [":ms 600000", ":wall 60"]
+            if root:
+                rel = source.resolve().relative_to(root.resolve())
+                folder = "\\".join(rel.parts[:-1])
+                script += [*head, f"mount c {root}", f"mount d {work}", f"mount v {bc_dir}", "c:", f"cd \\{folder}", rf"V:\BC {rel.name},NUL,NUL /O{switches(source)}; > D:\O{at}.TXT", "."]
+                continue
             job = work / f"D{at}"
             job.mkdir()
             for sibling in source.parent.iterdir():  # $INCLUDE files beside the source
                 if sibling.suffix.lower() in INCLUDES and sibling.is_file():
                     shutil.copy(sibling, job / sibling.name.upper())
             (job / "T.BAS").write_bytes(dosbatch.crlf(source.read_bytes().replace(b"\x1a", b"")))
-            script += [f":ms 600000\n:wall 60", f"mount c {work}", f"mount v {bc_dir}", "c:", f"cd D{at}", r"V:\BC T.BAS /O; > O.TXT", "."]
+            script += [*head, f"mount c {work}", f"mount v {bc_dir}", "c:", f"cd D{at}", rf"V:\BC T.BAS /O{switches(source)}; > O.TXT", "."]
         (work / "job.conf").write_text(dosbatch.CONF)
         (work / "jobs.txt").write_text("\n".join(script) + "\n")
-        with open(work / "jobs.txt") as stdin, open(work / "events.txt", "w") as sink:
-            subprocess.run([DOSBOX, "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
-                           env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
-        ends = [json.loads(l) for l in (work / "events.txt").read_text().splitlines() if l.startswith('{"ev":"end"')]
+        events = work / "events.txt"
+        with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
+            process = subprocess.Popen([DOSBOX, "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
+                                       env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+            counted = 0
+            while process.poll() is None:  # each job's end event moves the bar
+                time.sleep(0.1)
+                done = events.read_text().count('{"ev":"end"')
+                progress(done - counted)
+                counted = done
+            progress(events.read_text().count('{"ev":"end"') - counted)
+        ends = [json.loads(l) for l in events.read_text().splitlines() if l.startswith('{"ev":"end"')]
         result = []
         for at in range(len(sources)):
             end = ends[at] if at < len(ends) else {}
-            out_file = work / f"D{at}" / "O.TXT"
+            out_file = work / (f"O{at}.TXT" if root else f"D{at}/O.TXT")
             if end.get("reason") != "exit" or not out_file.exists():
                 result.append("timeout" if end else "no result")
             else:
-                result.append(verdict(out_file.read_bytes().decode("latin-1")))
+                text = out_file.read_bytes().decode("latin-1")
+                if os.environ.get("BCRAW"):
+                    print(text, file=sys.stderr)
+                result.append(verdict(text))
         return result
 
 
 def main():
-    bc_dir, files = Path(sys.argv[1]), [Path(f) for f in sys.argv[2:]]
+    args = sys.argv[1:]
+    root = None
+    if args[:1] == ["--root"]:
+        root, args = Path(args[1]), args[2:]
+    bc_dir, files = Path(args[0]), [Path(f) for f in args[1:]]
     machines = 4 * (os.cpu_count() or 4)  # four booted machines per core
     slices = [files[i::machines] for i in range(machines) if files[i::machines]]
-    with ThreadPoolExecutor(len(slices)) as pool:
-        results = list(pool.map(lambda s: machine(bc_dir, s), slices))
+    lock = threading.Lock()
+    with tqdm(total=len(files), unit="file", desc="BC", file=sys.stderr) as bar:
+        def progress(n):
+            with lock:
+                bar.update(n)
+
+        with ThreadPoolExecutor(len(slices)) as pool:
+            results = list(pool.map(lambda s: machine(bc_dir, s, root, progress), slices))
     verdicts = {}
     for chunk, got in zip(slices, results):
         verdicts.update(zip(chunk, got))
