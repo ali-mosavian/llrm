@@ -412,3 +412,36 @@ fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
     let last = insns.last().and_then(|i| i.what.as_ref()).expect("a return");
     assert_eq!((last.op, last.name.as_deref()), (crate::model::ir::Operation::Return, Some("")));
 }
+
+const BOTH_CALLS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32)
+declare i32 @c(i32)
+define i32 @main() {
+entry:
+  %a = call cc 1002 i32 @w(i32 7)
+  %b = call i32 @c(i32 %a)
+  ret i32 %b
+}
+";
+
+/// A call destroys what its callee's convention says: the DAG path gave every
+/// call the target-wide set, EAX alone, so a value held in ECX or EDX across a
+/// cdecl call was destroyed (`es_across_copy` looped forever).
+#[test]
+fn a_call_destroys_what_its_conventions_says() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(BOTH_CALLS).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let calls: Vec<_> = insns.iter().filter(|i| i.call.is_some()).collect();
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].clobbers.contains(&named("ecx")), "watcall keeps ECX: {:?}", calls[0].clobbers);
+    assert!(
+        calls[1].clobbers.contains(&named("ecx")) && calls[1].clobbers.contains(&named("edx")),
+        "{:?}",
+        calls[1].clobbers
+    );
+}
