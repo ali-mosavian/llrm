@@ -176,6 +176,8 @@ struct Checker {
     static_scope: bool,
     /// An OPTION BASE has been read.
     option_base_seen: bool,
+    /// The target of an assignment is being read.
+    assigning: bool,
     /// The counters of the FOR loops being read.
     for_counters: Vec<String>,
     /// CONSTs and TYPEs registered ahead of the statements that declare them (`const N`, `type N`).
@@ -202,6 +204,7 @@ impl Checker {
             procedure: None,
             static_scope: false,
             option_base_seen: false,
+            assigning: false,
             for_counters: Vec::new(),
             pre_done: HashSet::new(),
             labels: HashSet::new(),
@@ -820,6 +823,12 @@ impl Checker {
         // an array element
         let array = self.array_var(name);
         if let Some(var) = array {
+            // each subscript that is not a constant holds a temporary: past six when read, seven when assigned, BC gives up
+            let variable_subscripts = arguments.iter().filter(|index| !matches!(index, Expr::Literal(..))).count();
+            if variable_subscripts > if self.assigning { 7 } else { 6 } {
+                self.err(span, "Expression too complex");
+                return None;
+            }
             let rank = var.rank.unwrap_or(1);
             let mut ok = true;
             for index in arguments {
@@ -1183,6 +1192,10 @@ impl Checker {
             Statement::Dim(items) | Statement::Static(items) => {
                 if matches!(statement, Statement::Static(_)) && self.procedure.is_none() {
                     self.err(self.span, "Subprogram error");
+                }
+                // `DIM a()` names no bounds: VBDOS's
+                if matches!(statement, Statement::Dim(_)) && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && items.iter().any(|item| item.array && item.bounds.is_empty()) {
+                    self.err(self.span, "Syntax error");
                 }
                 if matches!(statement, Statement::Dim(_)) && self.procedure.is_some() && items.iter().any(|item| item.shared) {
                     self.err(self.span, "Simple or array variable expected");
@@ -1566,7 +1579,12 @@ impl Checker {
                 self.err(span, "Duplicate definition");
                 return;
             }
-            _ => self.expr(target),
+            _ => {
+                self.assigning = true;
+                let typed = self.expr(target);
+                self.assigning = false;
+                typed
+            }
         };
         let (Some(t), Some(v)) = (target_typed, value_typed) else { return };
         if !t.variable {
@@ -1779,6 +1797,10 @@ impl Checker {
             if let Some(typed) = self.constant_expr(length) {
                 ty = Ty::Str(typed.constant.map(|c| c as usize));
             }
+        }
+        if d.bounds.len() > 60 {
+            self.err(span, "Too many dimensions");
+            return;
         }
         let mut constant_bounds = true;
         for bound in &d.bounds {
