@@ -529,6 +529,24 @@ impl<'a> TypeLegalizer<'a> {
                 let mask = self.dag.get_constant(mask, vt);
                 self.dag.get_node(ISD::And, vt, &[wide, mask])
             }
+            ISD::AnyExtend => {
+                // `PromoteIntOp_ANY_EXTEND`.
+                let promoted = self.promoted_integer(self.dag.operand(node, 0));
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::AnyExtend, vt, &[promoted])
+            }
+            ISD::SignExtend => {
+                // `PromoteIntOp_SIGN_EXTEND`: `getNode(ISD::SIGN_EXTEND_INREG)`
+                // as a shift left and an arithmetic one right.
+                let src = self.dag.operand(node, 0);
+                let promoted = self.promoted_integer(src);
+                let vt = self.dag.value_type(node);
+                let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
+                let unused = vt.size_in_bits() - self.dag.value_type(src).size_in_bits();
+                let amount = self.dag.get_constant(u128::from(unused), EVT::I8);
+                let high = self.dag.get_node(ISD::Shl, vt, &[wide, amount]);
+                self.dag.get_node(ISD::Sra, vt, &[high, amount])
+            }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
                 // (`PromoteTargetBoolean`).
@@ -634,6 +652,7 @@ impl<'a> TypeLegalizer<'a> {
                 (les, selector)
             }
             ISD::Load => self.expand_load(value, half),
+            x86isd::HUGE_ADD if vt == EVT::Simple(MVT::Far) => self.expand_huge_add(value, half)?,
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             ISD::Select => {
                 // `ExpandIntRes_SELECT`: one select per half.
@@ -1070,6 +1089,39 @@ impl<'a> TypeLegalizer<'a> {
         let low_store = self.dag.get_store(chain, lo, ptr, info);
         let high_store = self.dag.get_store(chain, hi, high_ptr, info);
         self.dag.get_token_factor(&[low_store, high_store])
+    }
+
+    /// A huge pointer plus a dword: the offset widened and added as a
+    /// dword, the offset the sum's low word, the selector stepped by its high
+    /// word at the machine's stride (`Machine::huge_shift`).
+    fn expand_huge_add(
+        &mut self,
+        node: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::HUGE_ADD,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
+        let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (offset, selector) = self.expanded_integer(far);
+        let dword = self.dag.value_type(delta);
+        let wide = self.dag.get_node(ISD::ZeroExtend, dword, &[offset]);
+        let sum = self.dag.get_node(ISD::Add, dword, &[wide, delta]);
+        let (width, stride_shift) = (
+            self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8),
+            self.dag.get_constant(u128::from(shift), EVT::I8),
+        );
+        let carry = self.dag.get_node(ISD::Sra, dword, &[sum, width]);
+        let stride = self.dag.get_node(ISD::Shl, dword, &[carry, stride_shift]);
+        let stride = self.dag.get_node(ISD::Truncate, half, &[stride]);
+        Ok((self.dag.get_node(ISD::Truncate, half, &[sum]), self.dag.get_node(ISD::Add, half, &[selector, stride])))
     }
 
     /// `IntegerExpandSetCCOperands`: equality is the halves' xors or-ed

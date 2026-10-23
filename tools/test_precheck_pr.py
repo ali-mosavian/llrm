@@ -197,3 +197,12 @@ def test_a_perf_pr_states_the_ledger_command_and_a_d_faces_qbq_llrm_number():
     other = head + "d_faces QCport: 979.6 M Ir (-m32 -mabi=sysv -march=i486 -O2)\n"
     assert pc.description_failures("perf(pipeline): x", other) != []
     assert pc.description_failures("fix(flow): x", head) == []
+
+
+def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypatch):
+    """#3899 and the docs that name a path of one machine landed with their scanners red: a docs-only PR plans no gate step. The precheck runs the root scanners
+    and names one that fails here and passes on the base; one red on both is the base's."""
+    monkeypatch.setattr(pc.parity_smoke, "integration_failures", lambda targets, root=None, run=None: {"integration docs_links::test_every_markdown_link_resolves"})
+    named = pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: set())
+    assert named == ["scanner fails here and passes on origin/feat/parity: integration docs_links::test_every_markdown_link_resolves"]
+    assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []

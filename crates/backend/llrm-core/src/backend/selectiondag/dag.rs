@@ -193,6 +193,9 @@ pub struct SelectionDAG {
     pub var_args_frame_index: Option<i32>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
+    /// Which globals (by symbol) are local to the object: only those fold a
+    /// constant offset into their address (`isOffsetFoldingLegal`).
+    pub local_symbols: Vec<bool>,
 }
 
 impl SelectionDAG {
@@ -212,6 +215,7 @@ impl SelectionDAG {
             first_temporary: 0,
             var_args_frame_index: None,
             temporaries: Vec::new(),
+            local_symbols: Vec::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;

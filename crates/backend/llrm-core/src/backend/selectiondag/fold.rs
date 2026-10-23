@@ -628,7 +628,10 @@ impl SelectionDAG {
         offset: i64,
         other: SDValue,
     ) -> Option<SDValue> {
-        if global != ISD::GlobalAddress || !self.config.offset_folding {
+        if global != ISD::GlobalAddress
+            || !self.config.offset_folding
+            || !self.local_symbols.get(symbol as usize).copied().unwrap_or(true)
+        {
             return None;
         }
         let amount = signed(self.constant(other)?, self.width(other)) as i64;

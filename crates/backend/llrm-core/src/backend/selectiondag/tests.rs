@@ -25,6 +25,7 @@ mod fp_to_int;
 mod get_node;
 mod global_address;
 mod i1_branch;
+mod i1_m16;
 mod int_to_fp;
 mod legalize_dag;
 mod legalize_types;
