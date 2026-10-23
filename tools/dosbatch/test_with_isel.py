@@ -30,3 +30,15 @@ def test_a_c_program_itself_is_compiled_by_the_selected_selector(monkeypatch, tm
     monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
     command = run_tests.compile_command(program, tmp_path / "p.obj")
     assert command[1] == "--isel=dag" and Path(command[0]).name == "llrm-c", command
+
+
+def test_real_mode_c_keeps_the_old_selector(monkeypatch, tmp_path):
+    """The DAG path selects 32-bit code only: under LLRM_ISEL=dag every real-mode program failed to build and the launch lost jobs."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
+    assert not any(one.startswith("--isel") for one in command), command
