@@ -31,7 +31,10 @@ impl Builder<'_> {
             }
             Intrinsic::BitCount(count) => {
                 // The zero-is-poison flag picks the `_ZERO_UNDEF` form.
-                let poison = !matches!(instruction.operands.get(1), Some(Operand::Constant(id)) if self.is_zero(*id));
+                let poison = !matches!(
+                    instruction.operands.get(1),
+                    Some(Operand::Constant(id)) if self.is_zero(*id)
+                );
                 let code = match (count, poison) {
                     (BitCount::Population, _) => ISD::CtPop,
                     (BitCount::LeadingZeros, false) => ISD::CtLz,
@@ -43,7 +46,10 @@ impl Builder<'_> {
             }
             Intrinsic::ByteSwap => self.dag.get_node(ISD::BSwap, dest, &[first]),
             Intrinsic::Abs => {
-                let poison = matches!(instruction.operands.get(1), Some(Operand::Constant(id)) if !self.is_zero(*id));
+                let poison = matches!(
+                    instruction.operands.get(1),
+                    Some(Operand::Constant(id)) if !self.is_zero(*id)
+                );
                 self.dag.get_node(if poison { ISD::AbsMinPoison } else { ISD::Abs }, dest, &[first])
             }
             Intrinsic::LRint => self.dag.get_node_flags(ISD::LRint, dest, &[first], flags),
@@ -73,6 +79,9 @@ impl Builder<'_> {
         &self,
         id: llrm_mir::context::ConstantId,
     ) -> bool {
-        matches!(self.module.context.get(id).kind, llrm_mir::context::ConstantKind::Int(0))
+        matches!(
+            self.module.context.get(id).kind,
+            llrm_mir::context::ConstantKind::Int(0)
+        )
     }
 }
