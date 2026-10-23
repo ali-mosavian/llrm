@@ -50,9 +50,11 @@ fn if_then_else_is_a_flat_list_for_a_later_pass_to_nest() {
 }
 
 #[test]
-fn a_print_item_is_followed_by_a_separator_or_the_end() {
+fn print_items_need_no_separator_between_them() {
     assert!(parse("PRINT a; b, TAB(3) c USING \"##\"; d").is_ok());
-    assert!(parse("PRINT a b").is_err());
+    // QB reads `PRINT a "x" b` as `a; "x"; b`; a sign or parenthesis continues the item before
+    assert!(parse("PRINT a \"x\" b").is_ok());
+    assert!(parse("PRINT (").is_err());
 }
 
 #[test]

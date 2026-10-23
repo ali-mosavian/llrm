@@ -26,25 +26,20 @@ def verdicts(command, files):
 def main():
     bc_dir, files = sys.argv[1], [Path(f) for f in sys.argv[2:]]
     cargo = ["cargo", "run", "-q", "--manifest-path", str(HERE / "Cargo.toml"), "--bin", "qbone", "--"]
+    cargo = ["cargo", "run", "-q", "--manifest-path", str(HERE / "Cargo.toml"), "--bin", "qbone", "--"]
     bc_ok_mine_refused, bc_refused_mine_ok, both_ok, both_refused = [], [], 0, 0
-    for start in range(0, len(files), 80):
-        chunk = files[start : start + 80]
-        names = {}
-        for f in chunk:
-            names.setdefault(f.name, []).append(f)
-        assert all(len(v) == 1 for v in names.values()), "file names in a batch must differ"
-        bc = verdicts([sys.executable, str(HERE / "bcprobe.py"), bc_dir], chunk)
-        mine = verdicts(cargo, chunk)
-        for f in chunk:
-            b, m = bc[f.name][0], mine[f.name][0]
-            if b.startswith("ok") and m == "ok":
-                both_ok += 1
-            elif b.startswith("ok"):
-                bc_ok_mine_refused.append(f"{f}: {m[:110]}")
-            elif m == "ok":
-                bc_refused_mine_ok.append(f"{f}: BC: {b[:110]}")
-            else:
-                both_refused += 1
+    bc = verdicts([sys.executable, str(HERE / "bcprobe.py"), bc_dir], files)
+    mine = verdicts(cargo, files)
+    for f in files:
+        b, m = bc[str(f)][0], mine[str(f)][0]
+        if b.startswith("ok") and m == "ok":
+            both_ok += 1
+        elif b.startswith("ok"):
+            bc_ok_mine_refused.append(f"{f}: {m[:110]}")
+        elif m == "ok":
+            bc_refused_mine_ok.append(f"{f}: BC: {b[:110]}")
+        else:
+            both_refused += 1
     print(f"both accept {both_ok}, both refuse {both_refused}")
     print(f"BC accepts, grammar refuses: {len(bc_ok_mine_refused)}")
     print("\n".join("  " + l for l in bc_ok_mine_refused))

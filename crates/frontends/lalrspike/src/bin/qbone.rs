@@ -9,6 +9,6 @@ fn main() {
             Err(error) => format!("lexer: {}", error.message),
             Ok(tokens) => lalrspike::parse_qb(&tokens).map(|_| "ok".to_owned()).unwrap_or_else(|e| e.chars().take(150).collect()),
         };
-        println!("{}: {verdict}", path.rsplit('/').next().unwrap());
+        println!("{path}: {verdict}");
     }
 }
