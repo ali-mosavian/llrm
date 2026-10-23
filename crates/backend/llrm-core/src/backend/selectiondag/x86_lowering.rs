@@ -131,6 +131,7 @@ impl Hooks for X86Lowering {
             ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
@@ -575,6 +576,24 @@ fn lower_int_to_fp(
         dag.get_node(ISD::FpRound, dst, &[sum, flag])
     };
     Some(rounded)
+}
+
+/// `LowerVASTART` for the 32-bit ABI: a `va_list` is a pointer, so the start
+/// is a store of the first variadic argument's address through it.
+fn lower_vastart(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let pointer = dag.config().pointer;
+    let first = dag.get_frame_index(pointer, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None };
+    Some(dag.get_store(chain, first, list, info))
 }
 
 fn is_pow2(value: u128) -> bool {

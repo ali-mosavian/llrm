@@ -450,6 +450,7 @@ pub mod x86isd {
     pub const PINSRW: u16 = 708;
     pub const PMULDQ: u16 = 709;
     pub const PMULUDQ: u16 = 710;
+    pub const POP_FROM_X87_REG: u16 = 957;
     pub const PROBED_ALLOCA: u16 = 711;
     pub const PSADBW: u16 = 712;
     pub const PSHUFB: u16 = 713;
@@ -1150,6 +1151,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "PINSRW" => 708,
         "PMULDQ" => 709,
         "PMULUDQ" => 710,
+        "POP_FROM_X87_REG" => 957,
         "PROBED_ALLOCA" => 711,
         "PSADBW" => 712,
         "PSHUFB" => 713,
