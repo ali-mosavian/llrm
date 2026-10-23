@@ -67,7 +67,14 @@ pub fn select_block(
     arch: &dyn llrm_target::Target,
     temporaries: &mut dyn super::x86_preprocess::FrameObjects,
 ) -> Result<Emitted, Refusal> {
+    // The scratch slots the legalizers ask for are frame objects numbered from
+    // here; they are made as the legalizers finish, before anything else is.
+    dag.first_temporary = temporaries.objects();
     legalized(dag, tli, lowering, arch)?;
+    for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
+        let made = temporaries.create_stack_temporary(size, align);
+        debug_assert_eq!(made, dag.first_temporary + at as i32);
+    }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
     super::x86_preprocess::preprocess(dag, temporaries);
     do_instruction_selection(dag, selector, hooks)?;

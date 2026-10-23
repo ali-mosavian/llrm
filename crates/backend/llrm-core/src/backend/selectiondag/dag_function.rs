@@ -127,6 +127,10 @@ impl FrameMap for Frame {
 pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
 
 impl FrameObjects for Temporaries<'_> {
+    fn objects(&self) -> i32 {
+        self.0.locals.borrow().len() as i32
+    }
+
     fn create_stack_temporary(
         &mut self,
         size: u32,

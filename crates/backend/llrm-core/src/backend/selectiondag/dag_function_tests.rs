@@ -619,3 +619,24 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     let crate::model::ir::Loc::Address(a) = &lea.sources[0] else { panic!("{lea:?}") };
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
+
+const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to float
+  ret float %r
+}
+";
+
+/// A legalizer's scratch slot (an integer stored to convert it) is a frame
+/// object the driver makes: the emitter refused its index as "frame index 6"
+/// in 11 programs of the m32 execution run. Until x87 is emitted the function
+/// is refused for its load, not for the slot.
+#[test]
+fn a_legalizers_stack_slot_is_a_frame_object() {
+    let module = llrm_mir::parse::module(INT_TO_FLOAT).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.as_deref().is_none_or(|why| !why.contains("frame index")), "{why:?}");
+}
