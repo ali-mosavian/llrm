@@ -417,6 +417,27 @@ impl Emitter<'_, '_> {
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
+    /// The call instruction: it destroys the caller-saved registers and may
+    /// touch any memory. Its address.
+    fn push_call(
+        &mut self,
+        what: Semantics,
+    ) -> i64 {
+        let at = self.next_address();
+        let clobbers = self.ctx.caller_saved.clone();
+        let memory = Arc::new(crate::model::lir::CallMemory {
+            effects: llrm_mir::memory::Effects::ANY,
+            private: Vec::new(),
+            disturbs: clobbers.clone(),
+        });
+        let uses = _read(&what);
+        let insn = Insn { call: Some(memory), clobbers, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        let block = self.blocks.last_mut().expect("a block");
+        block.insns.push(Arc::new(insn));
+        self.last_call = Some((self.blocks.len() - 1, self.blocks.last().expect("a block").insns.len() - 1));
+        at
+    }
+
     /// Names `held` as what the last call delivers in `register`; false if no
     /// call is waiting or the register is not one it destroys.
     fn deliver(
@@ -472,19 +493,25 @@ impl Emitter<'_, '_> {
                 let NodeData::Global { symbol, .. } = self.dag.node(node.ops[0]).data else {
                     return Err(EmitError::Unsupported("a call of a non-global".to_owned()));
                 };
-                let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
-                let at = self.next_address();
-                let clobbers = self.ctx.caller_saved.clone();
-                let memory = Arc::new(crate::model::lir::CallMemory {
-                    effects: llrm_mir::memory::Effects::ANY,
-                    private: Vec::new(),
-                    disturbs: clobbers.clone(),
-                });
-                let insn = Insn { call: Some(memory), clobbers, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
-                let block = self.blocks.last_mut().expect("a block");
-                block.insns.push(Arc::new(insn));
-                self.last_call = Some((self.blocks.len() - 1, self.blocks.last().expect("a block").insns.len() - 1));
+                let at = self.push_call(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) });
                 self.calls.push((at, symbol));
+                return Ok(Some(()));
+            }
+            // A call through a register or a cell of memory.
+            "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" => {
+                let target = if name.contains('m') && !name.starts_with("CALL32r") {
+                    let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
+                    Loc::Mem(self.cell(group, 4)?)
+                } else {
+                    self.operand(node.ops[0])?
+                };
+                let what = Semantics {
+                    indirect: true,
+                    name: Some("call".into()),
+                    sources: vec![target],
+                    ..Semantics::new(Operation::Call)
+                };
+                self.push_call(what);
                 return Ok(Some(()));
             }
             // The low byte, word or dword of a register is the same value

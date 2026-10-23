@@ -182,3 +182,26 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     let called = names.iter().position(|n| n == "call").unwrap();
     assert!(down < called && called < up, "{names:?}");
 }
+
+const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@fp = global ptr null
+define i32 @f(i32 %a) {
+entry:
+  %p = load ptr, ptr @fp
+  %r = call i32 %p(i32 %a)
+  ret i32 %r
+}
+";
+
+/// A call through a pointer is a call with its target as the source and
+/// `indirect` set; without the flag it was a direct call with no callee and
+/// 71 modules of the vsgcc corpus stopped compiling.
+#[test]
+fn an_indirect_call_names_its_target() {
+    let module = llrm_mir::parse::module(INDIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let call = done.body.insns().iter().filter_map(|i| i.what.clone()).find(|w| w.op == crate::model::ir::Operation::Call).expect("a call");
+    assert!(call.indirect && call.sources.len() == 1, "{call:?}");
+    assert!(done.calls.is_empty());
+}
