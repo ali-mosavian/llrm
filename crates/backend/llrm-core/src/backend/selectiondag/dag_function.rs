@@ -606,28 +606,11 @@ fn selected_in(
             }
         }
     }
-    // Every value read is defined somewhere (a phi, an instruction, an
-    // arrival): a LIR that reads one nothing defines stops the allocator's
-    // liveness, so it is a refusal here.
-    let defined: std::collections::HashSet<u32> = emitted
-        .iter()
-        .flat_map(|block| {
-            block
-                .phis
-                .iter()
-                .map(|phi| phi.result)
-                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().copied()))
-        })
-        .collect();
-    for block in &emitted {
-        for insn in &block.insns {
-            if let Some(value) = insn.uses.iter().find(|value| !defined.contains(value)) {
-                return refuse(format!(
-                    "--isel=dag: value {value} is read and never defined ({:?})",
-                    insn.what.as_ref().map(|what| what.name.clone())
-                ));
-            }
-        }
+    // Every value read is defined on every path to the read (a phi, an
+    // instruction, an arrival): a LIR that reads one nothing defines on some
+    // path stops the allocator's liveness, so it is a refusal here.
+    if let Some((value, name)) = read_before_defined(&emitted, &succ) {
+        return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
     }
     // A floating value is a 10-byte register value: read at another width it is
     // an integer's bits taken from an x87 register (`bitcast` of a double to
@@ -733,6 +716,27 @@ fn float_across_call(
     if floating.is_empty() {
         return None;
     }
+    // Loading a far pointer sets ES, which the stackifier counts among the
+    // instructions the x87 stack does not survive: floating values and far
+    // cells in one function are left to the old selector.
+    let far = blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|insn| insn.what.as_ref())
+        .any(
+            |what| what.dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |loc| matches!(
+                        loc,
+                        crate::model::ir::Loc::Mem(cell) if cell.selector.is_some()
+                    ),
+                ),
+        );
+    if far {
+        return Some("floating values with far cells");
+    }
     // A phi of floating values is floating.
     loop {
         let before = floating.len();
@@ -799,6 +803,79 @@ fn float_across_call(
                 return Some("a floating value is live across an instruction that empties the x87 stack");
             }
             live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
+        }
+    }
+    None
+}
+
+/// A value read where some path to it defines nothing: (value, instruction).
+fn read_before_defined(
+    blocks: &[EmitBlock],
+    succ: &[Vec<i64>],
+) -> Option<(u32, Option<String>)> {
+    use std::collections::HashSet;
+    let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let defines = |insn: &Insn| -> Vec<u32> {
+        // A copy of a value to itself defines nothing.
+        let itself = insn
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| matches!(
+                    (&what.dests[..], &what.sources[..]),
+                    ([crate::model::ir::Loc::Held(to)], [crate::model::ir::Loc::Held(from)]) if to.value == from.value
+                ),
+            );
+        if itself { Vec::new() } else { insn.defines.clone() }
+    };
+    let own: Vec<HashSet<u32>> = blocks
+        .iter()
+        .map(|block| {
+            block.phis.iter().map(|phi| phi.result).chain(block.insns.iter().flat_map(|insn| defines(insn))).collect()
+        })
+        .collect();
+    // What is defined on every path to the start of each block (`None`: no
+    // path has reached it yet).
+    let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
+    entry[0] = Some(HashSet::new());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for at in 0..blocks.len() {
+            let Some(here) = entry[at].clone() else { continue };
+            let out: HashSet<u32> = here.union(&own[at]).copied().collect();
+            for next in &succ[at] {
+                let Some(&to) = index.get(next) else { continue };
+                let merged = match &entry[to] {
+                    None => out.clone(),
+                    Some(known) => known.intersection(&out).copied().collect(),
+                };
+                if entry[to].as_ref() != Some(&merged) {
+                    entry[to] = Some(merged);
+                    changed = true;
+                }
+            }
+        }
+    }
+    for (at, block) in blocks.iter().enumerate() {
+        let Some(mut known) = entry[at].clone() else { continue };
+        known.extend(block.phis.iter().map(|phi| phi.result));
+        for insn in &block.insns {
+            if let Some(value) = insn.uses.iter().find(|value| !known.contains(value)) {
+                return Some((*value, insn.what.as_ref().and_then(|what| what.name.as_ref().map(|n| n.to_string()))));
+            }
+            known.extend(defines(insn));
+        }
+        // What a phi takes from an edge is defined at the end of that edge's
+        // block.
+        for phi in &block.phis {
+            for (edge, value) in &phi.incoming {
+                let Some(&from) = index.get(edge) else { continue };
+                let Some(start) = entry[from].as_ref() else { continue };
+                if !start.contains(value) && !own[from].contains(value) {
+                    return Some((*value, Some("phi".to_owned())));
+                }
+            }
         }
     }
     None

@@ -215,6 +215,12 @@ struct Emitter<'a, 'd> {
     glue_users: HashMap<SDValue, Vec<u32>>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
+    /// The selector each `LES16rm` loaded beside its offset, by node: a cell
+    /// based on that offset takes it as its segment.
+    selectors: HashMap<u32, Held>,
+    /// The value the last `CopyToReg ES` put there: the selector of the next
+    /// cell through ES that is not based on a loaded far pointer.
+    es: Option<Held>,
     /// The node whose flags EFLAGS holds now.
     flags_now: Option<u32>,
     /// The select a following one may join.
@@ -316,6 +322,8 @@ pub fn emit_in(
         calls: Vec::new(),
         last_call: None,
         flags_now: None,
+        es: None,
+        selectors: HashMap::new(),
         lazy: HashMap::new(),
         last_select: None,
         flag_insns: HashMap::new(),
@@ -485,6 +493,13 @@ impl Emitter<'_, '_> {
         match node.opcode {
             ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
             ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
+            // A selector put in ES for the cells that follow: a value, taken
+            // by the next cell through ES.
+            ISD::CopyToReg if self.is_es(node.ops[1]) => {
+                let selector = self.held_operand(node.ops[2])?;
+                self.es = Some(selector);
+                Ok(())
+            }
             ISD::CopyToReg
                 if self.dag.node(node.ops[1]).data == NodeData::PhysReg(llrm_lir::registers::RegId::AH)
                     && self.glue_reaches(n, |name| name == "SAHF") =>
@@ -526,6 +541,13 @@ impl Emitter<'_, '_> {
             }
             ISD::CopyFromReg => {
                 let result = SDValue { node: n, res: 0 };
+                // The selector `LES16rm` left in ES, read on the chain it made.
+                if self.is_es(node.ops[1])
+                    && let Some(selector) = self.selectors.get(&node.ops[0].node).copied()
+                {
+                    self.values.insert(result, selector.value);
+                    return Ok(());
+                }
                 match self.dag.node(node.ops[1]).data {
                     // `EmitCopyFromReg`: a virtual source is the value itself.
                     NodeData::Register(reg) => {
@@ -990,6 +1012,18 @@ impl Emitter<'_, '_> {
         Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
     }
 
+    /// Whether `register` is ES, named as the builder's physical register or as
+    /// the pin's register number (the matcher's copies of the selector).
+    fn is_es(
+        &self,
+        register: SDValue,
+    ) -> bool {
+        matches!(
+            self.dag.node(register).data,
+            NodeData::PhysReg(llrm_lir::registers::RegId::ES) | NodeData::Register(31)
+        )
+    }
+
     /// Whether `value` is a machine node of the pin's opcode `name`.
     fn is_machine_named(
         &self,
@@ -1114,6 +1148,26 @@ impl Emitter<'_, '_> {
                     vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(destination_after), Loc::Held(emptied)],
                     vec![Loc::Held(value), Loc::Held(count), Loc::Held(destination)],
                 );
+                return Ok(Some(()));
+            }
+            // A far pointer loaded from memory: the offset and, beside it, the
+            // selector, as the two word loads `farload` joins into a `les`.
+            // The pin leaves the selector in ES, which the cells that use it
+            // name; here it is a value of its own, taken by the cells based on
+            // this offset.
+            "LES16rm" => {
+                let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short les".to_owned()))?;
+                let low = self.cell(group, 2)?;
+                let high = Mem {
+                    offset: low.offset + 2,
+                    addr: low.addr.map(|addr| Addr { disp: addr.disp + 2, ..addr }),
+                    ..low.clone()
+                };
+                let (offset, selector) = (self.fresh(2), self.fresh(2));
+                self.values.insert(SDValue { node: n, res: 0 }, offset.value);
+                self.selectors.insert(n, selector);
+                self.push(Operation::Move, "mov", vec![Loc::Held(offset)], vec![Loc::Mem(low)]);
+                self.push(Operation::Move, "mov", vec![Loc::Held(selector)], vec![Loc::Mem(high)]);
                 return Ok(Some(()));
             }
             // A float compare: the stackifier follows the `fcom` with the
@@ -1565,6 +1619,29 @@ impl Emitter<'_, '_> {
         let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
+        // A cell through ES is a far cell: the selector is the one loaded with
+        // the offset it is based on.
+        if self.is_es(group[4]) {
+            let selector = [group[0], group[2]]
+                .into_iter()
+                .find_map(|part| self.selectors.get(&part.node).copied())
+                .or(self.es)
+                .ok_or_else(|| EmitError::Unsupported("a cell through ES that nothing loaded".to_owned()))?;
+            let disp = self.constant(group[3])?;
+            let address = Addr {
+                segment: llrm_lir::registers::RegId::ES.iced(),
+                ..Addr::new(crate::model::ir::Space::Far, disp)
+            };
+            return Ok(Mem {
+                offset: disp,
+                scale,
+                disp_width: 2,
+                base,
+                index,
+                selector: Some(selector),
+                ..Mem::new(Some(address), cell_width)
+            });
+        }
         if let NodeData::Global { symbol, offset } = self.dag.node(group[3]).data {
             let addr = self.ctx.globals.address(symbol, offset);
             if self.address_register(group[4], Role::Segment)?.is_some() {

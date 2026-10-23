@@ -1454,3 +1454,42 @@ fn an_integer_wider_than_the_mantissa_is_rounded_under_float_store() {
     };
     assert!(stores(true) > stores(false), "{} vs {}", stores(true), stores(false));
 }
+
+const M16_FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+/// A far pointer loaded from memory is its offset and, beside it, its selector
+/// (the two word loads `farload` joins into a `les`); the cell through ES
+/// takes that selector. `LES16rm` was 328 of 494 refusals at m16.
+#[test]
+fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
+    use crate::model::ir::{Loc, Operation, Space};
+    let module = llrm_mir::parse::module(M16_FAR_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let words = whats
+        .iter()
+        .filter(|w| {
+            w.op == Operation::Move
+                && matches!(
+                    &w.sources[..],
+                    [Loc::Mem(m)] if m.width == 2 && m.selector.is_none()
+                )
+        })
+        .count();
+    assert!(words >= 2, "the offset and the selector are two word loads: {whats:?}");
+    assert!(
+        whats
+            .iter()
+            .flat_map(|w| w.sources.iter())
+            .any(|l| matches!(l, Loc::Mem(m) if m.selector.is_some() && m.addr.is_some_and(|a| a.space == Space::Far))),
+        "the access goes through the selector"
+    );
+}
