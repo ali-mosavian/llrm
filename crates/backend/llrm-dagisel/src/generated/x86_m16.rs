@@ -8,7 +8,7 @@ use crate::dag::{Dag, Hooks, PatternContext, SDValue};
 use crate::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::predicates;
 
-pub static ITEMS: [crate::matcher::Matcher; 15182] = [
+pub static ITEMS: [crate::matcher::Matcher; 15185] = [
     SwitchOpcode,
     OpcodeCase { size: 3589, opcode: 317 },
     RecordMemRef,
@@ -12156,7 +12156,7 @@ pub static ITEMS: [crate::matcher::Matcher; 15182] = [
     EmitMergeInputChains(Slice { start: 82, len: 1 }),
     EmitInteger { vt: Vt(7), value: 0 },
     MorphNodeTo(Emit { opcode: 767, flags: 5, vts: [Vt(7), Vt(0)], num_vts: 1, operands: Slice { start: 214, len: 3 } }),
-    OpcodeCase { size: 26, opcode: 953 },
+    OpcodeCase { size: 29, opcode: 953 },
     Scope,
     Alt(4),
     RecordNode,
@@ -12172,7 +12172,7 @@ pub static ITEMS: [crate::matcher::Matcher; 15182] = [
     CheckType(Vt(8)),
     MorphNodeTo(Emit { opcode: 2604, flags: 0, vts: [Vt(8), Vt(0)], num_vts: 1, operands: Slice { start: 82, len: 1 } }),
     OpcodeCase { size: 0, opcode: 0 },
-    Alt(9),
+    Alt(12),
     RecordNode,
     SwitchType,
     TypeCase { size: 2, vt: Vt(7) },
@@ -12181,6 +12181,9 @@ pub static ITEMS: [crate::matcher::Matcher; 15182] = [
     TypeCase { size: 2, vt: Vt(8) },
     CheckComplexPat { pattern: 2, record: 0 },
     MorphNodeTo(Emit { opcode: 2603, flags: 0, vts: [Vt(8), Vt(0)], num_vts: 1, operands: Slice { start: 103, len: 1 } }),
+    TypeCase { size: 2, vt: Vt(6) },
+    CheckComplexPat { pattern: 2, record: 0 },
+    MorphNodeTo(Emit { opcode: 2566, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 103, len: 1 } }),
     TypeCase { size: 0, vt: Vt(0) },
     Alt(0),
     OpcodeCase { size: 7, opcode: 739 },

@@ -753,6 +753,20 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, frame.node), "LEA16r");
     }
 
+    /// The pin moves a relocatable symbol into an i32 register; at m16 the
+    /// wrapped address of a global is an i16 and had no pattern (38
+    /// `GlobalAddress` nodes stopped the m16 corpus).
+    #[test]
+    fn the_address_of_a_global_is_mov16ri() {
+        let mut dag = TestDag::new();
+        let wrapped = dag.wrapped_global(1, 0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, wrapped.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
+    }
+
     #[test]
     fn the_pins_own_table_has_no_pattern_for_a_far_load() {
         let (mut dag, node, _) = far_load(x86isd::LES);

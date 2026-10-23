@@ -64,3 +64,6 @@ def lea16addr : ComplexPattern<i16, 5, "selectLEAAddr",
                                [add, sub, mul, X86mul_imm, shl, or, xor, frameindex], []>;
 let Predicates = [Not64BitMode] in
 def : Pat<(i16 lea16addr:$src), (LEA16r lea16addr:$src)>;
+
+// A wrapped symbol is a 16-bit immediate with a relocation (the pin has it for i32 and i64).
+def : Pat<(i16 relocImm:$src), (MOV16ri relocImm:$src)>;
