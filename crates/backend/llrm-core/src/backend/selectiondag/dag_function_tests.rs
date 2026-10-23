@@ -1050,6 +1050,30 @@ fn two_selects_on_one_compare_are_one_branch() {
     assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
 
+const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f(ptr %d, ptr %s, i16 %n) {
+entry:
+  call void @llvm.memmove.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}
+";
+
+/// A call of the runtime's `memmove` at m16 is a far call: its routine is a far
+/// procedure in another code segment. It was a near `call`, and the program
+/// crashed at once (the memmove_overlap run test under `LLRM_ISEL_REAL`).
+#[test]
+fn a_runtime_routine_is_called_far_at_m16() {
+    let module = llrm_mir::parse::module(VARIABLE_MOVE).expect("parses");
+    let libcalls = [("memmove".to_owned(), 0, "_memmove@3".to_owned())];
+    let done =
+        selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &libcalls)
+            .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(&i64, &String)> = done.calls.iter().collect();
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert!(done.far.contains(sites[0].0), "{sites:?} far={:?}", done.far);
+}
+
 const FLOAT_TO_INT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(double %x) {
 entry:
@@ -1074,4 +1098,73 @@ fn a_float_to_int_conversion_is_a_truncating_store() {
         .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fistt"))
         .expect("a fistt");
     assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
+}
+
+const FLOAT_COMPARE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %a, double %b) {
+entry:
+  %c = fcmp olt double %a, %b
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+";
+
+/// A float compare is an `fcom` of two values and the set that reads its flags;
+/// the stackifier adds the `fnstsw ax; sahf`, so the pin's `FNSTSW16r`, the AH
+/// copy and `SAHF` emit nothing. 12 programs stopped at `UCOM_Fpr*`.
+#[test]
+fn a_float_compare_is_an_fcom_and_a_set() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_COMPARE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let compare = whats.iter().position(|w| w.op == Operation::Compare).expect("an fcom");
+    assert_eq!(whats[compare].name.as_deref(), Some("fcom"));
+    assert!(whats[compare].sources.iter().all(|l| matches!(l, Loc::Held(h) if h.width == 10)), "{:?}", whats[compare]);
+    assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
+}
+
+const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 ptr addrspace(1) @g()
+declare cc 1005 void @use(ptr addrspace(1))
+define cc 1005 i16 @f(i16 %n) addrspace(1) {
+entry:
+  %p = call cc 1005 ptr addrspace(1) @g()
+  br label %loop
+loop:
+  %q = phi ptr addrspace(1) [ %p, %entry ], [ %q2, %loop ]
+  %i = phi i16 [ 0, %entry ], [ %i2, %loop ]
+  %q2 = getelementptr i8, ptr addrspace(1) %q, i16 4
+  %i2 = add i16 %i, 1
+  call cc 1005 void @use(ptr addrspace(1) %q)
+  %c = icmp ult i16 %i2, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret i16 %i2
+}
+";
+
+/// A phi of a two-register value (a far pointer) has an entry for each part;
+/// both went to the first register, so the second part was read and never
+/// defined and the allocator's liveness failed ("a unique value") in 3 QCport
+/// modules once float compares let those functions through.
+#[test]
+fn every_part_of_a_far_phi_is_defined() {
+    let module = llrm_mir::parse::module(M16_FAR_LOOP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let mut defined: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for block in done.body.blocks.iter() {
+        defined.extend(block.phis.iter().map(|phi| phi.result));
+        for insn in block.insns.iter() {
+            defined.extend(insn.defines.iter().copied());
+        }
+    }
+    for insn in done.body.insns().iter() {
+        for used in &insn.uses {
+            assert!(defined.contains(used), "value {used} is read and never defined: {:?}", insn.what);
+        }
+    }
 }

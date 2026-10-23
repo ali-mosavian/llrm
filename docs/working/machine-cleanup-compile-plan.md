@@ -29,7 +29,7 @@ machinecse 5%, postrasink 6%, machinedce 3%, `narrowed_arithmetic` 5%, `fused` 4
 4%, `constants` 3%, `zeroes` 3%, the other rule groups under 3% each.
 
 Measuring: callgrind on the ledger command with a stamped dist of the parity tip contained in the
-head; the pin side is the same command with the pinned clang (`~/scratch/llvm-build/bin/clang`,
+head; the pin side is the same command with the pinned clang (`clang` as in the ledger command,
 `clang version 24.0.0git d1106deb71cc81016406a1917d0508d2df296266`, `-O2 -m32 -march=i486 -c -o` a real file). Pin per-pass inclusive M is from that
 profile (MachineScheduler 10.4, MachineLICM 9.1, MachineSink 4.3, BlockPlacement 3.9, CopyProp 3.4,
 ReachingDef 3.4, MachineCSE 2.9, BranchFolder 2.0, FPStackifier 1.7, DeadMachineInstructionElim 1.4,

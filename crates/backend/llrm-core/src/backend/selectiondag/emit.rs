@@ -217,6 +217,7 @@ struct Emitter<'a, 'd> {
     flags_now: Option<u32>,
     /// The select a following one may join.
     last_select: Option<Select>,
+
     /// The compares that made flags, to make them again.
     flag_insns: HashMap<u32, Arc<Insn>>,
 }
@@ -366,6 +367,7 @@ fn pushed_arguments(
             )
     };
     let mut at = 0;
+    let mut refused = false;
     while at < insns.len() {
         if !is_area(&insns[at]) {
             at += 1;
@@ -385,6 +387,12 @@ fn pushed_arguments(
         };
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
+            .inspect(|&place| {
+                // Only a move of a word or a dword can be a push.
+                if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
+                    refused = true;
+                }
+            })
             .map(|place| {
                 let Some(Loc::Mem(cell)) = insns[place].what.as_ref().and_then(|what| what.dests.first()) else {
                     unreachable!("a store has its cell")
@@ -392,6 +400,9 @@ fn pushed_arguments(
                 (place, cell.offset, cell.width)
             })
             .collect();
+        if refused {
+            return Err(EmitError::Unsupported("a floating argument stored into the area at m16".to_owned()));
+        }
         stores.sort_by_key(|&(_, offset, _)| offset);
         let mut next = 0;
         for &(_, offset, width) in &stores {
@@ -471,6 +482,12 @@ impl Emitter<'_, '_> {
         match node.opcode {
             ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
             ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg
+                if self.dag.node(node.ops[1]).data == NodeData::PhysReg(llrm_lir::registers::RegId::AH)
+                    && self.glue_reaches(n, |name| name == "SAHF") =>
+            {
+                Ok(())
+            }
             ISD::CopyToReg if self.feeds_call(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
@@ -954,6 +971,16 @@ impl Emitter<'_, '_> {
         Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
     }
 
+    /// Whether `value` is a machine node of the pin's opcode `name`.
+    fn is_machine_named(
+        &self,
+        value: SDValue,
+        name: &str,
+    ) -> bool {
+        let ISD::Machine(op) = self.dag.opcode(value) else { return false };
+        self.ctx.names.get(&(op as u16)).is_some_and(|one| one.split('|').next() == Some(name))
+    }
+
     /// Whether `value` is an `IMPLICIT_DEF` machine node.
     fn is_implicit_def(
         &self,
@@ -1070,6 +1097,24 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
+            // A float compare: the stackifier follows the `fcom` with the
+            // `fnstsw ax; sahf` that put its result in EFLAGS, so those pin
+            // pseudos (`FNSTSW16r`, the copy of AH, `SAHF`) emit nothing and
+            // `SAHF` is the producer of the flags.
+            _ if name.starts_with("UCOM_Fpr") || name.starts_with("COM_Fpr") => {
+                let (Loc::Held(left), Loc::Held(right)) = (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+                else {
+                    return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
+                };
+                self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                return Ok(Some(()));
+            }
+            "FNSTSW16r" => {
+                let held = self.fresh(2);
+                self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                return Ok(Some(()));
+            }
+            "SAHF" => return Ok(Some(())),
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
             // which the matcher names with `CopyToReg`/`CopyFromReg` around
             // them: the LIR form says the pair in its operands.
@@ -1141,7 +1186,10 @@ impl Emitter<'_, '_> {
             // (AH) is a different register.
             "EXTRACT_SUBREG" => {
                 let index = self.constant(node.ops[1])?;
-                if !matches!(index, 1 | 4 | 6) {
+                // AH of the status word (`FNSTSW16r`) is read by `SAHF`
+                // alone, which the compare's `fcom` stands for.
+                let status = self.is_machine_named(node.ops[0], "FNSTSW16r");
+                if !matches!(index, 1 | 4 | 6) && !(index == 2 && status) {
                     return Err(EmitError::Unsupported(format!("EXTRACT_SUBREG index {index}")));
                 }
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
