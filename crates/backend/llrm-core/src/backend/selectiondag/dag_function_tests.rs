@@ -465,7 +465,7 @@ entry:
 #[test]
 fn a_long_copy_and_fill_are_rep_string_operations() {
     let module = llrm_mir::parse::module(BIG_COPY).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let strings: Vec<_> = insns
