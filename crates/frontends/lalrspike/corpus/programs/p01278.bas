@@ -1,0 +1,2 @@
+DIM x%
+OPTION BASE 0

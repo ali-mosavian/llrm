@@ -1,0 +1,3 @@
+DIM x%
+ON x% GOTO a
+65536 PRINT

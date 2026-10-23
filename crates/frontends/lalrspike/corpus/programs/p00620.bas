@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+DEFINT A-Z
+END SUB

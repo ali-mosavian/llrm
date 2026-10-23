@@ -1,0 +1,2 @@
+COMMON SHARED x%
+PRINT x%(1)

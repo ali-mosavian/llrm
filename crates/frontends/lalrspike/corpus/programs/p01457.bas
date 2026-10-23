@@ -1,0 +1,2 @@
+DIM x AS STRING
+DIM x AS STRING * 4

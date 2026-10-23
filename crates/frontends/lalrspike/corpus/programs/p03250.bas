@@ -1,0 +1,2 @@
+ERASE x%
+DEFINT X

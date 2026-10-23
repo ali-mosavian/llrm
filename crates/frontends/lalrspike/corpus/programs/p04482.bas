@@ -1,0 +1,3 @@
+DIM x%
+RESTORE a
+65536 PRINT

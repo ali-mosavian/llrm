@@ -1,0 +1,2 @@
+COMMON x%
+DEFSTR X

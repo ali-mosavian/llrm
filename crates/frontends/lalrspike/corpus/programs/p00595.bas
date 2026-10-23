@@ -1,0 +1,5 @@
+DIM x%
+FUNCTION f% ()
+EXIT SUB
+f% = 1
+END FUNCTION

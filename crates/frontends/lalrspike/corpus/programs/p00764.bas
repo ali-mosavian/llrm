@@ -1,0 +1,4 @@
+TYPE T2
+a AS INTEGER
+x% = 1
+END TYPE

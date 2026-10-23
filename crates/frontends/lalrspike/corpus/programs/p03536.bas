@@ -1,0 +1,3 @@
+SUB p
+CONST x = y
+END SUB

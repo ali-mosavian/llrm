@@ -1,0 +1,7 @@
+DIM x%, y%, i%, j%
+SELECT CASE x%
+CASE 1
+DO WHILE x%
+y% = 3
+LOOP
+END SELECT

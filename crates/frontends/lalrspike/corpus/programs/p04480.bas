@@ -1,0 +1,3 @@
+DIM x%
+RESUME a
+65536 PRINT

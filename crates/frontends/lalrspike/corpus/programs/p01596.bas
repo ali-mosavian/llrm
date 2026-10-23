@@ -1,0 +1,2 @@
+DIM x AS STRING * 4
+SWAP x%, x

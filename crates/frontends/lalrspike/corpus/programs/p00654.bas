@@ -1,0 +1,6 @@
+DIM zz%(5)
+CALL p
+END
+SUB p
+SHARED zz%
+END SUB

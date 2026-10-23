@@ -1,0 +1,2 @@
+DEFINT X
+DIM x AS STRING * 4

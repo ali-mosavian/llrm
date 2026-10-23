@@ -1,0 +1,2 @@
+DIM x AS STRING
+CONST y = 2

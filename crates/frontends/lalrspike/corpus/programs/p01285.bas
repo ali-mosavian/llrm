@@ -1,0 +1,2 @@
+DIM x%
+INPUT x%

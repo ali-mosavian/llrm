@@ -36,6 +36,8 @@ pub mod qb_classes;
 pub mod qb_kw;
 pub mod qb_rd;
 pub mod qb_scan;
+pub mod qb_sigs;
+pub mod qb_check;
 pub mod qb_lexer;
 pub mod qb_words;
 pub mod qb_tokens;

@@ -1,0 +1,5 @@
+DIM x%
+FUNCTION f% ()
+f = 1
+f% = 1
+END FUNCTION

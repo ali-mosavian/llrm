@@ -1,0 +1,2 @@
+DIM x AS STRING
+DIM SHARED x%(5)

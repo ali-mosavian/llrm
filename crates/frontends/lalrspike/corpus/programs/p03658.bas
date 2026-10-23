@@ -1,0 +1,3 @@
+DIM x%
+RESUME 10
+a: PRINT 1

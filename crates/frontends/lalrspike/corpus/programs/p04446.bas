@@ -1,0 +1,3 @@
+DIM x%
+RUN a
+65535 PRINT

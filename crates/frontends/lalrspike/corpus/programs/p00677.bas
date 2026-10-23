@@ -1,0 +1,2 @@
+DECLARE SUB p CDECL (a%)
+CALL p(1)

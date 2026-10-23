@@ -1,0 +1,6 @@
+DIM x%
+a:
+SUB p
+a:
+RESTORE a
+END SUB

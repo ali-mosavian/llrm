@@ -319,6 +319,8 @@ pub enum Statement {
         end: Expr,
         step: Option<Expr>,
         body: Vec<Statement>,
+        /// The variable the NEXT that closes the loop names, if it names one.
+        next_variable: Option<(String, Span)>,
         span: Span,
     },
     While {

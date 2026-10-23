@@ -1,0 +1,2 @@
+x%(1) = 1
+OPTION BASE 2

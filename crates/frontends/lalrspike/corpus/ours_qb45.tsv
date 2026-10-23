@@ -1,66 +1,66 @@
-0	unsupported	line 15: the audited SCREEN form requires one mode
-1	semantic	line 15: omitted argument used as an expression
-2	unsupported	line 15: the audited SCREEN form requires one mode
-3	unsupported	line 15: the audited SCREEN form requires one mode
-4	unsupported	line 15: the audited SCREEN form requires one mode
-5	unsupported	line 15: the audited SCREEN form requires one mode
-6	unsupported	line 15: the audited SCREEN form requires one mode
-7	unsupported	line 15: the audited SCREEN form requires one mode
-8	unsupported	line 15: the audited SCREEN form requires one mode
-9	unsupported	line 15: the audited SCREEN form requires one mode
-10	unsupported	line 15: the audited SCREEN form requires one mode
+0	ok	
+1	ok	
+2	ok	
+3	ok	
+4	ok	
+5	ok	
+6	ok	
+7	ok	
+8	ok	
+9	ok	
+10	ok	
 11	ok	
-12	unsupported	line 15: the audited SCREEN form requires one mode
-13	unsupported	line 15: the audited SCREEN form requires one mode
-14	unsupported	line 15: the audited SCREEN form requires one mode
-15	unsupported	line 15: the audited SCREEN form requires one mode
-16	unsupported	line 15: the audited SCREEN form requires one mode
-17	unsupported	line 15: the audited SCREEN form requires one mode
-18	unsupported	line 15: the audited SCREEN form requires one mode
-19	unsupported	line 15: the audited SCREEN form requires one mode
-20	unsupported	line 15: the audited SCREEN form requires one mode
-21	unsupported	line 15: the audited SCREEN form requires one mode
-22	unsupported	line 15: the audited SCREEN form requires one mode
-23	unsupported	line 15: the audited SCREEN form requires one mode
-24	unsupported	line 15: the audited SCREEN form requires one mode
-25	unsupported	line 15: the audited SCREEN form requires one mode
-26	unsupported	line 15: the audited SCREEN form requires one mode
-27	unsupported	line 15: the audited SCREEN form requires one mode
-28	unsupported	line 15: the audited SCREEN form requires one mode
-29	unsupported	line 15: the audited SCREEN form requires one mode
-30	unsupported	line 15: the audited SCREEN form requires one mode
-31	unsupported	line 15: the audited SCREEN form requires one mode
-32	unsupported	line 15: the audited SCREEN form requires one mode
-33	unsupported	line 15: the audited SCREEN form requires one mode
-34	unsupported	line 15: the audited SCREEN form requires one mode
-35	unsupported	line 15: the audited SCREEN form requires one mode
-36	unsupported	line 15: the audited SCREEN form requires one mode
-37	unsupported	line 15: the audited SCREEN form requires one mode
-38	unsupported	line 15: the audited SCREEN form requires one mode
-39	unsupported	line 15: the audited SCREEN form requires one mode
-40	unsupported	line 15: the audited SCREEN form requires one mode
-41	unsupported	line 15: the audited SCREEN form requires one mode
-42	unsupported	line 15: the audited SCREEN form requires one mode
-43	unsupported	line 15: the audited SCREEN form requires one mode
-44	unsupported	line 15: the audited SCREEN form requires one mode
-45	unsupported	line 15: the audited SCREEN form requires one mode
-46	unsupported	line 15: the audited SCREEN form requires one mode
-47	unsupported	line 15: the audited SCREEN form requires one mode
-48	unsupported	line 15: the audited SCREEN form requires one mode
-49	unsupported	line 15: the audited SCREEN form requires one mode
-50	unsupported	line 15: the audited SCREEN form requires one mode
-51	unsupported	line 15: the audited SCREEN form requires one mode
-52	unsupported	line 15: the audited SCREEN form requires one mode
-53	unsupported	line 15: the audited SCREEN form requires one mode
-54	unsupported	line 15: the audited SCREEN form requires one mode
-55	unsupported	line 15: the audited SCREEN form requires one mode
-56	unsupported	line 15: the audited SCREEN form requires one mode
-57	unsupported	line 15: the audited SCREEN form requires one mode
-58	unsupported	line 15: the audited SCREEN form requires one mode
-59	unsupported	line 15: the audited SCREEN form requires one mode
-60	unsupported	line 15: the audited SCREEN form requires one mode
-61	unsupported	line 15: the audited SCREEN form requires one mode
-62	unsupported	line 15: the audited SCREEN form requires one mode
+12	ok	
+13	ok	
+14	ok	
+15	ok	
+16	ok	
+17	ok	
+18	ok	
+19	ok	
+20	ok	
+21	ok	
+22	ok	
+23	ok	
+24	ok	
+25	ok	
+26	ok	
+27	ok	
+28	ok	
+29	ok	
+30	semantic	15:7 Type mismatch
+31	semantic	15:7 Type mismatch
+32	ok	
+33	ok	
+34	ok	
+35	ok	
+36	ok	
+37	ok	
+38	ok	
+39	ok	
+40	semantic	15:10 Type mismatch
+41	semantic	15:10 Type mismatch
+42	ok	
+43	ok	
+44	ok	
+45	ok	
+46	ok	
+47	ok	
+48	ok	
+49	ok	
+50	semantic	15:13 Type mismatch
+51	semantic	15:13 Type mismatch
+52	ok	
+53	ok	
+54	ok	
+55	ok	
+56	ok	
+57	ok	
+58	ok	
+59	ok	
+60	semantic	15:16 Type mismatch
+61	semantic	15:16 Type mismatch
+62	semantic	15:0 Syntax error
 63	ok	
 64	ok	
 65	ok	
@@ -73,24 +73,24 @@
 72	ok	
 73	ok	
 74	ok	
-75	semantic	line 15: string expressions are runtime-only and not attached yet
-76	semantic	line 15: unsupported implicit conversion string to integer
+75	semantic	15:6 Type mismatch
+76	semantic	15:6 Type mismatch
 77	ok	
 78	ok	
-79	semantic	line 15: string expressions are runtime-only and not attached yet
-80	semantic	line 15: unsupported implicit conversion string to integer
+79	semantic	15:9 Type mismatch
+80	semantic	15:9 Type mismatch
 81	ok	
 82	ok	
-83	semantic	line 15: string expressions are runtime-only and not attached yet
-84	semantic	line 15: unsupported implicit conversion string to integer
-85	semantic	line 15: COLOR expects at most three positional arguments
+83	semantic	15:12 Type mismatch
+84	semantic	15:12 Type mismatch
+85	semantic	15:0 Syntax error
 86	ok	
 87	ok	
 88	ok	
 89	ok	
 90	ok	
-91	semantic	line 15: string expressions are runtime-only and not attached yet
-92	semantic	line 15: unsupported implicit conversion string to integer
+91	semantic	15:4 Type mismatch
+92	semantic	15:4 Type mismatch
 93	syntax	15:6 syntax error
 94	ok	
 95	ok	
@@ -141,41 +141,41 @@
 140	ok	
 141	ok	
 142	ok	
-143	semantic	line 15: string expressions are runtime-only and not attached yet
-144	semantic	line 15: unsupported implicit conversion string to integer
+143	semantic	15:7 Type mismatch
+144	semantic	15:7 Type mismatch
 145	ok	
 146	ok	
 147	ok	
-148	semantic	line 15: string expressions are runtime-only and not attached yet
-149	semantic	line 15: unsupported implicit conversion string to integer
+148	semantic	15:10 Type mismatch
+149	semantic	15:10 Type mismatch
 150	ok	
 151	ok	
 152	ok	
-153	semantic	line 15: string expressions are runtime-only and not attached yet
-154	semantic	line 15: unsupported implicit conversion string to integer
+153	semantic	15:13 Type mismatch
+154	semantic	15:13 Type mismatch
 155	ok	
 156	ok	
 157	ok	
-158	semantic	line 15: string expressions are runtime-only and not attached yet
-159	semantic	line 15: unsupported implicit conversion string to integer
+158	semantic	15:16 Type mismatch
+159	semantic	15:16 Type mismatch
 160	ok	
 161	ok	
 162	ok	
-163	semantic	line 15: string expressions are runtime-only and not attached yet
-164	semantic	line 15: unsupported implicit conversion string to integer
-165	semantic	line 15: LOCATE expects at most five positional arguments
-166	unsupported	line 15: the audited WIDTH form requires columns and rows
+163	semantic	15:19 Type mismatch
+164	semantic	15:19 Type mismatch
+165	semantic	15:0 Syntax error
+166	ok	
 167	ok	
 168	ok	
 169	ok	
 170	ok	
-171	semantic	line 15: string expressions are runtime-only and not attached yet
-172	semantic	line 15: unsupported implicit conversion string to integer
+171	ok	
+172	ok	
 173	ok	
 174	ok	
 175	ok	
-176	semantic	line 15: string expressions are runtime-only and not attached yet
-177	semantic	line 15: unsupported implicit conversion string to integer
+176	semantic	15:9 Type mismatch
+177	semantic	15:9 Type mismatch
 178	syntax	15:11 syntax error
 179	ok	
 180	ok	
@@ -183,155 +183,155 @@
 182	ok	
 183	ok	
 184	ok	
-185	semantic	line 15: string expressions are runtime-only and not attached yet
-186	semantic	line 15: unsupported implicit conversion string to integer
+185	semantic	15:9 Type mismatch
+186	semantic	15:9 Type mismatch
 187	syntax	15:11 syntax error
 188	ok	
 189	ok	
 190	ok	
 191	ok	
-192	semantic	line 15: string expressions are runtime-only and not attached yet
-193	semantic	line 15: unsupported implicit conversion string to integer
+192	semantic	15:8 Type mismatch
+193	semantic	15:8 Type mismatch
 194	syntax	15:10 syntax error
-195	unsupported	line 15: the audited WIDTH form requires columns and rows
-196	unsupported	line 15: the audited WIDTH form requires columns and rows
-197	unsupported	line 15: the audited WIDTH form requires columns and rows
-198	unsupported	line 15: the audited WIDTH form requires columns and rows
-199	unsupported	line 15: the audited WIDTH form requires columns and rows
-200	unsupported	line 15: the audited WIDTH form requires columns and rows
+195	ok	
+196	ok	
+197	ok	
+198	ok	
+199	semantic	15:13 Type mismatch
+200	semantic	15:13 Type mismatch
 201	syntax	15:15 syntax error
-202	semantic	line 15: string expressions are runtime-only and not attached yet
-203	semantic	line 15: string expressions are runtime-only and not attached yet
-204	semantic	line 15: string expressions are runtime-only and not attached yet
-205	semantic	line 15: string expressions are runtime-only and not attached yet
-206	semantic	line 15: string expressions are runtime-only and not attached yet
-207	semantic	line 15: string expressions are runtime-only and not attached yet
-208	semantic	line 15: string expressions are runtime-only and not attached yet
+202	ok	
+203	ok	
+204	ok	
+205	ok	
+206	ok	
+207	semantic	15:14 Type mismatch
+208	semantic	15:14 Type mismatch
 209	syntax	15:16 syntax error
 210	ok	
 211	ok	
 212	ok	
 213	ok	
 214	ok	
-215	semantic	line 15: string expressions are runtime-only and not attached yet
-216	semantic	line 15: unsupported implicit conversion string to integer
+215	semantic	15:11 Type mismatch
+216	semantic	15:11 Type mismatch
 217	ok	
 218	ok	
 219	ok	
-220	semantic	line 15: string expressions are runtime-only and not attached yet
-221	semantic	line 15: unsupported implicit conversion string to integer
+220	semantic	15:17 Type mismatch
+221	semantic	15:17 Type mismatch
 222	syntax	15:19 syntax error
-223	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-224	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-225	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-226	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-227	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-228	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-229	unsupported	line 15: VIEW_SCREEN is parsed as a runtime statement but has no audited ABI contract
-230	unsupported	line 15: VIEW_SCREEN is parsed as a runtime statement but has no audited ABI contract
-231	unsupported	line 15: VIEW_SCREEN is parsed as a runtime statement but has no audited ABI contract
-232	unsupported	line 15: VIEW_SCREEN is parsed as a runtime statement but has no audited ABI contract
-233	unsupported	line 15: VIEW_SCREEN is parsed as a runtime statement but has no audited ABI contract
-234	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-235	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-236	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-237	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-238	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-239	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-240	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-241	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-242	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-243	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-244	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-245	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-246	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-247	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-248	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-249	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-250	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-251	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-252	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-253	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-254	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-255	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-256	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-257	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-258	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-259	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-260	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-261	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-262	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-263	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-264	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-265	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-266	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-267	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-268	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-269	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-270	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-271	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-272	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-273	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-274	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-275	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-276	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-277	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-278	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-279	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-280	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-281	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-282	unsupported	line 15: VIEW is parsed as a runtime statement but has no audited ABI contract
-283	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-284	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-285	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-286	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-287	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-288	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-289	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-290	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-291	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-292	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-293	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-294	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-295	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-296	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-297	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-298	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-299	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-300	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-301	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-302	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-303	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-304	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-305	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-306	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-307	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-308	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-309	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-310	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-311	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-312	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-313	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-314	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-315	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-316	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-317	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-318	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-319	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-320	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-321	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-322	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-323	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-324	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
-325	unsupported	line 15: WINDOW is parsed as a runtime statement but has no audited ABI contract
+223	ok	
+224	ok	
+225	syntax	15:22 syntax error
+226	ok	
+227	ok	
+228	ok	
+229	ok	
+230	syntax	15:28 syntax error
+231	ok	
+232	ok	
+233	ok	
+234	ok	
+235	ok	
+236	ok	
+237	ok	
+238	ok	
+239	ok	
+240	ok	
+241	ok	
+242	semantic	15:7 Type mismatch
+243	semantic	15:7 Type mismatch
+244	ok	
+245	ok	
+246	ok	
+247	ok	
+248	ok	
+249	ok	
+250	ok	
+251	ok	
+252	semantic	15:10 Type mismatch
+253	semantic	15:10 Type mismatch
+254	ok	
+255	ok	
+256	ok	
+257	ok	
+258	ok	
+259	ok	
+260	ok	
+261	ok	
+262	semantic	15:15 Type mismatch
+263	semantic	15:15 Type mismatch
+264	ok	
+265	ok	
+266	ok	
+267	ok	
+268	ok	
+269	ok	
+270	ok	
+271	ok	
+272	semantic	15:18 Type mismatch
+273	semantic	15:18 Type mismatch
+274	ok	
+275	ok	
+276	semantic	15:22 Type mismatch
+277	semantic	15:22 Type mismatch
+278	ok	
+279	ok	
+280	semantic	15:25 Type mismatch
+281	semantic	15:25 Type mismatch
+282	semantic	15:0 Syntax error
+283	ok	
+284	ok	
+285	ok	
+286	ok	
+287	ok	
+288	ok	
+289	ok	
+290	ok	
+291	ok	
+292	ok	
+293	ok	
+294	semantic	15:9 Type mismatch
+295	semantic	15:9 Type mismatch
+296	ok	
+297	ok	
+298	ok	
+299	ok	
+300	ok	
+301	ok	
+302	ok	
+303	ok	
+304	semantic	15:12 Type mismatch
+305	semantic	15:12 Type mismatch
+306	ok	
+307	ok	
+308	ok	
+309	ok	
+310	ok	
+311	ok	
+312	ok	
+313	ok	
+314	semantic	15:17 Type mismatch
+315	semantic	15:17 Type mismatch
+316	ok	
+317	ok	
+318	ok	
+319	ok	
+320	ok	
+321	ok	
+322	ok	
+323	ok	
+324	semantic	15:20 Type mismatch
+325	semantic	15:20 Type mismatch
 326	syntax	15:23 syntax error
-327	semantic	line 15: PALETTE expects an attribute and color
+327	ok	
 328	ok	
 329	ok	
 330	ok	
 331	ok	
-332	semantic	line 15: string expressions are runtime-only and not attached yet
-333	semantic	line 15: unsupported implicit conversion string to integer
+332	semantic	15:8 Type mismatch
+333	semantic	15:8 Type mismatch
 334	ok	
 335	ok	
 336	ok	
@@ -340,27 +340,27 @@
 339	ok	
 340	ok	
 341	ok	
-342	semantic	line 15: string expressions are runtime-only and not attached yet
-343	semantic	line 15: unsupported implicit conversion string to long
+342	semantic	15:11 Type mismatch
+343	semantic	15:11 Type mismatch
 344	syntax	15:13 syntax error
-345	semantic	line 15: PALETTE expects an attribute and color
-346	semantic	line 15: PALETTE expects an attribute and color
-347	semantic	line 15: PALETTE expects an attribute and color
-348	semantic	line 15: PALETTE expects an attribute and color
-349	semantic	line 15: PALETTE expects an attribute and color
+345	semantic	15:14 Wrong number of dimensions
+346	semantic	15:14 Wrong number of dimensions
+347	semantic	15:14 Wrong number of dimensions
+348	semantic	15:14 Wrong number of dimensions
+349	ok	
 350	syntax	15:14 syntax error
 351	syntax	15:20 syntax error
-352	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-353	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-354	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-355	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-356	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-357	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-358	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-359	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-360	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-361	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
-362	unsupported	line 15: PCOPY is parsed as a runtime statement but has no audited ABI contract
+352	ok	
+353	ok	
+354	ok	
+355	ok	
+356	semantic	15:6 Type mismatch
+357	semantic	15:6 Type mismatch
+358	ok	
+359	ok	
+360	ok	
+361	semantic	15:9 Type mismatch
+362	semantic	15:9 Type mismatch
 363	syntax	15:11 syntax error
 364	ok	
 365	ok	
@@ -374,8 +374,8 @@
 373	ok	
 374	ok	
 375	ok	
-376	semantic	line 15: string expressions are runtime-only and not attached yet
-377	semantic	line 15: unsupported implicit conversion string to integer
+376	semantic	15:6 Type mismatch
+377	semantic	15:6 Type mismatch
 378	ok	
 379	ok	
 380	ok	
@@ -384,13 +384,13 @@
 383	ok	
 384	ok	
 385	ok	
-386	semantic	line 15: string expressions are runtime-only and not attached yet
-387	semantic	line 15: unsupported implicit conversion string to integer
+386	semantic	15:9 Type mismatch
+387	semantic	15:9 Type mismatch
 388	ok	
 389	ok	
-390	semantic	line 15: string expressions are runtime-only and not attached yet
-391	semantic	line 15: unsupported implicit conversion string to integer
-392	semantic	line 15: PSET expects coordinates and optional color
+390	semantic	15:13 Type mismatch
+391	semantic	15:13 Type mismatch
+392	semantic	15:0 Syntax error
 393	ok	
 394	ok	
 395	ok	
@@ -403,8 +403,8 @@
 402	ok	
 403	ok	
 404	ok	
-405	semantic	line 15: string expressions are runtime-only and not attached yet
-406	semantic	line 15: unsupported implicit conversion string to integer
+405	semantic	15:8 Type mismatch
+406	semantic	15:8 Type mismatch
 407	ok	
 408	ok	
 409	ok	
@@ -413,13 +413,13 @@
 412	ok	
 413	ok	
 414	ok	
-415	semantic	line 15: string expressions are runtime-only and not attached yet
-416	semantic	line 15: unsupported implicit conversion string to integer
+415	semantic	15:11 Type mismatch
+416	semantic	15:11 Type mismatch
 417	ok	
 418	ok	
-419	semantic	line 15: string expressions are runtime-only and not attached yet
-420	semantic	line 15: unsupported implicit conversion string to integer
-421	semantic	line 15: PRESET expects coordinates and optional color
+419	semantic	15:15 Type mismatch
+420	semantic	15:15 Type mismatch
+421	semantic	15:0 Syntax error
 422	ok	
 423	ok	
 424	ok	
@@ -508,8 +508,8 @@
 507	ok	
 508	ok	
 509	ok	
-510	semantic	line 15: string expressions are runtime-only and not attached yet
-511	semantic	line 15: unsupported implicit conversion string to integer
+510	semantic	15:6 Type mismatch
+511	semantic	15:6 Type mismatch
 512	ok	
 513	ok	
 514	ok	
@@ -518,8 +518,8 @@
 517	ok	
 518	ok	
 519	ok	
-520	semantic	line 15: string expressions are runtime-only and not attached yet
-521	semantic	line 15: unsupported implicit conversion string to integer
+520	semantic	15:9 Type mismatch
+521	semantic	15:9 Type mismatch
 522	ok	
 523	ok	
 524	ok	
@@ -528,8 +528,8 @@
 527	ok	
 528	ok	
 529	ok	
-530	semantic	line 15: string expressions are runtime-only and not attached yet
-531	semantic	line 15: unsupported implicit conversion string to integer
+530	semantic	15:14 Type mismatch
+531	semantic	15:14 Type mismatch
 532	ok	
 533	ok	
 534	ok	
@@ -538,12 +538,12 @@
 537	ok	
 538	ok	
 539	ok	
-540	semantic	line 15: string expressions are runtime-only and not attached yet
-541	semantic	line 15: unsupported implicit conversion string to integer
+540	semantic	15:17 Type mismatch
+541	semantic	15:17 Type mismatch
 542	ok	
 543	ok	
-544	semantic	line 15: string expressions are runtime-only and not attached yet
-545	semantic	line 15: unsupported implicit conversion string to integer
+544	semantic	15:21 Type mismatch
+545	semantic	15:21 Type mismatch
 546	ok	
 547	ok	
 548	ok	
@@ -552,52 +552,52 @@
 551	ok	
 552	ok	
 553	ok	
-554	semantic	line 15: string expressions are runtime-only and not attached yet
-555	semantic	line 15: unsupported implicit conversion string to integer
+554	semantic	15:25 Type mismatch
+555	semantic	15:25 Type mismatch
 556	syntax	15:27 syntax error
 557	ok	
-558	ok	
-559	ok	
-560	ok	
+558	syntax	15:18 syntax error
+559	syntax	15:19 syntax error
+560	syntax	15:20 syntax error
 561	ok	
 562	ok	
 563	ok	
 564	ok	
-565	ok	
+565	syntax	15:22 syntax error
 566	ok	
 567	ok	
 568	ok	
 569	ok	
-570	ok	
-571	ok	
+570	syntax	15:21 syntax error
+571	syntax	15:22 syntax error
 572	ok	
 573	ok	
 574	ok	
 575	ok	
-576	ok	
+576	syntax	15:24 syntax error
 577	ok	
 578	ok	
 579	ok	
 580	ok	
-581	ok	
-582	ok	
-583	ok	
+581	syntax	15:22 syntax error
+582	syntax	15:23 syntax error
+583	syntax	15:24 syntax error
 584	ok	
 585	ok	
 586	ok	
 587	ok	
-588	ok	
+588	syntax	15:26 syntax error
 589	ok	
 590	ok	
 591	ok	
 592	ok	
-593	ok	
-594	ok	
+593	syntax	15:25 syntax error
+594	syntax	15:26 syntax error
 595	ok	
 596	ok	
 597	ok	
 598	ok	
-599	ok	
+599	syntax	15:28 syntax error
 600	ok	
 601	ok	
 602	ok	
@@ -609,8 +609,8 @@
 608	ok	
 609	ok	
 610	ok	
-611	semantic	line 15: string expressions are runtime-only and not attached yet
-612	semantic	line 15: unsupported implicit conversion string to integer
+611	semantic	15:8 Type mismatch
+612	semantic	15:8 Type mismatch
 613	ok	
 614	ok	
 615	ok	
@@ -619,8 +619,8 @@
 618	ok	
 619	ok	
 620	ok	
-621	semantic	line 15: string expressions are runtime-only and not attached yet
-622	semantic	line 15: unsupported implicit conversion string to integer
+621	semantic	15:11 Type mismatch
+622	semantic	15:11 Type mismatch
 623	ok	
 624	ok	
 625	ok	
@@ -629,12 +629,12 @@
 628	ok	
 629	ok	
 630	ok	
-631	semantic	line 15: string expressions are runtime-only and not attached yet
-632	semantic	line 15: unsupported implicit conversion string to single
+631	semantic	15:15 Type mismatch
+632	semantic	15:15 Type mismatch
 633	ok	
 634	ok	
-635	semantic	line 15: string expressions are runtime-only and not attached yet
-636	semantic	line 15: unsupported implicit conversion string to integer
+635	semantic	15:18 Type mismatch
+636	semantic	15:18 Type mismatch
 637	ok	
 638	ok	
 639	ok	
@@ -643,8 +643,8 @@
 642	ok	
 643	ok	
 644	ok	
-645	semantic	line 15: string expressions are runtime-only and not attached yet
-646	semantic	line 15: unsupported implicit conversion string to single
+645	semantic	15:21 Type mismatch
+646	semantic	15:21 Type mismatch
 647	ok	
 648	ok	
 649	ok	
@@ -653,8 +653,8 @@
 652	ok	
 653	ok	
 654	ok	
-655	semantic	line 15: string expressions are runtime-only and not attached yet
-656	semantic	line 15: unsupported implicit conversion string to single
+655	semantic	15:24 Type mismatch
+656	semantic	15:24 Type mismatch
 657	ok	
 658	ok	
 659	ok	
@@ -663,80 +663,80 @@
 662	ok	
 663	ok	
 664	ok	
-665	semantic	line 15: string expressions are runtime-only and not attached yet
-666	semantic	line 15: unsupported implicit conversion string to single
-667	semantic	line 15: CIRCLE expects coordinates, radius, and optional color, angles, and aspect
-668	semantic	line 15: PAINT expects coordinates, fill, and optional border
-669	semantic	line 15: omitted argument used as an expression
-670	semantic	line 15: omitted argument used as an expression
-671	semantic	line 15: PAINT expects coordinates, fill, and optional border
-672	semantic	line 15: omitted argument used as an expression
-673	semantic	line 15: PAINT expects coordinates, fill, and optional border
+665	semantic	15:27 Type mismatch
+666	semantic	15:27 Type mismatch
+667	semantic	15:0 Syntax error
+668	ok	
+669	syntax	15:14 syntax error
+670	syntax	15:15 syntax error
+671	ok	
+672	ok	
+673	ok	
 674	ok	
-675	semantic	line 15: omitted argument used as an expression
-676	semantic	line 15: PAINT expects coordinates, fill, and optional border
+675	syntax	15:17 syntax error
+676	ok	
 677	ok	
-678	semantic	line 15: PAINT expects coordinates, fill, and optional border
-679	semantic	line 15: unsupported implicit conversion string to integer
-680	semantic	line 15: unsupported implicit conversion string to integer
-681	semantic	line 15: PAINT expects coordinates, fill, and optional border
-682	semantic	line 15: unsupported implicit conversion string to integer
-683	semantic	line 15: PAINT expects coordinates, fill, and optional border
-684	semantic	line 15: PAINT expects coordinates, fill, and optional border
-685	semantic	line 15: omitted argument used as an expression
-686	semantic	line 15: omitted argument used as an expression
-687	semantic	line 15: PAINT expects coordinates, fill, and optional border
-688	semantic	line 15: omitted argument used as an expression
-689	semantic	line 15: PAINT expects coordinates, fill, and optional border
+678	ok	
+679	ok	
+680	syntax	15:17 syntax error
+681	ok	
+682	ok	
+683	ok	
+684	ok	
+685	syntax	15:18 syntax error
+686	syntax	15:19 syntax error
+687	ok	
+688	ok	
+689	ok	
 690	ok	
-691	semantic	line 15: omitted argument used as an expression
-692	semantic	line 15: PAINT expects coordinates, fill, and optional border
+691	syntax	15:21 syntax error
+692	ok	
 693	ok	
-694	semantic	line 15: PAINT expects coordinates, fill, and optional border
-695	semantic	line 15: unsupported implicit conversion string to integer
-696	semantic	line 15: unsupported implicit conversion string to integer
-697	semantic	line 15: PAINT expects coordinates, fill, and optional border
-698	semantic	line 15: unsupported implicit conversion string to integer
-699	semantic	line 15: PAINT expects coordinates, fill, and optional border
-700	semantic	line 15: PAINT expects coordinates, fill, and optional border
-701	semantic	line 15: PAINT expects coordinates, fill, and optional border
-702	semantic	line 15: PAINT expects coordinates, fill, and optional border
-703	semantic	line 15: PAINT expects coordinates, fill, and optional border
-704	semantic	line 15: PAINT expects coordinates, fill, and optional border
-705	semantic	line 15: PAINT expects coordinates, fill, and optional border
-706	semantic	line 15: PAINT expects coordinates, fill, and optional border
-707	semantic	line 15: PAINT expects coordinates, fill, and optional border
-708	semantic	line 15: PAINT expects coordinates, fill, and optional border
-709	semantic	line 15: PAINT expects coordinates, fill, and optional border
-710	semantic	line 15: PAINT expects coordinates, fill, and optional border
-711	semantic	line 15: PAINT expects coordinates, fill, and optional border
-712	semantic	line 15: PAINT expects coordinates, fill, and optional border
-713	semantic	line 15: PAINT expects coordinates, fill, and optional border
-714	semantic	line 15: PAINT expects coordinates, fill, and optional border
-715	semantic	line 15: PAINT expects coordinates, fill, and optional border
-716	semantic	line 15: PAINT expects coordinates, fill, and optional border
-717	semantic	line 15: PAINT expects coordinates, fill, and optional border
-718	semantic	line 15: PAINT expects coordinates, fill, and optional border
-719	semantic	line 15: PAINT expects coordinates, fill, and optional border
-720	semantic	line 15: PAINT expects coordinates, fill, and optional border
-721	semantic	line 15: PAINT expects coordinates, fill, and optional border
-722	semantic	line 15: PAINT expects coordinates, fill, and optional border
-723	semantic	line 15: PAINT expects coordinates, fill, and optional border
-724	semantic	line 15: PAINT expects coordinates, fill, and optional border
-725	semantic	line 15: PAINT expects coordinates, fill, and optional border
-726	semantic	line 15: PAINT expects coordinates, fill, and optional border
-727	semantic	line 15: PAINT expects coordinates, fill, and optional border
-728	semantic	line 15: PAINT expects coordinates, fill, and optional border
-729	semantic	line 15: PAINT expects coordinates, fill, and optional border
-730	semantic	line 15: PAINT expects coordinates, fill, and optional border
-731	semantic	line 15: PAINT expects coordinates, fill, and optional border
-732	semantic	line 15: PAINT expects coordinates, fill, and optional border
+694	ok	
+695	ok	
+696	syntax	15:21 syntax error
+697	ok	
+698	ok	
+699	ok	
+700	ok	
+701	ok	
+702	ok	
+703	ok	
+704	ok	
+705	ok	
+706	ok	
+707	ok	
+708	semantic	15:7 Type mismatch
+709	semantic	15:7 Type mismatch
+710	ok	
+711	ok	
+712	ok	
+713	ok	
+714	ok	
+715	ok	
+716	ok	
+717	ok	
+718	semantic	15:10 Type mismatch
+719	semantic	15:10 Type mismatch
+720	ok	
+721	ok	
+722	ok	
+723	ok	
+724	ok	
+725	semantic	15:17 Type mismatch
+726	semantic	15:17 Type mismatch
+727	ok	
+728	ok	
+729	ok	
+730	semantic	15:20 String expression required
+731	semantic	15:20 String expression required
+732	semantic	15:0 Syntax error
 733	ok	
 734	ok	
 735	ok	
 736	ok	
-737	semantic	line 15: assignment target is not a variable or array element
-738	semantic	string expression requires a string operand
+737	semantic	15:5 String expression required
+738	semantic	15:5 String expression required
 739	syntax	15:7 syntax error
 740	ok	
 741	ok	
@@ -750,8 +750,8 @@
 749	ok	
 750	ok	
 751	ok	
-752	semantic	line 15: string expressions are runtime-only and not attached yet
-753	semantic	line 15: unsupported implicit conversion string to integer
+752	semantic	15:5 Type mismatch
+753	semantic	15:5 Type mismatch
 754	ok	
 755	ok	
 756	ok	
@@ -760,8 +760,8 @@
 759	ok	
 760	ok	
 761	ok	
-762	semantic	line 15: string expressions are runtime-only and not attached yet
-763	semantic	line 15: unsupported implicit conversion string to integer
+762	semantic	15:8 Type mismatch
+763	semantic	15:8 Type mismatch
 764	ok	
 765	ok	
 766	ok	
@@ -770,8 +770,8 @@
 769	ok	
 770	ok	
 771	ok	
-772	semantic	line 15: string expressions are runtime-only and not attached yet
-773	semantic	line 15: unsupported implicit conversion string to integer
+772	semantic	15:13 Type mismatch
+773	semantic	15:13 Type mismatch
 774	ok	
 775	ok	
 776	ok	
@@ -780,58 +780,58 @@
 779	ok	
 780	ok	
 781	ok	
-782	semantic	line 15: string expressions are runtime-only and not attached yet
-783	semantic	line 15: unsupported implicit conversion string to integer
+782	semantic	15:16 Type mismatch
+783	semantic	15:16 Type mismatch
 784	ok	
 785	ok	
 786	ok	
-787	semantic	line 15: X% is not an array
+787	semantic	15:20 Array not defined
 788	syntax	15:20 syntax error
 789	syntax	15:26 syntax error
-790	semantic	line 15: graphics PUT has the wrong number of operands
-791	ok	
-792	ok	
-793	ok	
-794	ok	
-795	ok	
-796	semantic	line 15: graphics PUT has the wrong number of operands
-797	ok	
-798	ok	
-799	ok	
-800	ok	
-801	ok	
-802	semantic	line 15: graphics PUT has the wrong number of operands
-803	semantic	line 15: graphics PUT has the wrong number of operands
-804	semantic	line 15: graphics PUT has the wrong number of operands
-805	semantic	line 15: graphics PUT has the wrong number of operands
-806	semantic	line 15: graphics PUT has the wrong number of operands
-807	semantic	line 15: graphics PUT has the wrong number of operands
-808	semantic	line 15: graphics PUT has the wrong number of operands
-809	semantic	line 15: graphics PUT has the wrong number of operands
-810	semantic	line 15: graphics PUT has the wrong number of operands
-811	semantic	line 15: graphics PUT has the wrong number of operands
-812	semantic	line 15: graphics PUT has the wrong number of operands
-813	semantic	line 15: graphics PUT has the wrong number of operands
-814	semantic	line 15: graphics PUT has the wrong number of operands
-815	semantic	line 15: graphics PUT has the wrong number of operands
-816	semantic	line 15: graphics PUT has the wrong number of operands
-817	semantic	line 15: graphics PUT has the wrong number of operands
-818	semantic	line 15: graphics PUT has the wrong number of operands
-819	semantic	line 15: graphics PUT has the wrong number of operands
-820	semantic	line 15: graphics PUT has the wrong number of operands
-821	semantic	line 15: graphics PUT has the wrong number of operands
-822	semantic	line 15: graphics PUT has the wrong number of operands
-823	semantic	line 15: graphics PUT has the wrong number of operands
-824	semantic	line 15: graphics PUT has the wrong number of operands
-825	semantic	line 15: graphics PUT has the wrong number of operands
+790	ok	
+791	semantic	15:19 Syntax error
+792	semantic	15:19 Syntax error
+793	semantic	15:19 Syntax error
+794	semantic	15:19 Syntax error
+795	semantic	15:19 Syntax error
+796	ok	
+797	semantic	15:23 Syntax error
+798	semantic	15:23 Syntax error
+799	semantic	15:23 Syntax error
+800	semantic	15:23 Syntax error
+801	semantic	15:23 Syntax error
+802	ok	
+803	ok	
+804	ok	
+805	ok	
+806	ok	
+807	ok	
+808	ok	
+809	ok	
+810	semantic	15:5 Type mismatch
+811	semantic	15:5 Type mismatch
+812	ok	
+813	ok	
+814	ok	
+815	ok	
+816	ok	
+817	ok	
+818	ok	
+819	ok	
+820	semantic	15:8 Type mismatch
+821	semantic	15:8 Type mismatch
+822	ok	
+823	ok	
+824	ok	
+825	semantic	15:12 Array not defined
 826	syntax	15:12 syntax error
 827	syntax	15:20 syntax error
 828	ok	
 829	ok	
 830	ok	
 831	ok	
-832	semantic	line 15: assignment target is not a variable or array element
-833	semantic	string expression requires a string operand
+832	semantic	15:5 String expression required
+833	semantic	15:5 String expression required
 834	syntax	15:7 syntax error
 835	ok	
 836	ok	
@@ -846,8 +846,8 @@
 845	ok	
 846	ok	
 847	ok	
-848	semantic	line 15: string expressions are runtime-only and not attached yet
-849	semantic	line 15: unsupported implicit conversion string to integer
+848	semantic	15:6 Type mismatch
+849	semantic	15:6 Type mismatch
 850	ok	
 851	ok	
 852	ok	
@@ -856,8 +856,8 @@
 855	ok	
 856	ok	
 857	ok	
-858	semantic	line 15: string expressions are runtime-only and not attached yet
-859	semantic	line 15: unsupported implicit conversion string to single
+858	semantic	15:9 Type mismatch
+859	semantic	15:9 Type mismatch
 860	syntax	15:11 syntax error
 861	ok	
 862	syntax	15:4 syntax error
@@ -870,8 +870,8 @@
 869	ok	
 870	ok	
 871	ok	
-872	semantic	line 15: string expressions are runtime-only and not attached yet
-873	semantic	line 15: unsupported implicit conversion string to integer
+872	semantic	15:5 Type mismatch
+873	semantic	15:5 Type mismatch
 874	ok	
 875	ok	
 876	ok	
@@ -880,8 +880,8 @@
 879	ok	
 880	ok	
 881	ok	
-882	semantic	line 15: string expressions are runtime-only and not attached yet
-883	semantic	line 15: unsupported implicit conversion string to $byte
+882	semantic	15:8 Type mismatch
+883	semantic	15:8 Type mismatch
 884	syntax	15:10 syntax error
 885	ok	
 886	ok	
@@ -892,8 +892,8 @@
 891	ok	
 892	ok	
 893	ok	
-894	semantic	line 15: string expressions are runtime-only and not attached yet
-895	semantic	line 15: unsupported implicit conversion string to integer
+894	semantic	15:4 Type mismatch
+895	semantic	15:4 Type mismatch
 896	ok	
 897	ok	
 898	ok	
@@ -902,8 +902,8 @@
 901	ok	
 902	ok	
 903	ok	
-904	semantic	line 15: string expressions are runtime-only and not attached yet
-905	semantic	line 15: unsupported implicit conversion string to $byte
+904	semantic	15:7 Type mismatch
+905	semantic	15:7 Type mismatch
 906	syntax	15:9 syntax error
 907	ok	
 908	ok	
@@ -915,8 +915,8 @@
 914	ok	
 915	ok	
 916	ok	
-917	semantic	line 15: string expressions are runtime-only and not attached yet
-918	semantic	line 15: unsupported implicit conversion string to integer
+917	semantic	15:5 Type mismatch
+918	semantic	15:5 Type mismatch
 919	ok	
 920	ok	
 921	ok	
@@ -925,8 +925,8 @@
 924	ok	
 925	ok	
 926	ok	
-927	semantic	line 15: string expressions are runtime-only and not attached yet
-928	semantic	line 15: unsupported implicit conversion string to $byte
+927	semantic	15:8 Type mismatch
+928	semantic	15:8 Type mismatch
 929	ok	
 930	ok	
 931	ok	
@@ -935,8 +935,8 @@
 934	ok	
 935	ok	
 936	ok	
-937	semantic	line 15: string expressions are runtime-only and not attached yet
-938	semantic	line 15: unsupported implicit conversion string to $byte
+937	semantic	15:11 Type mismatch
+938	semantic	15:11 Type mismatch
 939	syntax	15:13 syntax error
 940	ok	
 941	ok	
@@ -948,16 +948,16 @@
 947	ok	
 948	ok	
 949	ok	
-950	semantic	line 15: string expressions are runtime-only and not attached yet
-951	semantic	line 15: unsupported implicit conversion string to integer
+950	semantic	15:10 Type mismatch
+951	semantic	15:10 Type mismatch
 952	syntax	15:12 syntax error
 953	ok	
 954	ok	
 955	ok	
 956	ok	
 957	ok	
-958	semantic	line 15: assignment target is not a variable or array element
-959	semantic	string expression requires a string operand
+958	semantic	15:6 String expression required
+959	semantic	15:6 String expression required
 960	ok	
 961	ok	
 962	ok	
@@ -966,15 +966,15 @@
 965	ok	
 966	ok	
 967	ok	
-968	semantic	line 15: string expressions are runtime-only and not attached yet
-969	semantic	line 15: unsupported implicit conversion string to integer
+968	semantic	15:9 Type mismatch
+969	semantic	15:9 Type mismatch
 970	syntax	15:11 syntax error
 971	ok	
 972	ok	
 973	ok	
 974	ok	
-975	semantic	line 15: assignment target is not a variable or array element
-976	semantic	string expression requires a string operand
+975	semantic	15:6 String expression required
+976	semantic	15:6 String expression required
 977	ok	
 978	ok	
 979	ok	
@@ -983,8 +983,8 @@
 982	ok	
 983	ok	
 984	ok	
-985	semantic	line 15: string expressions are runtime-only and not attached yet
-986	semantic	line 15: unsupported implicit conversion string to integer
+985	semantic	15:9 Type mismatch
+986	semantic	15:9 Type mismatch
 987	ok	
 988	ok	
 989	ok	
@@ -993,10 +993,10 @@
 992	ok	
 993	ok	
 994	ok	
-995	semantic	line 15: string expressions are runtime-only and not attached yet
-996	semantic	line 15: unsupported implicit conversion string to integer
+995	semantic	15:12 Type mismatch
+996	semantic	15:12 Type mismatch
 997	syntax	15:14 syntax error
-998	unsupported	line 15: the audited RANDOMIZE form requires one seed expression
+998	ok	
 999	ok	
 1000	ok	
 1001	ok	
@@ -1006,8 +1006,8 @@
 1005	ok	
 1006	ok	
 1007	ok	
-1008	semantic	line 15: string expressions are runtime-only and not attached yet
-1009	semantic	line 15: unsupported implicit conversion string to double
+1008	semantic	15:10 Type mismatch
+1009	semantic	15:10 Type mismatch
 1010	syntax	15:12 syntax error
 1011	ok	
 1012	syntax	15:15 syntax error
@@ -1021,68 +1021,68 @@
 1020	ok	
 1021	ok	
 1022	ok	
-1023	semantic	line 15: string expressions are runtime-only and not attached yet
-1024	semantic	line 15: unsupported implicit conversion string to long
+1023	semantic	15:6 Type mismatch
+1024	semantic	15:6 Type mismatch
 1025	syntax	15:8 syntax error
-1026	unsupported	line 15: TRON is parsed as a runtime statement but has no audited ABI contract
+1026	ok	
 1027	syntax	15:4 syntax error
-1028	unsupported	line 15: TROFF is parsed as a runtime statement but has no audited ABI contract
+1028	ok	
 1029	syntax	15:5 syntax error
-1030	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1031	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1032	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1033	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1034	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1035	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1036	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1037	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1038	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1039	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1040	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1041	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1042	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1043	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1044	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1045	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1046	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1047	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1048	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1049	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1050	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1051	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1052	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1053	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1054	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1055	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1056	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1057	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1058	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1059	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1060	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1061	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1062	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1063	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1064	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1065	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1066	unsupported	call to CLEAR has no source signature or audited runtime ABI contract
-1067	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1068	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1069	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1070	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1071	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1072	unsupported	call to SHELL has no source signature or audited runtime ABI contract
-1073	unsupported	call to SHELL has no source signature or audited runtime ABI contract
+1030	ok	
+1031	ok	
+1032	ok	
+1033	ok	
+1034	ok	
+1035	ok	
+1036	ok	
+1037	ok	
+1038	ok	
+1039	ok	
+1040	ok	
+1041	ok	
+1042	ok	
+1043	ok	
+1044	semantic	15:6 Type mismatch
+1045	semantic	15:6 Type mismatch
+1046	ok	
+1047	ok	
+1048	ok	
+1049	ok	
+1050	ok	
+1051	ok	
+1052	ok	
+1053	ok	
+1054	semantic	15:9 Type mismatch
+1055	semantic	15:9 Type mismatch
+1056	ok	
+1057	ok	
+1058	ok	
+1059	ok	
+1060	ok	
+1061	ok	
+1062	ok	
+1063	ok	
+1064	semantic	15:12 Type mismatch
+1065	semantic	15:12 Type mismatch
+1066	semantic	15:0 Syntax error
+1067	ok	
+1068	ok	
+1069	ok	
+1070	ok	
+1071	ok	
+1072	semantic	15:6 String expression required
+1073	semantic	15:6 String expression required
 1074	syntax	15:8 syntax error
-1075	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
-1076	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
-1077	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
-1078	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
-1079	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
-1080	unsupported	call to ENVIRON has no source signature or audited runtime ABI contract
+1075	ok	
+1076	ok	
+1077	ok	
+1078	ok	
+1079	semantic	15:8 String expression required
+1080	semantic	15:8 String expression required
 1081	syntax	15:10 syntax error
 1082	ok	
 1083	syntax	15:6 syntax error
-1084	unsupported	call to STOP has no source signature or audited runtime ABI contract
+1084	ok	
 1085	syntax	15:4 syntax error
 1086	ok	
 1087	syntax	15:3 syntax error
@@ -1090,188 +1090,188 @@
 1089	ok	
 1090	ok	
 1091	ok	
-1092	semantic	line 15: assignment target is not a variable or array element
-1093	semantic	string expression requires a string operand
+1092	semantic	15:8 String expression required
+1093	semantic	15:8 String expression required
 1094	syntax	15:10 syntax error
 1095	ok	
 1096	ok	
 1097	ok	
 1098	ok	
-1099	semantic	line 15: assignment target is not a variable or array element
-1100	semantic	string expression requires a string operand
+1099	semantic	15:8 String expression required
+1100	semantic	15:8 String expression required
 1101	syntax	15:10 syntax error
 1102	ok	
 1103	ok	
 1104	ok	
 1105	ok	
-1106	semantic	line 15: string expressions are runtime-only and not attached yet
-1107	semantic	line 15: unsupported implicit conversion string to integer
+1106	semantic	15:6 Type mismatch
+1107	semantic	15:6 Type mismatch
 1108	syntax	15:8 syntax error
 1109	ok	
 1110	ok	
 1111	ok	
-1112	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1112	ok	
 1113	ok	
 1114	ok	
 1115	ok	
 1116	ok	
-1117	semantic	line 15: assignment target is not a variable or array element
-1118	semantic	string expression requires a string operand
+1117	semantic	15:5 String expression required
+1118	semantic	15:5 String expression required
 1119	ok	
 1120	ok	
-1121	semantic	line 15: string expressions are runtime-only and not attached yet
-1122	semantic	line 15: unsupported implicit conversion string to integer
+1121	semantic	15:21 Type mismatch
+1122	semantic	15:21 Type mismatch
 1123	syntax	15:23 syntax error
 1124	ok	
 1125	ok	
 1126	ok	
-1127	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1127	ok	
 1128	ok	
 1129	ok	
 1130	ok	
 1131	ok	
-1132	semantic	line 15: assignment target is not a variable or array element
-1133	semantic	string expression requires a string operand
+1132	semantic	15:5 String expression required
+1133	semantic	15:5 String expression required
 1134	ok	
 1135	syntax	15:22 syntax error
-1136	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1137	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1138	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1139	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1140	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1141	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1142	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1143	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1144	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1145	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1146	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1147	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1148	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1149	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1150	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1151	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1136	ok	
+1137	ok	
+1138	ok	
+1139	ok	
+1140	ok	
+1141	semantic	15:5 String expression required
+1142	semantic	15:5 String expression required
+1143	ok	
+1144	ok	
+1145	semantic	15:11 Type mismatch
+1146	semantic	15:11 Type mismatch
+1147	ok	
+1148	ok	
+1149	ok	
+1150	semantic	15:20 Type mismatch
+1151	semantic	15:20 Type mismatch
 1152	syntax	15:22 syntax error
-1153	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1154	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1155	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1156	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1157	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1158	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1159	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1160	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1161	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1162	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1163	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1164	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1165	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1166	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1167	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1153	ok	
+1154	ok	
+1155	ok	
+1156	ok	
+1157	semantic	15:5 String expression required
+1158	semantic	15:5 String expression required
+1159	ok	
+1160	ok	
+1161	semantic	15:22 Type mismatch
+1162	semantic	15:22 Type mismatch
+1163	ok	
+1164	ok	
+1165	ok	
+1166	semantic	15:31 Type mismatch
+1167	semantic	15:31 Type mismatch
 1168	syntax	15:33 syntax error
-1169	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1170	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1171	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1172	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1173	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1174	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1175	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1176	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1177	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1178	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1179	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1180	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1169	ok	
+1170	ok	
+1171	ok	
+1172	ok	
+1173	ok	
+1174	ok	
+1175	semantic	15:5 String expression required
+1176	semantic	15:5 String expression required
+1177	ok	
+1178	ok	
+1179	semantic	15:34 Type mismatch
+1180	semantic	15:34 Type mismatch
 1181	syntax	15:36 syntax error
-1182	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1183	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1184	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1185	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1186	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1187	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1188	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1189	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1190	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1191	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1182	ok	
+1183	ok	
+1184	ok	
+1185	ok	
+1186	semantic	15:5 String expression required
+1187	semantic	15:5 String expression required
+1188	ok	
+1189	ok	
+1190	semantic	15:28 Type mismatch
+1191	semantic	15:28 Type mismatch
 1192	syntax	15:30 syntax error
-1193	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1194	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1195	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1196	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1197	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1198	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1199	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1200	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1201	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1202	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1203	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1204	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1193	ok	
+1194	ok	
+1195	ok	
+1196	ok	
+1197	ok	
+1198	ok	
+1199	semantic	15:5 String expression required
+1200	semantic	15:5 String expression required
+1201	ok	
+1202	ok	
+1203	semantic	15:31 Type mismatch
+1204	semantic	15:31 Type mismatch
 1205	syntax	15:33 syntax error
-1206	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1207	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1208	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1209	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1210	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1211	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1212	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1213	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1214	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
-1215	unsupported	line 15: OPEN with ACCESS, LOCK, LEN or RANDOM mode is not supported
+1206	ok	
+1207	ok	
+1208	ok	
+1209	ok	
+1210	semantic	15:5 String expression required
+1211	semantic	15:5 String expression required
+1212	ok	
+1213	ok	
+1214	semantic	15:51 Type mismatch
+1215	semantic	15:51 Type mismatch
 1216	syntax	15:53 syntax error
-1217	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1218	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1219	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1220	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1221	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1222	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1223	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1224	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1225	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1226	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1227	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1228	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1229	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1230	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1231	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1232	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1233	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1234	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1235	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
+1217	ok	
+1218	ok	
+1219	ok	
+1220	semantic	15:5 String expression required
+1221	semantic	15:5 String expression required
+1222	ok	
+1223	ok	
+1224	semantic	15:11 Type mismatch
+1225	semantic	15:11 Type mismatch
+1226	ok	
+1227	ok	
+1228	ok	
+1229	semantic	15:14 String expression required
+1230	semantic	15:14 String expression required
+1231	ok	
+1232	ok	
+1233	ok	
+1234	semantic	15:17 Type mismatch
+1235	semantic	15:17 Type mismatch
 1236	syntax	15:19 syntax error
-1237	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1238	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1239	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1240	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1241	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1242	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1243	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1244	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1245	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1246	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1247	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1248	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
-1249	unsupported	line 15: the classic OPEN mode$, #file, path$ form is not supported
+1237	ok	
+1238	ok	
+1239	semantic	15:5 String expression required
+1240	semantic	15:5 String expression required
+1241	ok	
+1242	semantic	15:12 Type mismatch
+1243	semantic	15:12 Type mismatch
+1244	ok	
+1245	ok	
+1246	ok	
+1247	semantic	15:15 String expression required
+1248	semantic	15:15 String expression required
+1249	ok	
 1250	ok	
 1251	ok	
 1252	ok	
 1253	ok	
 1254	ok	
-1255	semantic	line 15: string expressions are runtime-only and not attached yet
-1256	semantic	line 15: unsupported implicit conversion string to integer
+1255	semantic	15:6 Type mismatch
+1256	semantic	15:6 Type mismatch
 1257	ok	
 1258	ok	
-1259	semantic	line 15: string expressions are runtime-only and not attached yet
-1260	semantic	line 15: unsupported implicit conversion string to integer
+1259	semantic	15:9 Type mismatch
+1260	semantic	15:9 Type mismatch
 1261	ok	
 1262	ok	
 1263	ok	
-1264	semantic	line 15: string expressions are runtime-only and not attached yet
-1265	semantic	line 15: unsupported implicit conversion string to integer
+1264	semantic	15:6 Type mismatch
+1265	semantic	15:6 Type mismatch
 1266	ok	
-1267	unsupported	call to RESET has no source signature or audited runtime ABI contract
+1267	ok	
 1268	syntax	15:5 syntax error
 1269	ok	
 1270	ok	
 1271	ok	
-1272	semantic	line 15: string expressions are runtime-only and not attached yet
-1273	semantic	line 15: unsupported implicit conversion string to integer
+1272	semantic	15:5 Type mismatch
+1273	semantic	15:5 Type mismatch
 1274	ok	
 1275	ok	
 1276	ok	
@@ -1280,18 +1280,18 @@
 1279	ok	
 1280	ok	
 1281	ok	
-1282	semantic	line 15: string expressions are runtime-only and not attached yet
-1283	semantic	line 15: unsupported implicit conversion string to long
+1282	semantic	15:8 Type mismatch
+1283	semantic	15:8 Type mismatch
 1284	syntax	15:10 syntax error
-1285	unsupported	line 15: GET and PUT without a variable are not supported
-1286	unsupported	line 15: GET and PUT without a variable are not supported
+1285	ok	
+1286	ok	
 1287	ok	
-1288	unsupported	line 15: GET and PUT without a variable are not supported
+1288	ok	
 1289	ok	
 1290	ok	
 1291	ok	
-1292	semantic	line 15: string expressions are runtime-only and not attached yet
-1293	semantic	line 15: unsupported implicit conversion string to integer
+1292	semantic	15:4 Type mismatch
+1293	semantic	15:4 Type mismatch
 1294	ok	
 1295	ok	
 1296	ok	
@@ -1300,26 +1300,26 @@
 1299	ok	
 1300	ok	
 1301	ok	
-1302	semantic	line 15: string expressions are runtime-only and not attached yet
-1303	semantic	line 15: unsupported implicit conversion string to long
+1302	semantic	15:7 Type mismatch
+1303	semantic	15:7 Type mismatch
 1304	ok	
 1305	ok	
 1306	ok	
 1307	ok	
 1308	ok	
-1309	semantic	line 15: assignment target is not a variable or array element
-1310	ok	
+1309	semantic	15:10 Variable required
+1310	semantic	15:10 Variable required
 1311	ok	
 1312	syntax	15:12 syntax error
-1313	unsupported	line 15: GET and PUT without a variable are not supported
-1314	unsupported	line 15: GET and PUT without a variable are not supported
+1313	ok	
+1314	ok	
 1315	ok	
-1316	unsupported	line 15: GET and PUT without a variable are not supported
+1316	ok	
 1317	ok	
 1318	ok	
 1319	ok	
-1320	semantic	line 15: string expressions are runtime-only and not attached yet
-1321	semantic	line 15: unsupported implicit conversion string to integer
+1320	semantic	15:4 Type mismatch
+1321	semantic	15:4 Type mismatch
 1322	ok	
 1323	ok	
 1324	ok	
@@ -1328,202 +1328,202 @@
 1327	ok	
 1328	ok	
 1329	ok	
-1330	semantic	line 15: string expressions are runtime-only and not attached yet
-1331	semantic	line 15: unsupported implicit conversion string to long
+1330	semantic	15:7 Type mismatch
+1331	semantic	15:7 Type mismatch
 1332	ok	
 1333	ok	
 1334	ok	
 1335	ok	
 1336	ok	
-1337	semantic	line 15: assignment target is not a variable or array element
-1338	ok	
+1337	semantic	15:10 Variable required
+1338	semantic	15:10 Variable required
 1339	ok	
 1340	syntax	15:12 syntax error
-1341	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1342	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1343	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1344	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1345	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1346	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1347	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1348	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1349	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1350	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1351	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1352	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1353	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1354	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1355	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1356	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1357	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1358	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1359	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1360	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1361	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1362	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1363	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1364	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1365	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1366	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1367	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1368	unsupported	line 15: LOCK is parsed as a runtime statement but has no audited ABI contract
-1369	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1370	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1371	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1372	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1373	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1374	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1375	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1376	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1377	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1378	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1379	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1380	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1381	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1382	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1383	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1384	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1385	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1386	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1387	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1388	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1389	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1390	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1391	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1392	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1393	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1394	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1395	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1396	unsupported	line 15: UNLOCK is parsed as a runtime statement but has no audited ABI contract
-1397	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1398	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1399	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1400	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1401	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1402	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1403	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1404	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1405	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1406	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1407	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1408	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1409	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1410	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1411	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1412	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1413	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1414	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1415	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1416	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1417	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1418	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1419	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1420	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1421	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1422	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1423	unsupported	line 15: FIELD is parsed as a runtime statement but has no audited ABI contract
-1424	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1425	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1426	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1427	unsupported	call to LSET has no source signature or audited runtime ABI contract
+1341	ok	
+1342	ok	
+1343	ok	
+1344	ok	
+1345	ok	
+1346	semantic	15:5 Type mismatch
+1347	semantic	15:5 Type mismatch
+1348	ok	
+1349	ok	
+1350	ok	
+1351	ok	
+1352	ok	
+1353	ok	
+1354	ok	
+1355	ok	
+1356	semantic	15:8 Type mismatch
+1357	semantic	15:8 Type mismatch
+1358	ok	
+1359	ok	
+1360	ok	
+1361	ok	
+1362	ok	
+1363	ok	
+1364	ok	
+1365	ok	
+1366	semantic	15:14 Type mismatch
+1367	semantic	15:14 Type mismatch
+1368	semantic	15:0 Syntax error
+1369	ok	
+1370	ok	
+1371	ok	
+1372	ok	
+1373	ok	
+1374	semantic	15:7 Type mismatch
+1375	semantic	15:7 Type mismatch
+1376	ok	
+1377	ok	
+1378	ok	
+1379	ok	
+1380	ok	
+1381	ok	
+1382	ok	
+1383	ok	
+1384	semantic	15:10 Type mismatch
+1385	semantic	15:10 Type mismatch
+1386	ok	
+1387	ok	
+1388	ok	
+1389	ok	
+1390	ok	
+1391	ok	
+1392	ok	
+1393	ok	
+1394	semantic	15:16 Type mismatch
+1395	semantic	15:16 Type mismatch
+1396	semantic	15:0 Syntax error
+1397	ok	
+1398	ok	
+1399	ok	
+1400	ok	
+1401	semantic	15:6 Type mismatch
+1402	semantic	15:6 Type mismatch
+1403	ok	
+1404	ok	
+1405	ok	
+1406	semantic	15:9 Type mismatch
+1407	semantic	15:9 Type mismatch
+1408	ok	
+1409	ok	
+1410	ok	
+1411	semantic	15:15 Variable required
+1412	semantic	15:15 Variable required
+1413	ok	
+1414	ok	
+1415	ok	
+1416	semantic	15:18 Type mismatch
+1417	semantic	15:18 Type mismatch
+1418	ok	
+1419	ok	
+1420	ok	
+1421	semantic	15:24 Variable required
+1422	semantic	15:24 Variable required
+1423	ok	
+1424	ok	
+1425	ok	
+1426	ok	
+1427	semantic	15:5 String expression required
 1428	syntax	15:5 syntax error
 1429	syntax	15:5 syntax error
-1430	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1431	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1432	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1433	unsupported	call to LSET has no source signature or audited runtime ABI contract
-1434	unsupported	call to LSET has no source signature or audited runtime ABI contract
+1430	ok	
+1431	ok	
+1432	ok	
+1433	semantic	15:10 String expression required
+1434	semantic	15:10 String expression required
 1435	syntax	15:12 syntax error
-1436	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1437	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1438	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1439	unsupported	call to RSET has no source signature or audited runtime ABI contract
+1436	ok	
+1437	ok	
+1438	ok	
+1439	semantic	15:5 String expression required
 1440	syntax	15:5 syntax error
 1441	syntax	15:5 syntax error
-1442	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1443	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1444	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1445	unsupported	call to RSET has no source signature or audited runtime ABI contract
-1446	unsupported	call to RSET has no source signature or audited runtime ABI contract
+1442	ok	
+1443	ok	
+1444	ok	
+1445	semantic	15:10 String expression required
+1446	semantic	15:10 String expression required
 1447	syntax	15:12 syntax error
-1448	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1449	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1450	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1451	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1452	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1453	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1454	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1455	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1456	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1457	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1458	unsupported	line 15: IOCTL is parsed as a runtime statement but has no audited ABI contract
-1459	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1460	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1461	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1462	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1463	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1464	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1465	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1466	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1467	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1468	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
-1469	unsupported	line 15: NAME is parsed as a runtime statement but has no audited ABI contract
+1448	ok	
+1449	ok	
+1450	ok	
+1451	semantic	15:6 Type mismatch
+1452	semantic	15:6 Type mismatch
+1453	ok	
+1454	ok	
+1455	ok	
+1456	ok	
+1457	ok	
+1458	semantic	15:0 Syntax error
+1459	ok	
+1460	ok	
+1461	ok	
+1462	ok	
+1463	semantic	15:5 String expression required
+1464	semantic	15:5 String expression required
+1465	ok	
+1466	ok	
+1467	ok	
+1468	semantic	15:11 String expression required
+1469	semantic	15:11 String expression required
 1470	syntax	15:13 syntax error
-1471	unsupported	call to KILL has no source signature or audited runtime ABI contract
-1472	unsupported	call to KILL has no source signature or audited runtime ABI contract
-1473	unsupported	call to KILL has no source signature or audited runtime ABI contract
-1474	unsupported	call to KILL has no source signature or audited runtime ABI contract
-1475	unsupported	call to KILL has no source signature or audited runtime ABI contract
-1476	unsupported	call to KILL has no source signature or audited runtime ABI contract
+1471	ok	
+1472	ok	
+1473	ok	
+1474	ok	
+1475	semantic	15:5 String expression required
+1476	semantic	15:5 String expression required
 1477	syntax	15:7 syntax error
-1478	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
-1479	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
-1480	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
-1481	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
-1482	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
-1483	unsupported	call to MKDIR has no source signature or audited runtime ABI contract
+1478	ok	
+1479	ok	
+1480	ok	
+1481	ok	
+1482	semantic	15:6 String expression required
+1483	semantic	15:6 String expression required
 1484	syntax	15:8 syntax error
-1485	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
-1486	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
-1487	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
-1488	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
-1489	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
-1490	unsupported	call to CHDIR has no source signature or audited runtime ABI contract
+1485	ok	
+1486	ok	
+1487	ok	
+1488	ok	
+1489	semantic	15:6 String expression required
+1490	semantic	15:6 String expression required
 1491	syntax	15:8 syntax error
-1492	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
-1493	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
-1494	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
-1495	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
-1496	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
-1497	unsupported	call to RMDIR has no source signature or audited runtime ABI contract
+1492	ok	
+1493	ok	
+1494	ok	
+1495	ok	
+1496	semantic	15:6 String expression required
+1497	semantic	15:6 String expression required
 1498	syntax	15:8 syntax error
-1499	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1500	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1501	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1502	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1503	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1504	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
-1505	unsupported	line 15: FILES is parsed as a runtime statement but has no audited ABI contract
+1499	ok	
+1500	ok	
+1501	ok	
+1502	ok	
+1503	ok	
+1504	semantic	15:6 String expression required
+1505	semantic	15:6 String expression required
 1506	syntax	15:8 syntax error
-1507	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
-1508	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
-1509	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
-1510	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
-1511	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
-1512	unsupported	line 15: CHAIN is parsed as a runtime statement but has no audited ABI contract
+1507	ok	
+1508	ok	
+1509	ok	
+1510	ok	
+1511	semantic	15:6 String expression required
+1512	semantic	15:6 String expression required
 1513	syntax	15:8 syntax error
-1514	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1515	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1516	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1517	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1518	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1519	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
-1520	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
+1514	ok	
+1515	ok	
+1516	ok	
+1517	ok	
+1518	ok	
+1519	ok	
+1520	ok	
 1521	syntax	15:6 syntax error
-1522	unsupported	line 15: RUN is parsed as a runtime statement but has no audited ABI contract
+1522	ok	
 1523	syntax	15:7 syntax error
 1524	ok	
-1525	unsupported	call to WRITEX% has no source signature or audited runtime ABI contract
+1525	ok	
 1526	syntax	15:7 syntax error
 1527	ok	
 1528	ok	
@@ -1633,8 +1633,8 @@
 1632	syntax	15:11 syntax error
 1633	syntax	15:13 syntax error
 1634	ok	
-1635	semantic	line 15: LINE INPUT destination must be a dynamic STRING
-1636	semantic	line 15: LINE INPUT destination must be a dynamic STRING
+1635	ok	
+1636	semantic	15:17 String expression required
 1637	syntax	15:17 syntax error
 1638	syntax	15:17 syntax error
 1639	syntax	15:19 syntax error
@@ -1644,13 +1644,13 @@
 1643	ok	
 1644	syntax	15:13 syntax error
 1645	ok	
-1646	semantic	line 15: LINE INPUT destination must be a dynamic STRING
-1647	semantic	line 15: LINE INPUT destination must be a dynamic STRING
+1646	ok	
+1647	semantic	15:14 String expression required
 1648	syntax	15:14 syntax error
 1649	syntax	15:14 syntax error
 1650	syntax	15:16 syntax error
 1651	ok	
-1652	semantic	line 15: omitted argument used as an expression
+1652	ok	
 1653	ok	
 1654	ok	
 1655	ok	
@@ -1712,55 +1712,55 @@
 1711	ok	
 1712	ok	
 1713	ok	
-1714	semantic	line 15: omitted argument used as an expression
-1715	semantic	line 15: omitted argument used as an expression
-1716	semantic	line 15: omitted argument used as an expression
-1717	semantic	line 15: omitted argument used as an expression
-1718	semantic	line 15: omitted argument used as an expression
-1719	semantic	line 15: omitted argument used as an expression
-1720	semantic	line 15: omitted argument used as an expression
-1721	semantic	line 15: omitted argument used as an expression
-1722	semantic	line 15: omitted argument used as an expression
-1723	semantic	line 15: omitted argument used as an expression
-1724	semantic	line 15: omitted argument used as an expression
-1725	semantic	line 15: omitted argument used as an expression
-1726	semantic	line 15: omitted argument used as an expression
-1727	semantic	line 15: omitted argument used as an expression
-1728	semantic	line 15: omitted argument used as an expression
-1729	semantic	line 15: omitted argument used as an expression
-1730	semantic	line 15: omitted argument used as an expression
-1731	semantic	line 15: omitted argument used as an expression
-1732	semantic	line 15: omitted argument used as an expression
-1733	semantic	line 15: omitted argument used as an expression
-1734	semantic	line 15: omitted argument used as an expression
-1735	semantic	line 15: omitted argument used as an expression
-1736	semantic	line 15: omitted argument used as an expression
-1737	semantic	line 15: omitted argument used as an expression
-1738	semantic	line 15: omitted argument used as an expression
-1739	semantic	line 15: omitted argument used as an expression
-1740	semantic	line 15: omitted argument used as an expression
-1741	semantic	line 15: omitted argument used as an expression
-1742	semantic	line 15: omitted argument used as an expression
-1743	semantic	line 15: omitted argument used as an expression
-1744	semantic	line 15: omitted argument used as an expression
-1745	semantic	line 15: omitted argument used as an expression
-1746	semantic	line 15: omitted argument used as an expression
-1747	semantic	line 15: omitted argument used as an expression
-1748	semantic	line 15: omitted argument used as an expression
-1749	semantic	line 15: omitted argument used as an expression
-1750	semantic	line 15: omitted argument used as an expression
-1751	semantic	line 15: omitted argument used as an expression
-1752	semantic	line 15: omitted argument used as an expression
-1753	semantic	line 15: omitted argument used as an expression
-1754	semantic	line 15: omitted argument used as an expression
-1755	semantic	line 15: omitted argument used as an expression
-1756	semantic	line 15: omitted argument used as an expression
-1757	semantic	line 15: omitted argument used as an expression
-1758	semantic	line 15: omitted argument used as an expression
-1759	semantic	line 15: omitted argument used as an expression
-1760	semantic	line 15: omitted argument used as an expression
-1761	semantic	line 15: omitted argument used as an expression
-1762	semantic	line 15: omitted argument used as an expression
+1714	ok	
+1715	ok	
+1716	ok	
+1717	ok	
+1718	ok	
+1719	ok	
+1720	ok	
+1721	ok	
+1722	ok	
+1723	ok	
+1724	ok	
+1725	ok	
+1726	ok	
+1727	ok	
+1728	ok	
+1729	ok	
+1730	ok	
+1731	ok	
+1732	ok	
+1733	ok	
+1734	ok	
+1735	ok	
+1736	ok	
+1737	ok	
+1738	ok	
+1739	ok	
+1740	ok	
+1741	ok	
+1742	ok	
+1743	ok	
+1744	ok	
+1745	ok	
+1746	ok	
+1747	ok	
+1748	ok	
+1749	ok	
+1750	ok	
+1751	ok	
+1752	ok	
+1753	ok	
+1754	ok	
+1755	ok	
+1756	ok	
+1757	ok	
+1758	ok	
+1759	ok	
+1760	ok	
+1761	ok	
+1762	ok	
 1763	ok	
 1764	ok	
 1765	ok	
@@ -1799,8 +1799,8 @@
 1798	ok	
 1799	ok	
 1800	ok	
-1801	semantic	line 15: assignment target is not a variable or array element
-1802	semantic	string expression requires a string operand
+1801	semantic	15:12 String expression required
+1802	semantic	15:12 String expression required
 1803	ok	
 1804	ok	
 1805	ok	
@@ -1816,8 +1816,8 @@
 1815	ok	
 1816	ok	
 1817	ok	
-1818	semantic	line 15: assignment target is not a variable or array element
-1819	semantic	string expression requires a string operand
+1818	semantic	15:12 String expression required
+1819	semantic	15:12 String expression required
 1820	ok	
 1821	ok	
 1822	ok	
@@ -1838,9 +1838,9 @@
 1837	ok	
 1838	ok	
 1839	ok	
-1840	semantic	line 15: assignment target is not a variable or array element
-1841	semantic	string expression requires a string operand
-1842	semantic	line 15: omitted argument used as an expression
+1840	semantic	15:12 String expression required
+1841	semantic	15:12 String expression required
+1842	ok	
 1843	ok	
 1844	ok	
 1845	ok	
@@ -1849,8 +1849,8 @@
 1848	ok	
 1849	ok	
 1850	ok	
-1851	semantic	line 15: assignment target is not a variable or array element
-1852	semantic	string expression requires a string operand
+1851	semantic	15:15 String expression required
+1852	semantic	15:15 String expression required
 1853	ok	
 1854	ok	
 1855	ok	
@@ -1862,49 +1862,49 @@
 1861	ok	
 1862	ok	
 1863	ok	
-1864	semantic	string expression requires a string operand
-1865	semantic	string expression requires a string operand
-1866	semantic	string expression requires a string operand
-1867	semantic	line 15: assignment target is not a variable or array element
-1868	semantic	string expression requires a string operand
-1869	semantic	line 15: assignment target is not a variable or array element
-1870	semantic	line 15: assignment target is not a variable or array element
+1864	semantic	15:12 String expression required
+1865	semantic	15:12 String expression required
+1866	semantic	15:12 String expression required
+1867	semantic	15:13 String expression required
+1868	semantic	15:12 String expression required
+1869	semantic	15:12 String expression required
+1870	semantic	15:12 String expression required
 1871	ok	
-1872	semantic	string expression requires a string operand
-1873	semantic	string expression requires a string operand
-1874	semantic	string expression requires a string operand
-1875	semantic	string expression requires a string operand
-1876	semantic	string expression requires a string operand
-1877	semantic	string expression requires a string operand
-1878	semantic	string expression requires a string operand
-1879	semantic	string expression requires a string operand
-1880	semantic	string expression requires a string operand
-1881	semantic	string expression requires a string operand
-1882	semantic	string expression requires a string operand
+1872	semantic	15:12 String expression required
+1873	semantic	15:12 String expression required
+1874	semantic	15:12 String expression required
+1875	semantic	15:12 String expression required
+1876	semantic	15:12 String expression required
+1877	semantic	15:12 String expression required
+1878	semantic	15:12 String expression required
+1879	semantic	15:12 String expression required
+1880	semantic	15:12 String expression required
+1881	semantic	15:12 String expression required
+1882	semantic	15:12 String expression required
 1883	ok	
 1884	ok	
 1885	ok	
 1886	ok	
-1887	semantic	line 15: string expressions are runtime-only and not attached yet
-1888	semantic	line 15: unsupported implicit conversion string to integer
+1887	semantic	15:10 Type mismatch
+1888	semantic	15:10 Type mismatch
 1889	ok	
 1890	ok	
 1891	ok	
 1892	ok	
 1893	ok	
 1894	ok	
-1895	unsupported	line 15: SPC is not supported
-1896	unsupported	line 15: SPC is not supported
-1897	unsupported	line 15: SPC is not supported
-1898	unsupported	line 15: SPC is not supported
-1899	unsupported	line 15: SPC is not supported
-1900	unsupported	line 15: SPC is not supported
-1901	unsupported	line 15: SPC is not supported
-1902	unsupported	line 15: SPC is not supported
-1903	unsupported	line 15: SPC is not supported
-1904	unsupported	line 15: SPC is not supported
-1905	unsupported	line 15: SPC is not supported
-1906	unsupported	line 15: SPC is not supported
+1895	ok	
+1896	ok	
+1897	ok	
+1898	ok	
+1899	semantic	15:10 Type mismatch
+1900	semantic	15:10 Type mismatch
+1901	ok	
+1902	ok	
+1903	ok	
+1904	ok	
+1905	ok	
+1906	ok	
 1907	ok	
 1908	ok	
 1909	ok	
@@ -1914,8 +1914,8 @@
 1913	ok	
 1914	ok	
 1915	ok	
-1916	semantic	line 15: string expressions are runtime-only and not attached yet
-1917	semantic	line 15: unsupported implicit conversion string to integer
+1916	semantic	15:13 Type mismatch
+1917	semantic	15:13 Type mismatch
 1918	ok	
 1919	ok	
 1920	ok	
@@ -1926,11 +1926,11 @@
 1925	ok	
 1926	ok	
 1927	ok	
-1928	semantic	line 15: string expressions are runtime-only and not attached yet
-1929	semantic	line 15: unsupported implicit conversion string to integer
+1928	semantic	15:10 Type mismatch
+1929	semantic	15:10 Type mismatch
 1930	ok	
-1931	unsupported	line 15: SPC is not supported
-1932	unsupported	line 15: SPC is not supported
+1931	ok	
+1932	ok	
 1933	ok	
 1934	ok	
 1935	ok	
@@ -1941,9 +1941,9 @@
 1940	ok	
 1941	ok	
 1942	ok	
-1943	semantic	line 15: S$ is not an array
+1943	semantic	15:6 Array not dimensioned
 1944	ok	
-1945	semantic	line 15: unsupported implicit conversion string to integer
+1945	semantic	15:6 Type mismatch
 1946	ok	
 1947	ok	
 1948	ok	
@@ -1972,7 +1972,7 @@
 1971	ok	
 1972	ok	
 1973	ok	
-1974	semantic	line 15: X% is not an array
+1974	semantic	15:6 Array not dimensioned
 1975	ok	
 1976	ok	
 1977	ok	
@@ -1995,8 +1995,8 @@
 1994	ok	
 1995	ok	
 1996	ok	
-1997	semantic	line 15: assignment target is not a variable or array element
-1998	semantic	string expression requires a string operand
+1997	semantic	15:13 String expression required
+1998	semantic	15:13 String expression required
 1999	ok	
 2000	ok	
 2001	ok	
@@ -2009,7 +2009,7 @@
 2008	ok	
 2009	ok	
 2010	ok	
-2011	semantic	line 15: omitted argument used as an expression
+2011	ok	
 2012	ok	
 2013	ok	
 2014	ok	
@@ -2026,45 +2026,45 @@
 2025	ok	
 2026	ok	
 2027	ok	
-2028	semantic	line 15: omitted argument used as an expression
-2029	syntax	15:0 syntax error
-2030	syntax	15:0 syntax error
-2031	syntax	15:0 syntax error
-2032	syntax	15:0 syntax error
-2033	syntax	15:0 syntax error
-2034	syntax	15:0 syntax error
-2035	syntax	15:0 syntax error
-2036	syntax	15:0 syntax error
-2037	syntax	15:0 syntax error
-2038	syntax	15:0 syntax error
-2039	syntax	15:0 syntax error
-2040	syntax	15:0 syntax error
-2041	syntax	15:0 syntax error
-2042	syntax	15:0 syntax error
-2043	syntax	15:0 syntax error
-2044	syntax	15:0 syntax error
-2045	syntax	15:0 syntax error
-2046	syntax	15:0 syntax error
-2047	syntax	15:0 syntax error
-2048	syntax	15:0 syntax error
-2049	syntax	15:0 syntax error
-2050	syntax	15:0 syntax error
-2051	syntax	15:0 syntax error
-2052	syntax	15:0 syntax error
-2053	syntax	15:0 syntax error
-2054	syntax	15:0 syntax error
-2055	syntax	15:0 syntax error
-2056	syntax	15:0 syntax error
-2057	syntax	15:0 syntax error
-2058	semantic	duplicate declaration X%
-2059	semantic	duplicate declaration L&
-2060	semantic	duplicate declaration S!
-2061	semantic	duplicate declaration D#
-2062	semantic	duplicate declaration ARR%
+2028	ok	
+2029	ok	
+2030	ok	
+2031	ok	
+2032	ok	
+2033	ok	
+2034	ok	
+2035	ok	
+2036	ok	
+2037	ok	
+2038	ok	
+2039	ok	
+2040	ok	
+2041	ok	
+2042	ok	
+2043	ok	
+2044	ok	
+2045	ok	
+2046	ok	
+2047	ok	
+2048	ok	
+2049	ok	
+2050	ok	
+2051	ok	
+2052	ok	
+2053	ok	
+2054	ok	
+2055	ok	
+2056	ok	
+2057	ok	
+2058	semantic	15:4 Duplicate definition
+2059	semantic	15:4 Duplicate definition
+2060	semantic	15:4 Duplicate definition
+2061	semantic	15:4 Duplicate definition
+2062	semantic	15:4 Array already dimensioned
 2063	ok	
 2064	syntax	15:4 syntax error
 2065	syntax	15:4 syntax error
-2066	semantic	duplicate declaration S$
+2066	semantic	15:4 Duplicate definition
 2067	syntax	15:8 syntax error
 2068	ok	
 2069	ok	
@@ -2075,46 +2075,46 @@
 2074	ok	
 2075	ok	
 2076	ok	
-2077	semantic	line 15: string expressions are runtime-only and not attached yet
-2078	semantic	line 15: unsupported implicit conversion string to integer
+2077	semantic	15:5 Type mismatch
+2078	semantic	15:5 Type mismatch
 2079	syntax	15:7 syntax error
 2080	ok	
 2081	ok	
 2082	ok	
 2083	ok	
-2084	semantic	line 15: assignment target is not a variable or array element
-2085	semantic	string expression requires a string operand
+2084	semantic	15:5 Type mismatch
+2085	semantic	15:5 Type mismatch
 2086	syntax	15:7 syntax error
-2087	semantic	string expression requires a string operand
-2088	semantic	string expression requires a string operand
-2089	semantic	string expression requires a string operand
-2090	semantic	line 15: assignment target is not a variable or array element
-2091	semantic	string expression requires a string operand
-2092	semantic	line 15: assignment target is not a variable or array element
-2093	semantic	line 15: assignment target is not a variable or array element
+2087	semantic	15:5 Type mismatch
+2088	semantic	15:5 Type mismatch
+2089	semantic	15:5 Type mismatch
+2090	semantic	15:6 Type mismatch
+2091	semantic	15:5 Type mismatch
+2092	semantic	15:5 Type mismatch
+2093	semantic	15:5 Type mismatch
 2094	ok	
 2095	syntax	15:7 syntax error
-2096	semantic	line 15: string expressions are runtime-only and not attached yet
-2097	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2098	semantic	line 15: unsupported implicit conversion string to integer
+2096	semantic	15:5 Type mismatch
+2097	semantic	15:5 Type mismatch
+2098	semantic	15:5 Type mismatch
 2099	syntax	15:7 syntax error
 2100	ok	
-2101	semantic	line 15: SWAP variables must have identical types
-2102	semantic	line 15: SWAP variables must have identical types
-2103	semantic	line 15: SWAP variables must have identical types
+2101	semantic	15:0 Type mismatch
+2102	semantic	15:0 Type mismatch
+2103	semantic	15:0 Type mismatch
 2104	ok	
 2105	ok	
 2106	syntax	15:5 syntax error
 2107	syntax	15:5 syntax error
-2108	semantic	line 15: SWAP variables must have identical types
-2109	semantic	line 15: SWAP variables must have identical types
-2110	semantic	line 15: SWAP variables must have identical types
-2111	semantic	line 15: SWAP variables must have identical types
+2108	semantic	15:0 Type mismatch
+2109	semantic	15:0 Type mismatch
+2110	semantic	15:0 Type mismatch
+2111	semantic	15:0 Type mismatch
 2112	ok	
 2113	ok	
 2114	syntax	15:8 syntax error
 2115	syntax	15:8 syntax error
-2116	semantic	line 15: SWAP variables must have identical types
+2116	semantic	15:0 Type mismatch
 2117	syntax	15:10 syntax error
 2118	ok	
 2119	syntax	15:10 syntax error
@@ -2128,50 +2128,50 @@
 2127	ok	
 2128	ok	
 2129	ok	
-2130	semantic	line 15: string expressions are runtime-only and not attached yet
-2131	semantic	line 15: unsupported implicit conversion string to integer
+2130	semantic	15:9 Type mismatch
+2131	semantic	15:9 Type mismatch
 2132	syntax	15:11 syntax error
 2133	ok	
 2134	ok	
 2135	ok	
 2136	ok	
 2137	ok	
-2138	semantic	line 15: string expressions are runtime-only and not attached yet
-2139	semantic	line 15: unsupported implicit conversion string to integer
+2138	semantic	15:9 Type mismatch
+2139	semantic	15:9 Type mismatch
 2140	ok	
 2141	ok	
 2142	ok	
-2143	semantic	line 15: string expressions are runtime-only and not attached yet
-2144	semantic	line 15: unsupported implicit conversion string to integer
+2143	semantic	15:12 Type mismatch
+2144	semantic	15:12 Type mismatch
 2145	ok	
 2146	ok	
 2147	ok	
-2148	semantic	line 15: assignment target is not a variable or array element
-2149	semantic	string expression requires a string operand
+2148	semantic	15:18 Type mismatch
+2149	semantic	15:18 Type mismatch
 2150	syntax	15:20 syntax error
-2151	semantic	line 15: unsupported implicit conversion string to integer
-2152	semantic	line 15: string expressions are runtime-only and not attached yet
-2153	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2154	semantic	line 15: unsupported implicit conversion string to integer
+2151	semantic	15:9 Type mismatch
+2152	semantic	15:9 Type mismatch
+2153	semantic	15:9 Type mismatch
+2154	semantic	15:9 Type mismatch
 2155	ok	
-2156	semantic	line 15: unsupported implicit conversion string to integer
-2157	semantic	line 15: unsupported implicit conversion string to integer
-2158	semantic	line 15: unsupported implicit conversion string to integer
-2159	semantic	line 15: assignment target is not a variable or array element
-2160	semantic	string expression requires a string operand
+2156	semantic	15:9 Type mismatch
+2157	semantic	15:9 Type mismatch
+2158	semantic	15:9 Type mismatch
+2159	semantic	15:9 Type mismatch
+2160	semantic	15:9 Type mismatch
 2161	syntax	15:17 syntax error
-2162	semantic	MID$ assignment destination must be a string
-2163	semantic	MID$ assignment destination must be a string
-2164	semantic	MID$ assignment destination must be a string
-2165	semantic	MID$ assignment destination must be a string
-2166	semantic	MID$ assignment destination must be a string
-2167	semantic	MID$ assignment destination must be a string
+2162	semantic	15:5 String expression required
+2163	semantic	15:5 String expression required
+2164	semantic	15:5 String expression required
+2165	semantic	15:5 String expression required
+2166	semantic	15:5 String expression required
+2167	semantic	15:5 String expression required
 2168	syntax	15:16 syntax error
 2169	ok	
 2170	ok	
 2171	ok	
 2172	ok	
-2173	semantic	line 15: X% is not an array
+2173	semantic	15:6 Array not defined
 2174	syntax	15:6 syntax error
 2175	syntax	15:14 syntax error
 2176	syntax	15:10 syntax error
@@ -2179,8 +2179,8 @@
 2178	ok	
 2179	ok	
 2180	ok	
-2181	semantic	line 15 assignment: line 15: string expressions are runtime-only and not attached yet
-2182	semantic	line 15 assignment: line 15: line 15 array subscript is string rather than numeric
+2181	semantic	15:5 Type mismatch
+2182	semantic	15:5 Type mismatch
 2183	ok	
 2184	ok	
 2185	ok	
@@ -2189,42 +2189,42 @@
 2188	ok	
 2189	ok	
 2190	ok	
-2191	semantic	line 15: string expressions are runtime-only and not attached yet
-2192	semantic	line 15: unsupported implicit conversion string to integer
+2191	semantic	15:11 Type mismatch
+2192	semantic	15:11 Type mismatch
 2193	syntax	15:13 syntax error
-2194	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2195	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2196	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2197	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2198	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2199	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2200	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2201	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2202	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2203	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2204	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2205	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2206	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2207	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2208	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2209	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2210	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2211	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2212	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2213	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
-2214	semantic	line 15 assignment: line 15: ARR% has the wrong number of subscripts
+2194	semantic	15:0 Wrong number of dimensions
+2195	semantic	15:0 Wrong number of dimensions
+2196	semantic	15:0 Wrong number of dimensions
+2197	semantic	15:0 Wrong number of dimensions
+2198	semantic	15:5 Type mismatch
+2199	semantic	15:5 Type mismatch
+2200	semantic	15:0 Wrong number of dimensions
+2201	semantic	15:0 Wrong number of dimensions
+2202	semantic	15:0 Wrong number of dimensions
+2203	semantic	15:8 Type mismatch
+2204	semantic	15:8 Type mismatch
+2205	semantic	15:0 Wrong number of dimensions
+2206	semantic	15:0 Wrong number of dimensions
+2207	semantic	15:0 Wrong number of dimensions
+2208	semantic	15:0 Wrong number of dimensions
+2209	semantic	15:0 Wrong number of dimensions
+2210	semantic	15:0 Wrong number of dimensions
+2211	semantic	15:0 Wrong number of dimensions
+2212	semantic	15:0 Wrong number of dimensions
+2213	semantic	15:0 Wrong number of dimensions
+2214	semantic	15:0 Wrong number of dimensions
 2215	syntax	15:16 syntax error
 2216	ok	
 2217	ok	
 2218	ok	
 2219	ok	
-2220	semantic	line 15 assignment: line 15: string expressions are runtime-only and not attached yet
-2221	semantic	line 15 assignment: line 15: line 15 array subscript is string rather than numeric
+2220	semantic	15:3 Type mismatch
+2221	semantic	15:3 Type mismatch
 2222	ok	
 2223	ok	
 2224	ok	
-2225	semantic	line 15 assignment: line 15: string expressions are runtime-only and not attached yet
-2226	semantic	line 15 assignment: line 15: line 15 array subscript is string rather than numeric
+2225	semantic	15:6 Type mismatch
+2226	semantic	15:6 Type mismatch
 2227	ok	
 2228	ok	
 2229	ok	
@@ -2233,25 +2233,25 @@
 2232	ok	
 2233	ok	
 2234	ok	
-2235	semantic	line 15: string expressions are runtime-only and not attached yet
-2236	semantic	line 15: unsupported implicit conversion string to integer
+2235	semantic	15:12 Type mismatch
+2236	semantic	15:12 Type mismatch
 2237	syntax	15:14 syntax error
-2238	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2239	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2240	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2241	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2242	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2243	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2244	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2245	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2246	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2247	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2248	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2249	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2250	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2251	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2252	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
-2253	semantic	line 15 assignment: line 15: M% has the wrong number of subscripts
+2238	semantic	15:0 Wrong number of dimensions
+2239	semantic	15:0 Wrong number of dimensions
+2240	semantic	15:0 Wrong number of dimensions
+2241	semantic	15:0 Wrong number of dimensions
+2242	semantic	15:3 Type mismatch
+2243	semantic	15:3 Type mismatch
+2244	semantic	15:0 Wrong number of dimensions
+2245	semantic	15:0 Wrong number of dimensions
+2246	semantic	15:0 Wrong number of dimensions
+2247	semantic	15:0 Wrong number of dimensions
+2248	semantic	15:0 Wrong number of dimensions
+2249	semantic	15:0 Wrong number of dimensions
+2250	semantic	15:0 Wrong number of dimensions
+2251	semantic	15:0 Wrong number of dimensions
+2252	semantic	15:0 Wrong number of dimensions
+2253	semantic	15:0 Wrong number of dimensions
 2254	syntax	15:11 syntax error
 2255	ok	
 2256	ok	
@@ -2288,34 +2288,34 @@
 2287	syntax	15:10 syntax error
 2288	ok	
 2289	syntax	15:10 syntax error
-2290	semantic	unknown constant X%
+2290	semantic	15:11 Invalid constant
 2291	ok	
-2292	semantic	unknown constant L&
-2293	semantic	unknown constant S!
-2294	semantic	unknown constant D#
-2295	semantic	unknown constant X%
-2296	semantic	function call or subscript is not a constant expression
+2292	semantic	15:11 Invalid constant
+2293	semantic	15:11 Invalid constant
+2294	semantic	15:11 Invalid constant
+2295	semantic	15:12 Invalid constant
+2296	semantic	15:11 Invalid constant
 2297	ok	
 2298	ok	
-2299	semantic	string constant expressions are runtime-only
-2300	semantic	unknown constant S$
+2299	ok	
+2300	semantic	15:11 Invalid constant
 2301	syntax	15:15 syntax error
-2302	semantic	unknown constant S$
-2303	semantic	string constant expressions are runtime-only
-2304	semantic	function call or subscript is not a constant expression
-2305	semantic	function call or subscript is not a constant expression
+2302	semantic	15:11 Invalid constant
+2303	ok	
+2304	semantic	15:11 Invalid constant
+2305	semantic	15:11 Invalid constant
 2306	ok	
-2307	semantic	unknown constant X%
+2307	semantic	15:11 Invalid constant
 2308	syntax	15:15 syntax error
-2309	semantic	unknown constant X%
-2310	semantic	unknown constant L&
-2311	semantic	unknown constant S!
-2312	semantic	unknown constant D#
-2313	semantic	function call or subscript is not a constant expression
-2314	semantic	unknown constant R.A
+2309	semantic	15:11 Invalid constant
+2310	semantic	15:11 Invalid constant
+2311	semantic	15:11 Invalid constant
+2312	semantic	15:11 Invalid constant
+2313	semantic	15:11 Invalid constant
+2314	semantic	15:11 Invalid constant
 2315	ok	
-2316	semantic	string constant expressions are runtime-only
-2317	semantic	unknown constant S$
+2316	ok	
+2317	semantic	15:11 Invalid constant
 2318	syntax	15:15 syntax error
 2319	ok	
 2320	ok	
@@ -2326,27 +2326,27 @@
 2325	ok	
 2326	ok	
 2327	ok	
-2328	semantic	line 15: string expressions are runtime-only and not attached yet
-2329	semantic	line 15: unsupported implicit conversion string to integer
+2328	semantic	15:6 Type mismatch
+2329	semantic	15:6 Type mismatch
 2330	syntax	15:8 syntax error
 2331	ok	
 2332	ok	
 2333	ok	
 2334	ok	
-2335	semantic	line 15: assignment target is not a variable or array element
-2336	semantic	string assignment source is not a string place
+2335	semantic	15:6 Type mismatch
+2336	semantic	15:6 Type mismatch
 2337	syntax	15:8 syntax error
-2338	semantic	line 15: string expressions are runtime-only and not attached yet
-2339	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2340	semantic	line 15: unsupported implicit conversion string to integer
+2338	semantic	15:6 Type mismatch
+2339	semantic	15:6 Type mismatch
+2340	semantic	15:6 Type mismatch
 2341	syntax	15:8 syntax error
-2342	semantic	line 15 assignment: REC has no field ZZ
+2342	semantic	15:0 Element not defined
 2343	syntax	15:8 syntax error
 2344	ok	
 2345	syntax	15:5 syntax error
 2346	ok	
 2347	syntax	15:7 syntax error
-2348	semantic	line 15 assignment: line 15: constant C% is not assignable
+2348	semantic	15:0 Duplicate definition
 2349	syntax	15:6 syntax error
 2350	ok	
 2351	ok	
@@ -2358,25 +2358,25 @@
 2357	ok	
 2358	ok	
 2359	ok	
-2360	semantic	line 15: string expressions are runtime-only and not attached yet
-2361	semantic	line 15: condition is not numeric
+2360	semantic	15:3 Type mismatch
+2361	semantic	15:3 Type mismatch
 2362	syntax	15:17 syntax error
-2363	semantic	line 15: string expressions are runtime-only and not attached yet
-2364	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2365	semantic	line 15: condition is not numeric
+2363	semantic	15:3 Type mismatch
+2364	semantic	15:3 Type mismatch
+2365	semantic	15:3 Type mismatch
 2366	syntax	15:17 syntax error
-2367	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2368	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2369	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2370	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2371	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2372	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2373	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2374	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2375	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2376	unsupported	call to LAB has no source signature or audited runtime ABI contract
-2377	semantic	line 15: string expressions are runtime-only and not attached yet
-2378	semantic	line 15: condition is not numeric
+2367	ok	
+2368	ok	
+2369	ok	
+2370	ok	
+2371	ok	
+2372	ok	
+2373	ok	
+2374	ok	
+2375	ok	
+2376	ok	
+2377	semantic	15:3 Type mismatch
+2378	semantic	15:3 Type mismatch
 2379	syntax	15:14 syntax error
 2380	ok	
 2381	ok	
@@ -2387,20 +2387,20 @@
 2386	ok	
 2387	ok	
 2388	ok	
-2389	semantic	line 15: string expressions are runtime-only and not attached yet
-2390	semantic	line 15: condition is not numeric
+2389	semantic	15:3 Type mismatch
+2390	semantic	15:3 Type mismatch
 2391	syntax	15:14 syntax error
-2392	semantic	unknown label 10
-2393	semantic	unknown label 10
-2394	semantic	unknown label 10
-2395	semantic	unknown label 10
-2396	semantic	unknown label 10
-2397	semantic	unknown label 10
-2398	semantic	unknown label 10
-2399	semantic	unknown label 10
-2400	semantic	unknown label 10
-2401	semantic	line 15: string expressions are runtime-only and not attached yet
-2402	semantic	line 15: condition is not numeric
+2392	ok	
+2393	ok	
+2394	ok	
+2395	ok	
+2396	ok	
+2397	ok	
+2398	ok	
+2399	ok	
+2400	ok	
+2401	semantic	15:3 Type mismatch
+2402	semantic	15:3 Type mismatch
 2403	syntax	15:13 syntax error
 2404	ok	
 2405	ok	
@@ -2412,8 +2412,8 @@
 2411	ok	
 2412	ok	
 2413	ok	
-2414	semantic	line 15: string expressions are runtime-only and not attached yet
-2415	semantic	line 15: unsupported implicit conversion string to integer
+2414	semantic	15:9 Type mismatch
+2415	semantic	15:9 Type mismatch
 2416	ok	
 2417	ok	
 2418	ok	
@@ -2422,8 +2422,8 @@
 2421	ok	
 2422	ok	
 2423	ok	
-2424	semantic	line 15: string expressions are runtime-only and not attached yet
-2425	semantic	line 15: unsupported implicit conversion string to integer
+2424	semantic	15:15 Type mismatch
+2425	semantic	15:15 Type mismatch
 2426	ok	
 2427	ok	
 2428	ok	
@@ -2432,8 +2432,8 @@
 2431	ok	
 2432	ok	
 2433	ok	
-2434	semantic	line 15: string expressions are runtime-only and not attached yet
-2435	semantic	line 15: unsupported implicit conversion string to integer
+2434	semantic	15:23 Type mismatch
+2435	semantic	15:23 Type mismatch
 2436	syntax	15:31 syntax error
 2437	ok	
 2438	ok	
@@ -2444,8 +2444,8 @@
 2443	ok	
 2444	ok	
 2445	ok	
-2446	semantic	line 15: string expressions are runtime-only and not attached yet
-2447	semantic	line 15: unsupported implicit conversion string to integer
+2446	semantic	15:9 Type mismatch
+2447	semantic	15:9 Type mismatch
 2448	ok	
 2449	ok	
 2450	ok	
@@ -2454,15 +2454,15 @@
 2453	ok	
 2454	ok	
 2455	ok	
-2456	semantic	line 15: string expressions are runtime-only and not attached yet
-2457	semantic	line 15: unsupported implicit conversion string to integer
+2456	semantic	15:15 Type mismatch
+2457	semantic	15:15 Type mismatch
 2458	syntax	15:26 syntax error
-2459	semantic	line 15: FOR counter is not numeric
+2459	semantic	15:4 Type mismatch
 2460	syntax	15:21 syntax error
-2461	semantic	line 15: unsupported implicit conversion string to integer
-2462	semantic	line 15: string expressions are runtime-only and not attached yet
-2463	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2464	semantic	line 15: unsupported implicit conversion string to integer
+2461	semantic	15:9 Type mismatch
+2462	semantic	15:9 Type mismatch
+2463	semantic	15:9 Type mismatch
+2464	semantic	15:9 Type mismatch
 2465	ok	
 2466	ok	
 2467	syntax	15:22 syntax error
@@ -2479,12 +2479,12 @@
 2478	ok	
 2479	ok	
 2480	ok	
-2481	semantic	line 15: string expressions are runtime-only and not attached yet
-2482	semantic	line 15: condition is not numeric
+2481	semantic	15:6 Type mismatch
+2482	semantic	15:6 Type mismatch
 2483	syntax	15:14 syntax error
-2484	semantic	line 15: string expressions are runtime-only and not attached yet
-2485	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2486	semantic	line 15: condition is not numeric
+2484	semantic	15:6 Type mismatch
+2485	semantic	15:6 Type mismatch
+2486	semantic	15:6 Type mismatch
 2487	syntax	15:14 syntax error
 2488	ok	
 2489	ok	
@@ -2497,8 +2497,8 @@
 2496	ok	
 2497	ok	
 2498	ok	
-2499	semantic	line 15: string expressions are runtime-only and not attached yet
-2500	semantic	line 15: condition is not numeric
+2499	semantic	15:9 Type mismatch
+2500	semantic	15:9 Type mismatch
 2501	syntax	15:17 syntax error
 2502	ok	
 2503	ok	
@@ -2510,8 +2510,8 @@
 2509	ok	
 2510	ok	
 2511	ok	
-2512	semantic	line 15: string expressions are runtime-only and not attached yet
-2513	semantic	line 15: condition is not numeric
+2512	semantic	15:15 Type mismatch
+2513	semantic	15:15 Type mismatch
 2514	syntax	15:17 syntax error
 2515	syntax	15:26 syntax error
 2516	syntax	15:25 syntax error
@@ -2544,8 +2544,8 @@
 2543	ok	
 2544	ok	
 2545	ok	
-2546	semantic	line 15: string SELECT CASE requires string case values
-2547	semantic	line 15: string SELECT CASE requires string case values
+2546	semantic	15:22 Type mismatch
+2547	semantic	15:21 Type mismatch
 2548	syntax	15:61 syntax error
 2549	ok	
 2550	ok	
@@ -2556,8 +2556,8 @@
 2555	ok	
 2556	ok	
 2557	ok	
-2558	semantic	line 15: string SELECT CASE requires string case values
-2559	semantic	line 15: string SELECT CASE requires string case values
+2558	semantic	15:27 Type mismatch
+2559	semantic	15:26 Type mismatch
 2560	ok	
 2561	ok	
 2562	ok	
@@ -2566,45 +2566,45 @@
 2565	ok	
 2566	ok	
 2567	ok	
-2568	semantic	line 15: string expressions are runtime-only and not attached yet
-2569	semantic	line 15: unsupported implicit conversion string to integer
+2568	semantic	15:26 Type mismatch
+2569	semantic	15:26 Type mismatch
 2570	syntax	15:59 syntax error
 2571	ok	
 2572	ok	
 2573	ok	
 2574	ok	
-2575	semantic	line 15: string expressions are runtime-only and not attached yet
-2576	semantic	line 15: string expressions are runtime-only and not attached yet
+2575	semantic	15:20 Type mismatch
+2576	semantic	15:21 Type mismatch
 2577	syntax	15:44 syntax error
-2578	semantic	line 15: string SELECT CASE requires string case values
-2579	semantic	line 15: string SELECT CASE requires string case values
-2580	semantic	line 15: string SELECT CASE requires string case values
-2581	semantic	line 15: string SELECT CASE requires string case values
+2578	semantic	15:21 Type mismatch
+2579	semantic	15:24 Type mismatch
+2580	semantic	15:31 Type mismatch
+2581	semantic	15:25 Type mismatch
 2582	ok	
 2583	ok	
 2584	syntax	15:42 syntax error
-2585	semantic	line 15: string expressions are runtime-only and not attached yet
-2586	semantic	line 15: string expressions are runtime-only and not attached yet
-2587	semantic	line 15: string expressions are runtime-only and not attached yet
-2588	semantic	line 15: string expressions are runtime-only and not attached yet
-2589	semantic	line 15: string expressions are runtime-only and not attached yet
-2590	semantic	line 15: string expressions are runtime-only and not attached yet
-2591	semantic	line 15: string expressions are runtime-only and not attached yet
+2585	semantic	15:21 Type mismatch
+2586	semantic	15:21 Type mismatch
+2587	semantic	15:21 Type mismatch
+2588	semantic	15:27 Type mismatch
+2589	semantic	15:26 Type mismatch
+2590	semantic	15:21 Type mismatch
+2591	semantic	15:22 Type mismatch
 2592	ok	
 2593	syntax	15:44 syntax error
-2594	semantic	line 15: SELECT CASE selector must be numeric or string
+2594	semantic	15:12 Typed variable not allowed in expression
 2595	syntax	15:33 syntax error
-2596	semantic	GOSUB label LAB has no matching RETURN
+2596	ok	
 2597	syntax	15:9 syntax error
 2598	ok	
 2599	syntax	15:8 syntax error
 2600	ok	
 2601	syntax	15:9 syntax error
-2602	semantic	unknown label 10
+2602	ok	
 2603	syntax	15:7 syntax error
-2604	unsupported	call to RETURN has no source signature or audited runtime ABI contract
+2604	ok	
 2605	syntax	15:6 syntax error
-2606	unsupported	call to RETURN has no source signature or audited runtime ABI contract
+2606	ok	
 2607	syntax	15:10 syntax error
 2608	ok	
 2609	ok	
@@ -2616,26 +2616,26 @@
 2615	ok	
 2616	ok	
 2617	ok	
-2618	semantic	line 15: string expressions are runtime-only and not attached yet
-2619	semantic	line 15: unsupported implicit conversion string to integer
-2620	semantic	unknown label 1
-2621	semantic	GOSUB label LAB has no matching RETURN
-2622	semantic	GOSUB label LAB has no matching RETURN
-2623	semantic	GOSUB label LAB has no matching RETURN
-2624	semantic	GOSUB label LAB has no matching RETURN
-2625	semantic	GOSUB label LAB has no matching RETURN
-2626	semantic	GOSUB label LAB has no matching RETURN
-2627	semantic	GOSUB label LAB has no matching RETURN
-2628	semantic	GOSUB label LAB has no matching RETURN
-2629	semantic	GOSUB label LAB has no matching RETURN
-2630	semantic	GOSUB label LAB has no matching RETURN
-2631	semantic	GOSUB label LAB has no matching RETURN
-2632	semantic	GOSUB label LAB has no matching RETURN
-2633	semantic	unknown GOSUB label 1
-2634	semantic	line 15: string expressions are runtime-only and not attached yet
-2635	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2636	semantic	line 15: unsupported implicit conversion string to integer
-2637	semantic	line 15: unsupported implicit conversion string to integer
+2618	semantic	15:3 Type mismatch
+2619	semantic	15:3 Type mismatch
+2620	ok	
+2621	ok	
+2622	ok	
+2623	ok	
+2624	ok	
+2625	ok	
+2626	ok	
+2627	ok	
+2628	ok	
+2629	ok	
+2630	ok	
+2631	semantic	15:3 Type mismatch
+2632	semantic	15:3 Type mismatch
+2633	semantic	15:17 Label not defined
+2634	semantic	15:3 Type mismatch
+2635	semantic	15:3 Type mismatch
+2636	semantic	15:3 Type mismatch
+2637	semantic	15:3 Type mismatch
 2638	syntax	15:10 syntax error
 2639	syntax	15:10 syntax error
 2640	ok	
@@ -2652,97 +2652,97 @@
 2651	syntax	15:11 syntax error
 2652	ok	
 2653	syntax	15:10 syntax error
-2654	semantic	unknown RESUME label 0
+2654	ok	
 2655	syntax	15:8 syntax error
-2656	ok	
+2656	semantic	15:0 EXIT not within matching block
 2657	syntax	15:8 syntax error
-2658	ok	
+2658	semantic	15:0 EXIT not within matching block
 2659	syntax	15:13 syntax error
-2660	semantic	EXIT Do appears outside its loop
+2660	semantic	15:0 EXIT not within matching block
 2661	syntax	15:7 syntax error
-2662	semantic	EXIT For appears outside its loop
+2662	semantic	15:0 EXIT not within matching block
 2663	syntax	15:8 syntax error
 2664	syntax	15:5 syntax error
 2665	syntax	15:5 syntax error
 2666	ok	
 2667	syntax	15:18 syntax error
-2668	semantic	line 15: MYSUB expects 2 arguments, got 0
+2668	semantic	15:0 Argument-count mismatch
 2669	syntax	15:10 syntax error
-2670	semantic	line 15: BYREF argument type does not match MYSUB
+2670	semantic	15:11 Parameter type mismatch
 2671	syntax	15:18 syntax error
-2672	semantic	line 15: MYSUB expects 2 arguments, got 1
+2672	semantic	15:0 Argument-count mismatch
 2673	syntax	15:14 syntax error
-2674	semantic	line 15: MYSUB expects 2 arguments, got 3
+2674	semantic	15:0 Argument-count mismatch
 2675	syntax	15:21 syntax error
 2676	ok	
-2677	semantic	line 15: MYSUB expects 2 arguments, got 3
+2677	semantic	15:0 Argument-count mismatch
 2678	syntax	15:8 syntax error
 2679	syntax	15:8 syntax error
 2680	ok	
-2681	semantic	line 15: MYSUB expects 2 arguments, got 3
-2682	semantic	line 15: MYSUB expects 2 arguments, got 1
-2683	semantic	line 15: unsupported implicit conversion integer to string
-2684	semantic	line 15: MYSUB expects 2 arguments, got 0
+2681	semantic	15:0 Argument-count mismatch
+2682	semantic	15:0 Argument-count mismatch
+2683	semantic	15:10 Type mismatch
+2684	semantic	15:0 Argument-count mismatch
 2685	syntax	15:5 syntax error
-2686	unsupported	call to NOSUCH has no source signature or audited runtime ABI contract
+2686	ok	
 2687	syntax	15:11 syntax error
-2688	unsupported	call to NOSUCH has no source signature or audited runtime ABI contract
-2689	unsupported	call to NOSUCH has no source signature or audited runtime ABI contract
+2688	semantic	15:0 DECLARE required
+2689	semantic	15:0 DECLARE required
 2690	ok	
 2691	ok	
-2692	semantic	line 15: BYREF argument type does not match MYFN%
-2693	semantic	line 15: BYREF argument type does not match MYFN%
-2694	semantic	line 15: BYREF argument type does not match MYFN%
+2692	semantic	15:11 Parameter type mismatch
+2693	semantic	15:11 Parameter type mismatch
+2694	semantic	15:11 Parameter type mismatch
 2695	ok	
 2696	ok	
 2697	ok	
 2698	ok	
-2699	semantic	line 15: BYREF argument type does not match MYFN%
-2700	semantic	line 15: BYREF argument type does not match MYFN%
+2699	semantic	15:11 Type mismatch
+2700	semantic	15:11 Parameter type mismatch
 2701	syntax	15:14 syntax error
 2702	syntax	15:14 syntax error
-2703	semantic	line 15: MYFN% expects 1 arguments, got 0
+2703	semantic	15:5 Argument-count mismatch
 2704	syntax	15:12 syntax error
-2705	semantic	line 15: MYFN% expects 1 arguments, got 2
+2705	semantic	15:5 Argument-count mismatch
 2706	syntax	15:16 syntax error
-2707	semantic	line 15: MYFN% is not an array
+2707	semantic	15:5 Type mismatch
 2708	syntax	15:13 syntax error
-2709	ok	
+2709	semantic	15:0 Name of subprogram illegal
 2710	syntax	15:13 syntax error
-2711	ok	
-2712	semantic	line 15: MYFN% expects 1 arguments, got 2
+2711	semantic	15:0 Variable required
+2712	semantic	15:0 Variable required
 2713	ok	
 2714	syntax	15:19 syntax error
-2715	semantic	line 15: array argument type does not match ARRSUB
+2715	semantic	15:12 Parameter type mismatch
 2716	syntax	15:19 syntax error
-2717	semantic	line 15: X% is not an array
+2717	semantic	15:12 Parameter type mismatch
 2718	syntax	15:15 syntax error
 2719	ok	
-2720	semantic	line 15: ARRSUB expects 1 arguments, got 2
+2720	semantic	15:0 Argument-count mismatch
 2721	ok	
 2722	syntax	15:21 syntax error
-2723	semantic	line 15: FNA% is not an array
+2723	semantic	15:5 Function not defined
 2724	syntax	15:12 syntax error
 2725	ok	
 2726	syntax	15:17 syntax error
 2727	ok	
 2728	syntax	15:17 syntax error
-2729	semantic	GOSUB label LAB has no matching RETURN
-2730	semantic	GOSUB label LAB has no matching RETURN
-2731	semantic	GOSUB label LAB has no matching RETURN
-2732	semantic	GOSUB label LAB has no matching RETURN
-2733	semantic	GOSUB label LAB has no matching RETURN
-2734	semantic	GOSUB label LAB has no matching RETURN
-2735	semantic	GOSUB label LAB has no matching RETURN
-2736	semantic	GOSUB label LAB has no matching RETURN
-2737	semantic	GOSUB label LAB has no matching RETURN
-2738	semantic	GOSUB label LAB has no matching RETURN
-2739	semantic	GOSUB label LAB has no matching RETURN
-2740	semantic	GOSUB label LAB has no matching RETURN
-2741	semantic	GOSUB label LAB has no matching RETURN
+2729	ok	
+2730	ok	
+2731	ok	
+2732	ok	
+2733	ok	
+2734	ok	
+2735	ok	
+2736	ok	
+2737	ok	
+2738	ok	
+2739	ok	
+2740	ok	
+2741	ok	
 2742	syntax	15:20 syntax error
-2743	semantic	GOSUB label LAB has no matching RETURN
-2744	semantic	GOSUB label LAB has no matching RETURN
+2743	ok	
+2744	ok	
 2745	syntax	15:16 syntax error
 2746	ok	
 2747	ok	
@@ -2771,8 +2771,8 @@
 2770	ok	
 2771	ok	
 2772	ok	
-2773	semantic	line 15: string expressions are runtime-only and not attached yet
-2774	semantic	line 15: unsupported implicit conversion string to long
+2773	ok	
+2774	ok	
 2775	syntax	15:10 syntax error
 2776	ok	
 2777	ok	
@@ -2784,24 +2784,24 @@
 2783	ok	
 2784	ok	
 2785	syntax	15:8 syntax error
-2786	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2787	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2788	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
+2786	ok	
+2787	ok	
+2788	ok	
 2789	syntax	15:6 syntax error
-2790	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2791	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2792	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2793	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2794	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2795	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2796	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2797	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2798	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
+2790	ok	
+2791	ok	
+2792	ok	
+2793	ok	
+2794	ok	
+2795	ok	
+2796	ok	
+2797	ok	
+2798	ok	
 2799	syntax	15:9 syntax error
-2800	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2801	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2802	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
-2803	unsupported	line 15: KEY is parsed as a runtime statement but has no audited ABI contract
+2800	ok	
+2801	ok	
+2802	ok	
+2803	ok	
 2804	syntax	15:24 syntax error
 2805	ok	
 2806	ok	
@@ -2815,8 +2815,8 @@
 2814	ok	
 2815	ok	
 2816	ok	
-2817	semantic	line 15: string expressions are runtime-only and not attached yet
-2818	semantic	line 15: ABS requires a numeric argument
+2817	semantic	15:9 Type mismatch
+2818	semantic	15:9 Type mismatch
 2819	syntax	15:12 syntax error
 2820	ok	
 2821	ok	
@@ -2827,8 +2827,8 @@
 2826	ok	
 2827	ok	
 2828	ok	
-2829	semantic	line 15: string expressions are runtime-only and not attached yet
-2830	semantic	line 15: SGN requires a numeric argument
+2829	semantic	15:9 Type mismatch
+2830	semantic	15:9 Type mismatch
 2831	syntax	15:12 syntax error
 2832	ok	
 2833	ok	
@@ -2839,8 +2839,8 @@
 2838	ok	
 2839	ok	
 2840	ok	
-2841	semantic	line 15: string expressions are runtime-only and not attached yet
-2842	semantic	line 15: INT requires a numeric argument
+2841	semantic	15:9 Type mismatch
+2842	semantic	15:9 Type mismatch
 2843	syntax	15:12 syntax error
 2844	ok	
 2845	ok	
@@ -2851,8 +2851,8 @@
 2850	ok	
 2851	ok	
 2852	ok	
-2853	semantic	line 15: string expressions are runtime-only and not attached yet
-2854	semantic	line 15: FIX requires a numeric argument
+2853	semantic	15:9 Type mismatch
+2854	semantic	15:9 Type mismatch
 2855	syntax	15:12 syntax error
 2856	ok	
 2857	ok	
@@ -2863,8 +2863,8 @@
 2862	ok	
 2863	ok	
 2864	ok	
-2865	semantic	line 15: string expressions are runtime-only and not attached yet
-2866	semantic	line 15: CINT requires a numeric argument
+2865	semantic	15:10 Type mismatch
+2866	semantic	15:10 Type mismatch
 2867	syntax	15:13 syntax error
 2868	ok	
 2869	ok	
@@ -2875,8 +2875,8 @@
 2874	ok	
 2875	ok	
 2876	ok	
-2877	semantic	line 15: string expressions are runtime-only and not attached yet
-2878	semantic	line 15: CLNG requires a numeric argument
+2877	semantic	15:10 Type mismatch
+2878	semantic	15:10 Type mismatch
 2879	syntax	15:13 syntax error
 2880	ok	
 2881	ok	
@@ -2887,8 +2887,8 @@
 2886	ok	
 2887	ok	
 2888	ok	
-2889	semantic	line 15: string expressions are runtime-only and not attached yet
-2890	semantic	line 15: CSNG requires a numeric argument
+2889	semantic	15:10 Type mismatch
+2890	semantic	15:10 Type mismatch
 2891	syntax	15:13 syntax error
 2892	ok	
 2893	ok	
@@ -2899,8 +2899,8 @@
 2898	ok	
 2899	ok	
 2900	ok	
-2901	semantic	line 15: string expressions are runtime-only and not attached yet
-2902	semantic	line 15: CDBL requires a numeric argument
+2901	semantic	15:10 Type mismatch
+2902	semantic	15:10 Type mismatch
 2903	syntax	15:13 syntax error
 2904	ok	
 2905	ok	
@@ -2911,8 +2911,8 @@
 2910	ok	
 2911	ok	
 2912	ok	
-2913	semantic	line 15: string expressions are runtime-only and not attached yet
-2914	semantic	line 15: SQR requires a numeric argument
+2913	semantic	15:9 Type mismatch
+2914	semantic	15:9 Type mismatch
 2915	syntax	15:12 syntax error
 2916	ok	
 2917	ok	
@@ -2923,8 +2923,8 @@
 2922	ok	
 2923	ok	
 2924	ok	
-2925	semantic	line 15: string expressions are runtime-only and not attached yet
-2926	semantic	line 15: SIN requires a numeric argument
+2925	semantic	15:9 Type mismatch
+2926	semantic	15:9 Type mismatch
 2927	syntax	15:12 syntax error
 2928	ok	
 2929	ok	
@@ -2935,8 +2935,8 @@
 2934	ok	
 2935	ok	
 2936	ok	
-2937	semantic	line 15: string expressions are runtime-only and not attached yet
-2938	semantic	line 15: COS requires a numeric argument
+2937	semantic	15:9 Type mismatch
+2938	semantic	15:9 Type mismatch
 2939	syntax	15:12 syntax error
 2940	ok	
 2941	ok	
@@ -2947,8 +2947,8 @@
 2946	ok	
 2947	ok	
 2948	ok	
-2949	semantic	line 15: string expressions are runtime-only and not attached yet
-2950	semantic	line 15: TAN requires a numeric argument
+2949	semantic	15:9 Type mismatch
+2950	semantic	15:9 Type mismatch
 2951	syntax	15:12 syntax error
 2952	ok	
 2953	ok	
@@ -2959,8 +2959,8 @@
 2958	ok	
 2959	ok	
 2960	ok	
-2961	semantic	line 15: string expressions are runtime-only and not attached yet
-2962	semantic	line 15: ATN requires a numeric argument
+2961	semantic	15:9 Type mismatch
+2962	semantic	15:9 Type mismatch
 2963	syntax	15:12 syntax error
 2964	ok	
 2965	ok	
@@ -2971,8 +2971,8 @@
 2970	ok	
 2971	ok	
 2972	ok	
-2973	semantic	line 15: string expressions are runtime-only and not attached yet
-2974	semantic	line 15: LOG requires a numeric argument
+2973	semantic	15:9 Type mismatch
+2974	semantic	15:9 Type mismatch
 2975	syntax	15:12 syntax error
 2976	ok	
 2977	ok	
@@ -2983,27 +2983,27 @@
 2982	ok	
 2983	ok	
 2984	ok	
-2985	semantic	line 15: string expressions are runtime-only and not attached yet
-2986	semantic	line 15: EXP requires a numeric argument
+2985	semantic	15:9 Type mismatch
+2986	semantic	15:9 Type mismatch
 2987	syntax	15:12 syntax error
-2988	semantic	line 15: ABS requires a numeric argument
-2989	semantic	line 15: string expressions are runtime-only and not attached yet
-2990	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2991	semantic	line 15: ABS requires a numeric argument
+2988	semantic	15:9 Type mismatch
+2989	semantic	15:9 Type mismatch
+2990	semantic	15:9 Type mismatch
+2991	semantic	15:9 Type mismatch
 2992	ok	
 2993	ok	
 2994	syntax	15:12 syntax error
-2995	semantic	line 15: SGN requires a numeric argument
-2996	semantic	line 15: string expressions are runtime-only and not attached yet
-2997	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-2998	semantic	line 15: SGN requires a numeric argument
+2995	semantic	15:9 Type mismatch
+2996	semantic	15:9 Type mismatch
+2997	semantic	15:9 Type mismatch
+2998	semantic	15:9 Type mismatch
 2999	ok	
 3000	ok	
 3001	syntax	15:12 syntax error
-3002	semantic	line 15: INT requires a numeric argument
-3003	semantic	line 15: string expressions are runtime-only and not attached yet
-3004	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3005	semantic	line 15: INT requires a numeric argument
+3002	semantic	15:9 Type mismatch
+3003	semantic	15:9 Type mismatch
+3004	semantic	15:9 Type mismatch
+3005	semantic	15:9 Type mismatch
 3006	ok	
 3007	ok	
 3008	syntax	15:12 syntax error
@@ -3018,8 +3018,8 @@
 3017	ok	
 3018	ok	
 3019	ok	
-3020	semantic	line 15: string expressions are runtime-only and not attached yet
-3021	semantic	line 15: unsupported implicit conversion string to single
+3020	semantic	15:9 Type mismatch
+3021	semantic	15:9 Type mismatch
 3022	syntax	15:12 syntax error
 3023	syntax	15:10 syntax error
 3024	syntax	15:10 syntax error
@@ -3027,16 +3027,16 @@
 3026	ok	
 3027	ok	
 3028	ok	
-3029	semantic	line 15: assignment target is not a variable or array element
+3029	ok	
 3030	ok	
 3031	syntax	15:12 syntax error
 3032	ok	
 3033	ok	
 3034	ok	
-3035	semantic	line 15: assignment target is not a variable or array element
+3035	ok	
 3036	ok	
-3037	semantic	line 15: assignment target is not a variable or array element
-3038	semantic	line 15: assignment target is not a variable or array element
+3037	ok	
+3038	ok	
 3039	ok	
 3040	syntax	15:12 syntax error
 3041	ok	
@@ -3045,120 +3045,120 @@
 3044	ok	
 3045	ok	
 3046	ok	
-3047	semantic	line 15: assignment target is not a variable or array element
-3048	semantic	string expression requires a string operand
+3047	semantic	15:9 String expression required
+3048	semantic	15:9 String expression required
 3049	syntax	15:12 syntax error
 3050	syntax	15:11 syntax error
 3051	ok	
 3052	ok	
 3053	ok	
 3054	ok	
-3055	semantic	line 15: assignment target is not a variable or array element
-3056	semantic	string expression requires a string operand
+3055	semantic	15:9 String expression required
+3056	semantic	15:9 String expression required
 3057	syntax	15:12 syntax error
-3058	semantic	string expression requires a string operand
-3059	semantic	string expression requires a string operand
-3060	semantic	string expression requires a string operand
-3061	semantic	line 15: assignment target is not a variable or array element
-3062	semantic	string expression requires a string operand
-3063	semantic	line 15: assignment target is not a variable or array element
-3064	semantic	line 15: assignment target is not a variable or array element
+3058	semantic	15:9 String expression required
+3059	semantic	15:9 String expression required
+3060	semantic	15:9 String expression required
+3061	semantic	15:10 String expression required
+3062	semantic	15:9 String expression required
+3063	semantic	15:9 String expression required
+3064	semantic	15:9 String expression required
 3065	ok	
 3066	syntax	15:12 syntax error
 3067	ok	
 3068	ok	
 3069	ok	
 3070	ok	
-3071	semantic	line 15: assignment target is not a variable or array element
-3072	semantic	string expression requires a string operand
+3071	semantic	15:11 String expression required
+3072	semantic	15:11 String expression required
 3073	ok	
 3074	ok	
 3075	ok	
-3076	semantic	line 15: assignment target is not a variable or array element
-3077	semantic	string expression requires a string operand
+3076	semantic	15:14 String expression required
+3077	semantic	15:14 String expression required
 3078	syntax	15:17 syntax error
 3079	ok	
 3080	ok	
 3081	ok	
 3082	ok	
-3083	semantic	line 15: string expressions are runtime-only and not attached yet
-3084	semantic	line 15: unsupported implicit conversion string to integer
+3083	semantic	15:11 Type mismatch
+3084	semantic	15:11 Type mismatch
 3085	ok	
 3086	ok	
 3087	ok	
-3088	semantic	line 15: assignment target is not a variable or array element
-3089	semantic	string expression requires a string operand
+3088	semantic	15:14 String expression required
+3089	semantic	15:14 String expression required
 3090	ok	
 3091	ok	
 3092	ok	
-3093	semantic	line 15: assignment target is not a variable or array element
-3094	semantic	string expression requires a string operand
+3093	semantic	15:17 String expression required
+3094	semantic	15:17 String expression required
 3095	syntax	15:20 syntax error
-3096	semantic	line 15: string expressions are runtime-only and not attached yet
-3097	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3098	semantic	line 15: unsupported implicit conversion string to integer
+3096	semantic	15:11 Type mismatch
+3097	semantic	15:11 Type mismatch
+3098	semantic	15:11 Type mismatch
 3099	ok	
-3100	semantic	line 15: unsupported implicit conversion string to integer
-3101	semantic	line 15: unsupported implicit conversion string to integer
-3102	semantic	line 15: unsupported implicit conversion string to integer
-3103	semantic	line 15: unsupported implicit conversion string to integer
-3104	semantic	line 15: unsupported implicit conversion string to integer
-3105	semantic	line 15: unsupported implicit conversion string to integer
-3106	semantic	line 15: unsupported implicit conversion string to integer
-3107	semantic	line 15: unsupported implicit conversion string to integer
-3108	semantic	line 15: unsupported implicit conversion string to integer
-3109	semantic	line 15: unsupported implicit conversion string to integer
+3100	semantic	15:11 Type mismatch
+3101	semantic	15:11 Type mismatch
+3102	semantic	15:11 Type mismatch
+3103	semantic	15:11 Type mismatch
+3104	semantic	15:11 Type mismatch
+3105	semantic	15:11 Type mismatch
+3106	semantic	15:11 Type mismatch
+3107	semantic	15:11 Type mismatch
+3108	semantic	15:11 Type mismatch
+3109	semantic	15:11 Type mismatch
 3110	syntax	15:20 syntax error
-3111	semantic	line 15: INSTR expects between 2 and 3 arguments
+3111	semantic	15:5 Argument-count mismatch
 3112	syntax	15:13 syntax error
 3113	ok	
 3114	ok	
 3115	ok	
 3116	ok	
-3117	semantic	line 15: assignment target is not a variable or array element
-3118	semantic	string expression requires a string operand
+3117	semantic	15:9 String expression required
+3118	semantic	15:9 String expression required
 3119	syntax	15:12 syntax error
 3120	ok	
 3121	ok	
 3122	ok	
 3123	ok	
-3124	semantic	line 15: assignment target is not a variable or array element
-3125	semantic	string expression requires a string operand
+3124	semantic	15:9 String expression required
+3125	semantic	15:9 String expression required
 3126	syntax	15:12 syntax error
 3127	ok	
 3128	ok	
 3129	ok	
 3130	ok	
-3131	semantic	line 15: assignment target is not a variable or array element
-3132	semantic	string expression requires a string operand
+3131	semantic	15:9 String expression required
+3132	semantic	15:9 String expression required
 3133	syntax	15:12 syntax error
 3134	ok	
 3135	ok	
 3136	ok	
 3137	ok	
-3138	semantic	line 15: assignment target is not a variable or array element
-3139	semantic	string expression requires a string operand
+3138	semantic	15:9 String expression required
+3139	semantic	15:9 String expression required
 3140	syntax	15:12 syntax error
-3141	unsupported	line 15: CVSMBF is not supported
-3142	unsupported	line 15: CVSMBF is not supported
-3143	unsupported	line 15: CVSMBF is not supported
-3144	unsupported	line 15: CVSMBF is not supported
-3145	unsupported	line 15: CVSMBF is not supported
-3146	unsupported	line 15: CVSMBF is not supported
+3141	ok	
+3142	ok	
+3143	ok	
+3144	ok	
+3145	semantic	15:12 String expression required
+3146	semantic	15:12 String expression required
 3147	syntax	15:15 syntax error
-3148	unsupported	line 15: CVDMBF is not supported
-3149	unsupported	line 15: CVDMBF is not supported
-3150	unsupported	line 15: CVDMBF is not supported
-3151	unsupported	line 15: CVDMBF is not supported
-3152	unsupported	line 15: CVDMBF is not supported
-3153	unsupported	line 15: CVDMBF is not supported
+3148	ok	
+3149	ok	
+3150	ok	
+3151	ok	
+3152	semantic	15:12 String expression required
+3153	semantic	15:12 String expression required
 3154	syntax	15:15 syntax error
 3155	ok	
 3156	ok	
 3157	ok	
 3158	ok	
-3159	semantic	line 15: string expressions are runtime-only and not attached yet
-3160	semantic	line 15: unsupported implicit conversion string to integer
+3159	semantic	15:10 Type mismatch
+3160	semantic	15:10 Type mismatch
 3161	syntax	15:13 syntax error
 3162	ok	
 3163	ok	
@@ -3169,8 +3169,8 @@
 3168	ok	
 3169	ok	
 3170	ok	
-3171	semantic	line 15: string expressions are runtime-only and not attached yet
-3172	semantic	line 15: unsupported implicit conversion string to long
+3171	semantic	15:10 Type mismatch
+3172	semantic	15:10 Type mismatch
 3173	syntax	15:13 syntax error
 3174	ok	
 3175	ok	
@@ -3181,8 +3181,8 @@
 3180	ok	
 3181	ok	
 3182	ok	
-3183	semantic	line 15: string expressions are runtime-only and not attached yet
-3184	semantic	line 15: unsupported implicit conversion string to single
+3183	semantic	15:10 Type mismatch
+3184	semantic	15:10 Type mismatch
 3185	syntax	15:13 syntax error
 3186	ok	
 3187	ok	
@@ -3193,91 +3193,91 @@
 3192	ok	
 3193	ok	
 3194	ok	
-3195	semantic	line 15: string expressions are runtime-only and not attached yet
-3196	semantic	line 15: unsupported implicit conversion string to double
+3195	semantic	15:10 Type mismatch
+3196	semantic	15:10 Type mismatch
 3197	syntax	15:13 syntax error
-3198	unsupported	line 15: MKSMBF$ is not supported
-3199	unsupported	line 15: MKSMBF$ is not supported
-3200	unsupported	line 15: MKSMBF$ is not supported
-3201	unsupported	line 15: MKSMBF$ is not supported
-3202	unsupported	line 15: MKSMBF$ is not supported
-3203	unsupported	line 15: MKSMBF$ is not supported
-3204	unsupported	line 15: MKSMBF$ is not supported
-3205	unsupported	line 15: MKSMBF$ is not supported
-3206	unsupported	line 15: MKSMBF$ is not supported
-3207	unsupported	line 15: MKSMBF$ is not supported
-3208	unsupported	line 15: MKSMBF$ is not supported
+3198	ok	
+3199	ok	
+3200	ok	
+3201	ok	
+3202	ok	
+3203	ok	
+3204	ok	
+3205	ok	
+3206	ok	
+3207	semantic	15:13 Type mismatch
+3208	semantic	15:13 Type mismatch
 3209	syntax	15:16 syntax error
-3210	unsupported	line 15: MKDMBF$ is not supported
-3211	unsupported	line 15: MKDMBF$ is not supported
-3212	unsupported	line 15: MKDMBF$ is not supported
-3213	unsupported	line 15: MKDMBF$ is not supported
-3214	unsupported	line 15: MKDMBF$ is not supported
-3215	unsupported	line 15: MKDMBF$ is not supported
-3216	unsupported	line 15: MKDMBF$ is not supported
-3217	unsupported	line 15: MKDMBF$ is not supported
-3218	unsupported	line 15: MKDMBF$ is not supported
-3219	unsupported	line 15: MKDMBF$ is not supported
-3220	unsupported	line 15: MKDMBF$ is not supported
+3210	ok	
+3211	ok	
+3212	ok	
+3213	ok	
+3214	ok	
+3215	ok	
+3216	ok	
+3217	ok	
+3218	ok	
+3219	semantic	15:13 Type mismatch
+3220	semantic	15:13 Type mismatch
 3221	syntax	15:16 syntax error
 3222	ok	
 3223	ok	
 3224	ok	
 3225	ok	
-3226	semantic	line 15: assignment target is not a variable or array element
-3227	semantic	string expression requires a string operand
+3226	semantic	15:11 String expression required
+3227	semantic	15:11 String expression required
 3228	ok	
 3229	ok	
 3230	ok	
-3231	semantic	line 15: string expressions are runtime-only and not attached yet
-3232	semantic	line 15: unsupported implicit conversion string to integer
+3231	semantic	15:14 Type mismatch
+3232	semantic	15:14 Type mismatch
 3233	syntax	15:17 syntax error
 3234	ok	
 3235	ok	
 3236	ok	
 3237	ok	
-3238	semantic	line 15: assignment target is not a variable or array element
-3239	semantic	string expression requires a string operand
+3238	semantic	15:12 String expression required
+3239	semantic	15:12 String expression required
 3240	ok	
 3241	ok	
 3242	ok	
-3243	semantic	line 15: string expressions are runtime-only and not attached yet
-3244	semantic	line 15: unsupported implicit conversion string to integer
+3243	semantic	15:15 Type mismatch
+3244	semantic	15:15 Type mismatch
 3245	syntax	15:18 syntax error
 3246	ok	
 3247	ok	
 3248	ok	
 3249	ok	
 3250	ok	
-3251	semantic	line 15: assignment target is not a variable or array element
-3252	semantic	string expression requires a string operand
+3251	semantic	15:10 String expression required
+3252	semantic	15:10 String expression required
 3253	ok	
 3254	ok	
 3255	ok	
-3256	semantic	line 15: string expressions are runtime-only and not attached yet
-3257	semantic	line 15: unsupported implicit conversion string to integer
+3256	semantic	15:13 Type mismatch
+3257	semantic	15:13 Type mismatch
 3258	ok	
 3259	ok	
 3260	ok	
-3261	semantic	line 15: string expressions are runtime-only and not attached yet
-3262	semantic	line 15: unsupported implicit conversion string to integer
+3261	semantic	15:16 Type mismatch
+3262	semantic	15:16 Type mismatch
 3263	syntax	15:19 syntax error
-3264	semantic	line 15: LEFT$ expects 2 arguments
-3265	semantic	line 15: LEFT$ expects 2 arguments
-3266	semantic	line 15: LEFT$ expects 2 arguments
-3267	semantic	line 15: LEFT$ expects 2 arguments
-3268	semantic	line 15: LEFT$ expects 2 arguments
-3269	semantic	line 15: LEFT$ expects 2 arguments
+3264	semantic	15:5 Argument-count mismatch
+3265	semantic	15:5 Argument-count mismatch
+3266	semantic	15:5 Argument-count mismatch
+3267	semantic	15:5 Argument-count mismatch
+3268	semantic	15:5 Argument-count mismatch
+3269	semantic	15:5 Argument-count mismatch
 3270	syntax	15:14 syntax error
-3271	semantic	line 15: assignment target is not a variable or array element
-3272	semantic	string expression requires a string operand
-3273	semantic	line 15: assignment target is not a variable or array element
+3271	semantic	15:11 String expression required
+3272	semantic	15:11 String expression required
+3273	semantic	15:12 String expression required
 3274	ok	
-3275	semantic	string expression requires a string operand
-3276	semantic	string expression requires a string operand
-3277	semantic	string expression requires a string operand
-3278	semantic	string expression requires a string operand
-3279	semantic	string expression requires a string operand
+3275	semantic	15:11 String expression required
+3276	semantic	15:11 String expression required
+3277	semantic	15:11 String expression required
+3278	semantic	15:11 String expression required
+3279	semantic	15:11 String expression required
 3280	syntax	15:17 syntax error
 3281	ok	
 3282	ok	
@@ -3288,33 +3288,33 @@
 3287	ok	
 3288	ok	
 3289	ok	
-3290	semantic	line 15: string expressions are runtime-only and not attached yet
-3291	semantic	line 15: STR$ requires a numeric argument
+3290	semantic	15:10 Type mismatch
+3291	semantic	15:10 Type mismatch
 3292	syntax	15:13 syntax error
-3293	semantic	line 15: string expressions are runtime-only and not attached yet
-3294	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3295	semantic	line 15: STR$ requires a numeric argument
+3293	semantic	15:10 Type mismatch
+3294	semantic	15:10 Type mismatch
+3295	semantic	15:10 Type mismatch
 3296	syntax	15:13 syntax error
 3297	ok	
 3298	ok	
 3299	ok	
 3300	ok	
-3301	semantic	line 15: string expressions are runtime-only and not attached yet
-3302	semantic	line 15: unsupported implicit conversion string to integer
+3301	semantic	15:10 Type mismatch
+3302	semantic	15:10 Type mismatch
 3303	syntax	15:13 syntax error
 3304	ok	
 3305	ok	
 3306	ok	
 3307	ok	
-3308	semantic	line 15: string expressions are runtime-only and not attached yet
-3309	semantic	line 15: unsupported implicit conversion string to integer
+3308	semantic	15:12 Type mismatch
+3309	semantic	15:12 Type mismatch
 3310	syntax	15:15 syntax error
 3311	ok	
 3312	ok	
 3313	ok	
 3314	ok	
-3315	semantic	line 15: string expressions are runtime-only and not attached yet
-3316	semantic	line 15: unsupported implicit conversion string to integer
+3315	semantic	15:13 Type mismatch
+3316	semantic	15:13 Type mismatch
 3317	ok	
 3318	ok	
 3319	ok	
@@ -3324,8 +3324,8 @@
 3323	ok	
 3324	ok	
 3325	ok	
-3326	semantic	line 15: string expressions are runtime-only and not attached yet
-3327	semantic	line 15: unsupported implicit conversion string to integer
+3326	semantic	15:13 Type mismatch
+3327	semantic	15:13 Type mismatch
 3328	ok	
 3329	ok	
 3330	ok	
@@ -3340,8 +3340,8 @@
 3339	ok	
 3340	ok	
 3341	ok	
-3342	semantic	line 15: string expressions are runtime-only and not attached yet
-3343	semantic	line 15: unsupported implicit conversion string to long
+3342	semantic	15:10 Type mismatch
+3343	semantic	15:10 Type mismatch
 3344	syntax	15:13 syntax error
 3345	ok	
 3346	ok	
@@ -3352,36 +3352,36 @@
 3351	ok	
 3352	ok	
 3353	ok	
-3354	semantic	line 15: string expressions are runtime-only and not attached yet
-3355	semantic	line 15: unsupported implicit conversion string to long
+3354	semantic	15:10 Type mismatch
+3355	semantic	15:10 Type mismatch
 3356	syntax	15:13 syntax error
 3357	ok	
 3358	ok	
 3359	ok	
 3360	ok	
-3361	semantic	line 15: assignment target is not a variable or array element
-3362	semantic	string expression requires a string operand
+3361	semantic	15:12 String expression required
+3362	semantic	15:12 String expression required
 3363	syntax	15:15 syntax error
 3364	ok	
 3365	ok	
 3366	ok	
 3367	ok	
-3368	semantic	line 15: assignment target is not a variable or array element
-3369	semantic	string expression requires a string operand
+3368	semantic	15:12 String expression required
+3369	semantic	15:12 String expression required
 3370	syntax	15:15 syntax error
 3371	ok	
 3372	ok	
 3373	ok	
 3374	ok	
-3375	semantic	line 15: assignment target is not a variable or array element
-3376	semantic	string expression requires a string operand
+3375	semantic	15:12 String expression required
+3376	semantic	15:12 String expression required
 3377	syntax	15:15 syntax error
 3378	ok	
 3379	ok	
 3380	ok	
 3381	ok	
-3382	semantic	line 15: assignment target is not a variable or array element
-3383	semantic	string expression requires a string operand
+3382	semantic	15:12 String expression required
+3383	semantic	15:12 String expression required
 3384	syntax	15:15 syntax error
 3385	ok	
 3386	ok	
@@ -3392,8 +3392,8 @@
 3391	ok	
 3392	ok	
 3393	ok	
-3394	semantic	line 15: string expressions are runtime-only and not attached yet
-3395	semantic	line 15: unsupported implicit conversion string to integer
+3394	semantic	15:10 Type mismatch
+3395	semantic	15:10 Type mismatch
 3396	syntax	15:13 syntax error
 3397	ok	
 3398	ok	
@@ -3404,15 +3404,15 @@
 3403	ok	
 3404	ok	
 3405	ok	
-3406	semantic	line 15: string expressions are runtime-only and not attached yet
-3407	semantic	line 15: unsupported implicit conversion string to integer
+3406	semantic	15:9 Type mismatch
+3407	semantic	15:9 Type mismatch
 3408	syntax	15:12 syntax error
 3409	ok	
 3410	ok	
 3411	ok	
 3412	ok	
-3413	semantic	line 15: string expressions are runtime-only and not attached yet
-3414	semantic	line 15: unsupported implicit conversion string to integer
+3413	semantic	15:9 Type mismatch
+3414	semantic	15:9 Type mismatch
 3415	syntax	15:12 syntax error
 3416	ok	
 3417	syntax	15:11 syntax error
@@ -3442,49 +3442,49 @@
 3441	ok	
 3442	ok	
 3443	ok	
-3444	semantic	line 15: string expressions are runtime-only and not attached yet
-3445	semantic	line 15: unsupported implicit conversion string to integer
+3444	semantic	15:12 Type mismatch
+3445	semantic	15:12 Type mismatch
 3446	syntax	15:15 syntax error
 3447	ok	
 3448	ok	
 3449	ok	
 3450	ok	
-3451	semantic	line 15: string expressions are runtime-only and not attached yet
-3452	semantic	line 15: unsupported implicit conversion string to integer
+3451	semantic	15:12 Type mismatch
+3452	semantic	15:12 Type mismatch
 3453	ok	
 3454	ok	
-3455	semantic	line 15: string expressions are runtime-only and not attached yet
-3456	semantic	line 15: unsupported implicit conversion string to integer
+3455	semantic	15:15 Type mismatch
+3456	semantic	15:15 Type mismatch
 3457	syntax	15:18 syntax error
 3458	ok	
 3459	ok	
-3460	semantic	line 15: string expressions are runtime-only and not attached yet
-3461	semantic	line 15: unsupported implicit conversion string to integer
+3460	semantic	15:9 Type mismatch
+3461	semantic	15:9 Type mismatch
 3462	syntax	15:11 syntax error
 3463	ok	
 3464	ok	
-3465	semantic	line 15: string expressions are runtime-only and not attached yet
-3466	semantic	line 15: unsupported implicit conversion string to integer
+3465	semantic	15:9 Type mismatch
+3466	semantic	15:9 Type mismatch
 3467	syntax	15:11 syntax error
-3468	unsupported	line 15: LOC is not supported
-3469	unsupported	line 15: LOC is not supported
-3470	unsupported	line 15: LOC is not supported
-3471	unsupported	line 15: LOC is not supported
+3468	ok	
+3469	ok	
+3470	semantic	15:9 Type mismatch
+3471	semantic	15:9 Type mismatch
 3472	syntax	15:11 syntax error
-3473	unsupported	line 15: SEEK is not supported
-3474	unsupported	line 15: SEEK is not supported
-3475	unsupported	line 15: SEEK is not supported
-3476	unsupported	line 15: SEEK is not supported
+3473	ok	
+3474	ok	
+3475	semantic	15:10 Type mismatch
+3476	semantic	15:10 Type mismatch
 3477	syntax	15:12 syntax error
-3478	unsupported	line 15: FILEATTR is not supported
-3479	unsupported	line 15: FILEATTR is not supported
-3480	unsupported	line 15: FILEATTR is not supported
-3481	unsupported	line 15: FILEATTR is not supported
-3482	unsupported	line 15: FILEATTR is not supported
-3483	unsupported	line 15: FILEATTR is not supported
-3484	unsupported	line 15: FILEATTR is not supported
-3485	unsupported	line 15: FILEATTR is not supported
-3486	unsupported	line 15: FILEATTR is not supported
+3478	ok	
+3479	ok	
+3480	semantic	15:14 Type mismatch
+3481	semantic	15:14 Type mismatch
+3482	ok	
+3483	ok	
+3484	ok	
+3485	semantic	15:16 Type mismatch
+3486	semantic	15:16 Type mismatch
 3487	syntax	15:19 syntax error
 3488	ok	
 3489	syntax	15:13 syntax error
@@ -3504,39 +3504,39 @@
 3503	ok	
 3504	ok	
 3505	ok	
-3506	semantic	line 15: X% is not an array
+3506	semantic	15:12 Array not defined
 3507	syntax	15:12 syntax error
 3508	syntax	15:19 syntax error
 3509	ok	
 3510	ok	
 3511	ok	
 3512	ok	
-3513	semantic	line 15: X% is not an array
+3513	semantic	15:12 Array not defined
 3514	syntax	15:12 syntax error
 3515	ok	
 3516	ok	
 3517	ok	
-3518	semantic	line 15: string expressions are runtime-only and not attached yet
-3519	semantic	line 15: unsupported implicit conversion string to integer
+3518	semantic	15:19 Type mismatch
+3519	semantic	15:19 Type mismatch
 3520	syntax	15:22 syntax error
 3521	ok	
 3522	ok	
 3523	ok	
 3524	ok	
-3525	semantic	line 15: X% is not an array
+3525	semantic	15:12 Array not defined
 3526	syntax	15:12 syntax error
 3527	syntax	15:19 syntax error
 3528	ok	
 3529	ok	
 3530	ok	
 3531	ok	
-3532	semantic	line 15: X% is not an array
+3532	semantic	15:12 Array not defined
 3533	syntax	15:12 syntax error
 3534	ok	
 3535	ok	
 3536	ok	
-3537	semantic	line 15: string expressions are runtime-only and not attached yet
-3538	semantic	line 15: unsupported implicit conversion string to integer
+3537	semantic	15:19 Type mismatch
+3538	semantic	15:19 Type mismatch
 3539	syntax	15:22 syntax error
 3540	syntax	15:15 syntax error
 3541	ok	
@@ -3572,7 +3572,7 @@
 3571	ok	
 3572	ok	
 3573	ok	
-3574	semantic	string expression requires a string operand
+3574	semantic	15:10 String expression required
 3575	syntax	15:10 syntax error
 3576	syntax	15:10 syntax error
 3577	syntax	15:13 syntax error
@@ -3586,8 +3586,8 @@
 3585	ok	
 3586	ok	
 3587	ok	
-3588	semantic	line 15: string expressions are runtime-only and not attached yet
-3589	semantic	line 15: unsupported implicit conversion string to integer
+3588	semantic	15:11 Type mismatch
+3589	semantic	15:11 Type mismatch
 3590	ok	
 3591	ok	
 3592	ok	
@@ -3596,120 +3596,120 @@
 3595	ok	
 3596	ok	
 3597	ok	
-3598	semantic	line 15: string expressions are runtime-only and not attached yet
-3599	semantic	line 15: unsupported implicit conversion string to integer
+3598	semantic	15:14 Type mismatch
+3599	semantic	15:14 Type mismatch
 3600	syntax	15:17 syntax error
-3601	semantic	line 15: POINT expects 2 arguments
-3602	semantic	line 15: POINT expects 2 arguments
-3603	semantic	line 15: POINT expects 2 arguments
-3604	semantic	line 15: POINT expects 2 arguments
-3605	semantic	line 15: POINT expects 2 arguments
-3606	semantic	line 15: POINT expects 2 arguments
+3601	ok	
+3602	ok	
+3603	ok	
+3604	ok	
+3605	semantic	15:11 Type mismatch
+3606	semantic	15:11 Type mismatch
 3607	syntax	15:14 syntax error
-3608	unsupported	line 15: PMAP is not supported
-3609	unsupported	line 15: PMAP is not supported
-3610	unsupported	line 15: PMAP is not supported
-3611	unsupported	line 15: PMAP is not supported
-3612	unsupported	line 15: PMAP is not supported
-3613	unsupported	line 15: PMAP is not supported
-3614	unsupported	line 15: PMAP is not supported
-3615	unsupported	line 15: PMAP is not supported
-3616	unsupported	line 15: PMAP is not supported
-3617	unsupported	line 15: PMAP is not supported
-3618	unsupported	line 15: PMAP is not supported
-3619	unsupported	line 15: PMAP is not supported
-3620	unsupported	line 15: PMAP is not supported
-3621	unsupported	line 15: PMAP is not supported
-3622	unsupported	line 15: PMAP is not supported
-3623	unsupported	line 15: PMAP is not supported
+3608	ok	
+3609	ok	
+3610	ok	
+3611	ok	
+3612	ok	
+3613	ok	
+3614	ok	
+3615	ok	
+3616	ok	
+3617	semantic	15:10 Type mismatch
+3618	semantic	15:10 Type mismatch
+3619	ok	
+3620	ok	
+3621	ok	
+3622	semantic	15:13 Type mismatch
+3623	semantic	15:13 Type mismatch
 3624	syntax	15:16 syntax error
-3625	unsupported	line 15: SCREEN is not supported
-3626	unsupported	line 15: SCREEN is not supported
-3627	unsupported	line 15: SCREEN is not supported
-3628	unsupported	line 15: SCREEN is not supported
-3629	unsupported	line 15: SCREEN is not supported
-3630	unsupported	line 15: SCREEN is not supported
-3631	unsupported	line 15: SCREEN is not supported
-3632	unsupported	line 15: SCREEN is not supported
-3633	unsupported	line 15: SCREEN is not supported
-3634	unsupported	line 15: SCREEN is not supported
-3635	unsupported	line 15: SCREEN is not supported
+3625	ok	
+3626	ok	
+3627	ok	
+3628	ok	
+3629	semantic	15:12 Type mismatch
+3630	semantic	15:12 Type mismatch
+3631	ok	
+3632	ok	
+3633	ok	
+3634	semantic	15:15 Type mismatch
+3635	semantic	15:15 Type mismatch
 3636	syntax	15:18 syntax error
-3637	unsupported	line 15: SCREEN is not supported
-3638	unsupported	line 15: SCREEN is not supported
-3639	unsupported	line 15: SCREEN is not supported
-3640	unsupported	line 15: SCREEN is not supported
-3641	unsupported	line 15: SCREEN is not supported
-3642	unsupported	line 15: SCREEN is not supported
-3643	unsupported	line 15: SCREEN is not supported
-3644	unsupported	line 15: SCREEN is not supported
-3645	unsupported	line 15: SCREEN is not supported
-3646	unsupported	line 15: SCREEN is not supported
-3647	unsupported	line 15: SCREEN is not supported
-3648	unsupported	line 15: SCREEN is not supported
-3649	unsupported	line 15: SCREEN is not supported
-3650	unsupported	line 15: SCREEN is not supported
-3651	unsupported	line 15: SCREEN is not supported
-3652	unsupported	line 15: SCREEN is not supported
+3637	ok	
+3638	ok	
+3639	ok	
+3640	ok	
+3641	semantic	15:12 Type mismatch
+3642	semantic	15:12 Type mismatch
+3643	ok	
+3644	ok	
+3645	ok	
+3646	semantic	15:15 Type mismatch
+3647	semantic	15:15 Type mismatch
+3648	ok	
+3649	ok	
+3650	ok	
+3651	semantic	15:18 Type mismatch
+3652	semantic	15:18 Type mismatch
 3653	syntax	15:21 syntax error
 3654	ok	
 3655	ok	
 3656	ok	
 3657	ok	
-3658	semantic	line 15: string expressions are runtime-only and not attached yet
-3659	semantic	line 15: unsupported implicit conversion string to integer
+3658	semantic	15:11 Type mismatch
+3659	semantic	15:11 Type mismatch
 3660	syntax	15:14 syntax error
 3661	ok	
 3662	ok	
 3663	ok	
 3664	ok	
-3665	semantic	line 15: string expressions are runtime-only and not attached yet
-3666	semantic	line 15: unsupported implicit conversion string to integer
+3665	semantic	15:11 Type mismatch
+3666	semantic	15:11 Type mismatch
 3667	syntax	15:14 syntax error
 3668	ok	
 3669	ok	
 3670	ok	
 3671	ok	
-3672	semantic	line 15: string expressions are runtime-only and not attached yet
-3673	semantic	line 15: unsupported implicit conversion string to integer
+3672	semantic	15:9 Type mismatch
+3673	semantic	15:9 Type mismatch
 3674	syntax	15:12 syntax error
 3675	ok	
 3676	ok	
 3677	ok	
 3678	ok	
-3679	semantic	line 15: string expressions are runtime-only and not attached yet
-3680	semantic	line 15: unsupported implicit conversion string to integer
+3679	semantic	15:10 Type mismatch
+3680	semantic	15:10 Type mismatch
 3681	syntax	15:13 syntax error
 3682	ok	
 3683	syntax	15:8 syntax error
 3684	ok	
 3685	syntax	15:8 syntax error
-3686	unsupported	line 15: ERDEV is not supported
+3686	ok	
 3687	syntax	15:10 syntax error
-3688	unsupported	line 15: ERDEV$ is not supported
+3688	ok	
 3689	syntax	15:11 syntax error
-3690	unsupported	line 15: LPOS is not supported
-3691	unsupported	line 15: LPOS is not supported
-3692	unsupported	line 15: LPOS is not supported
-3693	unsupported	line 15: LPOS is not supported
-3694	unsupported	line 15: LPOS is not supported
-3695	unsupported	line 15: LPOS is not supported
+3690	ok	
+3691	ok	
+3692	ok	
+3693	ok	
+3694	semantic	15:10 Type mismatch
+3695	semantic	15:10 Type mismatch
 3696	syntax	15:13 syntax error
-3697	unsupported	line 15: SETMEM is not supported
-3698	unsupported	line 15: SETMEM is not supported
-3699	unsupported	line 15: SETMEM is not supported
-3700	unsupported	line 15: SETMEM is not supported
-3701	unsupported	line 15: SETMEM is not supported
-3702	unsupported	line 15: SETMEM is not supported
-3703	unsupported	line 15: SETMEM is not supported
-3704	unsupported	line 15: SETMEM is not supported
-3705	unsupported	line 15: SETMEM is not supported
-3706	unsupported	line 15: SETMEM is not supported
-3707	unsupported	line 15: SETMEM is not supported
+3697	ok	
+3698	ok	
+3699	ok	
+3700	ok	
+3701	ok	
+3702	ok	
+3703	ok	
+3704	ok	
+3705	ok	
+3706	semantic	15:12 Type mismatch
+3707	semantic	15:12 Type mismatch
 3708	syntax	15:15 syntax error
 3709	syntax	15:8 syntax error
 3710	syntax	15:8 syntax error
-3711	semantic	line 15: FOO is not an array
+3711	semantic	15:5 Array not dimensioned
 3712	syntax	15:11 syntax error
 3713	ok	
 3714	ok	
@@ -3720,8 +3720,8 @@
 3719	ok	
 3720	ok	
 3721	ok	
-3722	semantic	line 15: string expressions are runtime-only and not attached yet
-3723	semantic	line 15: unsupported implicit conversion string to integer
+3722	semantic	15:5 Type mismatch
+3723	semantic	15:5 Type mismatch
 3724	ok	
 3725	ok	
 3726	ok	
@@ -3730,112 +3730,112 @@
 3729	ok	
 3730	ok	
 3731	ok	
-3732	semantic	line 15: string expressions are runtime-only and not attached yet
-3733	semantic	line 15: unsupported implicit conversion string to integer
+3732	semantic	15:5 Type mismatch
+3733	semantic	15:5 Type mismatch
 3734	syntax	15:12 syntax error
 3735	ok	
 3736	ok	
 3737	ok	
 3738	ok	
-3739	semantic	line 15: assignment target is not a variable or array element
-3740	semantic	line 15: assignment target is not a variable or array element
+3739	semantic	15:5 Type mismatch
+3740	semantic	15:5 Type mismatch
 3741	ok	
 3742	ok	
 3743	ok	
-3744	semantic	line 15: assignment target is not a variable or array element
-3745	semantic	line 15: assignment target is not a variable or array element
+3744	semantic	15:5 Type mismatch
+3745	semantic	15:5 Type mismatch
 3746	syntax	15:12 syntax error
-3747	semantic	line 15: assignment target is not a variable or array element
-3748	semantic	line 15: assignment target is not a variable or array element
-3749	semantic	line 15: assignment target is not a variable or array element
-3750	semantic	line 15: assignment target is not a variable or array element
-3751	semantic	line 15: assignment target is not a variable or array element
-3752	semantic	line 15: assignment target is not a variable or array element
-3753	semantic	line 15: assignment target is not a variable or array element
-3754	semantic	line 15: assignment target is not a variable or array element
-3755	semantic	line 15: assignment target is not a variable or array element
-3756	semantic	line 15: assignment target is not a variable or array element
-3757	semantic	line 15: assignment target is not a variable or array element
-3758	semantic	line 15: assignment target is not a variable or array element
+3747	semantic	15:5 Type mismatch
+3748	semantic	15:5 Type mismatch
+3749	semantic	15:5 Type mismatch
+3750	semantic	15:5 Type mismatch
+3751	semantic	15:5 Type mismatch
+3752	semantic	15:5 Type mismatch
+3753	semantic	15:5 Type mismatch
+3754	semantic	15:5 Type mismatch
+3755	semantic	15:5 Type mismatch
+3756	semantic	15:5 Type mismatch
+3757	semantic	15:5 Type mismatch
+3758	semantic	15:5 Type mismatch
 3759	ok	
 3760	syntax	15:12 syntax error
-3761	semantic	line 15: string expressions are runtime-only and not attached yet
-3762	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3763	semantic	line 15: unsupported implicit conversion string to integer
-3764	semantic	line 15: unsupported implicit conversion string to integer
-3765	semantic	line 15: unsupported implicit conversion string to long
-3766	semantic	line 15: unsupported implicit conversion string to single
-3767	semantic	line 15: unsupported implicit conversion string to double
-3768	semantic	line 15: unsupported implicit conversion string to integer
-3769	semantic	line 15: unsupported implicit conversion string to integer
-3770	semantic	line 15: unsupported implicit conversion string to integer
-3771	semantic	line 15: unsupported implicit conversion string to integer
-3772	semantic	line 15: string expressions are runtime-only and not attached yet
-3773	semantic	line 15: unsupported implicit conversion string to integer
+3761	semantic	15:5 Type mismatch
+3762	semantic	15:5 Type mismatch
+3763	semantic	15:5 Type mismatch
+3764	semantic	15:5 Type mismatch
+3765	semantic	15:5 Type mismatch
+3766	semantic	15:5 Type mismatch
+3767	semantic	15:5 Type mismatch
+3768	semantic	15:5 Type mismatch
+3769	semantic	15:5 Type mismatch
+3770	semantic	15:5 Type mismatch
+3771	semantic	15:5 Type mismatch
+3772	semantic	15:5 Type mismatch
+3773	semantic	15:5 Type mismatch
 3774	syntax	15:12 syntax error
 3775	ok	
 3776	ok	
 3777	ok	
 3778	ok	
-3779	semantic	line 15: unsupported implicit conversion string to integer
-3780	semantic	line 15: unsupported implicit conversion string to integer
+3779	semantic	15:5 Type mismatch
+3780	semantic	15:5 Type mismatch
 3781	ok	
 3782	ok	
 3783	ok	
-3784	semantic	line 15: unsupported implicit conversion string to integer
-3785	semantic	line 15: unsupported implicit conversion string to integer
+3784	semantic	15:5 Type mismatch
+3785	semantic	15:5 Type mismatch
 3786	syntax	15:12 syntax error
-3787	semantic	line 15: string expressions are runtime-only and not attached yet
-3788	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3789	semantic	line 15: unsupported implicit conversion string to integer
+3787	semantic	15:5 Type mismatch
+3788	semantic	15:5 Type mismatch
+3789	semantic	15:5 Type mismatch
 3790	ok	
 3791	ok	
-3792	semantic	line 15: unsupported implicit conversion string to long
-3793	semantic	line 15: unsupported implicit conversion string to single
-3794	semantic	line 15: unsupported implicit conversion string to double
-3795	semantic	line 15: unsupported implicit conversion string to integer
-3796	semantic	line 15: unsupported implicit conversion string to integer
-3797	semantic	line 15: unsupported implicit conversion string to integer
-3798	semantic	line 15: unsupported implicit conversion string to integer
+3792	semantic	15:5 Type mismatch
+3793	semantic	15:5 Type mismatch
+3794	semantic	15:5 Type mismatch
+3795	semantic	15:5 Type mismatch
+3796	semantic	15:5 Type mismatch
+3797	semantic	15:5 Type mismatch
+3798	semantic	15:5 Type mismatch
 3799	ok	
 3800	syntax	15:12 syntax error
-3801	semantic	line 15: unsupported implicit conversion string to integer
-3802	semantic	line 15: string expressions are runtime-only and not attached yet
-3803	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3804	semantic	line 15: unsupported implicit conversion string to integer
+3801	semantic	15:5 Type mismatch
+3802	semantic	15:5 Type mismatch
+3803	semantic	15:5 Type mismatch
+3804	semantic	15:5 Type mismatch
 3805	ok	
 3806	ok	
-3807	semantic	line 15: unsupported implicit conversion string to integer
-3808	semantic	line 15: unsupported implicit conversion string to long
-3809	semantic	line 15: unsupported implicit conversion string to long
-3810	semantic	line 15: unsupported implicit conversion string to long
-3811	semantic	line 15: unsupported implicit conversion string to integer
-3812	semantic	line 15: unsupported implicit conversion string to integer
-3813	semantic	line 15: unsupported implicit conversion string to integer
-3814	semantic	line 15: unsupported implicit conversion string to integer
-3815	semantic	line 15: string expressions are runtime-only and not attached yet
-3816	semantic	line 15: unsupported implicit conversion string to integer
+3807	semantic	15:5 Type mismatch
+3808	semantic	15:5 Type mismatch
+3809	semantic	15:5 Type mismatch
+3810	semantic	15:5 Type mismatch
+3811	semantic	15:5 Type mismatch
+3812	semantic	15:5 Type mismatch
+3813	semantic	15:5 Type mismatch
+3814	semantic	15:5 Type mismatch
+3815	semantic	15:5 Type mismatch
+3816	semantic	15:5 Type mismatch
 3817	syntax	15:14 syntax error
 3818	ok	
 3819	ok	
 3820	ok	
-3821	semantic	line 15: NOT requires an integral operand
-3822	semantic	line 15: NOT requires an integral operand
+3821	ok	
+3822	ok	
 3823	ok	
 3824	ok	
 3825	ok	
 3826	ok	
-3827	semantic	line 15: string expressions are runtime-only and not attached yet
-3828	semantic	line 15: NOT requires an integral operand
+3827	semantic	15:5 Type mismatch
+3828	semantic	15:5 Type mismatch
 3829	syntax	15:11 syntax error
-3830	semantic	line 15: string expressions are runtime-only and not attached yet
-3831	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3832	semantic	line 15: NOT requires an integral operand
+3830	semantic	15:5 Type mismatch
+3831	semantic	15:5 Type mismatch
+3832	semantic	15:5 Type mismatch
 3833	syntax	15:11 syntax error
-3834	semantic	line 15: unsupported implicit conversion string to integer
-3835	semantic	line 15: string expressions are runtime-only and not attached yet
-3836	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3837	semantic	line 15: unsupported implicit conversion string to integer
+3834	semantic	15:5 Type mismatch
+3835	semantic	15:5 Type mismatch
+3836	semantic	15:5 Type mismatch
+3837	semantic	15:5 Type mismatch
 3838	ok	
 3839	syntax	15:8 syntax error
 3840	ok	
@@ -3847,8 +3847,8 @@
 3846	ok	
 3847	ok	
 3848	ok	
-3849	semantic	line 15: string expressions are runtime-only and not attached yet
-3850	semantic	line 15: unsupported implicit conversion string to long
+3849	semantic	15:5 Type mismatch
+3850	semantic	15:5 Type mismatch
 3851	ok	
 3852	ok	
 3853	ok	
@@ -3857,8 +3857,8 @@
 3856	ok	
 3857	ok	
 3858	ok	
-3859	semantic	line 15: string expressions are runtime-only and not attached yet
-3860	semantic	line 15: unsupported implicit conversion string to long
+3859	semantic	15:5 Type mismatch
+3860	semantic	15:5 Type mismatch
 3861	syntax	15:14 syntax error
 3862	ok	
 3863	ok	
@@ -3869,8 +3869,8 @@
 3868	ok	
 3869	ok	
 3870	ok	
-3871	semantic	line 15: string expressions are runtime-only and not attached yet
-3872	semantic	line 15: unsupported implicit conversion string to long
+3871	semantic	15:5 Type mismatch
+3872	semantic	15:5 Type mismatch
 3873	ok	
 3874	ok	
 3875	ok	
@@ -3879,8 +3879,8 @@
 3878	ok	
 3879	ok	
 3880	ok	
-3881	semantic	line 15: string expressions are runtime-only and not attached yet
-3882	semantic	line 15: unsupported implicit conversion string to long
+3881	semantic	15:5 Type mismatch
+3882	semantic	15:5 Type mismatch
 3883	syntax	15:12 syntax error
 3884	ok	
 3885	ok	
@@ -3891,8 +3891,8 @@
 3890	ok	
 3891	ok	
 3892	ok	
-3893	semantic	line 15: string expressions are runtime-only and not attached yet
-3894	semantic	line 15: unsupported implicit conversion string to single
+3893	semantic	15:5 Type mismatch
+3894	semantic	15:5 Type mismatch
 3895	ok	
 3896	ok	
 3897	ok	
@@ -3901,8 +3901,8 @@
 3900	ok	
 3901	ok	
 3902	ok	
-3903	semantic	line 15: string expressions are runtime-only and not attached yet
-3904	semantic	line 15: unsupported implicit conversion string to single
+3903	semantic	15:5 Type mismatch
+3904	semantic	15:5 Type mismatch
 3905	syntax	15:12 syntax error
 3906	ok	
 3907	ok	
@@ -3913,8 +3913,8 @@
 3912	ok	
 3913	ok	
 3914	ok	
-3915	semantic	line 15: string expressions are runtime-only and not attached yet
-3916	semantic	line 15: unsupported implicit conversion string to single
+3915	semantic	15:5 Type mismatch
+3916	semantic	15:5 Type mismatch
 3917	ok	
 3918	ok	
 3919	ok	
@@ -3923,27 +3923,27 @@
 3922	ok	
 3923	ok	
 3924	ok	
-3925	semantic	line 15: string expressions are runtime-only and not attached yet
-3926	semantic	line 15: unsupported implicit conversion string to single
+3925	semantic	15:5 Type mismatch
+3926	semantic	15:5 Type mismatch
 3927	syntax	15:12 syntax error
-3928	semantic	line 15: unsupported implicit conversion string to integer
-3929	semantic	line 15: string expressions are runtime-only and not attached yet
-3930	semantic	line 15: intrinsic LEFT has no semantic lowering for Left
-3931	semantic	line 15: unsupported implicit conversion string to integer
+3928	semantic	15:5 Type mismatch
+3929	semantic	15:5 Type mismatch
+3930	semantic	15:5 Type mismatch
+3931	semantic	15:5 Type mismatch
 3932	ok	
 3933	ok	
 3934	syntax	15:11 syntax error
-3935	semantic	line 15: assignment target is not a variable or array element
-3936	semantic	line 15: assignment target is not a variable or array element
-3937	semantic	line 15: assignment target is not a variable or array element
-3938	semantic	line 15: assignment target is not a variable or array element
-3939	semantic	line 15: assignment target is not a variable or array element
-3940	semantic	line 15: assignment target is not a variable or array element
-3941	semantic	line 15: assignment target is not a variable or array element
-3942	semantic	line 15: assignment target is not a variable or array element
-3943	semantic	line 15: assignment target is not a variable or array element
-3944	semantic	line 15: assignment target is not a variable or array element
-3945	semantic	line 15: assignment target is not a variable or array element
+3935	semantic	15:5 Type mismatch
+3936	semantic	15:5 Type mismatch
+3937	semantic	15:5 Type mismatch
+3938	semantic	15:5 Type mismatch
+3939	semantic	15:5 Type mismatch
+3940	semantic	15:5 Type mismatch
+3941	semantic	15:5 Type mismatch
+3942	semantic	15:5 Type mismatch
+3943	semantic	15:5 Type mismatch
+3944	semantic	15:5 Type mismatch
+3945	semantic	15:5 Type mismatch
 3946	syntax	15:12 syntax error
 3947	ok	
 3948	ok	
@@ -3954,8 +3954,8 @@
 3953	ok	
 3954	ok	
 3955	ok	
-3956	semantic	line 15: string expressions are runtime-only and not attached yet
-3957	semantic	line 15: unsupported implicit conversion string to integer
+3956	semantic	15:5 Type mismatch
+3957	semantic	15:5 Type mismatch
 3958	ok	
 3959	ok	
 3960	ok	
@@ -3964,8 +3964,8 @@
 3963	ok	
 3964	ok	
 3965	ok	
-3966	semantic	line 15: string expressions are runtime-only and not attached yet
-3967	semantic	line 15: unsupported implicit conversion string to integer
+3966	semantic	15:5 Type mismatch
+3967	semantic	15:5 Type mismatch
 3968	syntax	15:14 syntax error
 3969	ok	
 3970	ok	
@@ -3976,8 +3976,8 @@
 3975	ok	
 3976	ok	
 3977	ok	
-3978	semantic	line 15: string expressions are runtime-only and not attached yet
-3979	semantic	line 15: unsupported implicit conversion string to integer
+3978	semantic	15:5 Type mismatch
+3979	semantic	15:5 Type mismatch
 3980	ok	
 3981	ok	
 3982	ok	
@@ -3986,8 +3986,8 @@
 3985	ok	
 3986	ok	
 3987	ok	
-3988	semantic	line 15: string expressions are runtime-only and not attached yet
-3989	semantic	line 15: unsupported implicit conversion string to integer
+3988	semantic	15:5 Type mismatch
+3989	semantic	15:5 Type mismatch
 3990	syntax	15:14 syntax error
 3991	ok	
 3992	ok	
@@ -3998,8 +3998,8 @@
 3997	ok	
 3998	ok	
 3999	ok	
-4000	semantic	line 15: string expressions are runtime-only and not attached yet
-4001	semantic	line 15: unsupported implicit conversion string to integer
+4000	semantic	15:5 Type mismatch
+4001	semantic	15:5 Type mismatch
 4002	ok	
 4003	ok	
 4004	ok	
@@ -4008,8 +4008,8 @@
 4007	ok	
 4008	ok	
 4009	ok	
-4010	semantic	line 15: string expressions are runtime-only and not attached yet
-4011	semantic	line 15: unsupported implicit conversion string to integer
+4010	semantic	15:5 Type mismatch
+4011	semantic	15:5 Type mismatch
 4012	syntax	15:14 syntax error
 4013	syntax	15:11 syntax error
 4014	syntax	15:11 syntax error
@@ -4019,25 +4019,25 @@
 4018	syntax	15:6 syntax error
 4019	ok	
 4020	syntax	15:8 syntax error
-4021	semantic	line 15: Math overflow
+4021	semantic	15:5 Overflow
 4022	syntax	15:10 syntax error
-4023	semantic	line 15: Math overflow
+4023	semantic	15:5 Overflow
 4024	syntax	15:10 syntax error
-4025	ok	
+4025	semantic	15:5 Overflow
 4026	syntax	15:15 syntax error
-4027	ok	
+4027	semantic	15:5 Overflow
 4028	syntax	15:9 syntax error
 4029	ok	
 4030	syntax	15:10 syntax error
 4031	ok	
 4032	syntax	15:11 syntax error
-4033	semantic	line 15: Math overflow
+4033	semantic	15:5 Overflow
 4034	syntax	15:12 syntax error
 4035	ok	
 4036	syntax	15:16 syntax error
 4037	syntax	15:7 syntax error
 4038	syntax	15:7 syntax error
-4039	syntax	15:5 syntax error
-4040	syntax	15:5 syntax error
+4039	ok	
+4040	syntax	15:6 syntax error
 4041	ok	
 4042	ok	

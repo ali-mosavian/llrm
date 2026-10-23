@@ -1,0 +1,2 @@
+DEFINT X
+PRINT x%(1)

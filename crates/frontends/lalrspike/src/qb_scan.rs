@@ -161,11 +161,16 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 }
             }
             b'.' => {
-                if bytes.get(at + 1).is_some_and(u8::is_ascii_digit) && (at == 0 || !name_char(bytes[at - 1])) {
+                let after_name = at > 0 && (name_char(bytes[at - 1]) || bytes[at - 1] == b')');
+                if bytes.get(at + 1).is_some_and(u8::is_ascii_digit) && !after_name {
                     number(line, &mut at, line_index, dialect)?
-                } else {
+                } else if after_name || bytes.get(at + 1).is_some_and(|b| name_char(*b)) {
                     at += 1;
                     TokenKind::Period
+                } else {
+                    // a lone point is the number 0
+                    at += 1;
+                    TokenKind::Real("0".into(), None)
                 }
             }
             b'&' => based(line, &mut at, line_index, dialect)?,

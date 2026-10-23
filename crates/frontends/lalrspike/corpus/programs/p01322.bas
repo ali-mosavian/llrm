@@ -1,0 +1,2 @@
+DIM x
+PRINT x%

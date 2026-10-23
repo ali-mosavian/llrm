@@ -1,0 +1,4 @@
+DIM x%
+SUB q ()
+DIM SHARED y%
+END SUB

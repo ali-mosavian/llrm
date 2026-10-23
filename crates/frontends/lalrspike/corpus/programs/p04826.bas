@@ -1,0 +1,6 @@
+DIM x%
+RESUME a
+END
+SUB p
+a:
+END SUB

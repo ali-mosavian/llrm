@@ -1,0 +1,3 @@
+DIM x%
+END: 
+IF x% THEN 10

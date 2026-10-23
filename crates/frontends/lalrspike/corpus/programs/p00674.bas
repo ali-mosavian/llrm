@@ -1,0 +1,3 @@
+DECLARE SUB p (a%)
+DECLARE SUB p (a$)
+CALL p(1)

@@ -1,0 +1,2 @@
+DIM SHARED x%
+PRINT x%(1)

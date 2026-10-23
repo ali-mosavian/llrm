@@ -1,0 +1,2 @@
+CONST x = y
+OPTION BASE 2

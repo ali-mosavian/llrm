@@ -1,0 +1,2 @@
+DIM x AS STRING * 4
+DIM x(1 TO 5)

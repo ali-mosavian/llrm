@@ -1,0 +1,2 @@
+CONST x$ = "a"
+DIM x AS STRING

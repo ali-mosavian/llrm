@@ -43,7 +43,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseErr
         return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
     }
     let tokens = crate::qb_scan::scan(source, dialect).map_err(qbfront::ParseError::from)?;
-    let (tokens, volatile_at) = without_volatile(tokens);
+    let (tokens, volatile_at) = without_volatile(next_lists(tokens));
     let mut kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
     // `FN twice`: FN written apart from the name it prefixes
     for at in 0..tokens.len().saturating_sub(1) {
@@ -68,6 +68,33 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseErr
         let span = tokens.get(at).or(tokens.last()).map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
         fail(span, "syntax error")
     })
+}
+
+/// `NEXT i, j` closes two loops: it is read as `NEXT i : NEXT j`.
+fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
+    let reserved = |token: &Token, name: &str| matches!(&token.kind, TokenKind::Reserved(id) if tables::token_id(name) == Some(*id));
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        out.push(token.clone());
+        at += 1;
+        if reserved(token, "tkNEXT") {
+            // NEXT ident , ident , …
+            while let (Some(name @ Token { kind: TokenKind::Identifier(_), .. }), Some(comma), Some(Token { kind: TokenKind::Identifier(_), .. })) =
+                (tokens.get(at), tokens.get(at + 1), tokens.get(at + 2))
+            {
+                if !reserved(comma, "tkComma") {
+                    break;
+                }
+                out.push(name.clone());
+                out.push(Token { kind: TokenKind::Reserved(tables::token_id("tkColon").unwrap()), span: comma.span });
+                out.push(Token { kind: token.kind.clone(), span: token.span });
+                at += 2;
+            }
+        }
+    }
+    out
 }
 
 /// `ID AS VOLATILE TYPE`: the grammar parses the declaration without the word, so VOLATILE
@@ -1064,7 +1091,7 @@ impl Ast<'_> {
                 }
                 self.out.push(Statement::Erase(names));
             }
-            Kw::PRINT | Kw::LPRINT | Kw::WRITE => return self.print(k),
+            Kw::PRINT | Kw::QMark | Kw::LPRINT | Kw::WRITE => return self.print(if k == Kw::QMark { Kw::PRINT } else { k }),
             Kw::INPUT => return self.input(),
             Kw::LINE => return self.line(),
             Kw::OPEN => return self.open(),
@@ -1278,10 +1305,12 @@ impl Ast<'_> {
         }
         let body = self.collect_until(|ast| ast.is(Kw::NEXT))?;
         self.i += 1;
-        if matches!(self.tok_n(0), Some(Tok::Ident)) {
+        let mut next_variable = None;
+        if let (Some(Tok::Ident), TokenKind::Identifier(name)) = (self.tok_n(0), &self.tokens[self.i].kind) {
+            next_variable = Some((name.clone(), self.span(self.i)));
             self.i += 1;
         }
-        self.out.push(Statement::For { counter, start, end, step, body, span: self.span(keyword) });
+        self.out.push(Statement::For { counter, start, end, step, body, next_variable, span: self.span(keyword) });
         Ok(())
     }
 
@@ -2086,6 +2115,9 @@ impl Ast<'_> {
             let comma = self.take();
             out.push(if self.starts_exp() { self.exp()? } else { Expr::Omitted(self.span(comma)) });
         }
+        if matches!(out.last(), Some(Expr::Omitted(_))) {
+            return self.fail();
+        }
         Ok(out)
     }
 
@@ -2482,11 +2514,14 @@ impl Ast<'_> {
             }
             Kw::WIDTH => {
                 let mut arguments = Vec::new();
+                let mut name = "WIDTH";
                 if self.eat(Kw::Lbs) {
+                    name = "WIDTH_FILE";
                     arguments.push(self.exp()?);
                     self.expect(Kw::Comma)?;
                     arguments.push(self.exp()?);
                 } else if self.eat(Kw::LPRINT) {
+                    name = "WIDTH_LPRINT";
                     arguments.push(self.exp()?);
                 } else if self.eat(Kw::Comma) {
                     arguments.push(self.exp()?);
@@ -2496,7 +2531,7 @@ impl Ast<'_> {
                         arguments.push(self.exp()?);
                     }
                 }
-                self.runtime("WIDTH", arguments, span);
+                self.runtime(name, arguments, span);
             }
             Kw::PALETTE => {
                 let mut arguments = Vec::new();

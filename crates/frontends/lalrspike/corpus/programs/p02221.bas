@@ -1,0 +1,2 @@
+STATIC x%
+INPUT x%

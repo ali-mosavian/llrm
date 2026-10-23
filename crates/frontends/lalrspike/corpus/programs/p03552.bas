@@ -1,0 +1,3 @@
+SUB p
+DEFSTR X
+END SUB

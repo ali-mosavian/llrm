@@ -1,0 +1,3 @@
+DIM x%
+GOSUB a
+10 PRINT 1

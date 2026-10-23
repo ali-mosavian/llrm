@@ -1,0 +1,2 @@
+DEFINT X
+CONST y = 2

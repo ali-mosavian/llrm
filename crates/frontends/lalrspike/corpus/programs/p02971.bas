@@ -1,0 +1,2 @@
+DEFDBL A-Z
+DIM x(1 TO 5)

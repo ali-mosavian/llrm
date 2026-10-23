@@ -1,0 +1,2 @@
+COMMON SHARED x%
+SWAP x%, x
