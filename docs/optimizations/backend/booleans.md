@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/booleans.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/booleans.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:dae3596036edc9a37c074f6a1b7b424d9c9f48d9f40790fcc173aa7f0ad86caf -->
+<!-- src: crates/backend/llrm-core/src/backend/booleans.rs sha256:ca124335d8b1e2722fdca1f5665ccad478820d9089c2748ddab1b6ad55ec7eec -->
 
 # booleans
 
@@ -60,7 +60,8 @@ taken:  %b = icmp ult i16 %p, %hi ; br label %join
 join:   %r = phi i1 [ %b, %taken ], [ false, %entry ]
 ```
 
-From unit test `test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
+From unit test
+`test_an_and_of_two_compares_as_a_value_is_a_branch_around_the_second`
 in `selects.rs`.
 
 ## Runs

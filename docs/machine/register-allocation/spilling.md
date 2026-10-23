@@ -2,7 +2,7 @@
 
 Audience: an engineer changing what the allocator does with a value it chose not to keep in a register. This page states how a spill is planned and written, where its slot comes from, and how its code is kept short.
 
-The code is LLVM's `InlineSpiller`: [`spiller.rs`](../../optimizations/backend/spiller.md). The allocator calls `spiller::siblings` then `spiller::spilled_apart` for the value it spills ([assignment](assignment.md)); the SSA-spill route has its own spiller ([ssa-spill-route](ssa-spill-route.md)). Every instruction the spiller writes is marked: `spill_store`, `spill_reload` or `rematerialized`, which the cost model and the dump read.
+The code is LLVM's `InlineSpiller`: `greedy/inlinespiller.rs` (it writes the spill code as the allocator spills, see [assignment](assignment.md)). Every instruction the spiller writes is marked: `spill_store`, `spill_reload` or `rematerialized`, which the cost model and the dump read.
 
 ## Plan, then write
 

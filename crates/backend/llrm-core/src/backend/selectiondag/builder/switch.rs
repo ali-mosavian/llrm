@@ -150,8 +150,27 @@ impl Builder<'_> {
         let cond_type = self.operand_type(cond)?;
         let width = cond_type.size_in_bits();
         let Operand::Block(default) = instruction.operands[1] else { return Err(Refused("switch default")) };
+        let bpi = self
+            .info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &self.module.context,
+                        declarations: &self.module.globals,
+                        metadata: &self.module.metadata,
+                        layout: self.layout,
+                    },
+                    self.function,
+                ),
+            );
+        let edge = |index: usize| {
+            BranchProbability(bpi.get_edge_probability(self.function, self.block, index).get_numerator())
+        };
+        let default_edge =
+            BranchProbability(bpi.get_edge_probability_to(self.function, self.block, default).get_numerator());
         let mut cases = Vec::new();
-        for pair in instruction.operands[2..].chunks(2) {
+        for (at, pair) in instruction.operands[2..].chunks(2).enumerate() {
             let (Operand::Constant(value), Operand::Block(dest)) = (pair[0], pair[1]) else {
                 return Err(Refused("switch case"));
             };
@@ -159,7 +178,7 @@ impl Builder<'_> {
                 return Err(Refused("switch case value"));
             };
             let shift = 128 - width;
-            cases.push((((bits << shift) as i128) >> shift, dest.0));
+            cases.push((((bits << shift) as i128) >> shift, dest.0, edge(at + 1)));
         }
         let successors =
             std::iter::once(default).chain(instruction.operands[2..].chunks(2).filter_map(|pair| match pair[1] {
@@ -177,7 +196,7 @@ impl Builder<'_> {
             }
         }
         let target = SwitchTarget::x86(self.target.dag.pointer.size_in_bits());
-        let plan = switchcg::plan(&cases, default.0, &target);
+        let plan = switchcg::plan_with(&cases, default.0, &target);
         if plan.peeled.is_some() {
             return Err(Refused("switch with a peeled case"));
         }
@@ -198,14 +217,13 @@ impl Builder<'_> {
             .iter_block(default)
             .next()
             .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Unreachable);
-        let prob = BranchProbability::new(1, cases.len() as u32 + 1);
         let mut work = vec![WorkItem {
             block: self.block,
             first: 0,
             last: clusters.len() - 1,
             ge: None,
             lt: None,
-            default_prob: prob,
+            default_prob: default_edge,
         }];
         let mut clusters = clusters;
         while let Some(item) = work.pop() {

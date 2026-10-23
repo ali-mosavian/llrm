@@ -446,7 +446,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "pushfold.rs",
         "",
-        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: callframe.rs translates the pass function by function (registry callframe@5), tested on hand-built call frames against llc -run-pass=x86-cf-opt; its input, stores into a reserved call frame, is made by no selector yet (llrm pushes at selection), so it finds none; pushfold.rs keeps the load fold for selection's pushes (CF1); reason: the producer is the SelectionDAG call lowering (sdag-a) and the reserved frame is laid out by prologue insertion (row 80, 2026-11-13); cost: none; exit: both landed and pushfold.rs deleted; owner w-5; review 2026-11-13. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",
@@ -474,7 +474,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "flagscopy.rs",
         "",
-        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); same-block lowering as the pin (checked against llc -run-pass=x86-flags-copy-lowering). Blockers, landing 2026-11-04: restore in another block, flags live into successors, test-position hoisting, splitBlock for a second jcc. The NF variants are N/A (APX). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
+        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); all of runOnMachineFunction (cross-block copies, live-in flags, test-position hoisting, splitBlock) as the pin, checked against llc -run-pass=x86-flags-copy-lowering on three shapes; NF variants and fcmov N/A (APX / none pre-RA). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -531,7 +531,7 @@ const ROWS: &[Row] = &[
         Missing,
         "twoaddr.rs, twoaddress.rs",
         "",
-        "w-1; 2026-11-20: partial translation of [TwoAddressInstructionPass.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp): `tryInstructionCommute`/`isProfitableToCommute` (#3637), `convertInstTo3Addr` at m32 and m16 (#3680, #3729), kills from one scan (#3803), `rescheduleMIBelowKill` (#3830), `rescheduleKillAboveMI` (#3882, plan #3804); DEVIATEs TA-1 to TA-8 (twoaddress.rs header). Not translated: `scanUses`/`processCopy` maps (TA-1), `processTiedPairs`/`collectTiedOperands` (ours is `_untied`), `eliminateRegSequence`, `processStatepoint`; the update-in-place `_reused` is ours; cost 7.8 M Ir against the pin's 1.1 M (d_faces m32 -O2), a shared `LiveIntervals` with the Coalescer is the fix. Row 62b, MISSING (liveness/liveintervals.rs): [`LiveIntervals::handleMove`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp) and the incremental updates a pass makes (w-1; 2026-11-20 with the TwoAddress sharing: translated, not patched around; TwoAddress edits one `LiveIntervals` and hands it to the Coalescer; used by TwoAddress, the coalescer and the greedy allocator). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "w-1; 2026-11-20: partial translation of [TwoAddressInstructionPass.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp): `tryInstructionCommute`/`isProfitableToCommute` (#3637), `convertInstTo3Addr` at m32 and m16 (#3680, #3729), kills from one scan (#3803), `rescheduleMIBelowKill` (#3830), `rescheduleKillAboveMI` (#3882, plan #3804); DEVIATEs TA-1 to TA-8 (twoaddress.rs header). Not translated: `scanUses`/`processCopy` maps (TA-1), `processTiedPairs`/`collectTiedOperands` (ours is `_untied`), `eliminateRegSequence`, `processStatepoint`; the update-in-place `_reused` is ours; cost 7.8 M Ir against the pin's 1.1 M (d_faces m32 -O2), a shared `LiveIntervals` with the Coalescer is the fix. Row 62b, `handleMove` translated and unwired (#3916, liveness/liveintervals/handlemove.rs; no bundles, no regmask slots), the other incremental updates MISSING: [`LiveIntervals::handleMove`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp) and the incremental updates a pass makes (w-1; 2026-11-20 with the TwoAddress sharing: translated, not patched around; TwoAddress edits one `LiveIntervals` and hands it to the Coalescer; used by TwoAddress, the coalescer and the greedy allocator). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Register Coalescer",
@@ -686,10 +686,10 @@ const ROWS: &[Row] = &[
     again(
         "Machine Copy Propagation Pass",
         2,
-        Missing,
-        "",
+        Match,
+        "machinecp.rs (flow.rs: after ControlFlow, slot copyprop@18)",
         "-disable-copyprop",
-        "w-2; 2026-11-13: llrm runs it once; the pin runs it again after tail duplication. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
+        "translated: the pass runs again after the control flow, as the pin after tail duplication (de8c6bc87; test in jumps_tests.rs). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
     ),
     row(
         "Post-RA pseudo instruction expansion pass",

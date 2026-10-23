@@ -8,6 +8,7 @@ use crate::matcher::Vt;
 
 pub mod isd {
     pub const ABS: u16 = 196;
+    pub const ABS_MIN_POISON: u16 = 197;
     pub const ADD: u16 = 59;
     pub const ADDC: u16 = 71;
     pub const ADDE: u16 = 73;
@@ -65,8 +66,14 @@ pub mod isd {
     pub const ExternalSymbol: u16 = 19;
     pub const FABS: u16 = 261;
     pub const FADD: u16 = 99;
+    pub const FATAN: u16 = 269;
     pub const FCOPYSIGN: u16 = 158;
+    pub const FCOS: u16 = 265;
     pub const FDIV: u16 = 102;
+    pub const FEXP: u16 = 281;
+    pub const FEXP2: u16 = 282;
+    pub const FLOG: u16 = 278;
+    pub const FLOG2: u16 = 279;
     pub const FMA: u16 = 155;
     pub const FMUL: u16 = 101;
     pub const FNEG: u16 = 260;
@@ -78,8 +85,10 @@ pub mod isd {
     pub const FP_TO_UINT_SAT: u16 = 243;
     pub const FREEZE: u16 = 55;
     pub const FREM: u16 = 103;
+    pub const FRINT: u16 = 286;
     pub const FSHL: u16 = 203;
     pub const FSHR: u16 = 204;
+    pub const FSIN: u16 = 264;
     pub const FSQRT: u16 = 262;
     pub const FSUB: u16 = 100;
     pub const FrameIndex: u16 = 16;
@@ -139,6 +148,7 @@ pub mod isd {
     pub const SMULO: u16 = 83;
     pub const SMUL_LOHI: u16 = 66;
     pub const SRA: u16 = 199;
+    pub const SRCVALUE: u16 = 341;
     pub const SREM: u16 = 64;
     pub const SRL: u16 = 200;
     pub const SSUBO: u16 = 81;
@@ -189,7 +199,10 @@ pub mod isd {
     pub const USUBO: u16 = 82;
     pub const USUBO_CARRY: u16 = 76;
     pub const USUBSAT: u16 = 88;
+    pub const VACOPY: u16 = 336;
+    pub const VAEND: u16 = 337;
     pub const VALUETYPE: u16 = 8;
+    pub const VASTART: u16 = 338;
     pub const VECTOR_COMPRESS: u16 = 178;
     pub const VSELECT: u16 = 220;
     pub const XOR: u16 = 195;
@@ -387,6 +400,7 @@ pub mod x86isd {
     pub const LCMPXCHG_DAG: u16 = 661;
     pub const LDS: u16 = 24577;
     pub const LES: u16 = 24576;
+    pub const LLRM_ASM: u16 = 24578;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -436,6 +450,7 @@ pub mod x86isd {
     pub const PINSRW: u16 = 708;
     pub const PMULDQ: u16 = 709;
     pub const PMULUDQ: u16 = 710;
+    pub const POP_FROM_X87_REG: u16 = 957;
     pub const PROBED_ALLOCA: u16 = 711;
     pub const PSADBW: u16 = 712;
     pub const PSHUFB: u16 = 713;
@@ -768,6 +783,78 @@ pub mod x86 {
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
     pub const sub_16bit: u16 = 4;
+    /// The extras that are instructions, by number.
+    pub const NAMES: &[(u16, &str)] = &[
+        (386, "MOV32r0"),
+        (465, "ADC16mi"),
+        (471, "ADC16mr"),
+        (490, "ADC32mi"),
+        (496, "ADC32mr"),
+        (540, "ADC8mi"),
+        (544, "ADC8mr"),
+        (573, "ADD16mi"),
+        (583, "ADD16mr"),
+        (614, "ADD32mi"),
+        (624, "ADD32mr"),
+        (696, "ADD8mi"),
+        (702, "ADD8mr"),
+        (804, "AND16mi"),
+        (814, "AND16mr"),
+        (845, "AND32mi"),
+        (855, "AND32mr"),
+        (927, "AND8mi"),
+        (933, "AND8mr"),
+        (1202, "CDQ"),
+        (1506, "CWD"),
+        (1511, "DEC16m"),
+        (1522, "DEC32m"),
+        (1543, "DEC8m"),
+        (1553, "DIV16m"),
+        (1556, "DIV16r"),
+        (1559, "DIV32m"),
+        (1562, "DIV32r"),
+        (1757, "IDIV16m"),
+        (1760, "IDIV16r"),
+        (1763, "IDIV32m"),
+        (1766, "IDIV32r"),
+        (1821, "IMUL32m"),
+        (1824, "IMUL32r"),
+        (1901, "INC16m"),
+        (1912, "INC32m"),
+        (1933, "INC8m"),
+        (2784, "MUL32m"),
+        (2787, "MUL32r"),
+        (2849, "NEG16m"),
+        (2854, "NEG16r"),
+        (2859, "NEG32m"),
+        (2864, "NEG32r"),
+        (2879, "NEG8m"),
+        (2884, "NEG8r"),
+        (2921, "OR16mi"),
+        (2931, "OR16mr"),
+        (2962, "OR32mi"),
+        (2973, "OR32mr"),
+        (3045, "OR8mi"),
+        (3051, "OR8mr"),
+        (4165, "SBB16mi"),
+        (4171, "SBB16mr"),
+        (4190, "SBB32mi"),
+        (4196, "SBB32mr"),
+        (4240, "SBB8mi"),
+        (4244, "SBB8mr"),
+        (4744, "SUB16mi"),
+        (4754, "SUB16mr"),
+        (4785, "SUB32mi"),
+        (4795, "SUB32mr"),
+        (4867, "SUB8mi"),
+        (4873, "SUB8mr"),
+        (22586, "XOR16mi"),
+        (22596, "XOR16mr"),
+        (22627, "XOR32mi"),
+        (22637, "XOR32mr"),
+        (22709, "XOR8mi"),
+        (22715, "XOR8mr"),
+    ];
 }
 
 pub mod target_opcode {
@@ -1014,6 +1101,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LCMPXCHG_DAG" => 661,
         "LDS" => 24577,
         "LES" => 24576,
+        "LLRM_ASM" => 24578,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,
@@ -1063,6 +1151,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "PINSRW" => 708,
         "PMULDQ" => 709,
         "PMULUDQ" => 710,
+        "POP_FROM_X87_REG" => 957,
         "PROBED_ALLOCA" => 711,
         "PSADBW" => 712,
         "PSHUFB" => 713,

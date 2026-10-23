@@ -276,9 +276,34 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_32(), features, ptr)
+    }
+
+    /// m16: the same constructor calls over the 386 register file, with `i16`
+    /// pointers and the far pointer's type action.
+    ///
+    /// DEVIATE SD307: the pin has no 16-bit model, so this table is the 32-bit
+    /// one, kept to what the old m16 selector covers (`tests/m16_coverage.rs`
+    /// lists the functions that must stay selectable), not derived from the
+    /// pin. Owner sdag-c. Exit: the m16 shadow against the old selector
+    /// matches (11-20); the table is then checked against the old selector's
+    /// output until the old selector is deleted at the switch. Review
+    /// 2026-12-10.
+    pub fn x86_16(
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
+        Self::x86(TargetLoweringInfo::x86_16(), features, ptr)
+    }
+
+    fn x86(
+        types: TargetLoweringInfo,
+        features: Features,
+        ptr: MVT,
+    ) -> TargetLowering {
         use Action::*;
         use ISD::*;
-        let mut t = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        let mut t = TargetLowering::empty(types);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
@@ -359,9 +384,12 @@ impl TargetLowering {
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
         t.set_ops(&[Select, SetCC], &ints, Custom);
-        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[MVT::I32], Custom);
+        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[ptr], Custom);
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        // L559..L566: 32-bit va_list is a pointer
+        t.set_operation_action(VAStart, MVT::Other, Custom);
+        t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
         // L720..L760: x87 float classes (no SSE)
         for vt in [MVT::F32, MVT::F64] {
             t.set_ops(&[Undef, Poison], &[vt], Expand);

@@ -95,6 +95,10 @@ pub trait FrameMap {
 
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    /// The registers a call destroys (EAX, ECX, EDX at m32).
+    pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
+    pub stack_pointer: llrm_lir::registers::RegId,
     pub globals: &'a dyn GlobalMap,
     /// The LIR address of each MIR block, by `BlockId`: what a branch names.
     pub block_at: &'a HashMap<u32, i64>,
@@ -128,6 +132,12 @@ struct Emitter<'a, 'd> {
     /// The register tag each address component's value is constrained to
     /// (`constrainRegClass`).
     classes: Vec<(u32, &'static str)>,
+    /// `CopyFromReg` of the stack pointer: addresses through `SP`.
+    sp_values: std::collections::HashSet<SDValue>,
+    /// (call address, callee symbol) of each direct call.
+    calls: Vec<(i64, u32)>,
+    /// The call whose result registers have not been named yet: (block, insn).
+    last_call: Option<(usize, usize)>,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -173,6 +183,8 @@ impl EmitState {
 pub struct Emitted {
     pub blocks: Vec<EmitBlock>,
     pub classes: Vec<(u32, &'static str)>,
+    /// (address, global) of each direct call.
+    pub calls: Vec<(i64, u32)>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -201,13 +213,16 @@ pub fn emit_in(
         state,
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
+        sp_values: Default::default(),
+        calls: Vec::new(),
+        last_call: None,
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             emitter.node(node)?;
         }
     }
-    Ok(Emitted { blocks: emitter.blocks, classes: emitter.classes })
+    Ok(Emitted { blocks: emitter.blocks, classes: emitter.classes, calls: emitter.calls })
 }
 
 /// `X86::CondCode` order, the jump on each.
@@ -247,9 +262,18 @@ impl Emitter<'_, '_> {
                         let value = self.vreg(reg);
                         self.values.insert(result, value);
                     }
+                    NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
+                        self.sp_values.insert(result);
+                    }
                     NodeData::PhysReg(register) => {
                         let phys = Reg { register, width: width_of(self.dag, result) };
                         let held = self.fresh(width_of(self.dag, result));
+                        // The result of a call is what the call delivers in
+                        // that register.
+                        if self.deliver(held, register) {
+                            self.values.insert(result, held.value);
+                            return Ok(());
+                        }
                         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(phys)]);
                         self.values.insert(result, held.value);
                     }
@@ -270,14 +294,14 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let name =
             *self.ctx.names.get(&(opcode as u16)).ok_or_else(|| EmitError::Unsupported(format!("opcode {opcode}")))?;
-        let desc =
-            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "COPY" {
             return self.copy(n);
         }
         if let Some(done) = self.special(n, name)? {
             return Ok(done);
         }
+        let desc =
+            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -300,7 +324,8 @@ impl Emitter<'_, '_> {
             self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
-        let mut operands = self.operands(node.ops.as_slice(), desc, width_of_node(self.dag, n))?;
+        let cell_width = super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.dag, n));
+        let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
         let memory_dest = dests.is_empty() && form.dests.first().is_some_and(|d| d.allows('m'));
@@ -393,6 +418,53 @@ impl Emitter<'_, '_> {
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
+    /// The call instruction: it destroys the caller-saved registers and may
+    /// touch any memory. Its address.
+    fn push_call(
+        &mut self,
+        what: Semantics,
+    ) -> i64 {
+        let at = self.next_address();
+        let clobbers = self.ctx.caller_saved.clone();
+        let memory = Arc::new(crate::model::lir::CallMemory {
+            effects: llrm_mir::memory::Effects::ANY,
+            private: Vec::new(),
+            disturbs: clobbers.clone(),
+        });
+        let uses = _read(&what);
+        let insn = Insn { call: Some(memory), clobbers, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        let block = self.blocks.last_mut().expect("a block");
+        block.insns.push(Arc::new(insn));
+        self.last_call = Some((self.blocks.len() - 1, self.blocks.last().expect("a block").insns.len() - 1));
+        at
+    }
+
+    /// Names `held` as what the last call delivers in `register`; false if no
+    /// call is waiting or the register is not one it destroys.
+    fn deliver(
+        &mut self,
+        held: Held,
+        register: llrm_lir::registers::RegId,
+    ) -> bool {
+        let Some((block, at)) = self.last_call else { return false };
+        if !self.ctx.caller_saved.contains(&register) {
+            return false;
+        }
+        let call = Arc::make_mut(&mut self.blocks[block].insns[at]);
+        call.delivers.push((held, register));
+        call.defines.push(held.value);
+        true
+    }
+
+    /// Whether `value` is an `IMPLICIT_DEF` machine node.
+    fn is_implicit_def(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let ISD::Machine(op) = self.dag.opcode(value) else { return false };
+        self.ctx.names.get(&(op as u16)).is_some_and(|name| name.split('|').next() == Some("IMPLICIT_DEF"))
+    }
+
     /// Opcodes `x86.instr` has no row for but LIR has a form of: the constant
     /// loads (`MOV32r0` is `mov r, 0`, which a later pass makes `xor r, r`),
     /// `MOV32ImmSExti8`, and `LEA32r`/`LEA16r` (`lea r, [address]`). `None`:
@@ -404,6 +476,94 @@ impl Emitter<'_, '_> {
     ) -> Result<Option<()>, EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let width = width(node.values[0]);
+        let result = SDValue { node: n, res: 0 };
+        match name.split('|').next().unwrap_or(name) {
+            "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" => {
+                let bytes = self.constant(node.ops[0])?;
+                let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
+                let (verb, count) =
+                    if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
+                if count != 0 {
+                    let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: 4 });
+                    let count = Loc::Imm(Imm { value: count, width: 4, address: None });
+                    self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
+                }
+                return Ok(Some(()));
+            }
+            "CALLpcrel32" => {
+                let NodeData::Global { symbol, .. } = self.dag.node(node.ops[0]).data else {
+                    return Err(EmitError::Unsupported("a call of a non-global".to_owned()));
+                };
+                let at = self.push_call(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) });
+                self.calls.push((at, symbol));
+                return Ok(Some(()));
+            }
+            // A call through a register or a cell of memory.
+            "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" => {
+                let target = if name.contains('m') && !name.starts_with("CALL32r") {
+                    let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
+                    Loc::Mem(self.cell(group, 4)?)
+                } else {
+                    self.operand(node.ops[0])?
+                };
+                let what = Semantics {
+                    indirect: true,
+                    name: Some("call".into()),
+                    sources: vec![target],
+                    ..Semantics::new(Operation::Call)
+                };
+                self.push_call(what);
+                return Ok(Some(()));
+            }
+            // The low byte, word or dword of a register is the same value
+            // viewed narrower (`Held { width, ..held }`); the high byte
+            // (AH) is a different register.
+            "EXTRACT_SUBREG" => {
+                let index = self.constant(node.ops[1])?;
+                if !matches!(index, 1 | 4 | 6) {
+                    return Err(EmitError::Unsupported(format!("EXTRACT_SUBREG index {index}")));
+                }
+                let Loc::Held(source) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("EXTRACT_SUBREG of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // A register-class constraint is the allocator's business.
+            "COPY_TO_REGCLASS" => {
+                let Loc::Held(source) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("COPY_TO_REGCLASS of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // An undefined value reads as zero, as the old selector's undef
+            // does.
+            "IMPLICIT_DEF" => {
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                self.push(
+                    Operation::Move,
+                    "mov",
+                    vec![Loc::Held(held)],
+                    vec![Loc::Imm(Imm { value: 0, width, address: None })],
+                );
+                return Ok(Some(()));
+            }
+            // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
+            // value.
+            "INSERT_SUBREG" => {
+                if !self.is_implicit_def(node.ops[0]) {
+                    return Err(EmitError::Unsupported("INSERT_SUBREG into a defined register".to_owned()));
+                }
+                let Loc::Held(source) = self.operand(node.ops[1])? else {
+                    return Err(EmitError::Unsupported("INSERT_SUBREG of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            _ => {}
+        }
         let constant = match name {
             "MOV32r0" => Some(0),
             "MOV32r1" => Some(1),
@@ -545,6 +705,11 @@ impl Emitter<'_, '_> {
         ) {
             return self.frame_cell(group, cell_width);
         }
+        if self.sp_values.contains(&group[0]) {
+            let mut cell = self.cell_through(group, cell_width, self.ctx.stack_pointer)?;
+            cell.base = None;
+            return Ok(cell);
+        }
         let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
@@ -559,7 +724,29 @@ impl Emitter<'_, '_> {
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
+        // An absolute address (`[0xB8000]`) is a literal address of four bytes.
+        if base.is_none() && index.is_none() {
+            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            return Ok(Mem { disp_width: 4, ..Mem::new(Some(address), cell_width) });
+        }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
+    }
+
+    /// A cell addressed through the register `through` (the stack pointer):
+    /// `[through + index*scale + disp]`.
+    fn cell_through(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+        through: llrm_lir::registers::RegId,
+    ) -> Result<Mem, EmitError> {
+        let scale = self.constant(group[1])?;
+        let index = self.address_register(group[2], Role::Index)?;
+        let offset = self.constant(group[3])?;
+        if self.address_register(group[4], Role::Segment)?.is_some() {
+            return Err(EmitError::Unsupported("a segment override".to_owned()));
+        }
+        Ok(Mem { through, index, scale, offset, disp_width: 0, ..Mem::new(None, cell_width) })
     }
 
     /// A cell of the frame: the fixed object plus the displacement operand.

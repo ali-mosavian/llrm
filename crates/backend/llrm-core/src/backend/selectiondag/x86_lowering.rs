@@ -35,11 +35,11 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
-use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::dag_combiner::{CombineHooks, CombineLevel};
 use super::isd::{CondCode, ISD};
 use super::legalize_dag::Hooks;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// The pin's `X86ISD` numbers, as the matcher table (`llrm-dagisel`) names
 /// them.
@@ -65,6 +65,10 @@ pub mod x86isd {
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
+    /// `X86ISD::FP_TO_INT_IN_MEM`: `fist` of an x87 value to a stack slot.
+    pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
+    /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
+    pub const FILD: ISD = ISD::Target(586);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -127,6 +131,9 @@ impl Hooks for X86Lowering {
             ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::VAStart => lower_vastart(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
@@ -430,6 +437,163 @@ fn lower_addsub_carry(
     let code = cond_code(dag, cond::B);
     let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
     dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
+}
+
+/// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
+/// result's size, then a load of it. An unsigned `i32` goes through an `i64`
+/// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
+/// flips the sign bit of the result back.
+fn lower_fp_to_int(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let signed = dag.opcode(node) == ISD::FpToSInt;
+    let result_vt = dag.value_type(node);
+    let mut value = dag.operand(node, 0);
+    let value_vt = dag.value_type(value);
+    let EVT::Simple(float @ (MVT::F32 | MVT::F64 | MVT::F80)) = value_vt else { return None };
+    let unsigned_fixup = !signed && result_vt == EVT::I64;
+    let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
+    let size = stored_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let chain = dag.entry_node();
+    let mut adjust = None;
+    if unsigned_fixup {
+        // 2^63, the first value that does not fit a signed `i64`.
+        let threshold = match float {
+            MVT::F32 => 0x5F00_0000u128,
+            MVT::F64 => 0x43E0_0000_0000_0000,
+            _ => (0x403Eu128 << 64) | (1u128 << 63),
+        };
+        let threshold = dag.get_constant_fp(threshold, value_vt);
+        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+        let sixty_three = dag.get_constant(63, EVT::I8);
+        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
+        let zero = dag.get_constant_fp(0, value_vt);
+        let offset = dag.get_select(value_vt, at_least, threshold, zero);
+        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+    }
+    let info = MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+    let fist = dag.intern(
+        x86isd::FP_TO_INT_IN_MEM,
+        &[EVT::OTHER],
+        &[chain, value, slot],
+        SDNodeFlags::default(),
+        NodeData::Mem(info),
+    );
+    let load_info = MemInfo { mem_vt: result_vt, ..info };
+    let mut result = dag.get_load(result_vt, fist, slot, load_info);
+    if let Some(adjust) = adjust {
+        result = dag.get_node(ISD::Xor, EVT::I64, &[result, adjust]);
+    }
+    Some(result)
+}
+
+/// `BuildFILD` without SSE: `fild` of the `src_vt` integer at `slot`.
+fn build_fild(
+    dag: &mut SelectionDAG,
+    dst: EVT,
+    src_vt: EVT,
+    chain: SDValue,
+    slot: SDValue,
+    info: MemInfo,
+) -> SDValue {
+    let info = MemInfo { mem_vt: src_vt, ..info };
+    dag.intern(x86isd::FILD, &[dst, EVT::OTHER], &[chain, slot], SDNodeFlags::default(), NodeData::Mem(info))
+}
+
+/// `LowerSINT_TO_FP` and `LowerUINT_TO_FP` for the x87: the integer stored to
+/// a stack slot and `fild`ed. An unsigned `i32` is stored with a zero high
+/// dword and `fild`ed as an `i64`; an unsigned `i64` is `fild`ed signed and
+/// 2^64 is added when the sign was set (the constant pool's fudge).
+fn lower_int_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let signed = dag.opcode(node) == ISD::SIntToFp;
+    let dst = dag.value_type(node);
+    let src = dag.operand(node, 0);
+    let src_vt = dag.value_type(src);
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
+        return None;
+    }
+    let pointer = dag.config().pointer;
+    let chain = dag.entry_node();
+    let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
+        mem_vt: vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+    };
+    if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
+        let size = src_vt.size_in_bits() / 8;
+        let index = dag.create_stack_temporary(size, size);
+        let slot = dag.get_frame_index(pointer, index);
+        let info = store_info(index, src_vt, size);
+        let stored = dag.get_store(chain, src, slot, info);
+        return Some(build_fild(dag, dst, src_vt, stored, slot, info));
+    }
+    let index = dag.create_stack_temporary(8, 8);
+    let slot = dag.get_frame_index(pointer, index);
+    let info = store_info(index, EVT::I32, 8);
+    if src_vt == EVT::I32 {
+        let high_slot = {
+            let four = dag.get_constant(4, pointer);
+            dag.get_node(ISD::Add, pointer, &[slot, four])
+        };
+        let low = dag.get_store(chain, src, slot, info);
+        let zero = dag.get_constant(0, EVT::I32);
+        let high = dag.get_store(low, zero, high_slot, info);
+        return Some(build_fild(dag, dst, EVT::I64, high, slot, info));
+    }
+    let info = store_info(index, EVT::I64, 8);
+    let stored = dag.get_store(chain, src, slot, info);
+    let fild = build_fild(dag, EVT::Simple(MVT::F80), EVT::I64, stored, slot, info);
+    let zero = dag.get_constant(0, EVT::I64);
+    let sign_set = dag.get_setcc(EVT::I8, src, zero, CondCode::SetLt);
+    // The fudge: 0.0f at +0 and 2^64 as a float at +4 of one pool entry.
+    let fudge = dag.get_constant_pool(pointer, 0x5F80_0000_0000_0000, EVT::I64, false);
+    let (zero_offset, four_offset) = (dag.get_constant(0, pointer), dag.get_constant(4, pointer));
+    let offset = dag.get_select(pointer, sign_set, four_offset, zero_offset);
+    let fudge_ptr = dag.get_node(ISD::Add, pointer, &[fudge, offset]);
+    let NodeData::PoolIndex(entry) = dag.node(fudge).data else { return None };
+    let fudge_info = MemInfo {
+        mem_vt: EVT::Simple(MVT::F32),
+        align: 8,
+        volatile: false,
+        base: MemBase::ConstantPool(entry),
+        ext: Some(super::actions::LoadExt::ExtLoad),
+    };
+    let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
+    let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
+    let rounded = if dst == EVT::Simple(MVT::F80) {
+        sum
+    } else {
+        let flag = dag.get_constant_with(0, pointer, true, false);
+        dag.get_node(ISD::FpRound, dst, &[sum, flag])
+    };
+    Some(rounded)
+}
+
+/// `LowerVASTART` for the 32-bit ABI: a `va_list` is a pointer, so the start
+/// is a store of the first variadic argument's address through it.
+fn lower_vastart(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let pointer = dag.config().pointer;
+    let first = dag.get_frame_index(pointer, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None };
+    Some(dag.get_store(chain, first, list, info))
 }
 
 fn is_pow2(value: u128) -> bool {

@@ -828,12 +828,13 @@ fn staged(
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let dag = match target.selector {
         Selector::Old => None,
-        Selector::Dag => {
-            Some(timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)))
-        }
+        Selector::Dag => Some(timed("dag isel", || {
+            crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+        })),
         Selector::Shadow => {
-            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch))
-            {
+            match timed("dag isel", || {
+                crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+            }) {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {
                     llrm_support::debug!("isel", "{name} refused: {}", why.0);
@@ -1008,6 +1009,9 @@ fn phased(
     }
     let frame = frame.borrow().clone();
     let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
+        eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
+    }
     let (body, landing) = match landing {
         Some(marker) => {
             let (body, at) =

@@ -24,7 +24,7 @@
 //!
 //! ```text
 //!  frame copies -> machinecp -> extensions -> copysink
-//!    -> spillforward -> postrasink -> storecombine -> pushed constants
+//!    -> postrasink -> storecombine -> pushed constants
 //!    -> pushes, constants, commuted, transferred, high extracts, restored
 //!       copies, shuttles, overwritten, fused, fused calls, far loads
 //!    -> exact addresses -> addresses (LEA) -> stepped after compare
@@ -128,8 +128,7 @@ pub use crate::backend::lanes::{Lane, Lanes};
 use crate::backend::needs::{self, gated};
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{
-    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward,
-    storecombine,
+    affine, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, storecombine,
 };
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
@@ -324,7 +323,6 @@ impl Peephole {
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(crate::backend::machinecp::propagated(&body)))?;
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
-        let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));

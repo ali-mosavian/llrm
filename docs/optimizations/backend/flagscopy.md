@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/flagscopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/flagscopy.rs sha256:8f33d3327a63154435d82a9821e666506967c559d98216ba5f5c86d151ca2308 -->
+<!-- src: crates/backend/llrm-core/src/backend/flagscopy.rs sha256:ab68d9e83ab21c1c8e54a5c7a6e4e2d4d28fd94459a92debda6e241a5f1b7204 -->
 
 # flagscopy
 
@@ -49,11 +49,16 @@ https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df2962
 [L899]:
 https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899
 
-Blockers (named, with the date each lands, 2026-11-04 unless said):
-the copy and its restore in different blocks, flags live into successors,
-and the hoisting of the test position up the dominator tree (the loop in
-`runOnMachineFunction` over `TestMBB`) are an error with a message that
-says so; the split of a block with a second `jcc` on the flags is too.
+Cross-block lowering follows the pin: the copy may be in another block than
+its restore, the test position is hoisted up the dominator tree while the
+flags live in and nothing clobbers them (`HasEFLAGSClobber`,
+`HasEFLAGSClobberPath`), the flags live into successors are rewritten
+where they are read (the copy's block must dominate them; else the pin's
+fatal error, here an `Err`), and a second `jcc` on the flags goes to a block
+split off (`splitBlock`) with its edges, probabilities and phis.
+The NF variants (`hasNF` is APX) and the x87 `fcmov` forms have no
+counterpart: N/A.
+
 DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
 exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
 producer.

@@ -51,6 +51,7 @@ use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
+use super::x86_preprocess::FrameObjects;
 use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Mem, Space};
 use crate::model::lir::{Block, LirBlock, LirBody, Phi};
@@ -80,8 +81,21 @@ impl SchedInfo for Info {
     }
 }
 
-/// Fixed object `-k` is the k-th stack-passed parameter.
-struct Frame(Vec<i64>);
+/// The frame's objects: fixed object `-k` is the k-th stack-passed
+/// parameter; a stack temporary or alloca `k >= 0` is a cell below BP, laid
+/// out as the old selector lays them (`depth` grows, a slot is at `-depth`).
+pub(super) struct Frame {
+    params: Vec<i64>,
+    /// (displacement, size) of each object made, by index.
+    locals: std::cell::RefCell<Vec<(i64, i64)>>,
+    depth: std::cell::Cell<i64>,
+}
+
+impl Frame {
+    pub(super) fn new(params: Vec<i64>) -> Frame {
+        Frame { params, locals: Default::default(), depth: Default::default() }
+    }
+}
 
 impl FrameMap for Frame {
     fn cell(
@@ -89,12 +103,34 @@ impl FrameMap for Frame {
         index: i32,
         width: u32,
     ) -> Option<Mem> {
-        let disp = *self.0.get(usize::try_from(-index - 1).ok()?)?;
+        let disp = if index < 0 {
+            *self.params.get(usize::try_from(-index - 1).ok()?)?
+        } else {
+            self.locals.borrow().get(usize::try_from(index).ok()?)?.0
+        };
         Some(Mem {
             through: llrm_lir::registers::RegId::BP,
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, disp)), width)
         })
+    }
+}
+
+/// `CreateStackTemporary`: the preprocess makes its slots here.
+pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
+
+impl FrameObjects for Temporaries<'_> {
+    fn create_stack_temporary(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32 {
+        let (size, align) = (i64::from(size), i64::from(align.max(1)));
+        let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
+        self.0.depth.set(depth);
+        let mut locals = self.0.locals.borrow_mut();
+        locals.push((-depth, size));
+        (locals.len() - 1) as i32
     }
 }
 
@@ -125,7 +161,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     let mut slot = TABLES.lock().expect("the DAG tables");
     slot.get_or_insert_with(|| {
         let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-        std::sync::Arc::new(Tables { map: OpcodeMap::new(forms), names: MACHINE_OPCODES.iter().copied().collect() })
+        std::sync::Arc::new(Tables {
+            map: OpcodeMap::new(forms),
+            names: MACHINE_OPCODES
+                .iter()
+                .copied()
+                .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
+                .collect(),
+        })
     })
     .clone()
 }
@@ -172,6 +215,7 @@ pub fn selected(
     module: &Module,
     name: &str,
     arch: &dyn Target,
+    cpu: &crate::backend::cpu::Profile,
 ) -> Result<Selected, Unselected> {
     if arch.object().bitness != 32 {
         return refuse("only m32 is built so far");
@@ -186,13 +230,37 @@ pub fn selected(
     let mut info = FunctionLoweringInfo::new(function);
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let tables = tables(arch);
-    let frame = Frame(
+    let frame = Frame::new(
         convention
             .parameters
             .iter()
             .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
             .collect(),
     );
+    // The function's static allocas are frame objects 0, 1, ... in the order
+    // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
+    // type's alignment.
+    let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
+        info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
+    allocas.sort();
+    for (index, value) in allocas {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return refuse("an alloca that is not an instruction");
+        };
+        let instruction = function.instruction(def);
+        let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
+            return refuse("an alloca that is not an alloca");
+        };
+        if !instruction.operands.is_empty() {
+            return refuse("an alloca with a count");
+        }
+        let types = &module.context.types;
+        let size = layout.alloc_size(types, allocated) as i64;
+        let align =
+            crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
+        debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
+    }
     let mut hooks = X86Hooks::new(Options {
         cpu: Cpu::I486,
         opt_none: false,
@@ -207,7 +275,26 @@ pub fn selected(
     // the blocks after it.
     let block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
     let globals = Globals(module);
+    // What a call destroys: the general registers the convention does not
+    // keep for the caller.
+    let regs = llrm_lir::registers::Regs(arch.registers());
+    let kept: std::collections::BTreeSet<_> = arch
+        .callee_saved()
+        .into_iter()
+        .filter(|(full, pushed)| full == pushed)
+        .map(|(full, _)| regs.root(full))
+        .collect();
+    let stack_pointer = arch.register_named("esp");
+    let frame_registers = [stack_pointer, llrm_lir::registers::RegId::BP].map(|r| regs.root(r));
+    let caller_saved: std::collections::BTreeSet<_> = cpu
+        .general
+        .iter()
+        .map(|r| regs.root(*r))
+        .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
+        .collect();
     let ctx = EmitContext {
+        caller_saved: &caller_saved,
+        stack_pointer,
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
@@ -216,6 +303,7 @@ pub fn selected(
         names: &tables.names,
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
+    let mut calls = IndexMap::default();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
@@ -236,9 +324,14 @@ pub fn selected(
             &ctx,
             &mut state,
             block_at[&block.0],
+            arch,
+            &mut Temporaries(&frame),
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
         let from = emitted.len();
+        calls.extend(done.calls.iter().map(|(at, symbol)| {
+            (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())
+        }));
         emitted.extend(done.blocks);
         made.insert(block.0, from..emitted.len());
         exports.push((block, built.phi_updates));
@@ -294,14 +387,14 @@ pub fn selected(
     Ok(Selected {
         body,
         convention,
-        calls: IndexMap::default(),
+        calls,
         inline: IndexMap::default(),
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),
         far: Default::default(),
         pops: IndexMap::default(),
-        depth: 0,
-        extents: Vec::new(),
+        depth: frame.depth.get(),
+        extents: frame.locals.borrow().clone(),
         landing: None,
     })
 }

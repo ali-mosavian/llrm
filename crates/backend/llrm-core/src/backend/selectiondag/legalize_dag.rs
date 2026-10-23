@@ -143,6 +143,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
+            ISD::SIntToFp | ISD::UIntToFp => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SetCC | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
@@ -246,10 +247,60 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            // `vaend` has nothing to do; `vacopy` is a load of the source list
+            // and a store to the destination.
+            ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
+            ISD::VACopy => {
+                let (chain, dest, src) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let pointer = self.dag.config().pointer;
+                let info = MemInfo {
+                    mem_vt: pointer,
+                    align: pointer.size_in_bits() / 8,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                };
+                let loaded = self.dag.get_load(pointer, chain, src, info);
+                Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
+            }
             _ => None,
         }
+    }
+
+    /// `TargetLowering::expandABS` ([L11308][pin]) for scalars: `smax(x, 0 -
+    /// x)` or `umin` when legal, else `(x ^ s) - s` for `s = x >>s (bits -
+    /// 1)`.
+    ///
+    /// DEVIATE SD306: the pin freezes `x` first because `x` is read twice;
+    /// selection deletes the `FREEZE` again, so the machine code is the
+    /// same and the node is left out. Owner sdag-c. Exit: when the DAG has
+    /// `FREEZE`. Review 2026-12-10.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L11308
+    fn expand_abs(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let x = self.dag.operand(node, 0);
+        if self.tli.is_operation_legal(ISD::Sub, vt) {
+            for op in [ISD::SMax, ISD::UMin] {
+                if self.tli.is_operation_legal(op, vt) {
+                    let zero = self.dag.get_constant(0, vt);
+                    let neg = self.dag.get_node(ISD::Sub, vt, &[zero, x]);
+                    return self.dag.get_node(op, vt, &[x, neg]);
+                }
+            }
+        }
+        let amount = self.dag.get_constant(u128::from(vt.size_in_bits() - 1), EVT::I8);
+        let sign = self.dag.get_node(ISD::Sra, vt, &[x, amount]);
+        let flipped = self.dag.get_node(ISD::Xor, vt, &[x, sign]);
+        self.dag.get_node(ISD::Sub, vt, &[flipped, sign])
     }
 
     /// `TargetLowering::expandCTPOP` ([L10830][pin]), scalar: the parallel
@@ -383,6 +434,37 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Ok(())
     }
 
+    /// `PromoteNode` for a conversion between an integer and a float: the
+    /// integer side is widened (sign or zero extended going in, truncated
+    /// coming out).
+    fn promote_conversion(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let op = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        let result = match op {
+            ISD::SIntToFp | ISD::UIntToFp => {
+                let src = self.dag.operand(node, 0);
+                let EVT::Simple(from) = self.dag.value_type(src) else {
+                    unreachable!("promotion applies to simple types")
+                };
+                let to: EVT = self.tli.type_to_promote_to(op, from).into();
+                let widened =
+                    self.dag.get_node(if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend }, to, &[src]);
+                self.dag.get_node(op, vt, &[widened])
+            }
+            _ => {
+                let EVT::Simple(from) = vt else { unreachable!("promotion applies to simple types") };
+                let to: EVT = self.tli.type_to_promote_to(op, from).into();
+                let wide = self.dag.get_node(op, to, &[self.dag.operand(node, 0)]);
+                self.dag.get_node(ISD::Truncate, vt, &[wide])
+            }
+        };
+        self.replace_node(node, result);
+        Ok(())
+    }
+
     /// `ReplaceNode(Old, New)` for a node with one value result.
     fn replace_node(
         &mut self,
@@ -399,6 +481,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         node: SDValue,
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
+        if matches!(
+            op,
+            ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt
+        ) {
+            return self.promote_conversion(node);
+        }
         let EVT::Simple(from) = self.dag.value_type(node) else { unreachable!("promotion applies to simple types") };
         let to: EVT = self.tli.type_to_promote_to(op, from).into();
         let result = match op {

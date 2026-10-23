@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ports.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ports.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:6ffa1788c32ff7c50bcd86b747c2471f1aba70c72d7b501ae27a7f709a62edc2 -->
+<!-- src: crates/opt/llrm-transforms/src/ports.rs sha256:49478b5e669a2de515d44d4ec820eb108b0aeef1b67d03fe3eff2f7eb4d2e85d -->
 
 # ports
 
@@ -29,8 +29,9 @@ nothing.
    => unchanged
 ```
 
-DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the intrinsic definition, ours asks the
-target per call; exit: the frontends declare the memory attribute on the `in`/`out` intrinsics and this pass is
+DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the
+intrinsic definition, ours asks the target per call; exit: the frontends
+declare the memory attribute on the `in`/`out` intrinsics and this pass is
 deleted; owner w-6; review 2026-11-13).
 
 ## Example

@@ -3,7 +3,7 @@
 //!
 //! # Example
 //! ```
-//! use llrm_mir::lowering::{LoadExt, Lowering};
+//! use llrm_mir::lowering::Lowering;
 //! use llrm_x86::lowering::X86;
 //! assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
 //! assert!(X86 { is_64bit: false }.is_truncate_free(32, 16));
@@ -14,7 +14,19 @@
 //! # Runs
 //! `cargo test -p llrm-x86 lowering`.
 
-use llrm_mir::lowering::{LoadExt, Lowering};
+use std::sync::OnceLock;
+
+use llrm_mir::lowering::{Isd, LoadExt, Lowering};
+
+use crate::dag::actions::{Features, TargetLowering};
+use crate::dag::isd::ISD;
+use crate::dag::mvt::MVT;
+
+/// The DAG's tables for i486, built once.
+fn table() -> &'static TargetLowering {
+    static TABLE: OnceLock<TargetLowering> = OnceLock::new();
+    TABLE.get_or_init(|| TargetLowering::x86_32(Features::default(), MVT::I32))
+}
 
 /// The x86 family's answers. `is_64bit` is `Subtarget.is64Bit()`.
 pub struct X86 {
@@ -25,6 +37,44 @@ impl Lowering for X86 {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3807-L3810
     fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
         true
+    }
+
+    // `isOperationLegalOrCustom` from the DAG's action table (`dag::actions`):
+    // one copy of what the legalizer does with each operation on each type.
+    // DEVIATE TL2: the table translates the 32-bit arms only, so a 64-bit
+    // target answers as before the table: the divides `Expand` (L327), the
+    // rest legal on the register types. Owner sdag-b, 2027-02-04.
+    fn is_operation_legal_or_custom(
+        &self,
+        op: Isd,
+        bits: u32,
+    ) -> bool {
+        if self.is_64bit {
+            let legal_type = matches!(bits, 8 | 16 | 32 | 64);
+            return legal_type && !matches!(op, Isd::UDiv | Isd::SDiv | Isd::URem | Isd::SRem);
+        }
+        let Some(vt) = MVT::integer(bits) else { return false };
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        table().is_operation_legal_or_custom(node, vt.into())
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L186-L187
@@ -71,6 +121,20 @@ mod tests {
     #[test]
     fn test_x86_folds_a_mask_and_compare_with_zero() {
         assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
+    }
+
+    /// A promoted add is legal at 8, 16 and 32 bits, at 64 on a 64-bit target
+    /// only, a divide at none, and the base class has nothing legal.
+    #[test]
+    fn test_x86_operations_are_legal_on_its_register_types() {
+        let (narrow, wide) = (X86 { is_64bit: false }, X86 { is_64bit: true });
+        assert!(
+            narrow.is_operation_legal_or_custom(Isd::Add, 16) && narrow.is_operation_legal_or_custom(Isd::SetCc, 8)
+        );
+        assert!(!narrow.is_operation_legal_or_custom(Isd::Add, 64) && wide.is_operation_legal_or_custom(Isd::Add, 64));
+        assert!(
+            !wide.is_operation_legal_or_custom(Isd::UDiv, 32) && !narrow.is_operation_legal_or_custom(Isd::Add, 24)
+        );
     }
 
     /// An extending load of 8, 16 or 32 bits is one operation, a sign

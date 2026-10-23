@@ -110,6 +110,9 @@ impl SelectionDAG {
             NodeData::Symbol(id) => {
                 write!(text, "'{}'", self.symbol_names[id as usize]).ok();
             }
+            NodeData::Src(key) => {
+                write!(text, "<0x{key:x}>").ok();
+            }
             NodeData::JumpTable(index) => {
                 write!(text, "<{index}>").ok();
             }
@@ -120,7 +123,10 @@ impl SelectionDAG {
                 write!(text, "<{} 0x0>", self.block_names[block as usize]).ok();
             }
             NodeData::PhysReg(reg) => {
-                write!(text, " ${}", format!("{reg:?}").to_lowercase()).ok();
+                // the allocator's x87 registers are iced's MM0..MM6, the pin's
+                // FP0..FP6
+                let name = format!("{reg:?}").to_lowercase();
+                write!(text, " ${}", name.strip_prefix("mm").map_or(name.clone(), |n| format!("fp{n}"))).ok();
             }
             NodeData::Register(reg) => {
                 write!(text, " %{reg}").ok();
@@ -302,6 +308,10 @@ fn strip_decorations(line: &str) -> String {
     while let Some(start) = text.find(" [TF=") {
         let end = text[start..].find(']').map_or(text.len(), |end| start + end + 1);
         text.replace_range(start..end, "");
+    }
+    while let Some(start) = text.find("<0x") {
+        let end = text[start..].find('>').map_or(text.len(), |end| start + end + 1);
+        text.replace_range(start..end, "<>");
     }
     while let Some(start) = text.find(" 0x") {
         let end = text[start + 3..].find(|c: char| !c.is_ascii_hexdigit()).map_or(text.len(), |end| start + 3 + end);

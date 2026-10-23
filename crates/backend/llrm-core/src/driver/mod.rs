@@ -153,7 +153,6 @@ impl Options {
             self.pipeline.prefers_size(),
             self.pipeline.searches(),
             self.pipeline.searches_all(),
-            self.pipeline.compares_routes(),
             self.pipeline.optimize,
             self.float_store,
             self.pipeline.aggressive_codegen(),

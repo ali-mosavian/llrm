@@ -42,7 +42,7 @@
 //!
 //! # Runs
 //! Inside the peephole phase, after copy propagation and extension
-//! rewrites, before `spillforward`. Once per peephole run. No flag of its own.
+//! rewrites, before `postrasink`. Once per peephole run. No flag of its own.
 //!
 //! # Needs
 //! [`crate::analysis::loops`] for loops and dominance, and

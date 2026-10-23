@@ -92,6 +92,8 @@ pub enum NodeData {
     PoolIndex(u32),
     Mem(MemInfo),
     JumpTable(u32),
+    /// `SrcValueSDNode`: which IR value, by a key the builder makes.
+    Src(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -183,6 +185,14 @@ pub struct SelectionDAG {
     /// The constants spilled to the pool: bits and type
     /// (`MachineConstantPool`).
     pub constant_pool: Vec<(u128, EVT)>,
+    /// The frame index the first stack temporary gets: the driver sets it past
+    /// the builder's frame objects.
+    pub first_temporary: i32,
+    /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
+    /// set by the builder where the function takes `...`.
+    pub var_args_frame_index: Option<i32>,
+    /// The stack temporaries the legalizer asked for: size and alignment.
+    pub temporaries: Vec<(u32, u32)>,
 }
 
 impl SelectionDAG {
@@ -199,6 +209,9 @@ impl SelectionDAG {
             block_names: Vec::new(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
+            first_temporary: 0,
+            var_args_frame_index: None,
+            temporaries: Vec::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
@@ -785,6 +798,18 @@ impl SelectionDAG {
         self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index))
     }
 
+    /// `CreateStackObject`: a frame object for a lowering's scratch value; its
+    /// frame index (the driver turns the indices from
+    /// [`SelectionDAG::first_temporary`] on into real frame objects).
+    pub fn create_stack_temporary(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32 {
+        self.temporaries.push((size, align));
+        self.first_temporary + self.temporaries.len() as i32 - 1
+    }
+
     pub fn get_global_address(
         &mut self,
         vt: EVT,
@@ -848,6 +873,14 @@ impl SelectionDAG {
     ) -> SDValue {
         let id = self.symbol_id(name);
         self.intern(ISD::TargetExternalSymbolNode, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
+    /// `getSrcValue`.
+    pub fn get_src_value(
+        &mut self,
+        key: u32,
+    ) -> SDValue {
+        self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
     pub fn get_jump_table(
