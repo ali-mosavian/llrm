@@ -1473,3 +1473,34 @@ fn an_unsigned_64_bit_integer_converts_to_a_double() {
     selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const CALL_RETURNING_I64: &str =
+    "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define internal cc 1002 i64 @t_(double noundef %0) {
+b1:
+  %1 = fptosi double %0 to i64
+  ret i64 %1
+}
+define i64 @f(double noundef %d) {
+b1:
+  %r = call cc 1002 i64 @t_(double noundef %d)
+  ret i64 %r
+}
+";
+
+/// A call returning an i64 delivers both halves. The EDX read took the call's
+/// glue only when the convention's clobber list or the target's named EDX; a
+/// callee that returns in EDX without clobbering it made `mov v, EDX` read a
+/// register nothing defined (`floatalloc: _main reads edx before every path
+/// writes it`, double_to_int64.c -O0 under `--isel=dag`).
+#[test]
+fn a_call_delivers_both_halves_of_an_i64_result() {
+    let module = llrm_mir::parse::module(CALL_RETURNING_I64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Call)).expect("a call");
+    let mut registers: Vec<_> = call.delivers.iter().map(|(_, register)| *register).collect();
+    registers.sort_by_key(|r| r.index());
+    assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{call:?}");
+}

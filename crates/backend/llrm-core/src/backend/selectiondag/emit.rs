@@ -558,7 +558,8 @@ impl Emitter<'_, '_> {
                         let held = self.fresh(width_of(self.dag, result));
                         // The result of a call is what the call delivers in
                         // that register.
-                        if self.deliver(held, register) {
+                        let glued = self.reads_call_result(node.ops.get(2).copied());
+                        if self.deliver(held, register, glued) {
                             self.values.insert(result, held.value);
                             return Ok(());
                         }
@@ -840,10 +841,14 @@ impl Emitter<'_, '_> {
         &mut self,
         held: Held,
         register: llrm_lir::registers::RegId,
+        glued: bool,
     ) -> bool {
         let Some((block, at)) = self.last_call else { return false };
         let call = Arc::make_mut(&mut self.blocks[block].insns[at]);
-        if !call.clobbers.contains(&register) && !self.ctx.caller_saved.contains(&register) {
+        // A result the node reads through the call's glue is delivered whatever
+        // the convention's lists say: a callee may return in a register
+        // (EDX of an i64) that its clobber list and the target's do not name.
+        if !glued && !call.clobbers.contains(&register) && !self.ctx.caller_saved.contains(&register) {
             return false;
         }
         call.clobbers.insert(register);
@@ -966,6 +971,30 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> bool {
         self.glue_reaches(n, |name| name.starts_with("CALL"))
+    }
+
+    /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a call,
+    /// through the glue of the reads of its other results.
+    fn reads_call_result(
+        &self,
+        glue: Option<SDValue>,
+    ) -> bool {
+        let Some(mut glue) = glue else { return false };
+        while self.dag.opcode(glue) == ISD::CopyFromReg {
+            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+            glue = next;
+        }
+        let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
+        // The results are read after the call sequence ends.
+        self.ctx
+            .names
+            .get(&(op as u16))
+            .is_some_and(
+                |name| {
+                    let name = name.split('|').next().unwrap_or(name);
+                    name.starts_with("CALL") || name.starts_with("ADJCALLSTACKUP")
+                },
+            )
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a
