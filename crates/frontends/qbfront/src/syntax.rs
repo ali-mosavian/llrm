@@ -138,6 +138,8 @@ pub struct Procedure {
     pub module_scope: bool,
     /// `DECLARE SUB name` with no parameter list: calls are not checked against it.
     pub unchecked: bool,
+    /// `SUB name ()` with an empty parameter list in parentheses.
+    pub empty_list: bool,
     pub span: Span,
 }
 
