@@ -18,8 +18,8 @@
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
 //! DEVIATE SD200: not translated yet, so the nodes are the plain forms: the
-//! bit-test and arithmetic-flag folds (`LowerAndToBT`, `EmitTest` reusing an
-//! `ADD`/`AND` as flags, the `SUB 0, x` and `XOR` forms of `EmitCmp`), the
+//! bit-test fold (`LowerAndToBT`), the `SUB 0, x` and `XOR` forms of
+//! `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
@@ -92,6 +92,8 @@ pub const ES: u32 = 31;
 
 /// `X86::CondCode`.
 pub mod cond {
+    pub const O: u128 = 0;
+    pub const NO: u128 = 1;
     pub const B: u128 = 2;
     pub const AE: u128 = 3;
     pub const E: u128 = 4;
@@ -275,13 +277,74 @@ fn float_flags(
     Some((flags, cond_code(dag, code)))
 }
 
-/// `EmitTest`, without the arithmetic-flag reuse (SD35): `cmp x, 0`.
+/// `hasNonFlagsUse`: whether `op` has a reader other than a branch, a compare
+/// or a select condition (looking past a truncate nothing else reads).
+fn has_non_flags_use(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    dag.users(op).any(|user| {
+        let mut user = SDValue { node: user, res: 0 };
+        let mut through = op;
+        if dag.opcode(user) == ISD::Truncate {
+            let mut readers = dag.users(user);
+            if let (Some(only), None) = (readers.next(), readers.next()) {
+                through = user;
+                user = SDValue { node: only, res: 0 };
+            }
+        }
+        let condition = dag.opcode(user) == ISD::Select && dag.operand(user, 0) == through;
+        !matches!(dag.opcode(user), ISD::BrCond | ISD::SetCC) && !condition
+    })
+}
+
+/// `isProfitableToUseFlagOp`: every reader of `op` is a register copy, a
+/// compare or a store.
+fn is_profitable_to_use_flag_op(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    dag.users(op).all(|user| matches!(dag.opcode(SDValue { node: user, res: 0 }), ISD::CopyToReg | ISD::SetCC | ISD::Store))
+}
+
+/// `EmitTest`: the flags of `op` against zero. An arithmetic result that only
+/// feeds registers, stores and compares is made by the flag-setting x86 form
+/// and the compare reads its flags, when the condition needs neither the carry
+/// nor the overflow flag (a `test` clears them).
 fn emit_test(
     dag: &mut SelectionDAG,
     op: SDValue,
+    code: u128,
 ) -> SDValue {
-    let zero = dag.get_constant(0, dag.value_type(op));
-    dag.get_node(x86isd::CMP, EVT::I32, &[op, zero])
+    let vt = dag.value_type(op);
+    let zero = dag.get_constant(0, vt);
+    let test = |dag: &mut SelectionDAG| dag.get_node(x86isd::CMP, EVT::I32, &[op, zero]);
+    let need_carry = matches!(code, cond::A | cond::AE | cond::B | cond::BE);
+    let wraps = !matches!(dag.opcode(op), ISD::Add | ISD::Sub | ISD::Mul | ISD::Shl)
+        || dag.node(op).flags.0 & SDNodeFlags::NO_SIGNED_WRAP.0 == 0;
+    let need_overflow = matches!(code, cond::G | cond::GE | cond::L | cond::LE | cond::O | cond::NO) && wraps;
+    if op.res != 0 || need_carry || need_overflow {
+        return test(dag);
+    }
+    let opcode = match dag.opcode(op) {
+        ISD::And if !has_non_flags_use(dag, op) => return test(dag),
+        ISD::And => x86isd::AND,
+        ISD::Add => x86isd::ADD,
+        ISD::Sub => x86isd::SUB,
+        ISD::Or => x86isd::OR,
+        ISD::Xor => x86isd::XOR,
+        x86isd::ADD | x86isd::SUB | x86isd::OR | x86isd::XOR | x86isd::AND => {
+            return SDValue { node: op.node, res: 1 };
+        }
+        _ => return test(dag),
+    };
+    if !is_profitable_to_use_flag_op(dag, op) {
+        return test(dag);
+    }
+    let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+    let new = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    dag.replace_all_uses_with(op, SDValue { node: new.node, res: 0 });
+    SDValue { node: new.node, res: 1 }
 }
 
 /// `EmitCmp`: the flags of `op0 - op1`.
@@ -289,9 +352,10 @@ fn emit_cmp(
     dag: &mut SelectionDAG,
     op0: SDValue,
     op1: SDValue,
+    code: u128,
 ) -> SDValue {
     if dag.is_null_constant(op1) {
-        return emit_test(dag, op0);
+        return emit_test(dag, op0, code);
     }
     let vt = dag.value_type(op0);
     let sub = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[op0, op1]);
@@ -317,7 +381,7 @@ fn emit_flags_for_setcc(
     }
     let mut rhs = op1;
     let code = translate_cc(dag, cc, &mut rhs);
-    let flags = emit_cmp(dag, op0, rhs);
+    let flags = emit_cmp(dag, op0, rhs, code);
     (flags, cond_code(dag, code))
 }
 
@@ -399,7 +463,7 @@ fn lower_select(
         flags = dag.operand(cond, 1);
     } else {
         code = cond_code(dag, cond::NE);
-        flags = emit_test(dag, cond);
+        flags = emit_test(dag, cond, cond::NE);
     }
     let (op1, op2, result_vt) =
         if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
