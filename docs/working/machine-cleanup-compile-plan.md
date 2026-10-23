@@ -34,3 +34,13 @@ head; the pin side is the same command with the pinned clang (`~/scratch/llvm-bu
 profile (MachineScheduler 10.4, MachineLICM 9.1, MachineSink 4.3, BlockPlacement 3.9, CopyProp 3.4,
 ReachingDef 3.4, MachineCSE 2.9, BranchFolder 2.0, FPStackifier 1.7, DeadMachineInstructionElim 1.4,
 LateInstrsCleanup 1.2, Peephole 1.0, FixupBW 1.0, PEI 1.0).
+
+## X86FPStackifier inputs (step 9)
+
+From sdag-b (docs/working/selectiondag-plan.md, SD6): FP values are RFP vregs until this pass; selection emits the
+pin's `*_Fp` pseudos (X86InstrFPStack.td): `FCMP` to UCOM_Fpr + FNSTSW16r + SAHF (m16 differs in fnstsw/sahf only),
+`FILD` from a stack slot, `FP_TO_INT_IN_MEM` as fist to a slot, FP CMOV as `CMOV_RFP32/64/80`, constants as
+constant-pool loads, `fp_round` as store and reload, loads and stores as `LD_Fp*m`/`ST_Fp*m`, a call's float
+result as `POP_FROM_X87_REG`. Calls, returns, block edges and inline asm follow the pin's X86FloatingPoint (stack
+empty at call and ret except the ST0 result, `LiveBundle` layouts at edges). Exact pseudos per instruction:
+sdag-c and sdag-d (reply pending).
