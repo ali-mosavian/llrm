@@ -2109,13 +2109,13 @@ impl Ast<'_> {
     }
 
     /// `, [exp]`s after the leading arguments, an empty slot being Omitted at its comma.
-    fn rest(&mut self) -> R<Vec<Expr>> {
+    fn rest(&mut self, trailing_ok: bool) -> R<Vec<Expr>> {
         let mut out = Vec::new();
         while self.is(Kw::Comma) {
             let comma = self.take();
             out.push(if self.starts_exp() { self.exp()? } else { Expr::Omitted(self.span(comma)) });
         }
-        if matches!(out.last(), Some(Expr::Omitted(_))) {
+        if !trailing_ok && matches!(out.last(), Some(Expr::Omitted(_))) {
             return self.fail();
         }
         Ok(out)
@@ -2145,6 +2145,8 @@ impl Ast<'_> {
         let mut color = None;
         let mut mode = None;
         let mut style = None;
+        // BC takes `,color,` and `,,` (nothing after the second comma); VBDOS does not (checker)
+        let mut trailing = false;
         if self.eat(Kw::Comma) {
             if self.starts_exp() && !self.at_box_word() {
                 color = Some(self.exp()?);
@@ -2155,15 +2157,22 @@ impl Ast<'_> {
                     let (name, _) = self.identifier()?;
                     mode = Some(Expr::Name(name, self.span(at)));
                 }
-                if self.eat(Kw::Comma) && self.starts_exp() {
+                if self.eat(Kw::Comma) {
+                    if !self.starts_exp() {
+                        return self.fail();
+                    }
                     style = Some(self.exp()?);
+                } else {
+                    trailing = mode.is_none();
                 }
+            } else if color.is_none() {
+                return self.fail();
             }
         }
         for slot in [color, mode, style] {
             arguments.push(slot.unwrap_or(Expr::Omitted(span)));
         }
-        while arguments.len() > 4 && matches!(arguments.last(), Some(Expr::Omitted(_))) {
+        while arguments.len() > if trailing { 6 } else { 4 } && matches!(arguments.last(), Some(Expr::Omitted(_))) {
             arguments.pop();
         }
         self.runtime("LINE", arguments, span);
@@ -2240,6 +2249,15 @@ impl Ast<'_> {
         Ok(())
     }
 
+    /// The array of a graphics GET/PUT: `a%` or `a%(i)`, never `a%()`.
+    fn transfer_array(&mut self) -> R<Expr> {
+        let target = self.name_ref()?;
+        if matches!(&target, Expr::Apply { arguments, .. } if arguments.is_empty()) {
+            return self.fail();
+        }
+        Ok(target)
+    }
+
     fn get_put(&mut self, k: Kw) -> R<()> {
         let keyword = self.take();
         let span = self.span(keyword);
@@ -2258,11 +2276,11 @@ impl Ast<'_> {
                 arguments.push(Self::stepped(x, step));
                 arguments.push(y);
                 self.expect(Kw::Comma)?;
-                arguments.push(self.name_ref()?);
+                arguments.push(self.transfer_array()?);
                 self.runtime("GET", arguments, span);
             } else {
                 self.expect(Kw::Comma)?;
-                arguments.push(self.name_ref()?);
+                arguments.push(self.transfer_array()?);
                 if self.eat(Kw::Comma) {
                     let at = self.i;
                     let mode = match self.kw() {
@@ -2552,7 +2570,7 @@ impl Ast<'_> {
                     comma?;
                     arguments.push(self.exp()?);
                 }
-                arguments.extend(self.rest()?);
+                arguments.extend(self.rest(k == Kw::PAINT)?);
                 let name = match k {
                     Kw::PSET => "PSET",
                     Kw::PRESET => "PRESET",
@@ -2578,7 +2596,7 @@ impl Ast<'_> {
                         self.expect(Kw::Minus)?;
                         let (x2, y2, _) = self.coordinates()?;
                         arguments.extend([x, y, x2, y2]);
-                        arguments.extend(self.rest()?);
+                        arguments.extend(self.rest(false)?);
                     }
                     self.runtime(if screen { "VIEW_SCREEN" } else { "VIEW" }, arguments, span);
                 }

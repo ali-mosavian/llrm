@@ -35,7 +35,7 @@ def build(items):
     chunks = [[item] for item in groups] + [loose[i:i + BATCH] for i in range(0, len(loose), BATCH)]
     out = []
     for n, chunk in enumerate(chunks):
-        body = "".join(f"{item['text']} ' #{item['id']}\n" for item in chunk)
+        body = "".join(source_line(item, chunk) for item in chunk)
         out.append((f"b{n}.bas", prologue + body + epilogue, [item["id"] for item in chunk]))
     return out
 
@@ -45,7 +45,7 @@ def run_round(chunks, prologue, epilogue, work, tag):
     files = {}
     for n, chunk in enumerate(chunks):
         path = work / f"{tag}{n}.bas"
-        path.write_text(prologue + "".join(f"{item['text']} ' #{item['id']}\n" for item in chunk) + epilogue)
+        path.write_text(prologue + "".join(source_line(item, chunk) for item in chunk) + epilogue)
         files[path] = n
     tasks = [(directory, path) for path in files for directory in FAMILIES.values()]
     os.environ["BCRAW"] = "1"
@@ -55,6 +55,12 @@ def run_round(chunks, prologue, epilogue, work, tag):
     for (directory, path), text in raw.items():
         out.setdefault(files[path], {})[bcprobe.compiler(directory)[0]] = text
     return out
+
+
+def source_line(item, chunk):
+    """One catalog statement; a lone one carries no ' #id comment (a comment after a dangling comma changes VBDOS's verdict)."""
+    tag = "" if len(chunk) == 1 else f" ' #{item['id']}"
+    return f"{item['text']}{tag}\n"
 
 
 def complete(text):

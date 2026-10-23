@@ -22,6 +22,11 @@ FAMILIES = {"qb45": TOOLS / "qb45", "pds71": TOOLS / "pds71", "vbdos": TOOLS / "
 def main():
     index, folder, target = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
     ids = [json.loads(line)["id"] for line in index.read_text().splitlines()]
+    done = json.loads(target.read_text()) if target.exists() else {}
+    limit = int(os.environ.get("SLICE", "1200"))
+    todo = [i for i in ids if str(i) not in done][:limit]
+    print(f"{len(done)} done, {len(todo)} in this slice", file=sys.stderr)
+    ids = todo
     files = {folder / f"p{i:05d}.bas": i for i in ids}
     tasks = [(d, f) for f in files for d in FAMILIES.values()]
     os.environ["BCRAW"] = "1"
@@ -39,7 +44,8 @@ def main():
         if not messages and int(__import__("re").search(r"(\d+)\s+Severe", text).group(1)):
             messages = ["UNPLACED"]
         results[i][family] = messages or None
-    target.write_text(json.dumps(results))
+    done.update({str(i): v for i, v in results.items()})
+    target.write_text(json.dumps(done))
 
 
 if __name__ == "__main__":

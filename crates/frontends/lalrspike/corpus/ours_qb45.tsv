@@ -444,18 +444,18 @@
 443	ok	
 444	ok	
 445	ok	
-446	ok	
+446	syntax	15:14 syntax error
 447	ok	
 448	ok	
 449	ok	
 450	ok	
-451	ok	
+451	syntax	15:25 syntax error
 452	ok	
 453	ok	
 454	ok	
 455	ok	
 456	ok	
-457	ok	
+457	syntax	15:21 syntax error
 458	ok	
 459	ok	
 460	ok	
@@ -474,7 +474,7 @@
 473	ok	
 474	ok	
 475	ok	
-476	ok	
+476	syntax	15:25 syntax error
 477	ok	
 478	ok	
 479	ok	
@@ -482,8 +482,8 @@
 481	ok	
 482	ok	
 483	ok	
-484	ok	
-485	ok	
+484	syntax	15:29 syntax error
+485	syntax	15:18 syntax error
 486	ok	
 487	ok	
 488	ok	
@@ -667,67 +667,67 @@
 666	semantic	15:27 Type mismatch
 667	semantic	15:0 Syntax error
 668	ok	
-669	syntax	15:14 syntax error
-670	syntax	15:15 syntax error
-671	ok	
+669	semantic	15:0 Syntax error
+670	semantic	15:0 Syntax error
+671	semantic	15:0 Syntax error
 672	ok	
-673	ok	
+673	semantic	15:0 Syntax error
 674	ok	
-675	syntax	15:17 syntax error
-676	ok	
+675	semantic	15:0 Syntax error
+676	semantic	15:0 Syntax error
 677	ok	
-678	ok	
+678	semantic	15:0 Syntax error
 679	ok	
-680	syntax	15:17 syntax error
+680	semantic	15:0 Syntax error
 681	ok	
 682	ok	
 683	ok	
 684	ok	
-685	syntax	15:18 syntax error
-686	syntax	15:19 syntax error
-687	ok	
+685	semantic	15:0 Syntax error
+686	semantic	15:0 Syntax error
+687	semantic	15:0 Syntax error
 688	ok	
-689	ok	
+689	semantic	15:0 Syntax error
 690	ok	
-691	syntax	15:21 syntax error
-692	ok	
+691	semantic	15:0 Syntax error
+692	semantic	15:0 Syntax error
 693	ok	
-694	ok	
+694	semantic	15:0 Syntax error
 695	ok	
-696	syntax	15:21 syntax error
+696	semantic	15:0 Syntax error
 697	ok	
 698	ok	
 699	ok	
-700	ok	
-701	ok	
-702	ok	
-703	ok	
-704	ok	
-705	ok	
-706	ok	
-707	ok	
+700	semantic	15:0 Syntax error
+701	semantic	15:0 Syntax error
+702	semantic	15:0 Syntax error
+703	semantic	15:0 Syntax error
+704	semantic	15:0 Syntax error
+705	semantic	15:0 Syntax error
+706	semantic	15:0 Syntax error
+707	semantic	15:0 Syntax error
 708	semantic	15:7 Type mismatch
 709	semantic	15:7 Type mismatch
-710	ok	
-711	ok	
-712	ok	
-713	ok	
-714	ok	
-715	ok	
-716	ok	
-717	ok	
+710	semantic	15:0 Syntax error
+711	semantic	15:0 Syntax error
+712	semantic	15:0 Syntax error
+713	semantic	15:0 Syntax error
+714	semantic	15:0 Syntax error
+715	semantic	15:0 Syntax error
+716	semantic	15:0 Syntax error
+717	semantic	15:0 Syntax error
 718	semantic	15:10 Type mismatch
 719	semantic	15:10 Type mismatch
-720	ok	
-721	ok	
+720	semantic	15:0 Syntax error
+721	semantic	15:0 Syntax error
 722	ok	
-723	ok	
-724	ok	
+723	semantic	15:0 Syntax error
+724	semantic	15:0 Syntax error
 725	semantic	15:17 Type mismatch
 726	semantic	15:17 Type mismatch
-727	ok	
-728	ok	
-729	ok	
+727	semantic	15:0 Syntax error
+728	semantic	15:0 Syntax error
+729	semantic	15:0 Syntax error
 730	semantic	15:20 String expression required
 731	semantic	15:20 String expression required
 732	semantic	15:0 Syntax error
@@ -738,94 +738,94 @@
 737	semantic	15:5 String expression required
 738	semantic	15:5 String expression required
 739	syntax	15:7 syntax error
-740	ok	
-741	ok	
-742	ok	
-743	ok	
-744	ok	
-745	ok	
-746	ok	
-747	ok	
-748	ok	
-749	ok	
-750	ok	
-751	ok	
-752	semantic	15:5 Type mismatch
-753	semantic	15:5 Type mismatch
-754	ok	
-755	ok	
-756	ok	
-757	ok	
-758	ok	
-759	ok	
-760	ok	
-761	ok	
-762	semantic	15:8 Type mismatch
-763	semantic	15:8 Type mismatch
-764	ok	
-765	ok	
-766	ok	
-767	ok	
-768	ok	
-769	ok	
-770	ok	
-771	ok	
-772	semantic	15:13 Type mismatch
-773	semantic	15:13 Type mismatch
-774	ok	
-775	ok	
-776	ok	
-777	ok	
-778	ok	
-779	ok	
-780	ok	
-781	ok	
-782	semantic	15:16 Type mismatch
-783	semantic	15:16 Type mismatch
-784	ok	
-785	ok	
-786	ok	
+740	syntax	15:26 syntax error
+741	syntax	15:30 syntax error
+742	syntax	15:30 syntax error
+743	syntax	15:34 syntax error
+744	syntax	15:25 syntax error
+745	syntax	15:26 syntax error
+746	syntax	15:26 syntax error
+747	syntax	15:26 syntax error
+748	syntax	15:32 syntax error
+749	syntax	15:31 syntax error
+750	syntax	15:26 syntax error
+751	syntax	15:27 syntax error
+752	syntax	15:27 syntax error
+753	syntax	15:26 syntax error
+754	syntax	15:25 syntax error
+755	syntax	15:26 syntax error
+756	syntax	15:26 syntax error
+757	syntax	15:26 syntax error
+758	syntax	15:32 syntax error
+759	syntax	15:31 syntax error
+760	syntax	15:26 syntax error
+761	syntax	15:27 syntax error
+762	syntax	15:27 syntax error
+763	syntax	15:26 syntax error
+764	syntax	15:25 syntax error
+765	syntax	15:26 syntax error
+766	syntax	15:26 syntax error
+767	syntax	15:26 syntax error
+768	syntax	15:32 syntax error
+769	syntax	15:31 syntax error
+770	syntax	15:26 syntax error
+771	syntax	15:27 syntax error
+772	syntax	15:27 syntax error
+773	syntax	15:26 syntax error
+774	syntax	15:25 syntax error
+775	syntax	15:26 syntax error
+776	syntax	15:26 syntax error
+777	syntax	15:26 syntax error
+778	syntax	15:32 syntax error
+779	syntax	15:31 syntax error
+780	syntax	15:26 syntax error
+781	syntax	15:27 syntax error
+782	syntax	15:27 syntax error
+783	syntax	15:26 syntax error
+784	syntax	15:26 syntax error
+785	syntax	15:25 syntax error
+786	syntax	15:24 syntax error
 787	semantic	15:20 Array not defined
 788	syntax	15:20 syntax error
 789	syntax	15:26 syntax error
-790	ok	
-791	semantic	15:19 Syntax error
-792	semantic	15:19 Syntax error
-793	semantic	15:19 Syntax error
-794	semantic	15:19 Syntax error
-795	semantic	15:19 Syntax error
-796	ok	
-797	semantic	15:23 Syntax error
-798	semantic	15:23 Syntax error
-799	semantic	15:23 Syntax error
-800	semantic	15:23 Syntax error
-801	semantic	15:23 Syntax error
-802	ok	
-803	ok	
-804	ok	
-805	ok	
-806	ok	
-807	ok	
-808	ok	
-809	ok	
-810	semantic	15:5 Type mismatch
-811	semantic	15:5 Type mismatch
-812	ok	
-813	ok	
-814	ok	
-815	ok	
-816	ok	
-817	ok	
-818	ok	
-819	ok	
-820	semantic	15:8 Type mismatch
-821	semantic	15:8 Type mismatch
-822	ok	
-823	ok	
-824	ok	
+790	syntax	15:18 syntax error
+791	syntax	15:18 syntax error
+792	syntax	15:18 syntax error
+793	syntax	15:18 syntax error
+794	syntax	15:18 syntax error
+795	syntax	15:18 syntax error
+796	syntax	15:22 syntax error
+797	syntax	15:22 syntax error
+798	syntax	15:22 syntax error
+799	syntax	15:22 syntax error
+800	syntax	15:22 syntax error
+801	syntax	15:22 syntax error
+802	syntax	15:17 syntax error
+803	syntax	15:18 syntax error
+804	syntax	15:18 syntax error
+805	syntax	15:18 syntax error
+806	syntax	15:24 syntax error
+807	syntax	15:23 syntax error
+808	syntax	15:18 syntax error
+809	syntax	15:19 syntax error
+810	syntax	15:19 syntax error
+811	syntax	15:18 syntax error
+812	syntax	15:17 syntax error
+813	syntax	15:18 syntax error
+814	syntax	15:18 syntax error
+815	syntax	15:18 syntax error
+816	syntax	15:24 syntax error
+817	syntax	15:23 syntax error
+818	syntax	15:18 syntax error
+819	syntax	15:19 syntax error
+820	syntax	15:19 syntax error
+821	syntax	15:18 syntax error
+822	syntax	15:18 syntax error
+823	syntax	15:17 syntax error
+824	syntax	15:16 syntax error
 825	semantic	15:12 Array not defined
 826	syntax	15:12 syntax error
-827	syntax	15:20 syntax error
+827	syntax	15:18 syntax error
 828	ok	
 829	ok	
 830	ok	
