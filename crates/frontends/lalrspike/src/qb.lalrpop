@@ -272,6 +272,7 @@ extern {
         "ext" => Tok::Ext,
         "dynamic" => Tok::Dynamic,
         "static" => Tok::Static,
+        "fnword" => Tok::FnWord,
     }
 }
 
@@ -463,6 +464,8 @@ Declaration: Tree = {
     // PRIVATE (QuickrBASIC) is a name before SUB and FUNCTION, checked later
     <x:Ident> <p:ProcStmt> => p,
     "tkDEF" <n:Ident> <p:Parms> <e:("tkEQ" <Exp>)?> => Tree::node("DEFFN", vec![n, p, Tree::opt(e)]),
+    // `DEF FN twice(x)`: a space after FN
+    "tkDEF" "fnword" <n:Ident> <p:Parms> <e:("tkEQ" <Exp>)?> => Tree::node("DEFFN", vec![n, p, Tree::opt(e)]),
     "tkDEF" "tkSEG" <e:("tkEQ" <Exp>)?> => Tree::node("DEFSEG", vec![Tree::opt(e)]),
 };
 
@@ -750,10 +753,12 @@ NameRef: Tree = {
     <i:Ident> => Tree::node("Name", vec![i]),
     NameRefApplied,
     <r:NameRef> "period" <i:FieldName> => Tree::node("Field", vec![r, i]),
+    "fnword" <i:Ident> => Tree::node("Name", vec![i]),
     // a function's name used as a variable
     <k:FnKeyword> => Tree::node("Name", vec![k]),
 };
 NameRefApplied: Tree = {
+    "fnword" <i:Ident> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("Apply", vec![i, a]),
     <i:Ident> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("Apply", vec![i, a]),
     <r:NameRef> "period" <i:FieldName> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("FieldApply", vec![r, i, a]),
 };
