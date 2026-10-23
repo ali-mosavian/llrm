@@ -32,5 +32,6 @@ mod switch_dags;
 mod switches;
 mod type_actions;
 mod wide_counts;
+mod wide_division;
 mod wide_shifts;
 mod x86_conditions;

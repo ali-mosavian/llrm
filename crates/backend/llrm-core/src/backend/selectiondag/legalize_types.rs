@@ -67,6 +67,8 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// The target whose routines a division calls (`None`: no library calls).
+    target: Option<&'a dyn llrm_target::Target>,
 }
 
 impl<'a> TypeLegalizer<'a> {
@@ -82,7 +84,17 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::new(),
             promoted: HashMap::new(),
             expanded: HashMap::new(),
+            target: None,
         }
+    }
+
+    /// The target whose inline routines `i64` division calls (SD19).
+    pub fn with_target(
+        mut self,
+        target: &'a dyn llrm_target::Target,
+    ) -> TypeLegalizer<'a> {
+        self.target = Some(target);
+        self
     }
 
     fn id(
@@ -602,6 +614,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             ISD::Mul => self.expand_mul(value, half)?,
+            op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => self.expand_division(value, op, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
@@ -905,6 +918,52 @@ impl<'a> TypeLegalizer<'a> {
         let width = self.dag.get_constant(u128::from(half.size_in_bits()), half);
         let hi_plus = self.dag.get_node(ISD::Add, half, &[hi_count, width]);
         (self.dag.get_select(half, lo_not_zero, lo_count, hi_plus), zero)
+    }
+
+    /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes
+    /// (`ExpandDivRemLibCall`): a call to the target's inline `i64` divide
+    /// routine (`divide_routine`), operands and results in the registers it
+    /// states (SD19). The divisor is "narrow" when its high dword is the
+    /// constant 0, which has a cheaper routine.
+    fn expand_division(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        use super::libcall::{CallEnv, Place, Returned, lib_call};
+        let vt = self.dag.value_type(value);
+        let Some(arch) = self.target else {
+            return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand a division without a target" });
+        };
+        let signed = matches!(op, ISD::SDiv | ISD::SRem);
+        let wants_quotient = matches!(op, ISD::SDiv | ISD::UDiv);
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
+            (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let wide = self.dag.constant(divisor_hi) != Some(0);
+        let Ok(routine) = arch.divide_routine(signed, wide) else {
+            return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
+        };
+        let mut args = vec![
+            (dividend_lo, Place::Register(routine.dividend[0])),
+            (dividend_hi, Place::Register(routine.dividend[1])),
+            (divisor_lo, Place::Register(routine.divisor[0])),
+        ];
+        if wide {
+            args.push((divisor_hi, Place::Register(routine.divisor[1])));
+        }
+        let returns: Vec<Returned> =
+            [routine.quotient[0], routine.quotient[1], routine.remainder[0], routine.remainder[1]]
+                .into_iter()
+                .map(|reg| Returned { reg, vt: half })
+                .collect();
+        let pointer = self.dag.config().pointer;
+        let callee = self.dag.get_target_external_symbol(pointer, routine.name);
+        let root = self.dag.entry_node();
+        let env = CallEnv { arch, pointer };
+        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
     /// `ExpandIntegerOperand`.
