@@ -166,6 +166,7 @@ pub mod dfajumpthreading;
 mod dfajumpthreading_tests;
 pub mod earlycse;
 pub mod edges;
+pub mod emptyblocks;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
