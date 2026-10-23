@@ -277,7 +277,8 @@ fn test_source_owned_jump_to_fallthrough_becomes_an_anchor() {
 
     let result = threaded(&source);
 
-    // The block it fell into is one block with it (L1515): the anchor, then the return.
+    // The block it fell into is one block with it (L1515): the anchor, then the
+    // return.
     let kept = &result.blocks[0].insns;
     assert_eq!(kept.len(), 2);
     assert_eq!(kept[0].covers, Some((1, 4)));
@@ -856,7 +857,15 @@ fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
         count(&result, Operation::Compare),
         count(&source, Operation::Compare),
         "{:?}",
-        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.iter().map(|i| i.what.as_ref().map(|w| format!("{:?}", w.op))).collect::<Vec<_>>())).collect::<Vec<_>>()
+        result
+            .blocks
+            .iter()
+            .map(|b| (
+                b.at,
+                b.succ.clone(),
+                b.insns.iter().map(|i| i.what.as_ref().map(|w| format!("{:?}", w.op))).collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>()
     );
 }
 

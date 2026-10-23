@@ -408,7 +408,9 @@ impl<'a> Folder<'a> {
             return false;
         }
         for (to, chance) in self.odds.chances(block.at, &block.succ) {
-            self.odds.taken.insert((previous.at, to), (chance * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
+            self.odds
+                .taken
+                .insert((previous.at, to), (chance * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
         }
         for to in block.succ.iter() {
             if let Some(entering) = self.preds.get_mut(to) {
