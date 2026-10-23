@@ -533,10 +533,13 @@ impl Emitter<'_, '_> {
                 Some(k) if memory_dest => dests.get(k).cloned(),
                 _ => rest.next(),
             };
-            // a shift by `cl` reads `CL` without an operand: the `CopyToReg`
-            // glued to it wrote the register
-            let implicit =
-                || name.ends_with("rCL").then(|| Loc::Reg(Reg { register: llrm_lir::registers::RegId::CL, width: 1 }));
+            // a shift by `cl` has the amount as the value the `CopyToReg` glued
+            // to it wrote to `CL`; the form pins that source to `cx`
+            let implicit = || {
+                name.ends_with("rCL")
+                    .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
+                    .flatten()
+            };
             sources.push(
                 taken.or_else(implicit).ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?,
             );
@@ -735,7 +738,10 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_"))
+        self.glue_reaches(n, |name| {
+            let name = name.split('|').next().unwrap_or(name);
+            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+        })
     }
 
     /// Whether the `CopyToReg` node `n` passes an argument in a register to

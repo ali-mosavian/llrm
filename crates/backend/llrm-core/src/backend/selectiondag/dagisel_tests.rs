@@ -118,7 +118,7 @@ fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
             |node| (node.opcode == ISD::CopyToReg
                 && matches!(
                     dag.nodes()[node.ops[1].node as usize].data,
-                    super::NodeData::Register(r) if r == u32::from(llrm_dagisel::generated::ids::x86::CL)
+                    super::NodeData::PhysReg(llrm_lir::registers::RegId::CL)
                 ))
             .then(|| node.ops[2]),
         );
