@@ -841,7 +841,7 @@ impl InlineSpiller<'_> {
         insns: &[Arc<Insn>],
     ) -> bool {
         self.tables.orders.borrow().get(&reg).is_some_and(|order| order.first() == Some(&RegId::MM0))
-            || crate::backend::allocate::rfp_on() && widest_operand(insns, reg) == Some(10)
+            || widest_operand(insns, reg) == Some(10)
     }
 
     /// The cell of the home all siblings share, as wide as `reg`'s accesses.

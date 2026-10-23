@@ -521,10 +521,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Eliminate PHI nodes for register allocation",
-        Missing,
-        "phielim.rs, phielimination.rs",
+        Match,
+        "phielimination.rs, phielim.rs (edge splitting)",
         "",
-        "w-1; 2026-11-13: registry phielim@4 is ours-own; a phi from a non-predecessor is an error (verifier rule, #3850). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "translated: `LowerPHINode`, `SplitPHIEdges`, `LoweredPHIs`, plain `findPHICopyInsertPoint`; a phi from a non-predecessor is an error (#3850); the old lowering and the non-RFP route (P1, P4) are deleted; DEVIATEs P2, P3, P6 (phielimination.rs header). Not translated: EH-pad and INLINEASM_BR insert points (w-1, 2026-11-14). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Two-Address instruction pass",

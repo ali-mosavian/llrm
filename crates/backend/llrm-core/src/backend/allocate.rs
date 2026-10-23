@@ -1499,43 +1499,6 @@ pub fn greedy_rewritten(
     ))
 }
 
-/// Whether greedy allocates the x87 values into FP0..FP6 and the stackifier
-/// follows it, as the pin does: on unless `LLRM_NO_RFP` (the old floatassign
-/// route, until it is deleted).
-pub fn rfp_on() -> bool {
-    if let Some(forced) = RFP_ON.with(std::cell::Cell::get) {
-        return forced;
-    }
-    !llrm_support::env_flag!("LLRM_NO_RFP")
-}
-
-thread_local! {
-    static RFP_ON: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// The RFP route forced on or off for the life of the value, on this thread:
-/// for tests, including those of other crates.
-pub struct RfpOn;
-
-impl RfpOn {
-    pub fn set() -> Self {
-        RFP_ON.with(|one| one.set(Some(true)));
-        Self
-    }
-
-    /// The old route: floatassign before allocation.
-    pub fn off() -> Self {
-        RFP_ON.with(|one| one.set(Some(false)));
-        Self
-    }
-}
-
-impl Drop for RfpOn {
-    fn drop(&mut self) {
-        RFP_ON.with(|one| one.set(None));
-    }
-}
-
 /// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
 pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
 
@@ -2907,7 +2870,6 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
-    use crate::backend::regalloc_input::through;
     use crate::backend::rewriter::{_dead_insertions, _placed, _settled};
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::{Imm, Reg};
@@ -4030,35 +3992,6 @@ mod tests {
             BTreeSet::from([RegId::AX, RegId::BX, RegId::CX, RegId::DX])
         );
     }
-    /// Ten arrays walked by pointer: the loop preheader's parallel copy keeps
-    /// a rematerialized `lea` live across the whole group, longer than a
-    /// reload's range, so it was spillable; spilling it made the same `lea`
-    /// again, a new value every pass, and compilation did not finish (#104).
-    #[test]
-    fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
-        // Without the coalescer: the loop's parallel copy is what the allocator
-        // is handed to stress, and a coalescer that joins its copies (LLVM's
-        // does) leaves none.
-        let (body, phases) = crate::backend::phielim::with_old_lowering(|| {
-            crate::backend::regalloc_input::before_phase_skipping(
-                crate::backend::regalloc_input::Calls::C,
-                "walks10.ll",
-                "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum",
-                "386",
-                "RegAlloc",
-                &["Coalescer"],
-            )
-        });
-        let longest =
-            body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
-        assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
-
-        let before = body.next_value();
-        let after = through(body, phases).expect("allocates");
-        let made = after.next_value() - before;
-        assert!(made < 1000, "{made} values made for ten walks");
-    }
-
     /// An x87 value placed in FP0..FP6 is named by the register, with no value
     /// left on the instruction (`fpregs` numbers it again): it stayed a value
     /// the stackifier could not tell from another in the same register.
