@@ -3,9 +3,9 @@ use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
 
 /// A call that returns an `i64` is split by the builder into
-/// `extract_element x, 0` and `extract_element x, 1`. The operand's halves are the answer: here a
-/// wide load, whose low half is at the address and high half just above it.
-/// (`getNode` already folds an extract of a `build_pair`.)
+/// `extract_element x, 0` and `extract_element x, 1`. The operand's halves are
+/// the answer: here a wide load, whose low half is at the address and high half
+/// just above it. (`getNode` already folds an extract of a `build_pair`.)
 #[test]
 fn extract_element_of_a_wide_value_is_one_of_its_halves() {
     let (half_vt, wide_vt, step) = (EVT::I32, EVT::I64, 4);
@@ -26,6 +26,9 @@ fn extract_element_of_a_wide_value_is_one_of_its_halves() {
         let (lo, hi) = (dag.operand(root, 0), dag.operand(root, 1));
         assert_eq!((dag.opcode(lo), dag.operand(lo, 1)), (ISD::Load, ptr), "the low half is at the address");
         let address = dag.operand(hi, 1);
-        assert_eq!((dag.opcode(hi), dag.opcode(address), dag.constant(dag.operand(address, 1))), (ISD::Load, ISD::Add, Some(step)));
+        assert_eq!(
+            (dag.opcode(hi), dag.opcode(address), dag.constant(dag.operand(address, 1))),
+            (ISD::Load, ISD::Add, Some(step))
+        );
     }
 }
