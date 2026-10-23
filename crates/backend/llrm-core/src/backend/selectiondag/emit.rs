@@ -589,7 +589,7 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name))
+        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_"))
     }
 
     /// Whether the `CopyToReg` node `n` passes an argument in a register to
@@ -687,6 +687,45 @@ impl Emitter<'_, '_> {
                     ..Semantics::new(Operation::Call)
                 };
                 self.push_call(what, None);
+                return Ok(Some(()));
+            }
+            // A string move or fill repeated ECX times: the matcher names ESI,
+            // EDI, ECX (and the stored AL, AX or EAX) with `CopyToReg` around
+            // it, which the form pins.
+            "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" => {
+                use llrm_lir::registers::RegId;
+                let (count, source, destination) =
+                    (self.accumulated(RegId::ECX)?, self.accumulated(RegId::ESI)?, self.accumulated(RegId::EDI)?);
+                let (source_after, destination_after, emptied) = (self.fresh(4), self.fresh(4), self.fresh(4));
+                self.push(
+                    Operation::Copy,
+                    &name[4..9].to_ascii_lowercase(),
+                    vec![
+                        Loc::Mem(Mem::new(None, 0)),
+                        Loc::Held(source_after),
+                        Loc::Held(destination_after),
+                        Loc::Held(emptied),
+                    ],
+                    vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination)],
+                );
+                return Ok(Some(()));
+            }
+            "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" => {
+                use llrm_lir::registers::RegId;
+                let stored = match name.as_bytes()[8] {
+                    b'B' => RegId::AL,
+                    b'W' => RegId::AX,
+                    _ => RegId::EAX,
+                };
+                let (value, count, destination) =
+                    (self.accumulated(stored)?, self.accumulated(RegId::ECX)?, self.accumulated(RegId::EDI)?);
+                let (destination_after, emptied) = (self.fresh(4), self.fresh(4));
+                self.push(
+                    Operation::Fill,
+                    &name[4..9].to_ascii_lowercase(),
+                    vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(destination_after), Loc::Held(emptied)],
+                    vec![Loc::Held(value), Loc::Held(count), Loc::Held(destination)],
+                );
                 return Ok(Some(()));
             }
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
