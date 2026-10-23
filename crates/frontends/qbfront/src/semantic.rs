@@ -8769,6 +8769,9 @@ impl Compiler {
         if intrinsics::unsupported(name, self.dialect) {
             return self.fail(format!("{name} is not supported"));
         }
+        if name.ends_with('@') {
+            return self.fail(format!("{name}: CURRENCY is not supported"));
+        }
         Ok(())
     }
 

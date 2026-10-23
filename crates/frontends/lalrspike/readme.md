@@ -63,15 +63,19 @@ takes:
 
 | corpus | some BC accepts | grammar takes them | grammar refuses |
 |---|---|---|---|
-| QB 4.5 examples, GORILLA, NIBBLES, VBDOS and PDS sources (128) | 123 | 120 | 3 |
-| the repo's `.bas` files (599) | 560 | 559 | 1 |
+| QB 4.5 examples, GORILLA, NIBBLES, VBDOS and PDS sources (128) | 123 | 123 | 0 |
+| the repo's `.bas` files (599) | 560 | 560 | 0 |
 | the test sources' programs (487) | 363 | 363 | 0 |
 | mgl, in place so `$INCLUDE`s resolve (180) | 135 | 135 | 0 |
 
-Of the 4 refused, all are the lexer's (shared with the table-driven parser,
-so not the grammar's): the `@` currency suffix (`det@`, 2 files), VBDOS's
-doubled quote inside a string (`""""`), and `1_` as a line continuation with
-no space before the `_`. Where every BC refuses and the grammar accepts (about
+The last four refusals were the lexer's, shared with the table-driven parser:
+the `@` currency suffix on names and numbers (PDS and VBDOS), VBDOS's doubled
+quote inside a string, and `1_` as a continuation with no space. They are fixed
+in `qbfront`'s lexer, each only under the dialects whose BC takes it, with
+regression tests; the semantic layer refuses a CURRENCY name or number, as the
+compiler has no such type.
+
+Where every BC refuses and the grammar accepts (about
 140): `OPTION EXPLICIT` in QB 4.5, dialect forms in the wrong dialect, missing
 includes, `TYPE not defined`, `Duplicate definition`, `ON PLAY` without the
 event option, and a few syntax errors a BC reports that the grammar is too

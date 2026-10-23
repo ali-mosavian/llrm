@@ -82,6 +82,22 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `det@`: BC 7.1 and VBDOS have a CURRENCY type, whose suffix is `@`. The
+    /// compiler has none, so semantic analysis refuses such a name.
+    pub fn currency_suffix(self) -> bool {
+        matches!(self, Self::Pds71 | Self::VbDos)
+    }
+
+    /// VBDOS BC reads `""` in a string as one quote.
+    pub fn quote_escape(self) -> bool {
+        self == Self::VbDos
+    }
+
+    /// VBDOS BC continues a line at an `_` straight after a number, `1_`.
+    pub fn tight_continuation(self) -> bool {
+        self == Self::VbDos
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr
