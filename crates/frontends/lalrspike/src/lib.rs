@@ -40,22 +40,11 @@ pub mod qb {
     lalrpop_util::lalrpop_mod!(pub grammar, "/qb.rs");
 }
 
-#[allow(clippy::all, unused)]
-pub mod qb2 {
-    lalrpop_util::lalrpop_mod!(pub grammar, "/qb2.rs");
-}
-
 type QbError = lalrpop_util::ParseError<usize, qb_tokens::Tok, qb_tokens::Never>;
 
-/// The QB token stream parsed to a generic tree by the generated grammar, or
-/// where it stopped.
+/// The QB token stream parsed to a generic tree, or where it stopped.
 pub fn parse_qb(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
     qb::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
-}
-
-/// The same by the hand-written grammar.
-pub fn parse_qb_by_hand(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
-    qb2::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
 }
 
 fn qb_error(tokens: &[qbfront::generated_parser::Token], error: QbError) -> String {

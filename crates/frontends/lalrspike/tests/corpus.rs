@@ -26,10 +26,9 @@ fn every_nib_program_the_hand_parser_takes_the_lalr_parser_takes() {
     }
 }
 
-/// A function's name used as a variable, and QuickrBASIC's `PRIVATE`: the
-/// table-driven parser takes them through contextual names and token
-/// prepasses the grammar does not yet have.
-const NOT_YET: [&str; 2] = ["fixtures/seg-any.bas", "src/semantic/prelude.bas"];
+/// QuickrBASIC's `x += 1`, a token prepass in the table-driven parser. As a
+/// production it clashes with `foo -1`, a call with a negative argument.
+const NOT_YET: [&str; 1] = ["src/semantic/prelude.bas"];
 
 #[test]
 fn every_qb_program_the_table_driven_parser_takes_the_lalr_parser_takes() {
