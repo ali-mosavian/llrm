@@ -69,6 +69,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
+| [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5): plan |
