@@ -52,6 +52,20 @@ def verdict(out):
     return ("refused " if int(severe.group(1)) else "ok ") + first
 
 
+def errors(out):
+    """Every error BC listed: (code, source text, caret column, message), and the loose ones ("Label not defined: X")."""
+    rows = out.splitlines()
+    found, loose = [], []
+    for i, row in enumerate(rows):
+        match = re.match(r"\s*([0-9A-F]{4})\s+([0-9A-F]{4})\s{1,4}(.*)$", row)
+        if match and i + 1 < len(rows) and "^" in rows[i + 1]:
+            caret = rows[i + 1].index("^")
+            found.append((match.group(1), match.group(3).rstrip(), caret, rows[i + 1][caret + 1:].strip()))
+        elif re.match(r"^[A-Z][A-Za-z ]+: ", row) and not row.startswith("Microsoft"):
+            loose.append(row.strip())
+    return found, loose
+
+
 def compiler(bc_dir):
     """BC's path on V:, by the family's layout: QB 4.5 beside the root, PDS 7.1 in BINB, VBDOS in BIN."""
     if (bc_dir / "BINB" / "BC.EXE").exists():
@@ -62,9 +76,9 @@ def compiler(bc_dir):
 
 
 def switches(source):
-    """The switches dosbatch gives: error trapping needs /E and /X."""
+    """The switches dosbatch gives: error trapping needs /E and /X; event trapping /W."""
     text = source.read_bytes().upper()
-    return " /E /X" if b"ON ERROR" in text or b"RESUME" in text else ""
+    return (" /E /X" if b"ON ERROR" in text or b"RESUME" in text else "") + (" /W" if b"ON " in text or b"KEY" in text or b"TIMER" in text or b"PLAY" in text or b"PEN" in text or b"STRIG" in text or b"COM(" in text else "")
 
 
 class Machine:
@@ -166,7 +180,7 @@ def probe(tasks, root=None, progress=lambda n: None):
                 text = out.read_bytes().decode("latin-1")
                 if os.environ.get("BCTIME"):
                     print(f"{compiler(bc_dir)[0]} {source.name}: emulated_ms={end.get('ms')} cpu_ms={end.get('cpu_ms')}", file=sys.stderr)
-                answer = verdict(text)
+                answer = verdict(text) if not os.environ.get('BCRAW') else text
             with lock:
                 results[(bc_dir, source)] = answer
             progress(1)

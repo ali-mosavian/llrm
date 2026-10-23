@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use qbfront::generated_parser::tables;
 use qbfront::generated_parser::{Token, TokenKind};
 use qbfront::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, ExitTarget, FileMode, Literal, Module, Parameter, PrintItem,
+    Binary, Bound, CaseItem, Declaration, Expr, ExitTarget, FileAccess, FileLock, FileMode, Literal, Module, Parameter, PrintItem,
     PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 use qbfront::Dialect;
@@ -42,7 +42,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseErr
     if dialect.format_strings() {
         return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
     }
-    let tokens = crate::qb_lexer::lex_with(source, dialect, true).map_err(qbfront::ParseError::from)?;
+    let tokens = crate::qb_scan::scan(source, dialect).map_err(qbfront::ParseError::from)?;
     let (tokens, volatile_at) = without_volatile(tokens);
     let mut kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
     // `FN twice`: FN written apart from the name it prefixes
@@ -57,6 +57,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseErr
         i: 0,
         injected: None,
         volatile_at,
+        dialect,
         dynamic_arrays: false,
         colon_pending: false,
         out: Vec::new(),
@@ -128,6 +129,7 @@ struct Ast<'a> {
     /// A primary already read, for `foo (a) * b`: the next `prim` returns it.
     injected: Option<Expr>,
     volatile_at: BTreeSet<(usize, usize)>,
+    dialect: Dialect,
     /// `'$DYNAMIC` is in force.
     dynamic_arrays: bool,
     /// A line number labelled the statement after it: a `:` stands between them.
@@ -1304,7 +1306,9 @@ impl Ast<'_> {
         } else {
             None
         };
-        self.expect(Kw::NewLine)?;
+        if !(self.eat(Kw::NewLine) || self.separator()) {
+            return self.fail();
+        }
         let body = self.collect_until(|ast| ast.is(Kw::LOOP))?;
         self.i += 1;
         let post = if self.eat(Kw::WHILE) {
@@ -1325,7 +1329,9 @@ impl Ast<'_> {
         let keyword = self.take();
         self.expect(Kw::CASE)?;
         let selector = self.exp()?;
-        self.expect(Kw::NewLine)?;
+        if !(self.eat(Kw::NewLine) || self.separator()) {
+            return self.fail();
+        }
         let mut arms = Vec::new();
         let mut otherwise = Vec::new();
         loop {
@@ -1374,14 +1380,68 @@ impl Ast<'_> {
         Ok(())
     }
 
+    /// One DATA item: a number where it is plainly one, else the text (a quoted item without its quotes).
+    fn data_item(&self, item: &str, span: Span) -> Expr {
+        if let Some(rest) = item.strip_prefix('"') {
+            return Expr::Literal(Literal::String(rest.split('"').next().unwrap_or("").to_owned()), span);
+        }
+        let (sign, digits) = match item.as_bytes().first() {
+            Some(b'-') => (Some(Unary::Negative), &item[1..]),
+            Some(b'+') => (Some(Unary::Positive), &item[1..]),
+            _ => (None, item),
+        };
+        if digits.as_bytes().first().is_some_and(|b| b.is_ascii_digit() || *b == b'.') {
+            if let Ok(tokens) = crate::qb_scan::scan(digits, self.dialect) {
+                if let [Token { kind, .. }, Token { kind: TokenKind::Reserved(_), .. }] = tokens.as_slice() {
+                    let literal = match kind {
+                        TokenKind::Integer(value, suffix) => Some(Expr::Literal(
+                            Literal::Integer(*value, if *suffix == Some('&') { TypeName::Long } else { TypeName::Integer }),
+                            span,
+                        )),
+                        TokenKind::Real(text, suffix) => Some(Expr::Literal(
+                            Literal::Real(text.clone(), if *suffix == Some('#') { TypeName::Double } else { TypeName::Single }),
+                            span,
+                        )),
+                        _ => None,
+                    };
+                    if let Some(literal) = literal {
+                        return match sign {
+                            Some(op) => Expr::Unary { op, operand: Box::new(literal), span },
+                            None => literal,
+                        };
+                    }
+                }
+            }
+        }
+        Expr::Literal(Literal::String(item.to_owned()), span)
+    }
+
+    /// DATA's text as written: the items between its commas, a quoted one with its quotes dropped.
     fn data_statement(&mut self) -> R<()> {
         let keyword = self.take();
+        let raw_at = self.i;
+        let TokenKind::String(raw) = &self.tokens[raw_at].kind else { return self.fail() };
+        self.i += 1;
+        let origin = self.span(raw_at);
         let mut values = Vec::new();
+        let bytes = raw.as_bytes();
+        let mut from = 0;
         loop {
-            values.push(self.exp()?);
-            if !self.eat(Kw::Comma) {
+            let mut at = from;
+            let mut quoted = false;
+            while at < bytes.len() && (quoted || bytes[at] != b',') {
+                if bytes[at] == b'"' {
+                    quoted = !quoted;
+                }
+                at += 1;
+            }
+            let item = raw[from..at].trim();
+            let span = Span { line: origin.line, start: origin.start + from, end: origin.start + at };
+            values.push(self.data_item(item, span));
+            if at >= bytes.len() {
                 break;
             }
+            from = at + 1;
         }
         self.out.push(Statement::Data { values, span: self.span(keyword) });
         Ok(())
@@ -1906,7 +1966,7 @@ impl Ast<'_> {
         let mut using = None;
         let mut items: Vec<PrintItem> = Vec::new();
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
-            if k == Kw::PRINT && using.is_none() && self.eat(Kw::USING) {
+            if k != Kw::WRITE && using.is_none() && self.eat(Kw::USING) {
                 using = Some(self.exp()?);
                 if !(self.eat(Kw::SColon) || self.eat(Kw::Comma)) {
                     return self.fail();
@@ -2087,37 +2147,64 @@ impl Ast<'_> {
 
     fn open(&mut self) -> R<()> {
         let keyword = self.take();
-        let path = self.exp()?;
-        self.expect(Kw::FOR)?;
-        let mode = match self.kw() {
-            Some(Kw::APPEND) => FileMode::Append,
-            Some(Kw::INPUT) => FileMode::Input,
-            Some(Kw::OUTPUT) => FileMode::Output,
-            Some(Kw::BINARY) => FileMode::Binary,
-            _ => return self.fail(),
-        };
-        self.i += 1;
-        // ACCESS and LOCK clauses are read and dropped, as the table-driven parser does
-        if self.eat(Kw::ACCESS) {
-            if self.eat(Kw::READ) {
-                self.eat(Kw::WRITE);
-            } else {
-                self.expect(Kw::WRITE)?;
-            }
+        let span = self.span(keyword);
+        let first = self.exp()?;
+        if self.eat(Kw::Comma) {
+            // OPEN mode$, [#]file, path$[, record length]
+            self.eat(Kw::Lbs);
+            let file = self.exp()?;
+            self.expect(Kw::Comma)?;
+            let path = self.exp()?;
+            let record_length = if self.eat(Kw::Comma) { Some(self.exp()?) } else { None };
+            self.out.push(Statement::OpenClassic { mode: first, file, path, record_length, span });
+            return Ok(());
         }
-        if self.eat(Kw::LOCK) {
-            if self.eat(Kw::READ) {
-                self.eat(Kw::WRITE);
+        let mut mode_written = false;
+        let mut mode = FileMode::Random;
+        if self.eat(Kw::FOR) {
+            mode_written = true;
+            mode = match self.kw() {
+                Some(Kw::APPEND) => FileMode::Append,
+                Some(Kw::INPUT) => FileMode::Input,
+                Some(Kw::OUTPUT) => FileMode::Output,
+                Some(Kw::BINARY) => FileMode::Binary,
+                Some(Kw::RANDOM) => FileMode::Random,
+                _ => return self.fail(),
+            };
+            self.i += 1;
+        }
+        let access = if self.eat(Kw::ACCESS) {
+            Some(if self.eat(Kw::READ) {
+                if self.eat(Kw::WRITE) { FileAccess::ReadWrite } else { FileAccess::Read }
             } else {
                 self.expect(Kw::WRITE)?;
-            }
+                FileAccess::Write
+            })
         } else {
-            self.eat(Kw::SHARED);
-        }
+            None
+        };
+        let lock = if self.eat(Kw::SHARED) {
+            Some(FileLock::Shared)
+        } else if self.eat(Kw::LOCK) {
+            Some(if self.eat(Kw::READ) {
+                if self.eat(Kw::WRITE) { FileLock::ReadWrite } else { FileLock::Read }
+            } else {
+                self.expect(Kw::WRITE)?;
+                FileLock::Write
+            })
+        } else {
+            None
+        };
         self.expect(Kw::AS)?;
         self.eat(Kw::Lbs);
         let file = self.exp()?;
-        self.out.push(Statement::Open { path, mode, file, span: self.span(keyword) });
+        let record_length = if self.is(Kw::LEN) && self.is_n(1, Kw::EQ) {
+            self.i += 2;
+            Some(self.exp()?)
+        } else {
+            None
+        };
+        self.out.push(Statement::Open { path: first, mode, file, mode_written, access, lock, record_length, span });
         Ok(())
     }
 
@@ -2163,13 +2250,16 @@ impl Ast<'_> {
         }
         self.eat(Kw::Lbs);
         let file = self.exp()?;
-        let (position, target) = if self.eat(Kw::Comma) {
-            let position = if self.starts_exp() { Some(self.exp()?) } else { None };
-            self.expect(Kw::Comma)?;
-            (position, self.name_ref()?)
-        } else {
-            return self.fail();
-        };
+        let mut position = None;
+        let mut target = None;
+        if self.eat(Kw::Comma) {
+            if self.starts_exp() {
+                position = Some(self.exp()?);
+            }
+            if self.eat(Kw::Comma) {
+                target = Some(self.exp()?);
+            }
+        }
         self.out.push(Statement::FileTransfer { write: k == Kw::PUT, file, position, target, span });
         Ok(())
     }

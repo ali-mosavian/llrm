@@ -337,7 +337,7 @@ fn based(lex: &mut Lex) -> Result<TokenKind, ()> {
 }
 
 /// The same logical lines as the old lexer's, borrowed where nothing continues.
-fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'_, str>)> {
+pub(crate) fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'_, str>)> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut begins = 1;
