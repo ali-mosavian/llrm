@@ -170,7 +170,12 @@ impl<'a> Builder<'a> {
         dag.local_symbols = module
             .globals
             .iter()
-            .map(|global| matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private))
+            .map(|global| {
+                matches!(
+                    global.linkage,
+                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                )
+            })
             .collect();
         dag.block_names = (0..function.block_capacity())
             .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
