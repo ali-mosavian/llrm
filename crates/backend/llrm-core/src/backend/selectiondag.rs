@@ -138,6 +138,8 @@ mod asmcall_tests;
 #[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
+mod codecall_tests;
+#[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]
 mod dag_select_tests;
@@ -173,7 +175,5 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
-#[cfg(test)]
-mod codecall_tests;
 #[cfg(test)]
 mod vararg_tests;

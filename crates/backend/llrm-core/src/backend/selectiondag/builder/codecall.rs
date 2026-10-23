@@ -26,11 +26,14 @@ impl Builder<'_> {
         let mut ops = vec![self.root(), self.dag.get_target_external_symbol(EVT::I32, name)];
         for argument in arguments {
             // a frame place is a stack object
-            let Operand::Value(value) = *argument else { return Err(Refused("inline code naming other than a frame place")) };
+            let Operand::Value(value) = *argument else {
+                return Err(Refused("inline code naming other than a frame place"));
+            };
             let ValueDef::Instruction(_) = self.function.value(value).def else {
                 return Err(Refused("inline code naming other than a frame place"));
             };
-            let index = *self.info.static_allocas.get(&value).ok_or(Refused("inline code naming other than a frame place"))?;
+            let index =
+                *self.info.static_allocas.get(&value).ok_or(Refused("inline code naming other than a frame place"))?;
             ops.push(self.dag.get_target_frame_index(pointer, index));
         }
         let node = self.dag.get_node_multi(x86isd::LLRM_CODE, &[EVT::OTHER, EVT::GLUE], &ops);
@@ -51,7 +54,8 @@ impl Builder<'_> {
             pieces.push(copy);
         }
         self.dag.set_root(chain);
-        let value = if parts == 2 { self.dag.get_node(super::super::isd::ISD::BuildPair, vt, &pieces) } else { pieces[0] };
+        let value =
+            if parts == 2 { self.dag.get_node(super::super::isd::ISD::BuildPair, vt, &pieces) } else { pieces[0] };
         self.set_value(instruction.result.ok_or(Refused("inline code without a result"))?, value);
         Ok(())
     }

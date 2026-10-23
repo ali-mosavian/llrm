@@ -3,12 +3,15 @@
 //! `dx:ax`. Before, it stopped the builder at "intrinsic call" (4 m16 corpus
 //! blocks). The pin has no such node; this tests the shape.
 
-use super::builder::{BuilderTarget, build_block};
-use super::function_lowering::FunctionLoweringInfo;
 use llrm_mir::datalayout::DataLayout;
 
+use super::builder::{BuilderTarget, build_block};
+use super::function_lowering::FunctionLoweringInfo;
+
 fn dump(body: &str) -> String {
-    let text = format!("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n{body}");
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n{body}"
+    );
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module
@@ -17,10 +20,19 @@ fn dump(body: &str) -> String {
         .unwrap();
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap())
-        .unwrap_or_else(|why| panic!("{}", why.0))
-        .dag
-        .dump()
+    build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m16(),
+        &llrm_x86_m16::M16,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0))
+    .dag
+    .dump()
 }
 
 #[test]
