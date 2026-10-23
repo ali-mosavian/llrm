@@ -588,6 +588,23 @@ impl<'a> Commuter<'a> {
         self.dst.entry(dst_reg).or_insert(to);
     }
 
+    /// `convertInstTo3Addr`, after `three` replaced `old`: it has the position
+    /// `old` had (`DistanceMap`), and `SrcRegMap[regA]` and
+    /// `DstRegMap[regB]` are gone.
+    pub fn converted_to_three_address(
+        &mut self,
+        old: InstrKey,
+        three: InstrKey,
+        into: u32,
+        base: u32,
+    ) {
+        if let Some(&at) = self.distance.get(&old) {
+            self.distance.insert(three, at);
+        }
+        self.src.remove(&into);
+        self.dst.remove(&base);
+    }
+
     /// `tryInstructionTransform`'s `scanUses(regA)`: where `value`, the result
     /// of a tied instruction, goes.
     pub fn scan_uses_of(
