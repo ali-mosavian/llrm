@@ -15,6 +15,7 @@ fn arg(
 mod action_table;
 mod and_fold;
 mod bit_counts;
+mod br_jt;
 mod builder;
 mod combiner;
 mod div_by_constant;
