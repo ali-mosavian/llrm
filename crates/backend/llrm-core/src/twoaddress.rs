@@ -134,7 +134,7 @@ impl BodyFacts {
 
     /// `isPlainlyKilled(MI, Reg)`: the interval of `value` ends at the
     /// instruction (TwoAddressInstructionPass.cpp#L394-L483).
-    fn killed(
+    pub fn killed(
         &self,
         key: InstrKey,
         value: u32,
@@ -586,6 +586,35 @@ impl<'a> Commuter<'a> {
             to = from;
         }
         self.dst.entry(dst_reg).or_insert(to);
+    }
+
+    /// `processTiedPairs`, after the copy `into := mov first` was put before
+    /// `mi`: the copy takes the distance `mi` had and `mi` the next
+    /// (`DistanceMap`), and where `first` died at `mi` and `mi` reads it no
+    /// more, `into` arrives as `first` did (`SrcRegMap[LastCopiedReg] =
+    /// RegB`).
+    pub fn tied_pair_processed(
+        &mut self,
+        copy: InstrKey,
+        mi: InstrKey,
+        into: u32,
+        first: u32,
+        first_dies_here: bool,
+    ) {
+        self.distance.insert(copy, self.dist);
+        self.dist += 1;
+        self.distance.insert(mi, self.dist);
+        if first_dies_here {
+            self.src.insert(into, Mapped::Value(first));
+        }
+    }
+
+    /// `DistanceMap[key]`.
+    pub fn distance_of(
+        &self,
+        key: InstrKey,
+    ) -> Option<u32> {
+        self.distance.get(&key).copied()
     }
 
     /// `removeClobberedSrcRegMap`: after `one`, a register it writes no longer
