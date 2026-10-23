@@ -75,7 +75,8 @@ impl Builder<'_> {
             Intrinsic::Compare { .. } | Intrinsic::FMulAdd | Intrinsic::Fixed { .. } => {
                 self.visit_math(instruction, intrinsic)
             }
-            Intrinsic::MinMax { .. }
+            Intrinsic::WithOverflow { .. }
+            | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
             | Intrinsic::Abs

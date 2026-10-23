@@ -527,7 +527,14 @@ impl Builder<'_> {
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
-            let value = if parts == 2 { self.dag.get_node(ISD::BuildPair, vt, &pieces) } else { pieces[0] };
+            let value = if parts == 2 {
+                self.dag.get_node(ISD::BuildPair, vt, &pieces)
+            } else if vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
+                // a narrow argument arrives in a register-sized slot
+                self.dag.get_node(ISD::Truncate, vt, &[pieces[0]])
+            } else {
+                pieces[0]
+            };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -883,6 +890,22 @@ impl Builder<'_> {
                 ops.push(value);
             } else {
                 let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
+                // a narrow integer fills its register (`getCopyToParts`, by the
+                // return's `zeroext`/`signext`)
+                let value = if parts == 1 && vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
+                    let attrs = &self.function.return_attrs;
+                    let code = if llrm_mir::memory::has(attrs, "signext") {
+                        ISD::SignExtend
+                    } else if llrm_mir::memory::has(attrs, "zeroext") {
+                        ISD::ZeroExtend
+                    } else {
+                        ISD::AnyExtend
+                    };
+                    self.dag.get_node(code, part_vt, &[value])
+                } else {
+                    value
+                };
+                let vt = self.dag.value_type(value);
                 if self.convention.returns.len() != parts || (parts == 1 && part_vt != vt) {
                     return Err(Refused("result in registers the value does not fill"));
                 }
@@ -1084,6 +1107,7 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
+            Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
@@ -1392,6 +1416,23 @@ impl Builder<'_> {
         let vt = self.dag.value_type(operand);
         let node = self.dag.get_node_flags(ISD::FNeg, vt, &[operand], flags_of(instruction.flags));
         self.set_value(instruction.result.expect("an fneg has a result"), node);
+        Ok(())
+    }
+
+    /// `visitExtractValue`: result `k` of the multi-result node the aggregate
+    /// is. Only that is built; an aggregate in memory or registers is not.
+    fn visit_extract_value(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        indices: &[u32],
+    ) -> Result<(), Refused> {
+        let &[index] = indices else { return Err(Refused("extractvalue of a nested aggregate")) };
+        let aggregate = self.get_value(instruction.operands[0])?;
+        if aggregate.res as usize + index as usize >= self.dag.node(aggregate).values.len() {
+            return Err(Refused("extractvalue of an aggregate that is not a node's results"));
+        }
+        let picked = SDValue { node: aggregate.node, res: aggregate.res + index as u8 };
+        self.set_value(instruction.result.expect("an extractvalue has a result"), picked);
         Ok(())
     }
 
