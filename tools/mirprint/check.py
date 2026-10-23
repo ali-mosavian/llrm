@@ -4,7 +4,7 @@
     check.py FUNCTION FILE.c [llrm-c flags]      # default flags: -m32 -mabi=sysv -march=i486 -O2
 
 llrm-c prints the function as MIR (`LLRM_MIR_PRINT`); the pin's `llc -run-pass=greedy,virtregrewriter` allocates it; the stack
-references of the pin's result (spills and the incoming argument) are counted next to the frame references of llrm's own object. Only the
+references of the pin's result (spill stores, reloads, argument reads) is counted next to what llrm's spiller recorded for the same input (stores, reloads, folded reloads). Only the
 integer forms `backend/mirprint.rs` knows are printed; any other instruction is named and the run stops.
 """
 from __future__ import annotations
@@ -24,6 +24,12 @@ def llrm_c() -> str:
     return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-c")
 
 
+def spill_counts(stderr: str) -> dict[str, int]:
+    """What the spiller made for the function: `SPILL-COUNTS name stores=N reloads=N folded=N`."""
+    line = next(line for line in stderr.splitlines() if line.startswith("SPILL-COUNTS"))
+    return {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", line)}
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -34,7 +40,8 @@ def main(argv: list[str]) -> int:
     if "MIR-PRINT-REFUSED" in done.stderr:
         print(next(line for line in done.stderr.splitlines() if "MIR-PRINT-REFUSED" in line))
         return 1
-    mir = done.stderr[done.stderr.index("--- |"):]
+    mir = done.stderr[done.stderr.index("--- |"):done.stderr.index("SPILL-COUNTS")]
+    ours = spill_counts(done.stderr)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "f.mir"
         path.write_text(mir)
@@ -47,10 +54,9 @@ def main(argv: list[str]) -> int:
     stores = len(re.findall(r"MOV32mr %stack\.", pin.stdout))
     reloads = len(re.findall(r"[A-Z0-9]+32rm %stack\.", pin.stdout))
     arguments = len(re.findall(r"%fixed-stack\.", pin.stdout))
-    asm = done.stdout
-    body = re.search(rf"^{re.escape(function)} proc.*?^{re.escape(function)} endp", asm, re.S | re.M)
-    frame = len(re.findall(r"\[(?:ebp|esp)", body.group(0))) if body else -1
-    print(f"{function}: pin stack refs {stores + reloads + arguments} ({stores} stores, {reloads} reloads, {arguments} argument); llrm frame refs {frame}")
+    print(f"{function}: pin    stores {stores}, reloads {reloads}, argument {arguments}")
+    print(f"{function}: llrm   stores {ours['stores']}, reloads {ours['reloads'] + ours['folded']} ({ours['reloads']} loads + {ours['folded']} folded), "
+          f"argument {mir.count('%fixed-stack.')}   (the spiller's own records)")
     return 0
 
 

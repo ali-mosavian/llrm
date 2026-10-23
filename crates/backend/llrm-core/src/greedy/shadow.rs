@@ -910,6 +910,9 @@ pub fn decide_with_split(
         }
     }
     let (reloads, stores, folded) = greedy.spill_counts();
+    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
+        eprintln!("SPILL-COUNTS {} stores={stores} reloads={reloads} folded={folded}", body.name);
+    }
     let mut placed: Vec<(u32, RegId)> = Vec::new();
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
