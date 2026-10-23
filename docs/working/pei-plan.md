@@ -43,3 +43,7 @@ the spiller writes into the instruction. The pin writes a frame index and
 run. Exit: spill cells carry an index and one pass resolves them with
 `frameobjects::calculate_frame_object_offsets`; then `emitPrologue` and
 `emitEpilogue` (PEI-2) replace `prologue.rs` and `masm::parts`.
+
+### Oracle result (w-5, 2026-10-23)
+
+`LLRM_FRAME_ORACLE=1 llrm-c ...` prints, per function, the bytes below BP as ours lays them (`reserve`) and as `calculate_frame_object_offsets` lays the same objects (selector extents then spill slots, natural alignment up to the frame's; no callee-saved object, call frame or stack alignment). Rows corpus, m32 -O2, 158 functions: 153 equal, 4 pin larger (-2, -4, -8, -44 B), 1 ours larger (+4); totals ours 16,986, pin 17,040. The objects' layout is the pin's; what differs in the frame is the callee-saved pushes, the call frame and the stack-alignment rounding (PEI-2), and the alignment the selector gave an object (the 5 above: the oracle assumes the natural one).

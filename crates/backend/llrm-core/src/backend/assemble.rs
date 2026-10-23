@@ -1008,6 +1008,9 @@ fn phased(
     }
     let frame = frame.borrow().clone();
     let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    if llrm_support::env_flag!("LLRM_FRAME_ORACLE") {
+        eprintln!("{}", crate::backend::frameobjects::oracle_line(name, &frame, reserve));
+    }
     let (body, landing) = match landing {
         Some(marker) => {
             let (body, at) =

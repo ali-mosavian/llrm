@@ -124,6 +124,50 @@ pub fn calculate_frame_object_offsets(
     offset - frame.local_area
 }
 
+/// `LLRM_FRAME_ORACLE`: the frame area of `name` as ours lays it out (the bytes
+/// below BP, `reserve`) and as `calculate_frame_object_offsets` would lay the
+/// same objects: each selector extent and each spill slot, in the order the
+/// selector made them then the spill slots by home, aligned to their natural
+/// alignment up to the frame's. No callee-saved object, call frame or stack
+/// alignment: the objects' area only.
+pub fn oracle_line(
+    name: &str,
+    frame: &crate::backend::frame::Frame,
+    reserve: i64,
+) -> String {
+    let natural = |size: i64| {
+        let mut align = 1;
+        while align < size.min(frame.align) {
+            align *= 2;
+        }
+        align
+    };
+    let mut objects: Vec<Object> = Vec::new();
+    for &(_, size) in &frame.extents {
+        objects.push(Object { size, align: natural(size), offset: 0, callee_saved: false, dead: false });
+    }
+    let mut homes: Vec<(&i64, &i64)> = frame.slots.iter().map(|(_, home)| home).zip(std::iter::repeat(&0)).collect();
+    homes.sort();
+    homes.dedup_by_key(|(home, _)| **home);
+    for (home, _) in homes {
+        let size = frame.capacities.get(home).copied().unwrap_or(frame.align).max(1);
+        objects.push(Object { size, align: natural(size), offset: 0, callee_saved: false, dead: false });
+    }
+    let layout = Frame {
+        local_area: 0,
+        max_align: 1,
+        stack_align: 1,
+        transient_align: 1,
+        adjusts_stack: false,
+        has_var_sized: false,
+        realigned: false,
+        reserved_call_frame: false,
+        max_call_frame_size: 0,
+    };
+    let pin = calculate_frame_object_offsets(&mut objects, 0, layout);
+    format!("FRAME-ORACLE {name} objects={} ours={reserve} pin={pin}", objects.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Frame, Object, calculate_frame_object_offsets};
@@ -185,5 +229,17 @@ mod tests {
         let size = calculate_frame_object_offsets(&mut objects, 1, frame());
         assert_eq!(objects.iter().map(|one| one.offset).collect::<Vec<_>>(), [-12, -24, -20, -16, 0]);
         assert_eq!(size, 20);
+    }
+
+    /// The oracle lays the selector's extents and the spill slots as the
+    /// pin's function: a 1-byte, a 4-byte and an 8-byte extent are 1, 4 (after
+    /// 1 aligned to 4) and 8: 8 + 8 = 16.
+    #[test]
+    fn the_oracle_lays_extents_and_slots_by_the_pins_function() {
+        let mut frame = crate::backend::frame::Frame::new(0);
+        frame.align = 8;
+        frame.extents = vec![(-1, 1), (-8, 4), (-16, 8)];
+        let line = super::oracle_line("f", &frame, 16);
+        assert_eq!(line, "FRAME-ORACLE f objects=3 ours=16 pin=16", "{line}");
     }
 }
