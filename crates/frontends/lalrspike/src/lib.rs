@@ -31,7 +31,9 @@ pub fn parse_nib_source(source: &str) -> Result<ast::Module, String> {
     parse_nib(&tokens)
 }
 
+pub mod qb_classes;
 pub mod qb_kw;
+pub mod qb_rd;
 pub mod qb_lexer;
 pub mod qb_words;
 pub mod qb_tokens;
@@ -66,6 +68,16 @@ pub fn parse_qb_stream(
         lalrpop_util::ParseError::UnrecognizedEof { expected, .. } => format!("eof, expected {}", expected.join(" ")),
         lalrpop_util::ParseError::User { error } => format!("lex: {}", error.message),
         other => format!("{other:?}"),
+    })
+}
+
+/// A parse of kinds already in a vector, for comparing parsers on tokens no source spells.
+pub fn parse_qb_kinds(kinds: &[qb_tokens::Tok]) -> Result<qb_tree::Tree, usize> {
+    let tokens = kinds.iter().enumerate().map(|(at, tok)| Ok((at, tok.clone(), at + 1)));
+    qb::grammar::ProgramParser::new().parse(tokens).map_err(|error| match error {
+        lalrpop_util::ParseError::UnrecognizedToken { token: (at, ..), .. } => at,
+        lalrpop_util::ParseError::UnrecognizedEof { .. } => kinds.len(),
+        _ => 0,
     })
 }
 

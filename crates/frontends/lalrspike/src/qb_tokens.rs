@@ -9,7 +9,7 @@ use qbfront::syntax::Binary;
 
 use crate::qb_kw::{Kw, NAMES};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Tok {
     Kw(Kw),
     Ident,
