@@ -101,6 +101,47 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
+/// The library routines C's runtime on `target` has (`libcalls` of its
+/// `c.toml`), each with the calling convention (LLVM's number) a call of it is
+/// made in under `abi`: the convention a routine that states none has.
+fn libcalls(
+    target: &dyn llrm_target::Target,
+    abi: Option<&str>,
+) -> Result<Vec<(String, u32)>, String> {
+    let description = target.runtime("c").ok_or("this target has no C runtime")?;
+    let names = libcall_names(&description.table()?);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile = Profile::for_abi(target, abi)?;
+    let cc = target
+        .calling()
+        .named(&profile.convention)
+        .and_then(|one| one.cc.clone())
+        .ok_or_else(|| format!("calling.toml has no {} with a cc", profile.convention))?;
+    let number = match cc.as_str() {
+        "cdecl" => 0,
+        other => llrm_mir::opcode::CONVENTIONS
+            .iter()
+            .find(|(spelled, _)| spelled.strip_suffix("cc") == Some(other))
+            .map(|(_, number)| *number)
+            .ok_or_else(|| format!("no calling convention {other:?}"))?,
+    };
+    Ok(names.into_iter().map(|name| (name, number)).collect())
+}
+
+/// The routines a runtime description names as its own (`libcalls`): none
+/// where it names none, which is how a target without them is told.
+fn libcall_names(table: &toml::Table) -> Vec<String> {
+    table
+        .get("libcalls")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|one| one.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The unit `text` records and the profile it is raised under, for `codegen`.
 pub(crate) fn prepared(
     text: &str,
@@ -611,7 +652,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         target,
         watcom,
         entry_requests,
-        codegen: llrm_core::driver::Options { rounds_float_spills: true, ..bound.options(&flags, machine) },
+        codegen: {
+            let options = bound.options(&flags, machine);
+            let libcalls = libcalls(&*bound.target, options.abi.as_deref())?;
+            llrm_core::driver::Options { rounds_float_spills: true, libcalls, ..options }
+        },
         flags,
     })
 }
@@ -1707,6 +1752,21 @@ mod tests {
     /// while the real-mode target's was the x87 type: `-fld` was a switch
     /// in one target's file. The profile adds it where the layout has the x87
     /// type.
+    /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
+    /// there), a named one is a call: the m16 runtime names none and the m32
+    /// one names none until its `memcpy` is shipped
+    /// (runtime/c/x86-m32/ext.asm).
+    #[test]
+    fn test_a_runtime_names_its_libcalls_and_none_by_default() {
+        let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
+        assert_eq!(super::libcall_names(&table), ["memcpy"]);
+        assert!(super::libcall_names(&toml::Table::new()).is_empty());
+        for target in [&llrm_x86_m16::M16 as &dyn llrm_target::Target, &llrm_x86_m32::M32] {
+            let described = target.runtime("c").unwrap().table().unwrap();
+            assert!(super::libcall_names(&described).is_empty(), "{} names no libcalls yet", target.name());
+        }
+    }
+
     #[test]
     fn test_every_x86_target_asks_for_the_x87_long_double_once() {
         for profile in
