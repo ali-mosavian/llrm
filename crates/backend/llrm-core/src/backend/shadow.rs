@@ -11,9 +11,9 @@
 //! `[isel] NAME selector=old instructions=21 copies=3 executed=40 memory=12`.
 //! `executed` and `memory` are `executed::executed`'s estimate (`-` where the
 //! body has no finite one); `copies` are register-to-register `mov`s.
-//! `LLRM_ISEL_REPORT=FILE` appends `NAME dag|old` per function: who selected it.
-//! `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after selection,
-//! before any machine phase.
+//! `LLRM_ISEL_REPORT=FILE` appends `NAME dag|old` per function: who selected
+//! it. `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after
+//! selection, before any machine phase.
 //!
 //! # Example
 //! A function of 3 instructions holding one register copy:
