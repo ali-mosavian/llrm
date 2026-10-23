@@ -18,8 +18,8 @@
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
 //! DEVIATE SD200: not translated yet, so the nodes are the plain forms: the
-//! bit-test fold (`LowerAndToBT`), the `SUB 0, x` and `XOR` forms of
-//! `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
+//! reassociated and immediate forms of `LowerAndToBT`, the `SUB 0, x` and `XOR`
+//! forms of `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
@@ -50,6 +50,8 @@ pub mod x86isd {
     pub const ADD: ISD = ISD::Target(478);
     pub const AND: ISD = ISD::Target(485);
     pub const BRCOND: ISD = ISD::Target(493);
+    /// `X86ISD::BT`: the carry flag is bit `n` of `x`.
+    pub const BT: ISD = ISD::Target(497);
     pub const BSF: ISD = ISD::Target(495);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
@@ -369,6 +371,63 @@ fn emit_cmp(
     SDValue { node: sub.node, res: 1 }
 }
 
+/// `getBT`: `bt src, bit` as flags; the source is any-extended to a dword
+/// (there is no byte `bt`, the word form is longer) and the bit number follows
+/// its width.
+fn get_bt(
+    dag: &mut SelectionDAG,
+    mut src: SDValue,
+    bit: SDValue,
+) -> SDValue {
+    if dag.value_type(src).size_in_bits() < 32 {
+        src = dag.get_node(ISD::AnyExtend, EVT::I32, &[src]);
+    }
+    let vt = dag.value_type(src);
+    let bit = match dag.value_type(bit).size_in_bits().cmp(&vt.size_in_bits()) {
+        std::cmp::Ordering::Equal => bit,
+        std::cmp::Ordering::Less => dag.get_node(ISD::AnyExtend, vt, &[bit]),
+        std::cmp::Ordering::Greater => dag.get_node(ISD::Truncate, vt, &[bit]),
+    };
+    dag.get_node(x86isd::BT, EVT::I32, &[src, bit])
+}
+
+/// `LowerAndToBT`: `(x & (1 << n)) == 0` and `((x >> n) & 1) != 0` test bit `n`
+/// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
+/// (The reassociated three-way `and` and the immediate forms are not taken,
+/// SD200.)
+fn lower_and_to_bt(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+) -> Option<(SDValue, u128)> {
+    let (a, b) = (dag.operand(and, 0), dag.operand(and, 1));
+    let is_bit_shift =
+        |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Shl && dag.constant(dag.operand(v, 0)) == Some(1);
+    let (mut src, bit) = if is_bit_shift(dag, b) {
+        (a, dag.operand(b, 1))
+    } else if is_bit_shift(dag, a) {
+        (b, dag.operand(a, 1))
+    } else if dag.constant(b) == Some(1) && dag.opcode(a) == ISD::Srl {
+        (dag.operand(a, 0), dag.operand(a, 1))
+    } else if dag.constant(a) == Some(1) && dag.opcode(b) == ISD::Srl {
+        (dag.operand(b, 0), dag.operand(b, 1))
+    } else {
+        return None;
+    };
+    let mut cc = cc;
+    // A bit flip folds into the condition.
+    let ones = super::fold::mask(dag.value_type(src).size_in_bits());
+    if dag.opcode(src) == ISD::Xor && dag.constant(dag.operand(src, 1)) == Some(ones) {
+        src = dag.operand(src, 0);
+        cc = if cc == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
+    }
+    if dag.value_type(src).size_in_bits() > 32 {
+        return None;
+    }
+    let flags = get_bt(dag, src, bit);
+    Some((flags, if cc == CondCode::SetEq { cond::AE } else { cond::B }))
+}
+
 /// `emitFlagsForSetcc`: the flags and the condition-code constant.
 fn emit_flags_for_setcc(
     dag: &mut SelectionDAG,
@@ -385,6 +444,15 @@ fn emit_flags_for_setcc(
         let code = dag.constant(dag.operand(op0, 0)).expect("a SETCC reads a condition code");
         let code = if invert { code ^ 1 } else { code };
         return (dag.operand(op0, 1), cond_code(dag, code));
+    }
+    if matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.opcode(op0) == ISD::And
+        && dag.users(op0).count() == 1
+        && dag.is_null_constant(op1)
+    {
+        if let Some((flags, code)) = lower_and_to_bt(dag, op0, cc) {
+            return (flags, cond_code(dag, code));
+        }
     }
     let mut rhs = op1;
     let code = translate_cc(dag, cc, &mut rhs);
@@ -499,7 +567,14 @@ fn lower_brcond(
         let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc);
         (code, flags)
     } else {
-        // Anything else is tested: `and cond, 1`, then `!= 0`.
+        // Anything else is tested: `and cond, 1`, then `!= 0`; an `and` is
+        // tried as a bit test first.
+        if dag.opcode(cond) == ISD::And && dag.users(cond).count() == 1 {
+            if let Some((flags, code)) = lower_and_to_bt(dag, cond, CondCode::SetNe) {
+                let code = cond_code(dag, code);
+                return Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]));
+            }
+        }
         let vt = dag.value_type(cond);
         let one = dag.get_constant(1, vt);
         let masked = if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
