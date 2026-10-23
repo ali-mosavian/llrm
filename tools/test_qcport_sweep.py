@@ -1,6 +1,7 @@
 """The QCport sweep: a failure is grouped by its kind, only a kind no known entry covers is new, and the bisection finds the first bad squash."""
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -227,3 +228,25 @@ def test_a_module_that_dies_only_at_emit_is_a_failed_compile(tmp_path):
     (qcport / "ui" / "console.c").write_text("int x;\n")
     failed = q.sweep(compiler, qcport, tmp_path, levels=("-O1",), jobs=1)
     assert [(module, level) for module, level, _ in failed] == [("console", "-O1")]
+
+
+def test_qcport_console_encodes_at_every_level():
+    """ui/console.c at m16 -O1..-Os died in the encoder on `sub dx, edi` (optLEAALU added dword registers under a word destination, #3955), found only once the sweep compiled to an object."""
+    import os
+
+    import pytest
+
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    source = qcport / "ui" / "console.c"
+    if not source.is_file() or not include.is_dir():
+        pytest.skip("QCport is not on this host")
+    compiler = q.llrmbin.bin_dir() / "llrm-c"
+    flags = [f for part in (*q.MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    failed = {}
+    for level in q.LEVELS:
+        with q.object_file() as out:
+            done = subprocess.run([str(compiler), level, *flags, str(source), "-o", out], capture_output=True, text=True)
+            if done.returncode:
+                failed[level] = done.stderr[-200:]
+    assert not failed, failed
