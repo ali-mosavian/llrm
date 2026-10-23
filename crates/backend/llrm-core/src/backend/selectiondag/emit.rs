@@ -82,6 +82,29 @@ pub trait GlobalMap {
     ) -> Addr;
 }
 
+/// What a call destroys, from the convention of what it calls.
+pub trait Conventions {
+    /// The registers a call of `callee` destroys beside the ones it passes
+    /// arguments in and returns results in; `None` where the convention is
+    /// not known (the target-wide set stands).
+    fn clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>>;
+}
+
+/// No convention is known: every call destroys `EmitContext::caller_saved`.
+pub struct NoConventions;
+
+impl Conventions for NoConventions {
+    fn clobbers(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        None
+    }
+}
+
 /// Where the frame's fixed objects are.
 pub trait FrameMap {
     /// The cell of fixed object `index` (`FrameIndex<-1>` is the first stack
@@ -99,6 +122,7 @@ pub struct EmitContext<'a> {
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
     pub stack_pointer: llrm_lir::registers::RegId,
+    pub conventions: &'a dyn Conventions,
     pub globals: &'a dyn GlobalMap,
     /// The LIR address of each MIR block, by `BlockId`: what a branch names.
     pub block_at: &'a HashMap<u32, i64>,
@@ -463,9 +487,13 @@ impl Emitter<'_, '_> {
     fn push_call(
         &mut self,
         what: Semantics,
+        callee: Option<&Callee>,
     ) -> i64 {
         let at = self.next_address();
-        let clobbers = self.ctx.caller_saved.clone();
+        // The convention's destroyed registers and the ones the arguments
+        // went in (the callee's to use); a result joins them in `deliver`.
+        let mut clobbers = self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
+        clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
         let memory = Arc::new(crate::model::lir::CallMemory {
             effects: llrm_mir::memory::Effects::ANY,
             private: Vec::new(),
@@ -490,10 +518,11 @@ impl Emitter<'_, '_> {
         register: llrm_lir::registers::RegId,
     ) -> bool {
         let Some((block, at)) = self.last_call else { return false };
-        if !self.ctx.caller_saved.contains(&register) {
+        let call = Arc::make_mut(&mut self.blocks[block].insns[at]);
+        if !call.clobbers.contains(&register) && !self.ctx.caller_saved.contains(&register) {
             return false;
         }
-        let call = Arc::make_mut(&mut self.blocks[block].insns[at]);
+        call.clobbers.insert(register);
         call.delivers.push((held, register));
         call.defines.push(held.value);
         true
@@ -634,7 +663,10 @@ impl Emitter<'_, '_> {
                     NodeData::Symbol(id) => Callee::Named(self.dag.symbol_names[id as usize].clone()),
                     _ => return Err(EmitError::Unsupported("a call of a non-global".to_owned())),
                 };
-                let at = self.push_call(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) });
+                let at = self.push_call(
+                    Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                    Some(&callee),
+                );
                 self.calls.push((at, callee));
                 return Ok(Some(()));
             }
@@ -654,7 +686,7 @@ impl Emitter<'_, '_> {
                     sources: vec![target],
                     ..Semantics::new(Operation::Call)
                 };
-                self.push_call(what);
+                self.push_call(what, None);
                 return Ok(Some(()));
             }
             // Division and the one-operand multiply work in AX:DX or EAX:EDX,
