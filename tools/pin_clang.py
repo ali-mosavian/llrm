@@ -10,7 +10,8 @@ from pathlib import Path
 PIN = "d1106deb71cc"
 
 
-def main():
+def path() -> str:
+    """The pin's clang, checked: exits with the reason when it does not run or is not the pin's commit. Its --version line goes to stderr."""
     clang = os.environ.get("LLRM_PIN_CLANG", str(Path.home() / "scratch/llvm-build/bin/clang"))
     try:
         version = subprocess.run([clang, "--version"], capture_output=True, text=True, check=True).stdout
@@ -19,7 +20,11 @@ def main():
     if PIN not in version:
         sys.exit(f"pin_clang: {clang} is not the pin ({PIN}): {version.splitlines()[0]}")
     print(version.splitlines()[0], file=sys.stderr)
-    print(clang)
+    return clang
+
+
+def main():
+    print(path())
 
 
 if __name__ == "__main__":
