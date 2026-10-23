@@ -1390,7 +1390,7 @@ impl Ast<'_> {
             Some(b'+') => (Some(Unary::Positive), &item[1..]),
             _ => (None, item),
         };
-        if digits.as_bytes().first().is_some_and(|b| b.is_ascii_digit() || *b == b'.') {
+        if digits.as_bytes().first().is_some_and(|b| b.is_ascii_digit() || *b == b'.' || *b == b'&') {
             if let Ok(tokens) = crate::qb_scan::scan(digits, self.dialect) {
                 if let [Token { kind, .. }, Token { kind: TokenKind::Reserved(_), .. }] = tokens.as_slice() {
                     let literal = match kind {
