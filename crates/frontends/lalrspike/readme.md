@@ -205,11 +205,59 @@ wrong or loses something):
 * `CIRCLE (x, y), r, , c, s`: an empty slot keeps its place (the old drops it).
 
 Not in this parser: QuickrBASIC's extensions (`+=`, `FOR … IN`, PRIVATE, tuples, f-strings), which
-the table-driven parser reads in every dialect; statements the table-driven parser also refuses
-(`OPEN … LEN =`, classic `OPEN "I", #1, …`, `ON ERROR RESUME NEXT`, COMMON) fail here too.
+the table-driven parser reads in every dialect. Taken here that the table-driven parser refuses:
+`ON [LOCAL] ERROR RESUME NEXT`, COMMON (as `Statement::Common`), `REDIM PRESERVE`, ISAM statements and
+`OPEN … FOR ISAM`, `DEFCUR`/CURRENCY, `'$FORM` and VBDOS's form/control objects.
 
 Speed, same 737 files: logos lexer + recursive descent to `Module`: 36.3 ms (21.6 MB/s);
 the table-driven parser to the same `Module`: 232 ms (3.4 MB/s), 6.4x.
+
+## The checker, against the real BC
+
+`src/qb_check.rs` (with `qb_sigs.rs`, the intrinsic functions' signatures, and the generated
+`qb_reserved.rs`) types a `Module` and refuses what BC refuses, per family (`Dialect::QuickBasic45`,
+`Pds71`, `VbDos`). It is calibrated, not designed: every rule below is something the real BC.EXE does, found by
+asking it. The loop:
+
+* `corpus/statements.py` + `expand.py` generate a **statement catalog** (10,608 one-line cases: every
+  intrinsic's shapes with right and wrong argument types, the trailing-comma and omitted-slot forms of
+  LINE/CIRCLE/PAINT/PUT/PALETTE/…, and every reserved word of the three families used as a name in 22
+  contexts). `corpus/programs.py` generates **4,838 small programs** (scopes, labels, blocks, procedures,
+  types). `corpus/real.py` takes the **1,090 real programs**: the repo's `.bas` files, GORILLA,
+  NIBBLES, QB 4.5's, PDS 7.1's and VBDOS's example sources, and mgl (run in place, so its
+  `$INCLUDE`s resolve).
+* `bcbatch.py`, `bcfiles.py`, `real.py run` give each one to the three BCs (QB 4.5, PDS 7.1, VBDOS) on
+  the dosrun DOSBox-X (`bcprobe.py`, about 30 jobs a second), each alone. `bcquick.py 'LINE'…` asks
+  about a few lines; `gen_reserved.py` writes `qb_reserved.rs` from the verdicts.
+* `compare.py`, `compare_programs.py` and `real.py compare` set our parse-and-check against BC's:
+  **gap** (BC takes it, we refuse), **leak** (BC refuses, we take it).
+
+| corpus | family | agree | gap | leak |
+|---|---|---|---|---|
+| 1,090 real programs | QB 4.5 / PDS 7.1 / VBDOS | 997 / 999 / 996 | **0 / 0 / 0** | 5 / 3 / 6 |
+| 4,838 small programs | QB 4.5 / PDS 7.1 / VBDOS | 4,834 / 4,832 / 4,830 | 0 / 2 / 1 | 4 / 4 / 7 |
+| the statement catalog (10,608) | QB 4.5 / PDS 7.1 / VBDOS | 10,591 / 10,594 / 10,590 | 0 / 1 / 5 | 14 / 11 / 12 |
+
+(`.bi` files alone are not compared: BC does not check what an include declares until a program uses it.)
+The leaks left are BC's resource limits (`Expression too complex` on 60 literal subscripts,
+`Math overflow` in one QB 4.5 function), `0 PRINT` with `ON ERROR GOTO 0`, and a few reserved-word
+corners; the real BC crashes on one program.
+
+What BC does that no manual says, all of it now in the checker: no bare name is a statement unless a SUB
+by that name was DECLAREd or defined above (`Equal sign missing`); a call above its DECLARE is not checked
+against it; a DECLARE without a parameter list is never checked; `SUB p ()` is VBDOS's; `DIM a()` is
+VBDOS's; `STATIC SUB`, `OPTION EXPLICIT`, `AS` after FUNCTION's parameters, array fields in a TYPE,
+`REDIM PRESERVE`, ISAM, CURRENCY, `ERR = n` and reserved words as record fields are PDS's or VBDOS's or both;
+arrays, scalars and CONSTs have separate namespaces, `x`, `x%` and `x AS INTEGER` are three names to BC
+with rules of their own (and PDS/VBDOS refuse to mix a suffix with AS); a reserved word is no name for
+anything but a field in PDS and VBDOS; a `_` ending a line continues it after any punctuation; COMMON and
+DECLARE must precede the first executable statement; a label in a procedure may not repeat the module's;
+`GOSUB` cannot leave a procedure but `RESTORE` and `ON ERROR GOTO` name labels anywhere or at module
+level; an INTEGER argument that is a constant outside 16 bits is `Math overflow`; and an undefined line
+number is an error where an undefined label name is one too. Pitfalls in the harness itself, each of
+which made a verdict wrong until found: BC wants CRLF in `$INCLUDE` files; a trailing `' #id` comment
+changes VBDOS's verdict on a line ending in a comma; bare messages arrive with a BEL in front
+(`Label not defined: 10`); and a background job dies when the session's turn ends.
 
 ## Deferred to later passes
 
