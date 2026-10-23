@@ -8854,7 +8854,7 @@
 8853	syntax	15:11 syntax error
 8854	syntax	15:0 syntax error
 8855	syntax	15:0 syntax error
-8856	semantic	15:0 Statement unrecognizable
+8856	semantic	15:0 Equal sign missing
 8857	semantic	15:0 Statement unrecognizable
 8858	semantic	15:0 Statement unrecognizable
 8859	syntax	15:0 syntax error
@@ -8880,7 +8880,7 @@
 8879	syntax	15:11 syntax error
 8880	syntax	15:11 syntax error
 8881	syntax	15:3 syntax error
-8882	semantic	15:0 Statement unrecognizable
+8882	semantic	15:0 Equal sign missing
 8883	syntax	24:7 syntax error
 8884	semantic	15:0 Statement unrecognizable
 8885	syntax	15:0 syntax error
@@ -8901,7 +8901,7 @@
 8900	syntax	15:0 syntax error
 8901	syntax	15:0 syntax error
 8902	syntax	15:5 syntax error
-8903	semantic	15:0 Statement unrecognizable
+8903	semantic	15:0 Equal sign missing
 8904	syntax	15:5 syntax error
 8905	syntax	15:4 syntax error
 8906	syntax	15:0 syntax error
@@ -8912,12 +8912,12 @@
 8911	syntax	15:0 syntax error
 8912	syntax	15:3 syntax error
 8913	semantic	15:0 Statement unrecognizable
-8914	semantic	15:0 Statement unrecognizable
+8914	semantic	15:0 Equal sign missing
 8915	syntax	15:0 syntax error
 8916	syntax	15:0 syntax error
 8917	syntax	15:8 syntax error
 8918	syntax	15:3 syntax error
-8919	semantic	15:0 Statement unrecognizable
+8919	semantic	15:0 Equal sign missing
 8920	semantic	15:0 Statement unrecognizable
 8921	syntax	15:5 syntax error
 8922	syntax	15:4 syntax error
@@ -8930,7 +8930,7 @@
 8929	syntax	15:0 syntax error
 8930	syntax	15:5 syntax error
 8931	syntax	15:0 syntax error
-8932	semantic	15:0 Statement unrecognizable
+8932	semantic	15:0 Equal sign missing
 8933	syntax	15:6 syntax error
 8934	syntax	15:0 syntax error
 8935	syntax	15:0 syntax error
@@ -8963,7 +8963,7 @@
 8962	syntax	15:0 syntax error
 8963	syntax	15:4 syntax error
 8964	semantic	15:0 Statement unrecognizable
-8965	semantic	15:0 Statement unrecognizable
+8965	semantic	15:0 Equal sign missing
 8966	syntax	15:0 syntax error
 8967	syntax	15:5 syntax error
 8968	syntax	15:0 syntax error
