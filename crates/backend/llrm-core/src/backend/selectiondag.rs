@@ -183,4 +183,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ext;
 #[cfg(test)]
+mod alloca_tests;
+#[cfg(test)]
 mod vararg_tests;

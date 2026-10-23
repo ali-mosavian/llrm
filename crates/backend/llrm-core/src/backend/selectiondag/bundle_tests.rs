@@ -128,7 +128,7 @@ pub(super) fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>
                 &module,
                 function,
                 &layout,
-                &BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]),
+                &BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]).with_stack_alignment(16),
                 &llrm_x86_m32::M32,
                 &convention,
                 &mut info,

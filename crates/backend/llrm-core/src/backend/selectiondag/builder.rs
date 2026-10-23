@@ -43,9 +43,21 @@ pub struct BuilderTarget {
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
     pub libcalls: Option<Vec<(String, u32, String)>>,
+    /// The stack alignment `alloca` rounds to, when not the target's own: the
+    /// pin's i486-linux goldens say 16.
+    pub stack_align: Option<u64>,
 }
 
 impl BuilderTarget {
+    /// This target with a stack alignment, whatever the target's is.
+    pub fn with_stack_alignment(
+        mut self,
+        bytes: u64,
+    ) -> BuilderTarget {
+        self.stack_align = Some(bytes);
+        self
+    }
+
     /// This target with the runtime routines the driver states.
     pub fn with_runtime_calls(
         mut self,
@@ -72,6 +84,7 @@ impl BuilderTarget {
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
+            stack_align: None,
         }
     }
 
@@ -83,6 +96,7 @@ impl BuilderTarget {
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
+            stack_align: None,
         }
     }
 }
@@ -1114,6 +1128,7 @@ impl Builder<'_> {
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. }
                 if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
+            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
             Opcode::Unreachable => {}
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -1421,6 +1436,44 @@ impl Builder<'_> {
 
     /// `visitExtractValue`: result `k` of the multi-result node the aggregate
     /// is. Only that is built; an aggregate in memory or registers is not.
+    /// `visitAlloca` for a dynamic one: the size scaled by the element size,
+    /// rounded up to the stack alignment, and `DYNAMIC_STACKALLOC` on the
+    /// root.
+    fn visit_alloca(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let types = &self.module.context.types;
+        let pointer = self.target.dag.pointer;
+        // no operand is the array size 1 of an `i32`
+        let count = match instruction.operands.first() {
+            Some(operand) => self.get_value(*operand)?,
+            None => self.dag.get_constant(1, EVT::I32),
+        };
+        let element = self.layout.alloc_size(types, allocated);
+        let element = self.dag.get_constant(u128::from(element), EVT::I64);
+        let count = self.dag.get_zext_or_trunc(count, pointer);
+        let element = self.dag.get_zext_or_trunc(element, pointer);
+        let size = self.dag.get_node(ISD::Mul, pointer, &[count, element]);
+        let stack_align = self.target.stack_align.unwrap_or_else(|| self.arch.stack_alignment().max(1) as u64);
+        let mask = stack_align - 1;
+        // an alignment no greater than the stack's is the stack's: operand 0
+        let wanted = self.layout.pref_align(types, allocated).max(align.unwrap_or(1));
+        let alignment = if wanted > stack_align { wanted } else { 0 };
+        let mask_node = self.dag.get_constant(u128::from(mask), pointer);
+        let size = self.dag.get_node_flags(ISD::Add, pointer, &[size, mask_node], SDNodeFlags::NO_UNSIGNED_WRAP);
+        let high = self.dag.get_constant(u128::from(!mask) & self::mask(pointer.size_in_bits()), pointer);
+        let size = self.dag.get_node(ISD::And, pointer, &[size, high]);
+        let alignment = self.dag.get_constant(u128::from(alignment), pointer);
+        let root = self.root();
+        let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
+        self.dag.set_root(SDValue { node: node.node, res: 1 });
+        self.set_value(instruction.result.ok_or(Refused("an alloca without a result"))?, node);
+        Ok(())
+    }
+
     fn visit_extract_value(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
