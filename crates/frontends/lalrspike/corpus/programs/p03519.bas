@@ -1,0 +1,4 @@
+DIM SHARED x%, x%(5)
+SUB p
+REDIM x(5) AS LONG
+END SUB

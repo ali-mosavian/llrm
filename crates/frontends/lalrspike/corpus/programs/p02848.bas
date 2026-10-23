@@ -1,0 +1,2 @@
+DEFINT X
+x$ = "a"

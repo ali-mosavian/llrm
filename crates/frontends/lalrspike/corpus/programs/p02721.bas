@@ -1,0 +1,2 @@
+PRINT x$
+CONST x% = 1

@@ -1,0 +1,2 @@
+DIM x(5) AS INTEGER
+DIM x(1 TO 5)

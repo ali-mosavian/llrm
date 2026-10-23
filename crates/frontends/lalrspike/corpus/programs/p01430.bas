@@ -1,0 +1,2 @@
+DIM x AS LONG
+DEFINT X

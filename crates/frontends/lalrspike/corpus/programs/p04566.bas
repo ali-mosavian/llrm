@@ -1,0 +1,3 @@
+DIM x%
+RESUME 0
+0 PRINT

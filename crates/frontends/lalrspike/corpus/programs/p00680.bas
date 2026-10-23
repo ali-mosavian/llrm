@@ -1,0 +1,2 @@
+DECLARE SUB p (BYVAL a%)
+CALL p(1)

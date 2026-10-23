@@ -1,0 +1,2 @@
+DEFSTR X
+CONST y = 2

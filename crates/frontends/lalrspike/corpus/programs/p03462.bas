@@ -1,0 +1,2 @@
+INPUT x%
+OPTION BASE 0

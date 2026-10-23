@@ -1,0 +1,3 @@
+SUB p
+PRINT x%
+END SUB

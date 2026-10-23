@@ -1,0 +1,2 @@
+DIM x AS INTEGER
+STATIC x%

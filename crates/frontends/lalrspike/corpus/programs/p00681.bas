@@ -1,0 +1,3 @@
+DECLARE SUB p (BYVAL a%)
+DIM x%
+CALL p(BYVAL x%)

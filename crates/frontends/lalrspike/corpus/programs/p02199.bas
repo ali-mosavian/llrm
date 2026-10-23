@@ -1,0 +1,2 @@
+STATIC x%
+COMMON SHARED x%

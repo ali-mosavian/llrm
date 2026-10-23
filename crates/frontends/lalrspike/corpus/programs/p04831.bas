@@ -1,0 +1,7 @@
+DIM x%
+a:
+10 PRINT
+END
+SUB p
+RESTORE a
+END SUB

@@ -1,0 +1,3 @@
+SUB p
+DIM x AS STRING * 4
+END SUB

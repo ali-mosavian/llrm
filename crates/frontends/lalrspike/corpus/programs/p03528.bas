@@ -1,0 +1,3 @@
+SUB p
+COMMON SHARED x%
+END SUB

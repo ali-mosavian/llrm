@@ -1,0 +1,3 @@
+SUB p
+STATIC x%
+END SUB

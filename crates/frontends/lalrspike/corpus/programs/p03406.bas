@@ -1,0 +1,2 @@
+SWAP x%, x
+DEFINT X

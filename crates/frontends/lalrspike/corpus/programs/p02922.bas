@@ -1,0 +1,2 @@
+DEFSTR X
+REDIM x(5) AS LONG

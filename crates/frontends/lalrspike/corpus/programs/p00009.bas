@@ -1,0 +1,4 @@
+DIM x%, y%, i%, j%
+IF x% THEN
+y% = 2
+END SELECT

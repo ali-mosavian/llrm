@@ -13,6 +13,7 @@ fn main() {
         "pds71" => Dialect::Pds71,
         _ => Dialect::VbDos,
     };
+    let legacy = std::env::var("LEGACY").is_ok();
     let old = std::env::var("PARSER").is_ok_and(|v| v == "old");
     let prologue = std::fs::read_to_string(&args[1]).unwrap();
     let epilogue = std::fs::read_to_string(&args[2]).unwrap();
@@ -27,6 +28,13 @@ fn main() {
         };
         let (class, message) = match parsed {
             Err(message) => ("syntax", message),
+            Ok(module) if !legacy => {
+                let diagnostics = lalrspike::qb_check::check(&module, dialect);
+                match diagnostics.first() {
+                    None => ("ok", String::new()),
+                    Some(first) => ("semantic", format!("{}:{} {}", first.span.line, first.span.start, first.message)),
+                }
+            }
             Ok(module) => match compile_with_options(&module, "t", dialect, "llrm", &Options::default()) {
                 Ok(_) => ("ok", String::new()),
                 Err(error) if error.message.contains("not supported") || error.message.contains("no source signature") || error.message.contains("audited") => {

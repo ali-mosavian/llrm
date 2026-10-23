@@ -1,0 +1,2 @@
+DEFDBL A-Z
+CONST x% = 1

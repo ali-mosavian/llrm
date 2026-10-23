@@ -1,0 +1,2 @@
+DIM x%
+CALL ABSOLUTE(x%, 0)

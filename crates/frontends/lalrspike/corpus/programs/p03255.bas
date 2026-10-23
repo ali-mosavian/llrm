@@ -1,0 +1,2 @@
+ERASE x%
+OPTION BASE 2

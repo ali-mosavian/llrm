@@ -1,0 +1,6 @@
+DIM x%
+IF x% THEN a
+END
+SUB p
+a:
+END SUB

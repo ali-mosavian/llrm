@@ -1,0 +1,2 @@
+DIM x$
+DIM SHARED x%

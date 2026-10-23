@@ -1,0 +1,2 @@
+REDIM x(5) AS LONG
+DIM SHARED x%(5)

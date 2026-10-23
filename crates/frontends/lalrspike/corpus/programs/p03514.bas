@@ -1,0 +1,3 @@
+SUB p
+DIM x(5, 5)
+END SUB

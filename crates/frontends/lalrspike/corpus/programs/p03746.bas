@@ -1,0 +1,3 @@
+DIM x%
+ON x% GOTO a
+10 PRINT 1

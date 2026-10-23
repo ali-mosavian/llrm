@@ -1,0 +1,2 @@
+COMMON x%
+DIM x AS INTEGER

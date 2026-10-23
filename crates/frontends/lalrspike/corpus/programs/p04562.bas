@@ -1,0 +1,3 @@
+DIM x%
+GOTO 0
+0 PRINT

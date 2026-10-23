@@ -1,0 +1,2 @@
+DIM x%
+COMMON SHARED x%

@@ -1,0 +1,5 @@
+SUB p
+END SUB
+PRINT 1
+SUB q
+END SUB

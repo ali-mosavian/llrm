@@ -1,0 +1,5 @@
+DIM x%
+FUNCTION f% ()
+DIM SHARED y%
+f% = 1
+END FUNCTION

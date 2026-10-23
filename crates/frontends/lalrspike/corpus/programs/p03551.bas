@@ -1,0 +1,4 @@
+DIM SHARED x%, x%(5)
+SUB p
+DEFINT X
+END SUB

@@ -1,0 +1,2 @@
+OPTION BASE 0
+PRINT x%

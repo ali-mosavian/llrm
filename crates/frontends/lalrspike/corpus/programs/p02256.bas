@@ -1,0 +1,2 @@
+COMMON x%
+CONST y = 2
