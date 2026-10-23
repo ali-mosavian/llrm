@@ -632,6 +632,13 @@ impl Builder<'_> {
         first_two: &[SDValue],
         size: SDValue,
     ) -> Result<SDValue, Refused> {
+        // The routine's symbol and calling convention are the fact's
+        // (`options.libcalls`), which `memcpycall` already applies to a
+        // `memcpy`; the builder does not have them, so a real target's call
+        // is not made here rather than made with the wrong ones.
+        if self.target.libcalls.is_none() {
+            return Err(Refused("library call whose symbol and convention are the target fact's"));
+        }
         let types = &self.module.context.types;
         let pointer_type = types.ptr(0);
         let word = types.int(self.target.dag.pointer.size_in_bits());

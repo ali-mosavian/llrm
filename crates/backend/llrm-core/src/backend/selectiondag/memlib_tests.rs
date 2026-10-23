@@ -64,3 +64,17 @@ fn a_variable_move_is_refused_without_a_memmove() {
     let on = built("move", &BuilderTarget::m32().with_libcalls(&["memmove"])).expect("builds");
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
+
+/// On m32 the fact names `memcpy` only: a variable fill is `rep stosb` and a
+/// move is refused, as the old selector. A `memcpy` call with the fact on is
+/// the MIR pass's (`memcpycall`, with the fact's symbol and convention); the
+/// builder, which has neither, refuses one rather than call `memcpy` in the
+/// wrong convention.
+#[test]
+fn the_real_m32_fact_names_memcpy_only() {
+    let target = BuilderTarget::m32();
+    let fill = built("fill", &target).expect("builds");
+    assert!(fill.contains("REP_STOS") && !fill.contains("'memset'"), "{fill}");
+    assert!(built("move", &target).is_err());
+    assert!(built("copy", &target).is_err());
+}
