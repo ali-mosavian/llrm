@@ -66,3 +66,27 @@ Next, each its own PR with Ir on both arms and objects identical: `Semantics` na
 - The SimplifyCfg visitors are 0.4 to 1.4 M each after #3834; `occurrence::arms` allocates 2.6 M in 14 callers, and `undefpred::removed` mutates while it walks them, so no iterator replaces the `Vec`.
 - LVI: the asks equal the pin's (593 / 574 against 516 / 475), the edge evaluations are 1.85x (12.3 K against 6.6 K), `get_edge_value_local` is a faithful port (1,153 against 498 Ir a call, flat); sharing CVP's `LviCache` with JumpThreading moved nothing (+37 K Ir, objects identical) and was not landed.
 - Landed: #3792 (-1.41 M), #3834 (-3.62 M), #3871 (-1.86 M), #3872 (-3.43 M). Open: `Vec<Loc>` clones in `Semantics` (11 M inclusive), 2026-11-06.
+
+## Dated plan at parity 00a8ea652 (2026-10-25)
+
+callgrind d_faces -O2 on the ledger command (release), ours against the pin's `opt` (cg-opt.out):
+
+| pass | ours | pin | excess | ratio |
+|---|--:|--:|--:|--:|
+| SimplifyCfg, 99 `iterativelySimplified` (the pin: 80) | 33.5 M | 8.58 M | 24.9 M | 3.9x |
+| CorrelatedValuePropagation, 22 runs | 29.0 M | 9.51 M | 19.5 M | 3.0x |
+| JumpThreading, 22 runs | 19.6 M | 7.21 M | 12.4 M | 2.7x |
+| of which LVI `solve` (under CVP and JT) | 27.3 M | 9.90 M | 17.4 M | 2.8x |
+
+Steps, one PR each, Ir on both arms and identical objects, the pin pass each mirrors named:
+
+| # | step | mirrors | target | date |
+|--:|---|---|--:|---|
+| 1 | `loop_form_blocks` from the manager's cached loop analysis (4.9 M in 36 asks, 137 K each) | `NeedCanonicalLoop` via `LoopInfo` | -3 M | 2026-11-12 |
+| 2 | the per-block visitors take `sole_predecessor`/`has_n_predecessors` in place of `predecessors()` (9,955 calls, 1.7 M) and `branchtocommon::folded` asks the cheap shape first (2.7 M, 3,661 calls) | `simplifyCFG` / `foldBranchToCommonDest`'s early exits | -2 M | 2026-11-17 |
+| 3 | LVI: one evaluation of a branch condition for all the values asked of it in a solve (`get_value_from_condition` 11 K calls at 1.15 K Ir against the pin's 498) | `getValueFromCondition` with its `ValueLatticeElement` cache | -6 M | 2026-11-24 |
+| 4 | CVP: `get_constant_on_edge` (528 calls, 14.8 K Ir each) and `get_constant_range_at_use` (554) reuse the block-value cache across the processed blocks | `CorrelatedValuePropagation::runImpl` order | -4 M | 2026-12-01 |
+| 5 | JumpThreading `process_threadable_edges` (619 calls, 17 K each): `computeValueKnownInPredecessors` memo per (value, block) | `computeValueKnownInPredecessorsImpl` | -3 M | 2026-12-08 |
+| 6 | re-take on the ledger (dist), the remaining top-5 callees by Ir | - | - | 2026-12-10 |
+
+Each target is a guess from the callee cost until the step is profiled; the PR states the measured number.
