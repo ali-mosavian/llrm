@@ -127,7 +127,8 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
     let bits = if matches!(mnemonic.as_str(), "movzx" | "movsx") {
         let rest = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
         let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
-        let size: String = rest.chars().skip_while(|c| c.is_ascii_lowercase()).take_while(|c| c.is_ascii_digit()).collect();
+        let size: String =
+            rest.chars().skip_while(|c| c.is_ascii_lowercase()).take_while(|c| c.is_ascii_digit()).collect();
         size.parse().unwrap_or(8)
     } else {
         width?
