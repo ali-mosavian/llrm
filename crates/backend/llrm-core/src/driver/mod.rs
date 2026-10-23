@@ -84,6 +84,10 @@ pub struct Options {
     pub no_inline: Vec<String>,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
+    /// The library routines the target's runtime has, each with the calling
+    /// convention (LLVM's number) a call of it is made in: `memcpy` is a call
+    /// where it is named, the selector's `rep movs` where not.
+    pub libcalls: Vec<(String, u32)>,
 }
 
 impl Options {
@@ -111,6 +115,7 @@ impl Options {
             code_segment: None,
             no_inline: Vec::new(),
             isel: Default::default(),
+            libcalls: Vec::new(),
         }
     }
 
@@ -456,6 +461,11 @@ pub fn optimized(
     })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
+    }
+    if let Some(&(_, convention)) = options.libcalls.iter().find(|(name, _)| name == "memcpy") {
+        timed("mir memcpy calls", || {
+            program.modules.iter_mut().try_for_each(|module| crate::backend::memcpycall::expanded(module, convention))
+        })?;
     }
     if options.isel == crate::backend::shadow::Selector::Dag {
         timed("mir memset patterns", || {

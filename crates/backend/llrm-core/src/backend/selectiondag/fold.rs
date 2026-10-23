@@ -287,6 +287,10 @@ impl SelectionDAG {
                 let inner = self.operand(n1, 0);
                 return Folded::Done(self.get_node(ISD::FAbs, vt, &[inner]));
             }
+            // `isGuaranteedNotToBeUndefOrPoison` (DEVIATE SD101)
+            ISD::Freeze if matches!(op_opcode, ISD::Constant | ISD::ConstantFP | ISD::Freeze) => {
+                return Folded::Done(n1);
+            }
             ISD::FpExtend if n1_type == vt => return Folded::Done(n1),
             ISD::FpToSInt | ISD::FpToUInt if self.is_undef(n1) => return Folded::Done(self.get_undef(vt)),
             _ => {}
@@ -624,7 +628,10 @@ impl SelectionDAG {
         offset: i64,
         other: SDValue,
     ) -> Option<SDValue> {
-        if global != ISD::GlobalAddress || !self.config.offset_folding {
+        if global != ISD::GlobalAddress
+            || !self.config.offset_folding
+            || !self.local_symbols.get(symbol as usize).copied().unwrap_or(true)
+        {
             return None;
         }
         let amount = signed(self.constant(other)?, self.width(other)) as i64;

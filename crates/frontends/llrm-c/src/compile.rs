@@ -101,6 +101,47 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
+/// The library routines C's runtime on `target` has (`libcalls` of its
+/// `c.toml`), each with the calling convention (LLVM's number) a call of it is
+/// made in under `abi`: the convention a routine that states none has.
+fn libcalls(
+    target: &dyn llrm_target::Target,
+    abi: Option<&str>,
+) -> Result<Vec<(String, u32)>, String> {
+    let description = target.runtime("c").ok_or("this target has no C runtime")?;
+    let names = libcall_names(&description.table()?);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile = Profile::for_abi(target, abi)?;
+    let cc = target
+        .calling()
+        .named(&profile.convention)
+        .and_then(|one| one.cc.clone())
+        .ok_or_else(|| format!("calling.toml has no {} with a cc", profile.convention))?;
+    let number = match cc.as_str() {
+        "cdecl" => 0,
+        other => llrm_mir::opcode::CONVENTIONS
+            .iter()
+            .find(|(spelled, _)| spelled.strip_suffix("cc") == Some(other))
+            .map(|(_, number)| *number)
+            .ok_or_else(|| format!("no calling convention {other:?}"))?,
+    };
+    Ok(names.into_iter().map(|name| (name, number)).collect())
+}
+
+/// The routines a runtime description names as its own (`libcalls`): none
+/// where it names none, which is how a target without them is told.
+fn libcall_names(table: &toml::Table) -> Vec<String> {
+    table
+        .get("libcalls")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|one| one.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The unit `text` records and the profile it is raised under, for `codegen`.
 pub(crate) fn prepared(
     text: &str,
@@ -611,7 +652,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         target,
         watcom,
         entry_requests,
-        codegen: llrm_core::driver::Options { rounds_float_spills: true, ..bound.options(&flags, machine) },
+        codegen: {
+            let options = bound.options(&flags, machine);
+            let libcalls = libcalls(&*bound.target, options.abi.as_deref())?;
+            llrm_core::driver::Options { rounds_float_spills: true, libcalls, ..options }
+        },
         flags,
     })
 }
@@ -829,12 +874,29 @@ mod tests {
             .collect()
     }
 
+    /// Two arrays off one stepped offset beside the counter: two steps by
+    /// constants, one by the element size (2) and one by one (the
+    /// counter, `inc`, or counting to zero `add -1` with no compare), and at
+    /// most one compare. A pointer per array is a third step.
+    fn shares_one_stepped_offset(counting: &[String]) {
+        let steps: Vec<&String> = counting.iter().filter(|one| !one.starts_with("cmp ")).collect();
+        let compares = counting.len() - steps.len();
+        let by = |one: &&String, amount: &str| {
+            one.starts_with("inc ") && amount == "1"
+                || one.starts_with("dec ") && amount == "-1"
+                || (one.starts_with("add ") || one.starts_with("sub ")) && one.ends_with(&format!(", {amount}"))
+        };
+        let counter = steps.iter().any(|one| by(one, "1") || by(one, "-1"));
+        let offset = steps.iter().any(|one| by(one, "2"));
+        assert!(steps.len() == 2 && counter && offset && compares <= 1, "{counting:?}");
+    }
+
     /// `dot` indexes `a[i]` and `b[i]`: both arrays share one stepped offset
     /// beside the counter, as `opt -passes=loop-reduce` + `llc -mcpu=i486`
     /// list it (`inc; add 2; cmp`), not a pointer per array.
     #[test]
     fn test_addresses_differing_by_base_share_one_stepped_offset() {
-        assert_eq!(loop_counting("dot"), ["inc dx", "cmp dx, cx"]);
+        shares_one_stepped_offset(&loop_counting("dot"));
     }
 
     /// `bytes` indexes by `i` itself, with a bound only known at run time: the
@@ -842,7 +904,13 @@ mod tests {
     /// (`inc; cmp`).
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
-        assert_eq!(loop_counting("bytes"), ["inc bx", "cmp bx, cx"]);
+        // The counter is the offset: one step by one and one compare with `n`
+        // (a register or its stack slot), nothing else.
+        let counting = loop_counting("bytes");
+        assert!(
+            counting.len() == 2 && counting[0].starts_with("inc ") && counting[1].starts_with("cmp "),
+            "{counting:?}"
+        );
     }
 
     /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` folds into the
@@ -850,7 +918,7 @@ mod tests {
     /// one counter, as `opt` + `llc -mcpu=i486` list it.
     #[test]
     fn test_subscripts_of_one_stride_share_one_offset() {
-        assert_eq!(loop_counting("from1"), ["inc dx", "cmp dx, cx"]);
+        shares_one_stepped_offset(&loop_counting("from1"));
         let loop_ = innermost("from1");
         let two_registers = |one: &String| {
             let inside = one.split_once("ptr [").map_or("", |(_, inside)| inside).as_bytes();
@@ -1707,6 +1775,21 @@ mod tests {
     /// while the real-mode target's was the x87 type: `-fld` was a switch
     /// in one target's file. The profile adds it where the layout has the x87
     /// type.
+    /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
+    /// there), a named one is a call: the m16 runtime names none and the m32
+    /// one names none until its `memcpy` is shipped
+    /// (runtime/c/x86-m32/ext.asm).
+    #[test]
+    fn test_a_runtime_names_its_libcalls_and_none_by_default() {
+        let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
+        assert_eq!(super::libcall_names(&table), ["memcpy"]);
+        assert!(super::libcall_names(&toml::Table::new()).is_empty());
+        for target in [&llrm_x86_m16::M16 as &dyn llrm_target::Target, &llrm_x86_m32::M32] {
+            let described = target.runtime("c").unwrap().table().unwrap();
+            assert!(super::libcall_names(&described).is_empty(), "{} names no libcalls yet", target.name());
+        }
+    }
+
     #[test]
     fn test_every_x86_target_asks_for_the_x87_long_double_once() {
         for profile in
@@ -1934,16 +2017,25 @@ mod tests {
 
     /// tests/fixtures/c/regparm3.c compiled under `-mabi=regparm3`.
     fn regparm3_listing(level: llrm_core::driver::flags::Level) -> String {
+        regparm3_listing_with(level, |_| {})
+    }
+
+    /// `regparm3_listing`, the pipeline options adjusted by `tune`.
+    fn regparm3_listing_with(
+        level: llrm_core::driver::flags::Level,
+        tune: impl FnOnce(&mut llrm_transforms::pipeline::Options),
+    ) -> String {
         let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap();
         let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regparm3.c");
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regparm3.c");
         let machine =
             llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let options = llrm_core::driver::Options {
+        let mut options = llrm_core::driver::Options {
             abi: Some("regparm3".to_owned()),
             pipeline: level.options(),
             ..llrm_driver::m16_options(machine)
         };
+        tune(&mut options.pipeline);
         let built = super::selected(&text, "regparm3", None, &options).unwrap();
         llrm_core::backend::masm::text(&built).unwrap()
     }
@@ -2039,11 +2131,10 @@ mod tests {
     #[test]
     fn test_m16_regparm3_a_small_struct_argument_is_on_the_stack() {
         let body = regparm3("_take4");
-        assert!(
-            body.contains(&"mov ax, word ptr [bp+6]".to_owned())
-                && body.contains(&"mov ax, word ptr [bp+8]".to_owned()),
-            "{body:?}"
-        );
+        // Which register takes each word is the allocator's: the struct is read
+        // from [bp+6] and [bp+8], and no register holds it.
+        let reads = |cell: &str| body.iter().filter(|line| line.contains(&format!("word ptr [bp+{cell}]"))).count();
+        assert!(reads("6") >= 1 && reads("8") >= 1, "{body:?}");
     }
 
     /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it
@@ -2074,9 +2165,14 @@ mod tests {
     /// and its callee removes them (`ret 4`), its callers nothing.
     #[test]
     fn test_m16_regparm3_calleepop_removes_the_stack_arguments_in_the_callee() {
-        let body = regparm3("_many");
+        // `many` is static and small: inlined into `call_many` it has no
+        // procedure. Kept a call, as the test means it.
+        let asm = regparm3_listing_with(llrm_core::driver::flags::Level::O2, |pipeline| {
+            pipeline.inline = llrm_transforms::inline::Threshold { limit: 0, last: false, ..pipeline.inline };
+        });
+        let body = procedure_of(&asm, "_many@3");
         assert_eq!(body.last().map(String::as_str), Some("ret 4"), "{body:?}");
-        let caller = regparm3("_call_many");
+        let caller = procedure_of(&asm, "_call_many@3");
         assert!(!caller.iter().any(|line| line.starts_with("add sp")), "{caller:?}");
     }
 
@@ -2149,16 +2245,41 @@ mod tests {
     /// operand more each (bench recchop/c -Os: +185).
     #[test]
     fn test_m16_regparm3_a_slot_a_register_still_holds_is_read_from_the_register() {
-        let body = regparm3_at("_chop", llrm_core::driver::flags::Level::Os);
-        let stored = body
-            .iter()
-            .position(|line| line.contains("ptr [bp-") && (line.ends_with(", dx") || line.ends_with(", edx")))
-            .expect("dx is stored to a slot");
-        let slot = body[stored].split(']').next().unwrap().rsplit(' ').next().unwrap().to_owned();
-        let until_dx_changes = body[stored + 1..]
-            .iter()
-            .take_while(|line| !line.contains(" dx,") && !line.contains(" edx,") && !line.contains("call"));
-        assert!(until_dx_changes.clone().all(|line| !line.contains(&slot)), "{body:?}");
+        // The premise moved with the allocator (`_chop` no longer stores dx at
+        // entry), so the property is asked of every store of a register
+        // to a frame slot in the listing: until the register is written, the
+        // slot is not read.
+        let listing = regparm3_listing(llrm_core::driver::flags::Level::Os);
+        let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+        let written = |line: &str, register: &str| {
+            line.split_once(' ')
+                .is_some_and(|(_, rest)| rest.split(',').next().is_some_and(|dest| dest.trim() == register))
+        };
+        let mut stores = 0;
+        for (at, line) in lines.iter().enumerate() {
+            let Some((slot_part, register)) = line.strip_prefix("mov ").and_then(|rest| rest.split_once(", ")) else {
+                continue;
+            };
+            let Some(slot) = slot_part.strip_prefix("word ptr [bp-").map(|rest| rest.trim_end_matches(']')) else {
+                continue;
+            };
+            if !matches!(register, "ax" | "bx" | "cx" | "dx" | "si" | "di") {
+                continue;
+            }
+            stores += 1;
+            let reads = lines[at + 1..]
+                .iter()
+                .take_while(|next| !written(next, register) && !next.contains("call") && !next.ends_with("endp"))
+                .filter(|next| !next.starts_with("mov word ptr [bp-") && next.contains(&format!("[bp-{slot}]")))
+                .count();
+            assert_eq!(
+                reads,
+                0,
+                "{register} is read back from [bp-{slot}] while it holds the value: {:?}",
+                &lines[at..at + 8.min(lines.len() - at)]
+            );
+        }
+        assert!(stores > 0, "the listing stores no register to a slot: the property is vacuous");
     }
 
     /// A far pointer is returned as one dword, offset low: the callee joins the
@@ -2263,10 +2384,14 @@ mod tests {
     #[test]
     fn test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free() {
         let body = watcall16("mixed_");
+        // The allocator names the registers the extensions land in; what is
+        // read is the convention's: the pair in BX (low) and CX, `c` in
+        // DX, `a` in AX.
+        let reads = |op: &str, source: &str| {
+            body.iter().any(|line| line.starts_with(&format!("{op} ")) && line.ends_with(&format!(", {source}")))
+        };
         assert!(
-            body.contains(&"movzx esi, bx".to_owned())
-                && body.contains(&"movzx ebx, cx".to_owned())
-                && body.contains(&"movsx ebx, dx".to_owned()),
+            reads("movzx", "bx") && reads("movzx", "cx") && reads("movsx", "dx") && reads("movsx", "ax"),
             "{body:?}"
         );
         let body = watcall16("far_pointer_");
@@ -2285,7 +2410,10 @@ mod tests {
     fn test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax() {
         let body = watcall16("result_");
         assert!(
-            body.contains(&"mov dword ptr [si], ebx".to_owned()) && body.contains(&"mov ax, si".to_owned()),
+            // The 6-byte result is written through SI (a dword and a word, or
+            // words: the combiner and allocator choose) and SI is returned.
+            body.iter().filter(|line| line.starts_with("mov ") && line.contains("ptr [si")).count() >= 2
+                && body.contains(&"mov ax, si".to_owned()),
             "{body:?}"
         );
         assert_eq!(body.last().map(String::as_str), Some("retf"));
@@ -3323,22 +3451,26 @@ mod tests {
     /// A flat string operation takes its operands in ESI, EDI and ECX with no
     /// segment operand: it was `movs dword ptr es:[di], dword ptr ebx:[si]`
     /// with the source and count in whatever registers the allocator chose,
-    /// and a refusal ("may be in no register") before that.
+    /// and a refusal ("may be in no register") before that. A struct copy
+    /// (strcopy.c) is the string operation: the old fixture, a copy loop
+    /// between two frame arrays, is no `rep movsd` any more, the copy being
+    /// dead.
     #[test]
     fn test_m32_lists_a_string_copy_through_esi_edi_ecx() {
-        let lines = flat_listing("strings");
-        let at = lines.iter().position(|line| line == "rep movsd").expect("a rep movsd");
+        let lines = flat_listing("strcopy");
+        let at = lines.iter().position(|line| line == "rep movsd").unwrap_or_else(|| panic!("a rep movsd: {lines:#?}"));
         let before = &lines[..at];
         assert!(
-            before.iter().any(|line| line.starts_with("lea esi, [esp"))
-                && before.iter().any(|line| line.starts_with("lea edi, [esp")),
+            before.iter().any(|line| line.starts_with("mov esi") || line.starts_with("lea esi"))
+                && before.iter().any(|line| line.starts_with("mov edi") || line.starts_with("lea edi")),
             "{before:#?}"
         );
         assert!(
-            before.iter().rev().take(4).any(|line| line == "shr ecx, 2" || line.starts_with("mov ecx")),
+            before.iter().rev().take(4).any(|line| line.starts_with("mov ecx") || line == "shr ecx, 2"),
             "{before:#?}"
         );
-        let object = flat_object("strings");
+        assert!(!lines.iter().any(|line| line.contains("es:") || line.contains("ebx:")), "{lines:#?}");
+        let object = flat_object("strcopy");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
     }
@@ -3543,16 +3675,24 @@ mod tests {
             .take_while(|line| *line != "sum_ endp")
             .map(String::as_str)
             .collect();
-        // The load is the add's operand, indexed `[base+index*4]`; the counter
-        // steps by one and the compare ends the loop, as llc lists it.
-        let at = body
-            .iter()
-            .position(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("*4]"));
+        // The load is the add's operand, addressed by a 32-bit register; the
+        // pointer or the index steps by a constant and a conditional
+        // jump ends the loop (llc lists `inc; cmp; jl` or, counting to zero,
+        // `add -1; jne`).
+        let at = body.iter().position(|line| line.starts_with("add e") && line.contains("dword ptr [e"));
         let at = at.unwrap_or_else(|| panic!("{body:#?}"));
-        assert!(
-            body[at + 1].starts_with("inc e") && body[at + 2].starts_with("cmp e") && body[at + 3].starts_with("jl "),
-            "{body:#?}"
-        );
+        let jump = body[at..].iter().position(|line| line.starts_with('j') && !line.starts_with("jmp")).map(|k| at + k);
+        let jump = jump.unwrap_or_else(|| panic!("{body:#?}"));
+        let steps = body[at + 1..jump]
+            .iter()
+            .filter(|line| {
+                line.starts_with("inc e")
+                    || line.starts_with("dec e")
+                    || ((line.starts_with("add e") || line.starts_with("sub e"))
+                        && line.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok()))
+            })
+            .count();
+        assert!(steps >= 2, "the pointer or index and the counter step by constants: {body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

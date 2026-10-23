@@ -198,9 +198,7 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        if self.copies_from_constant(src) {
-            return Err(Refused("memcpy from constant data"));
-        }
+        let slice = self.constant_slice(src);
         let widest = u64::from(self.target.dag.pointer.size_in_bits() / 8);
         let Some(ops) = Self::mem_ops(size, widest, limit, false) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
@@ -211,6 +209,29 @@ impl Builder<'_> {
                 dst_off -= width - left;
             }
             let vt = EVT::integer(width as u32 * 8);
+            // `getMemsetStringVal`: the bytes from the source's offset, zero
+            // past the end, as an immediate stored on the root
+            if let Some((bytes, base)) = &slice {
+                let mut value = 0u128;
+                for at in 0..width {
+                    let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                }
+                let value = self.dag.get_constant(value, vt);
+                let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
+                let info = MemInfo {
+                    mem_vt: vt,
+                    align: common_alignment(dst_align, dst_off) as u32,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                };
+                chains.push(self.dag.get_store(chain, value, to, info));
+                src_off += width;
+                dst_off += width;
+                left = left.saturating_sub(width);
+                continue;
+            }
             let from = self.dag.get_object_ptr_offset(src, src_off as i64);
             let info = MemInfo {
                 mem_vt: vt,
@@ -354,21 +375,81 @@ impl Builder<'_> {
         extended
     }
 
-    /// `isMemSrcFromConstant`: the source is (an offset of) a constant global.
-    fn copies_from_constant(
+    /// `isMemSrcFromConstant` (`getConstantDataArrayInfo`): the bytes of a
+    /// constant global's initializer and the source's offset into them; no
+    /// bytes is `zeroinitializer`. An initializer with an address in it has no
+    /// bytes (`ReadByteArrayFromGlobal` fails) and is read with loads.
+    fn constant_slice(
         &self,
         src: SDValue,
-    ) -> bool {
-        let base = if self.dag.opcode(src) == ISD::Add { self.dag.operand(src, 0) } else { src };
-        match self.dag.node(base).data {
-            NodeData::Global { symbol, .. } => {
-                matches!(
-                    &self.module.globals[symbol as usize].kind,
-                    llrm_mir::module::GlobalKind::Variable(variable) if variable.constant
-                )
-            }
-            _ => false,
+    ) -> Option<(Option<Vec<u8>>, u64)> {
+        let (base, delta) = if self.dag.opcode(src) == ISD::Add {
+            (self.dag.operand(src, 0), self.dag.constant(self.dag.operand(src, 1))? as u64)
+        } else {
+            (src, 0)
+        };
+        let NodeData::Global { symbol, offset } = self.dag.node(base).data else { return None };
+        let llrm_mir::module::GlobalKind::Variable(variable) = &self.module.globals[symbol as usize].kind else {
+            return None;
+        };
+        let init = variable.initializer.filter(|_| variable.constant)?;
+        let from = u64::try_from(delta as i64 + offset).ok()?;
+        let types = &self.module.context.types;
+        let size = self.layout.store_size(types, self.module.context.get(init).ty);
+        (from <= size).then_some(())?;
+        if matches!(self.module.context.get(init).kind, ConstantKind::Zero) {
+            return Some((None, from));
         }
+        let mut bytes = vec![0; size as usize];
+        self.flatten(init, &mut bytes, 0)?;
+        Some((Some(bytes), from))
+    }
+
+    /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
+    /// puts them; `None` for anything but integers, floats and aggregates of
+    /// them.
+    fn flatten(
+        &self,
+        id: llrm_mir::context::ConstantId,
+        bytes: &mut [u8],
+        at: usize,
+    ) -> Option<()> {
+        use llrm_mir::types::{FloatKind, Type};
+        let constant = self.module.context.get(id);
+        let types = &self.module.context.types;
+        match &constant.kind {
+            ConstantKind::Int(bits) => {
+                let width = types.int_bits(constant.ty)?;
+                (width % 8 == 0).then_some(())?;
+                let count = (width / 8) as usize;
+                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+            }
+            ConstantKind::Float(bits) => match types.get(constant.ty) {
+                Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
+                    let count = kind.value_bytes() as usize;
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                }
+                _ => return None,
+            },
+            ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison => {}
+            ConstantKind::Bytes(data) => bytes.get_mut(at..at + data.len())?.copy_from_slice(data),
+            ConstantKind::Aggregate(members) => match types.get(constant.ty) {
+                Type::Array { element, .. } => {
+                    let stride = self.layout.alloc_size(types, *element) as usize;
+                    for (index, member) in members.iter().enumerate() {
+                        self.flatten(*member, bytes, at + index * stride)?;
+                    }
+                }
+                _ => {
+                    let (_, offsets) = self.layout.struct_layout(types, constant.ty);
+                    for (member, offset) in members.iter().zip(offsets) {
+                        self.flatten(*member, bytes, at + offset as usize)?;
+                    }
+                }
+            },
+            _ => return None,
+        }
+        Some(())
     }
 
     fn visit_mem_intrinsic(

@@ -33,7 +33,13 @@ fn opcode_name(code: u32) -> String {
     table::MACHINE_OPCODES
         .iter()
         .find(|(v, _)| u32::from(*v) == code)
-        .map_or_else(|| format!("#{code}"), |(_, n)| n.split('|').next().unwrap().to_string())
+        .map(|(_, n)| n.split('|').next().unwrap())
+        // The hand matchers' instructions (`CDQ`, `DIV32r`) are in no pattern
+        // of the table.
+        .or_else(|| {
+            llrm_dagisel::generated::ids::x86::NAMES.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n)
+        })
+        .map_or_else(|| format!("#{code}"), str::to_string)
 }
 
 fn main() {

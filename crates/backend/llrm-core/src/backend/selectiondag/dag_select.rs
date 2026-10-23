@@ -124,7 +124,7 @@ pub(crate) fn do_instruction_selection(
 
 /// The nodes the root reaches in reverse topological order: a node comes before
 /// everything it reads.
-fn users_first(dag: &SelectionDAG) -> Vec<u32> {
+pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     let mut order = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![(dag.get_root().node, false)];
