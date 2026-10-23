@@ -166,9 +166,8 @@ fn a_sum_of_two_arguments_goes_through() {
     assert_eq!(blocks.len(), 1, "{blocks:#?}");
     let names: Vec<&str> =
         blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
-    assert_eq!(names, ["mov", "add", "mov", ""], "{blocks:#?}");
+    assert_eq!(names, ["mov", "add", ""], "{blocks:#?}");
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
-    assert!(blocks[0][2].starts_with("[Reg(Reg { register: EAX"), "the sum is returned in EAX: {blocks:#?}");
 }
 
 /// `x * 5` reaches selection with no `MUL` node: the combiner ran between
@@ -212,7 +211,7 @@ fn a_load_of_a_global_is_one_instruction_on_the_symbol() {
     let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
     let names: Vec<&str> =
         blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
-    assert_eq!(names, ["mov", "mov", ""], "the load, the copy to EAX, the unnamed return: {blocks:#?}");
+    assert_eq!(names, ["mov", ""], "the load, the return that requires it in EAX: {blocks:#?}");
     assert!(blocks[0][0].contains("addr: Some"), "the load reads the symbol's cell: {blocks:#?}");
 }
 

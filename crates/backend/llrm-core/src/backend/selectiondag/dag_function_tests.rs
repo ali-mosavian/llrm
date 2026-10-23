@@ -1,4 +1,5 @@
 use super::dag_function::selected;
+use crate::model::ir::Operation;
 
 const SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %b) {
@@ -24,7 +25,7 @@ fn names(text: &str) -> Result<Vec<String>, String> {
 /// two stack arguments comes out as the instructions the pin selects.
 #[test]
 fn a_function_of_one_block_is_selected_to_lir() {
-    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", ""]);
+    assert_eq!(names(SUM).unwrap(), ["mov", "add", ""]);
 }
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -949,4 +950,30 @@ fn a_branch_on_flags_follows_the_compare_that_made_them() {
             "{name} after {before:?}: {names:?}"
         );
     }
+}
+
+const PAIR: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) {
+entry:
+  %hi = zext i32 %a to i64
+  %sh = shl i64 %hi, 32
+  %lo = zext i32 %b to i64
+  %r = or i64 %sh, %lo
+  ret i64 %r
+}
+";
+
+/// `pair(a, b)` returned `(b << 32) | b`: the low half was copied to EAX, where
+/// `a` was held for the high half, and the `ret` required nothing, so the
+/// allocator saw no claim on EAX. The `ret` requires both return registers.
+#[test]
+fn a_ret_requires_the_registers_it_returns_in() {
+    let module = llrm_mir::parse::module(PAIR).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let ret = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Return)).expect("a ret");
+    let mut registers: Vec<_> = ret.requires.iter().map(|(_, register)| *register).collect();
+    registers.sort_by_key(|r| r.index());
+    assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{ret:?}");
 }

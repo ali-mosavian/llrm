@@ -182,6 +182,8 @@ struct Emitter<'a, 'd> {
     accumulator: HashMap<llrm_lir::registers::RegId, Held>,
     /// The arguments passed in registers to the call being built.
     arguments: Vec<(Held, llrm_lir::registers::RegId)>,
+    /// The values copied to the return registers, which the `RET` requires.
+    returns: Vec<(Held, llrm_lir::registers::RegId)>,
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, Callee)>,
     /// The call whose result registers have not been named yet: (block, insn).
@@ -271,6 +273,7 @@ pub fn emit_in(
         sp_values: Default::default(),
         accumulator: HashMap::new(),
         arguments: Vec::new(),
+        returns: Vec::new(),
         calls: Vec::new(),
         last_call: None,
         flags_now: None,
@@ -437,6 +440,17 @@ impl Emitter<'_, '_> {
                 self.arguments.push((held, register));
                 Ok(())
             }
+            // A value returned in a register is required there by the `RET`,
+            // as a call's arguments are by the call: a plain copy to EAX is
+            // no claim on EAX, and another return value held in it is lost.
+            ISD::CopyToReg if self.feeds_return(n) => {
+                let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("a virtual register returned".to_owned()));
+                };
+                let held = self.held_operand(node.ops[2])?;
+                self.returns.push((held, register));
+                Ok(())
+            }
             ISD::CopyToReg if self.feeds_implicit_operand(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register in a division sequence".to_owned()));
@@ -558,7 +572,12 @@ impl Emitter<'_, '_> {
             // pass adds the epilogue before it.
             // Unnamed: the printer says `retf` in a far procedure and `ret` in
             // a near one.
-            self.push(Operation::Return, "", Vec::new(), Vec::new());
+            let requires = std::mem::take(&mut self.returns);
+            let uses = requires.iter().map(|(held, _)| held.value).collect();
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Return) };
+            let at = self.next_address();
+            let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+            self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
         if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {
@@ -812,6 +831,13 @@ impl Emitter<'_, '_> {
 
     /// Whether the `CopyToReg` node `n` passes an argument in a register to
     /// the call its glue leads to.
+    fn feeds_return(
+        &self,
+        n: u32,
+    ) -> bool {
+        self.glue_reaches(n, |name| name.starts_with("RET"))
+    }
+
     fn feeds_call(
         &self,
         n: u32,
