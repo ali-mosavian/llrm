@@ -285,3 +285,24 @@ fn a_local_is_a_frame_cell_below_bp() {
     assert_eq!(done.depth, 4);
     assert_eq!(done.extents, [(-4, 4)]);
 }
+
+const FLOAT64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(i64 %a) {
+entry:
+  %d = uitofp i64 %a to double
+  ret double %d
+}
+";
+
+/// A conversion of an `i64` to a float is lowered by the target's hooks while
+/// the types are legalized; the driver gave the type legalizer none, so the
+/// function stopped at `Legalize(UIntToFp ... expand operand)` (15 + 11 + 6
+/// functions of the corpora).
+#[test]
+fn the_type_legalizer_has_the_targets_hooks() {
+    let module = llrm_mir::parse::module(FLOAT64).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .err()
+        .map_or_else(String::new, |e| e.0);
+    assert!(!why.contains("expand operand"), "{why}");
+}
