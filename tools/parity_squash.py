@@ -680,6 +680,41 @@ def new_scanner_failures(
     return failed - (on_head or _scanners_failing_on_head)(targets)
 
 
+def new_link_failures(
+    files: list[str],
+    build=None,
+    check=None,
+) -> list[str]:
+    """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
+    and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import link_check  # noqa: PLC0415
+
+    if not link_check.touches_runtime(files):
+        print("link: skipped (nothing the programs link against changed)")
+        return []
+    (build or _build_release)()
+    failures = (check or _link_programs)()
+    print(f"link: {len(link_check.QB_PROGRAMS)} QB + {len(link_check.C_PROGRAMS)} C programs, {len(failures)} do not link")
+    return failures
+
+
+def _build_release() -> None:
+    from buildslot import slotted  # noqa: PLC0415
+
+    subprocess.run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=ROOT, check=True)
+
+
+def _link_programs() -> list[str]:
+    import link_check  # noqa: PLC0415
+
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
+    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+        (target / "release" / name).touch()  # the runners refuse a binary older than its sources
+    os.environ["LLRM_BIN"] = str(target / "release")
+    return link_check.link_failures(target / "link-check")
+
+
 def scanner_tests_line(
     targets: list[str],
     failed: set[str],
@@ -800,6 +835,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
                 failed_units.update(new)
                 return False
+        if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
+            failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
+            return False
         return True
 
     def merge_alone(number: str) -> bool:
