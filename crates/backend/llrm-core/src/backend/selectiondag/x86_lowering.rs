@@ -63,7 +63,12 @@ pub mod x86isd {
     /// A huge pointer plus an `i32` byte delta (a GEP the builder cannot
     /// prove stays in its segment): `(far, i32) -> far`. Expanded by the
     /// type legalizer, never selected.
-    pub const HUGE_ADD: ISD = ISD::Target(24579);
+    pub const HUGE_ADD: ISD = ISD::Target(24590);
+    /// `llrm.ia16.window.p1.p3` as a node: a huge pointer with whole selector
+    /// steps of its offset moved into the selector, `far -> far`. Expanded by
+    /// the type legalizer, never selected (24578..24580 are the asm
+    /// pass-through nodes).
+    pub const LLRM_WINDOW: ISD = ISD::Target(24581);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);

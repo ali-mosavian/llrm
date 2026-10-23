@@ -105,7 +105,6 @@ pub fn tied(
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
-    let mut changed = false;
     let mut counter = body.next_value();
     let mut mint = || {
         counter += 1;
@@ -119,7 +118,6 @@ pub fn tied(
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
-    let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::new(&facts, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -130,13 +128,13 @@ pub fn tied(
             let dist = walk.pass(&one);
             let commuted = walk.try_instruction_commute(&one, dist);
             if let Some(chosen) = &commuted {
-                changed = true;
+                facts.rewrite(at, work[place].id(), Arc::clone(chosen));
+                work[place] = Arc::clone(chosen);
                 one = Arc::clone(chosen);
             }
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
             // a later reader goes below it.
             if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
-                changed = true;
                 continue;
             }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
@@ -147,7 +145,6 @@ pub fn tied(
                     || profitable_to_convert(&fixed, &one, base.value, body.regs()))
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
             {
-                changed = true;
                 if let Some(what) = one.what.as_ref()
                     && what.name.as_deref() == Some("add")
                     && matches!(what.sources.get(1), Some(Loc::Held(_)))
@@ -155,6 +152,8 @@ pub fn tied(
                 {
                     walk.note_lea(into.value);
                 }
+                facts.rewrite(at, work[place].id(), Arc::clone(&three));
+                work[place] = Arc::clone(&three);
                 insns.push(three);
                 place += 1;
                 continue;
@@ -162,7 +161,6 @@ pub fn tied(
             // `rescheduleKillAboveMI`: the reader that kills the source goes
             // above the tied instruction.
             if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
-                changed = true;
                 continue;
             }
             place += 1;
@@ -170,12 +168,15 @@ pub fn tied(
                 insns.push(one);
                 continue;
             };
+            facts.replace(at, &one, &fix);
             insns.extend(fix);
-            changed = true;
         }
-        blocks.push(block.with_insns(insns));
+        debug_assert!(
+            insns.iter().map(|one| one.id()).eq(facts.body_like(body).blocks[at].insns.iter().map(|one| one.id())),
+            "the intervals' block is not the pass's"
+        );
     }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
+    facts.finish(body)
 }
 
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
@@ -1156,6 +1157,20 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
 
+    /// The copy of a tied add's result goes below the kill with it: the
+    /// intervals are moved the copy first, below what it reads. The add
+    /// moved first was a def moved below its own reader, and `handleMove`
+    /// asserted on a segment that ends before the new place ("Must have
+    /// following segment": 7 of QCport's modules did not compile at -Os).
+    #[test]
+    fn test_a_tied_add_with_a_copy_of_its_result_goes_below_the_kill_with_it() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, copy_insn(2, 9, 8), lea_of(3, 5, 7), read(4, 9), read(5, 5)];
+        let got = tied(&of(insns), Off);
+        let names = names_of(&got);
+        assert!(position(&got, "lea") < position(&got, "add"), "{names:?}");
+    }
+
     /// The pin's checks: a kill that is a copy, or a call between, leaves the
     /// add where it was.
     #[test]
@@ -1214,6 +1229,8 @@ mod tests {
             vec![],
         ));
         flags_live.push(read(4, 7));
+        // a body the intervals can be made of: what is read is defined
+        flags_live.insert(0, imm_def(5, 6));
         assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
@@ -1281,12 +1298,12 @@ mod tests {
         assert_eq!(fixed[1].uses, [900]);
     }
 
-    /// Update in place and the tied rewrite each walked the body for liveness
-    /// rows: twice a body, 4.0 M of TwoAddress's 10.0 M at d_faces -O2. The
-    /// update in place asks only whether a value read once is read in its own
-    /// block, which the use counts answer.
+    /// The pin builds one `LiveIntervals` for the function and edits it
+    /// (TwoAddressInstructionPass.cpp#L394): the pass walked the body for
+    /// liveness rows (DEVIATE TA-6, 3.0 M Ir at m32 to build an interval set
+    /// per phase otherwise); now one `LiveIntervals::new` and no walk.
     #[test]
-    fn test_two_address_walks_the_body_for_liveness_once_and_builds_no_intervals() {
+    fn test_two_address_builds_one_live_intervals_and_walks_the_body_for_no_liveness_rows() {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
@@ -1318,12 +1335,9 @@ mod tests {
         let names: Vec<_> =
             got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
-        // The pin shares one LiveIntervals with the coalescer; here the kills
-        // are one backward scan over the live-out rows and none is
-        // built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
-        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);
+        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 1);
     }
 }

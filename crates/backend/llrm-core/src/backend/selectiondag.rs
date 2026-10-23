@@ -89,6 +89,10 @@
 //! arithmetic on frozen operands, `Register`s of known width and the like).
 //! Exit: with the known-bits translation (sdag-b). Owner sdag-a.
 //!
+//! DEVIATE SD102: an `invoke` has no `EH_LABEL`s around its call and a
+//! `landingpad` builds nothing: the QB personality's pad is entered by the
+//! runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -104,6 +108,8 @@ pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
 pub mod dagisel_adapter;
+pub mod div_combine;
+pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
@@ -152,9 +158,13 @@ mod fpround_tests;
 #[cfg(test)]
 mod freeze_tests;
 #[cfg(test)]
+mod invoke_tests;
+#[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]
 mod memconst_tests;
+#[cfg(test)]
+mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]

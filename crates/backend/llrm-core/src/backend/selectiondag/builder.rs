@@ -532,6 +532,29 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `visitInvoke`: the call, then the branch to the normal block. The
+    /// unwind edge is a CFG edge only; QB's runtime enters its pad, so no
+    /// `EH_LABEL`s or tables (DEVIATE SD102).
+    fn visit_invoke(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: &llrm_mir::opcode::CallInfo,
+    ) -> Result<(), Refused> {
+        // the arguments, the normal and unwind blocks, then the callee
+        let [.., Operand::Block(normal), Operand::Block(_), callee] = instruction.operands[..] else {
+            return Err(Refused("invoke without its blocks"));
+        };
+        let mut call = instruction.clone();
+        call.operands.truncate(instruction.operands.len() - 3);
+        call.operands.push(callee);
+        self.visit_call(&call, info)?;
+        let root = self.control_root();
+        let dest = self.dag.get_basic_block(normal.0);
+        let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
@@ -882,8 +905,12 @@ impl Builder<'_> {
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
-            // a far global's selector is a segment-of-symbol form not built yet
-            ConstantKind::Global(_) if vt == MVT::Far.into() => Err(Refused("address of a far global")),
+            // a far global: its offset and the selector of its segment
+            ConstantKind::Global(global) if vt == MVT::Far.into() => {
+                let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
+                let segment = self.segment_of(Some(global.0));
+                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+            }
             ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
                 source,
@@ -894,10 +921,20 @@ impl Builder<'_> {
             }) => {
                 let base = self.constant_value(operands[0])?;
                 let indices: Vec<Operand> = operands[1..].iter().map(|id| Operand::Constant(*id)).collect();
+                if self.dag.value_type(base) == MVT::Far.into() {
+                    let pointer = Operand::Constant(operands[0]);
+                    return self.far_gep(pointer, base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices);
+                }
                 self.gep_value(base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices)
             }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op, value }) => {
                 let operand = self.constant_value(*value)?;
+                if *op == CastOp::AddrSpaceCast
+                    || self.dag.value_type(operand) == MVT::Far.into()
+                    || vt == MVT::Far.into()
+                {
+                    return self.pointer_cast(*op, Operand::Constant(*value), operand, constant.ty);
+                }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
             }
             _ => Err(Refused("aggregate constant")),
@@ -1016,7 +1053,10 @@ impl Builder<'_> {
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
-            Opcode::Invoke(_) => return Err(Refused("invoke")),
+            Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
+            // QB's pad is entered by the runtime, which `ehprepare` set up
+            // and whose selector it took out: nothing to build
+            Opcode::LandingPad { .. } => {}
             other => return Err(Refused(Box::leak(format!("instruction {}", other.mnemonic()).into_boxed_str()))),
         }
         if !instruction.opcode.is_terminator() {
@@ -1187,12 +1227,16 @@ impl Builder<'_> {
                             ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
                         )
                     );
-                    // a global's selector (DGROUP) waits on the
-                    // segment-of-symbol form
-                    if !framed {
-                        return Err(Refused("near pointer to far, outside the frame"));
-                    }
-                    let selector = self.stack_selector();
+                    // a frame object is in SS; a global is in its own segment;
+                    // any other near pointer is into DGROUP
+                    let selector = match base {
+                        _ if framed => self.stack_selector(),
+                        Operand::Constant(id) => match self.module.context.get(id).kind {
+                            ConstantKind::Global(global) => self.segment_of(Some(global.0)),
+                            _ => self.segment_of(None),
+                        },
+                        _ => self.segment_of(None),
+                    };
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 _ => Err(Refused("cast to a far pointer")),
@@ -1203,6 +1247,14 @@ impl Builder<'_> {
             CastOp::AddrSpaceCast if from == dest => Ok(operand),
             _ => Err(Refused("cast between address spaces")),
         }
+    }
+
+    /// The selector of the segment `global` lives in (`SEGMENT_OF`).
+    fn segment_of(
+        &mut self,
+        global: Option<u32>,
+    ) -> SDValue {
+        self.dag.get_segment_of(global)
     }
 
     /// `SS`, the stack's selector.
@@ -1345,7 +1397,16 @@ impl Builder<'_> {
             }
             Operand::Block(_) => MemBase::Unknown,
         };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space: 0 })
+        // a far access goes through the offset half after `LES`, so `ES`
+        // (llrm's own space 259); the pin's 256..258 are `gs`, `fs`, `ss`
+        let space =
+            match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty))
+            {
+                Some(Type::Pointer(_)) if self.operand_type(pointer)? == MVT::Far.into() => 259,
+                Some(Type::Pointer(space)) if (256..259).contains(space) => *space,
+                _ => 0,
+            };
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
     }
 
     fn visit_load(

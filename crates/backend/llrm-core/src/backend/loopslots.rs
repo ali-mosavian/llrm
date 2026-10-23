@@ -1794,7 +1794,8 @@ mod tests {
     /// `nest(d)` as the front end's pipeline hands it to isel: whether an
     /// instruction fits a slot in a register was asked again for each loop
     /// around it, so that the asks grew with the square of the depth. Asked
-    /// once for each instruction and slot, they grow with the nest.
+    /// once for each instruction and slot, they grow with the nest: doubling
+    /// the depth doubles the step, where the square quadruples it.
     #[test]
     fn test_the_nest_asks_what_fits_a_slot_once_however_deep_the_loops() {
         use crate::backend::regalloc_input::{Calls, before_phase};
@@ -1812,7 +1813,7 @@ mod tests {
             "premise: every loop of the nest but the outermost, which the function's exit bounds, is ranked ({ranked4}, {ranked8}, {ranked16})"
         );
         assert!(
-            fitted16 < 3 * fitted8 && fitted8 < 3 * fitted4,
+            fitted16 - fitted8 < 3 * (fitted8 - fitted4),
             "{fitted4}, {fitted8}, {fitted16} asks for nests 4, 8 and 16 deep"
         );
     }
