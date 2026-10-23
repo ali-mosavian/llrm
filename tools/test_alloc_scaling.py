@@ -311,7 +311,7 @@ def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block(
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
         # The spiller's route, which -Omax alone makes by default, is the subject.
-        run = steps(compiler, source, "-O2", "-fallocation-routes")
+        run = steps(compiler, source, "-O2")
     assert run["ssa simulated"] < 150, f"branches N=400 -O2: ssa simulated cost {run['ssa simulated']} Minstr (150 allowed; 693 before): {run}"
 
 

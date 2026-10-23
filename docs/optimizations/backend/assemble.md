@@ -52,13 +52,6 @@ route's price is the instructions and memory operands it is expected to
 execute (`executed::work`), or its encoded bytes at -Os, plus two for each
 register it must save; a tie is decided by the other measure.
 
-Below -Omax `directed` runs the allocator alone first and runs the spiller
-route only if at least 0.5% of the weighted instructions are spill or
-frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route,
-`measure` runs both whatever the traffic and `LLRM_DEBUG=routes` says what
-the allocator alone left. With `-fallocation-routes` off the allocator runs
-alone.
-
 When all functions are done the module's constants are added to the data,
 stack checks the program proves unneeded are elided, undefined names
 become externs, and debug info is described.
