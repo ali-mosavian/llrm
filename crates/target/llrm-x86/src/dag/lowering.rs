@@ -82,9 +82,10 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], false)
     }
 
-    /// m16: the same registers, and the far pointer (SD2).
+    /// m16: `i8` and `i16` registers (the builder's `legal_ints`), so an `i32`
+    /// is a pair of `i16`; and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
-        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)
+        TargetLoweringInfo::new(&[MVT::I8, MVT::I16], true)
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
