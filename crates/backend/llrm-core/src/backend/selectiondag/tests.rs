@@ -15,7 +15,6 @@ fn arg(
 mod action_table;
 mod and_fold;
 mod bit_counts;
-mod m16_coverage;
 mod builder;
 mod combiner;
 mod expand_node;
@@ -28,6 +27,7 @@ mod i1_branch;
 mod int_to_fp;
 mod legalize_dag;
 mod legalize_types;
+mod m16_coverage;
 mod pair_arith;
 mod pair_mul;
 mod setcc_result;
