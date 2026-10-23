@@ -15,13 +15,13 @@ fn arg(
 mod action_table;
 mod and_fold;
 mod bit_counts;
+mod bitcast_float;
 mod br_jt;
 mod builder;
 mod combiner;
 mod div_by_constant;
 mod expand_node;
 mod ext_of_load;
-mod bitcast_float;
 mod extract_element;
 mod far_access;
 mod far_call;

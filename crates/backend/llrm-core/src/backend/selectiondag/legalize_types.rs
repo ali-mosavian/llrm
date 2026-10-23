@@ -690,7 +690,11 @@ impl<'a> TypeLegalizer<'a> {
                 // halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
-                let info = super::dag::MemInfo { mem_vt: half, align: 4.min(half.size_in_bits() / 8), ..self.slot_info(src, cell) };
+                let info = super::dag::MemInfo {
+                    mem_vt: half,
+                    align: 4.min(half.size_in_bits() / 8),
+                    ..self.slot_info(src, cell)
+                };
                 let step = u128::from(half.size_in_bits() / 8);
                 let pointer = self.dag.value_type(slot);
                 let offset = self.dag.get_constant(step, pointer);
