@@ -46,9 +46,21 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// `-fexcess-precision=standard`: an integer too wide for its float type's
+    /// mantissa is rounded to that type (x87 would keep it exact).
+    pub float_store: bool,
 }
 
 impl BuilderTarget {
+    /// This target rounding conversions to their float type.
+    pub fn with_float_store(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.float_store = on;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -85,6 +97,7 @@ impl BuilderTarget {
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
+            float_store: false,
         }
     }
 
@@ -97,6 +110,7 @@ impl BuilderTarget {
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
+            float_store: false,
         }
     }
 }
@@ -1253,7 +1267,19 @@ impl Builder<'_> {
         } else if op == CastOp::FPRound {
             self.round_through_memory(operand, dest)
         } else {
-            self.cast_value(op, operand, dest, flags_of(instruction.flags))?
+            let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
+            // an integer wider than the float's mantissa is rounded to its type
+            let mantissa = match dest {
+                EVT::Simple(MVT::F32) => 24,
+                EVT::Simple(MVT::F64) => 53,
+                _ => 64,
+            };
+            let wide = self.dag.value_type(operand).size_in_bits() > mantissa;
+            if self.target.float_store && matches!(op, CastOp::SIToFP | CastOp::UIToFP) && wide {
+                self.round_through_memory(converted, dest)
+            } else {
+                converted
+            }
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())

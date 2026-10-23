@@ -1424,3 +1424,33 @@ fn a_long_double_is_refused() {
     let Err(why) = done else { panic!("emitted") };
     assert!(why.0.contains("long double"), "{why:?}");
 }
+
+const INT_TO_FLOAT_ROUNDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i32 %x) {
+entry:
+  %r = sitofp i32 %x to float
+  ret float %r
+}
+";
+
+/// Under `-fexcess-precision=standard` an integer wider than the float's
+/// mantissa is rounded to the float type (16777217 is 16777216.0f): the
+/// conversion is stored and loaded back. The DAG path left the exact `fild`
+/// in the register and `big != single` answered 1 (int_compared_with_float
+/// -O0).
+#[test]
+fn an_integer_wider_than_the_mantissa_is_rounded_under_float_store() {
+    let module = llrm_mir::parse::module(INT_TO_FLOAT_ROUNDED).expect("parses");
+    let stores = |float_store: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.float_store = float_store;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.op == crate::model::ir::Operation::FloatStore)
+            .count()
+    };
+    assert!(stores(true) > stores(false), "{} vs {}", stores(true), stores(false));
+}
