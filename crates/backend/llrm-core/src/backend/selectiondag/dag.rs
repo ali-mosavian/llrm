@@ -894,6 +894,16 @@ impl SelectionDAG {
         self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
+    /// `SEGMENT_OF`: the selector of the segment a global lives in, or of
+    /// DGROUP, where the near data is, when it names none.
+    pub fn get_segment_of(
+        &mut self,
+        symbol: Option<u32>,
+    ) -> SDValue {
+        let data = symbol.map_or(NodeData::None, |symbol| NodeData::Global { symbol, offset: 0 });
+        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &[], SDNodeFlags::default(), data)
+    }
+
     pub fn get_jump_table(
         &mut self,
         vt: EVT,
