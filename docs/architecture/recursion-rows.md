@@ -56,3 +56,14 @@ OPEN, above main and not made worse than base by this change, with what the asse
 - **bintree** (owner splitkit-split-cost-row, 2026-11-06): main turns the last call into a loop (`jne` back to the entry, accumulator in memory) and keeps one call, 291 bytes; base does the same at 316 bytes and 78382 clocks, so the gap is the body's frame (main 8 bytes and 4 pushes, this 32 bytes and 4 pushes), again register allocation.
 
 recpow was +3.7% at -O2 until the tree term (0.625 calls per call) left it alone.
+
+## DEVIATE REC-1: recursive inlining is a flag, off by default
+
+The pin's inliner copies a recursive callee once into its caller. gcc's `recursive_inlining` and peeling (above) copy it into itself and into its callers, nine levels deep, which is not the pin's behaviour: hanoi's two identical calls became one by CSE, then `bench_hanoi` took nine copies of `hanoi` and a lookup table for `n < 9`, 40 instructions where gcc runs 35,764 and the pin's clang 249,852 (the 2026-10-23 bench table). The three mechanisms (copies of a function in itself, peeling of a recursive callee's own call in the copy, and the deferral of its tail-call elimination until the copies are made) are `-finline-recursive` (`Threshold::recursive`), off by default; `walk::tests::test_the_default_does_not_peel_a_recursive_callee` and `test_only_a_tree_recursion_waits_for_its_tail_call_elimination` pin the default. Owner: w-8 (flag); w-6 owns the rows above. Exit: the pin-faithful order of inlining and cleanup reaches the rows above without the flag, or the user turns it on.
+
+Not covered by the flag: a call with a constant argument inside a recursive body is still inlined again on later rounds of the walk (`fib(30)` in `main` gives 17 calls by default, 8 with the flag); the pin's inline history would stop it.
+
+## Open rows beside REC-1
+
+- **REC-2, owner w-6 (D10, `inlinecost::sites` and the walk's rounds):** a call with a constant argument inside a recursive body is inlined again on later rounds of the walk. `int main(void){ report(fib(30)); }` with `static int fib(int n)` the usual one, `-m32 -O2`: the pin's clang (24.0.0git d1106deb71cc) leaves 2 calls of `fib` in `main` and 2 in `fib`; llrm by default leaves 15 in `main` and 1 in `fib`; with `-finline-recursive` 2 in `main`. The pin is the target: 15 is the bug. An inline-history mark on the copied calls, tried in the walk, changed nothing, so the re-inlining comes through another path (the `constant` sites decided per round).
+- **REC-3, owner guess w-6:** `recchop` -O2 code is 1048 bytes by default and 1016 with the flag against the pin's 191, so the flag is not its cause; rows above for its clocks.
