@@ -875,7 +875,7 @@ impl Ast<'_> {
     }
 
     /// `a, , b,`: an expression where the source gave one, Omitted at the comma that closes an empty slot.
-    fn argument_list(&mut self) -> R<Vec<Expr>> {
+    fn argument_list(&mut self, trailing_ok: bool) -> R<Vec<Expr>> {
         let mut out = Vec::new();
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
             if self.is(Kw::Comma) {
@@ -891,6 +891,9 @@ impl Ast<'_> {
                 out.push(Expr::Omitted(self.previous()));
                 break;
             }
+        }
+        if !trailing_ok && matches!(out.last(), Some(Expr::Omitted(_))) {
+            return self.fail();
         }
         Ok(out)
     }
@@ -1997,7 +2000,8 @@ impl Ast<'_> {
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
             if k != Kw::WRITE && using.is_none() && self.eat(Kw::USING) {
                 using = Some(self.exp()?);
-                if !(self.eat(Kw::SColon) || self.eat(Kw::Comma)) {
+                // `USING fmt;` must be followed by a value (a comma is "Semicolon missing")
+                if !self.eat(Kw::SColon) || !self.starts_exp() {
                     return self.fail();
                 }
                 continue;
@@ -2305,6 +2309,8 @@ impl Ast<'_> {
         if self.eat(Kw::Comma) {
             if self.starts_exp() {
                 position = Some(self.exp()?);
+            } else if !self.is(Kw::Comma) {
+                return self.fail();
             }
             if self.eat(Kw::Comma) {
                 target = Some(self.exp()?);
@@ -2342,8 +2348,10 @@ impl Ast<'_> {
                 self.out.push(Statement::OnError { label, local, span });
                 return Ok(());
             }
-            // ON [LOCAL] ERROR RESUME NEXT has no statement of its own yet
-            return self.fail();
+            self.expect(Kw::RESUME)?;
+            self.expect(Kw::NEXT)?;
+            self.out.push(Statement::OnErrorResumeNext { local, span });
+            return Ok(());
         }
         let named = match self.kw() {
             Some(Kw::KEY) => Some("KEY"),
@@ -2351,9 +2359,13 @@ impl Ast<'_> {
             Some(Kw::SIGNAL) => Some("SIGNAL"),
             Some(Kw::TIMER) if self.is_n(1, Kw::LParen) => Some("TIMER"),
             Some(Kw::PEN) if self.is_n(1, Kw::GOSUB) => Some("PEN"),
-            Some(Kw::UEVENT) => Some("UEVENT"),
+            Some(Kw::UEVENT) if self.is_n(1, Kw::GOSUB) => Some("UEVENT"),
             _ => None,
         };
+        // ON PEN and ON UEVENT take no argument; elsewhere they are not a selector either
+        if named.is_none() && matches!(self.kw(), Some(Kw::PEN | Kw::UEVENT)) {
+            return self.fail();
+        }
         if let Some(device) = named {
             self.i += 1;
             let number = if self.eat(Kw::LParen) {
@@ -2427,8 +2439,13 @@ impl Ast<'_> {
         let span = self.span(keyword);
         match k {
             Kw::BEEP => self.runtime("BEEP", Vec::new(), span),
-            Kw::TRON => self.runtime("TRON", Vec::new(), span),
-            Kw::TROFF => self.runtime("TROFF", Vec::new(), span),
+            // BC warns "Statement Ignored" and skips the rest of the line
+            Kw::TRON | Kw::TROFF => {
+                while self.i < self.tokens.len() && !self.is(Kw::NewLine) {
+                    self.i += 1;
+                }
+                self.runtime(if k == Kw::TRON { "TRON" } else { "TROFF" }, Vec::new(), span);
+            }
             Kw::SYSTEM => self.runtime("SYSTEM", Vec::new(), span),
             Kw::STOP => self.implicit_call("STOP", Vec::new(), span),
             Kw::RESET => self.implicit_call("RESET", Vec::new(), span),
@@ -2448,7 +2465,7 @@ impl Ast<'_> {
                 self.implicit_call(if k == Kw::RANDOMIZE { "RANDOMIZE" } else { "SHELL" }, arguments, span);
             }
             Kw::COLOR | Kw::LOCATE | Kw::SCREEN => {
-                let arguments = self.argument_list()?;
+                let arguments = self.argument_list(false)?;
                 let name = match k {
                     Kw::COLOR => "COLOR",
                     Kw::LOCATE => "LOCATE",
@@ -2457,7 +2474,7 @@ impl Ast<'_> {
                 self.runtime(name, arguments, span);
             }
             Kw::CLEAR => {
-                let arguments = self.argument_list()?;
+                let arguments = self.argument_list(true)?;
                 self.implicit_call("CLEAR", arguments, span);
             }
             Kw::ENVIRON | Kw::KILL | Kw::MKDIR | Kw::CHDIR | Kw::RMDIR => {
@@ -2554,7 +2571,9 @@ impl Ast<'_> {
             Kw::PALETTE => {
                 let mut arguments = Vec::new();
                 if self.eat(Kw::USING) {
-                    arguments.push(self.name_ref()?);
+                    arguments.push(self.transfer_array()?);
+                    self.runtime("PALETTE_USING", arguments, span);
+                    return Ok(());
                 } else if self.starts_exp() {
                     arguments.push(self.exp()?);
                     self.expect(Kw::Comma)?;
@@ -2649,24 +2668,43 @@ impl Ast<'_> {
                     }
                 }
             }
-            Kw::LOCK | Kw::UNLOCK | Kw::IOCTL | Kw::FIELD => {
+            Kw::LOCK | Kw::UNLOCK => {
+                // LOCK [#]file [, record | [start] TO end]: [file], [file, record] or [file, start|omitted, end]
                 self.eat(Kw::Lbs);
                 let mut arguments = vec![self.exp()?];
-                while self.eat(Kw::Comma) {
-                    if self.starts_exp() {
+                if self.eat(Kw::Comma) {
+                    if self.is(Kw::TO) {
+                        arguments.push(Expr::Omitted(span));
+                    } else {
                         arguments.push(self.exp()?);
                     }
-                    if self.eat(Kw::TO) || self.eat(Kw::AS) {
+                    if self.eat(Kw::TO) {
                         arguments.push(self.exp()?);
                     }
                 }
-                let name = match k {
-                    Kw::LOCK => "LOCK",
-                    Kw::UNLOCK => "UNLOCK",
-                    Kw::IOCTL => "IOCTL",
-                    _ => "FIELD",
-                };
-                self.runtime(name, arguments, span);
+                self.runtime(if k == Kw::LOCK { "LOCK" } else { "UNLOCK" }, arguments, span);
+            }
+            Kw::IOCTL => {
+                self.eat(Kw::Lbs);
+                let file = self.exp()?;
+                self.expect(Kw::Comma)?;
+                let text = self.exp()?;
+                self.runtime("IOCTL", vec![file, text], span);
+            }
+            Kw::FIELD => {
+                // FIELD [#]file, width AS variable [, width AS variable]...: [file, width, variable, ...]
+                self.eat(Kw::Lbs);
+                let mut arguments = vec![self.exp()?];
+                loop {
+                    self.expect(Kw::Comma)?;
+                    arguments.push(self.exp()?);
+                    self.expect(Kw::AS)?;
+                    arguments.push(self.name_ref()?);
+                    if !self.is(Kw::Comma) {
+                        break;
+                    }
+                }
+                self.runtime("FIELD", arguments, span);
             }
             _ => return Err(keyword),
         }

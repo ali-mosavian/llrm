@@ -86,7 +86,10 @@ def run_items(items, tag):
             for family in FAMILIES:
                 text = outputs[n][family]
                 if complete(text):
-                    found, _ = bcprobe.errors(text)
+                    found, stray = bcprobe.errors(text)
+                    if len(chunk) == 1 and stray:
+                        i = chunk[0]["id"]
+                        results[i][family] = (results[i][family] or []) + stray
                     for _, echoed, _, message in found:
                         m = re.search(r"#(\d+)\s*$", echoed)
                         if len(chunk) == 1:

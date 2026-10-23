@@ -23,6 +23,10 @@ pub enum Class {
     Array,
     /// anything with a type: a record or a string or a number
     Whole,
+    /// a variable-length string variable (SADD)
+    VarLenString,
+    /// a whole array, or an element of one to start from (graphics GET and PUT)
+    ArrayStart,
     /// a label
     Label,
 }
@@ -124,7 +128,7 @@ UBOUND a|a,n=>Int
 $VARPTR v=>Str
 VARPTR v=>Int
 VARSEG v=>Int
-SADD t=>Int
+SADD u=>Int
 POINT n|n,n=>Int
 PMAP n,n=>Single
 SCREEN n,n|n,n,n=>Int
@@ -149,6 +153,7 @@ fn class_of(letter: char) -> Class {
         't' => Class::StrVar,
         'a' => Class::Array,
         'w' => Class::Whole,
+        'u' => Class::VarLenString,
         'l' => Class::Label,
         other => panic!("class {other}"),
     }

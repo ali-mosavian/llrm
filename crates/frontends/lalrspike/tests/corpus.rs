@@ -10,7 +10,13 @@ use qbfront::generated_parser::lex;
 fn tracked(extension: &str) -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let output = Command::new("git").arg("-C").arg(&root).args(["ls-files", &format!("*.{extension}")]).output().unwrap();
-    String::from_utf8(output.stdout).unwrap().lines().map(|line| root.join(line)).collect()
+    // corpus/ holds generated oracle programs, many of them deliberately malformed
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("lalrspike/corpus/"))
+        .map(|line| root.join(line))
+        .collect()
 }
 
 #[test]

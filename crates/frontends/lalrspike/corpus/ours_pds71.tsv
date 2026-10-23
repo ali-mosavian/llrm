@@ -1,22 +1,22 @@
 0	ok	
-1	ok	
-2	ok	
+1	syntax	15:8 syntax error
+2	syntax	15:9 syntax error
 3	ok	
 4	ok	
 5	ok	
 6	ok	
-7	ok	
+7	syntax	15:11 syntax error
 8	ok	
 9	ok	
 10	ok	
 11	ok	
-12	ok	
-13	ok	
+12	syntax	15:10 syntax error
+13	syntax	15:11 syntax error
 14	ok	
 15	ok	
 16	ok	
 17	ok	
-18	ok	
+18	syntax	15:13 syntax error
 19	ok	
 20	ok	
 21	ok	
@@ -62,12 +62,12 @@
 61	semantic	15:16 Type mismatch
 62	semantic	15:0 Syntax error
 63	ok	
-64	ok	
+64	syntax	15:7 syntax error
 65	ok	
 66	ok	
 67	ok	
 68	ok	
-69	ok	
+69	syntax	15:9 syntax error
 70	ok	
 71	ok	
 72	ok	
@@ -93,48 +93,48 @@
 92	semantic	15:4 Type mismatch
 93	syntax	15:6 syntax error
 94	ok	
-95	ok	
-96	ok	
-97	ok	
+95	syntax	15:8 syntax error
+96	syntax	15:9 syntax error
+97	syntax	15:10 syntax error
 98	ok	
 99	ok	
 100	ok	
 101	ok	
-102	ok	
+102	syntax	15:12 syntax error
 103	ok	
 104	ok	
 105	ok	
 106	ok	
-107	ok	
-108	ok	
+107	syntax	15:11 syntax error
+108	syntax	15:12 syntax error
 109	ok	
 110	ok	
 111	ok	
 112	ok	
-113	ok	
+113	syntax	15:14 syntax error
 114	ok	
 115	ok	
 116	ok	
 117	ok	
-118	ok	
-119	ok	
-120	ok	
+118	syntax	15:10 syntax error
+119	syntax	15:11 syntax error
+120	syntax	15:12 syntax error
 121	ok	
 122	ok	
 123	ok	
 124	ok	
-125	ok	
+125	syntax	15:14 syntax error
 126	ok	
 127	ok	
 128	ok	
 129	ok	
-130	ok	
-131	ok	
+130	syntax	15:13 syntax error
+131	syntax	15:14 syntax error
 132	ok	
 133	ok	
 134	ok	
 135	ok	
-136	ok	
+136	syntax	15:16 syntax error
 137	ok	
 138	ok	
 139	ok	
@@ -343,11 +343,11 @@
 342	semantic	15:11 Type mismatch
 343	semantic	15:11 Type mismatch
 344	syntax	15:13 syntax error
-345	semantic	15:14 Wrong number of dimensions
-346	semantic	15:14 Wrong number of dimensions
-347	semantic	15:14 Wrong number of dimensions
-348	semantic	15:14 Wrong number of dimensions
-349	ok	
+345	syntax	15:20 syntax error
+346	syntax	15:20 syntax error
+347	syntax	15:19 syntax error
+348	syntax	15:18 syntax error
+349	semantic	15:0 Syntax error
 350	syntax	15:14 syntax error
 351	syntax	15:20 syntax error
 352	ok	
@@ -1025,9 +1025,9 @@
 1024	semantic	15:6 Type mismatch
 1025	syntax	15:8 syntax error
 1026	ok	
-1027	syntax	15:4 syntax error
+1027	ok	
 1028	ok	
-1029	syntax	15:5 syntax error
+1029	ok	
 1030	ok	
 1031	ok	
 1032	ok	
@@ -1284,7 +1284,7 @@
 1283	semantic	15:8 Type mismatch
 1284	syntax	15:10 syntax error
 1285	ok	
-1286	ok	
+1286	syntax	15:7 syntax error
 1287	ok	
 1288	ok	
 1289	ok	
@@ -1312,7 +1312,7 @@
 1311	ok	
 1312	syntax	15:12 syntax error
 1313	ok	
-1314	ok	
+1314	syntax	15:7 syntax error
 1315	ok	
 1316	ok	
 1317	ok	
@@ -1366,7 +1366,7 @@
 1365	ok	
 1366	semantic	15:14 Type mismatch
 1367	semantic	15:14 Type mismatch
-1368	semantic	15:0 Syntax error
+1368	syntax	15:16 syntax error
 1369	ok	
 1370	ok	
 1371	ok	
@@ -1394,7 +1394,7 @@
 1393	ok	
 1394	semantic	15:16 Type mismatch
 1395	semantic	15:16 Type mismatch
-1396	semantic	15:0 Syntax error
+1396	syntax	15:18 syntax error
 1397	ok	
 1398	ok	
 1399	ok	
@@ -1407,21 +1407,21 @@
 1406	semantic	15:9 Type mismatch
 1407	semantic	15:9 Type mismatch
 1408	ok	
-1409	ok	
-1410	ok	
-1411	semantic	15:15 Variable required
-1412	semantic	15:15 Variable required
+1409	semantic	15:15 Variable-length string required
+1410	semantic	15:15 Variable-length string required
+1411	syntax	15:15 syntax error
+1412	syntax	15:15 syntax error
 1413	ok	
 1414	ok	
 1415	ok	
 1416	semantic	15:18 Type mismatch
 1417	semantic	15:18 Type mismatch
 1418	ok	
-1419	ok	
-1420	ok	
-1421	semantic	15:24 Variable required
-1422	semantic	15:24 Variable required
-1423	ok	
+1419	semantic	15:24 Variable-length string required
+1420	semantic	15:24 Variable-length string required
+1421	syntax	15:24 syntax error
+1422	syntax	15:24 syntax error
+1423	syntax	15:29 syntax error
 1424	ok	
 1425	ok	
 1426	ok	
@@ -1454,9 +1454,9 @@
 1453	ok	
 1454	ok	
 1455	ok	
-1456	ok	
-1457	ok	
-1458	semantic	15:0 Syntax error
+1456	semantic	15:9 String expression required
+1457	semantic	15:9 String expression required
+1458	syntax	15:11 syntax error
 1459	ok	
 1460	ok	
 1461	ok	
@@ -1518,12 +1518,12 @@
 1517	ok	
 1518	ok	
 1519	ok	
-1520	ok	
+1520	semantic	15:4 String expression required
 1521	syntax	15:6 syntax error
-1522	ok	
+1522	semantic	15:4 String expression required
 1523	syntax	15:7 syntax error
 1524	ok	
-1525	ok	
+1525	semantic	15:0 Equal sign missing
 1526	syntax	15:7 syntax error
 1527	ok	
 1528	ok	
@@ -1834,13 +1834,13 @@
 1833	ok	
 1834	ok	
 1835	ok	
-1836	ok	
-1837	ok	
-1838	ok	
-1839	ok	
-1840	semantic	15:12 String expression required
-1841	semantic	15:12 String expression required
-1842	ok	
+1836	syntax	15:15 syntax error
+1837	syntax	15:18 syntax error
+1838	syntax	15:25 syntax error
+1839	syntax	15:19 syntax error
+1840	syntax	15:14 syntax error
+1841	syntax	15:15 syntax error
+1842	syntax	15:15 syntax error
 1843	ok	
 1844	ok	
 1845	ok	
@@ -2027,41 +2027,41 @@
 2026	ok	
 2027	ok	
 2028	ok	
-2029	ok	
-2030	ok	
-2031	ok	
-2032	ok	
-2033	ok	
-2034	ok	
-2035	ok	
-2036	ok	
-2037	ok	
-2038	ok	
-2039	ok	
-2040	ok	
-2041	ok	
-2042	ok	
-2043	ok	
-2044	ok	
-2045	ok	
-2046	ok	
-2047	ok	
-2048	ok	
-2049	ok	
-2050	ok	
-2051	ok	
-2052	ok	
-2053	ok	
-2054	ok	
-2055	ok	
-2056	ok	
-2057	ok	
+2029	syntax	15:0 unknown character '?'
+2030	syntax	15:0 unknown character '?'
+2031	syntax	15:0 unknown character '?'
+2032	syntax	15:0 unknown character '?'
+2033	syntax	15:0 unknown character '?'
+2034	syntax	15:0 unknown character '?'
+2035	syntax	15:0 unknown character '?'
+2036	syntax	15:0 unknown character '?'
+2037	syntax	15:0 unknown character '?'
+2038	syntax	15:0 unknown character '?'
+2039	syntax	15:0 unknown character '?'
+2040	syntax	15:0 unknown character '?'
+2041	syntax	15:0 unknown character '?'
+2042	syntax	15:0 unknown character '?'
+2043	syntax	15:0 unknown character '?'
+2044	syntax	15:0 unknown character '?'
+2045	syntax	15:0 unknown character '?'
+2046	syntax	15:0 unknown character '?'
+2047	syntax	15:0 unknown character '?'
+2048	syntax	15:0 unknown character '?'
+2049	syntax	15:0 unknown character '?'
+2050	syntax	15:0 unknown character '?'
+2051	syntax	15:0 unknown character '?'
+2052	syntax	15:0 unknown character '?'
+2053	syntax	15:0 unknown character '?'
+2054	syntax	15:0 unknown character '?'
+2055	syntax	15:0 unknown character '?'
+2056	syntax	15:0 unknown character '?'
+2057	syntax	15:0 unknown character '?'
 2058	semantic	15:4 Duplicate definition
 2059	semantic	15:4 Duplicate definition
 2060	semantic	15:4 Duplicate definition
 2061	semantic	15:4 Duplicate definition
 2062	semantic	15:4 Array already dimensioned
-2063	ok	
+2063	semantic	15:4 Duplicate definition
 2064	syntax	15:4 syntax error
 2065	syntax	15:4 syntax error
 2066	semantic	15:4 Duplicate definition
@@ -2167,10 +2167,10 @@
 2166	semantic	15:5 String expression required
 2167	semantic	15:5 String expression required
 2168	syntax	15:16 syntax error
-2169	ok	
-2170	ok	
-2171	ok	
-2172	ok	
+2169	semantic	15:6 Syntax error
+2170	semantic	15:6 Syntax error
+2171	semantic	15:6 Syntax error
+2172	semantic	15:6 Syntax error
 2173	semantic	15:6 Array not defined
 2174	syntax	15:6 syntax error
 2175	syntax	15:14 syntax error
@@ -2275,8 +2275,8 @@
 2274	ok	
 2275	ok	
 2276	syntax	15:7 syntax error
-2277	ok	
-2278	ok	
+2277	semantic	15:0 Array already dimensioned
+2278	semantic	15:0 Array already dimensioned
 2279	syntax	15:13 syntax error
 2280	ok	
 2281	syntax	15:12 syntax error
@@ -2365,16 +2365,16 @@
 2364	semantic	15:3 Type mismatch
 2365	semantic	15:3 Type mismatch
 2366	syntax	15:17 syntax error
-2367	ok	
-2368	ok	
-2369	ok	
-2370	ok	
-2371	ok	
-2372	ok	
-2373	ok	
-2374	ok	
-2375	ok	
-2376	ok	
+2367	semantic	15:11 Equal sign missing
+2368	semantic	15:11 Equal sign missing
+2369	semantic	15:10 Equal sign missing
+2370	semantic	15:11 Equal sign missing
+2371	semantic	15:11 Equal sign missing
+2372	semantic	15:11 Equal sign missing
+2373	semantic	15:17 Equal sign missing
+2374	semantic	15:16 Equal sign missing
+2375	semantic	15:11 Equal sign missing
+2376	semantic	15:12 Equal sign missing
 2377	semantic	15:3 Type mismatch
 2378	semantic	15:3 Type mismatch
 2379	syntax	15:14 syntax error
@@ -2466,9 +2466,9 @@
 2465	ok	
 2466	ok	
 2467	syntax	15:22 syntax error
-2468	ok	
+2468	semantic	15:4 FOR index variable illegal
 2469	syntax	15:26 syntax error
-2470	ok	
+2470	semantic	15:22 NEXT without FOR
 2471	syntax	15:24 syntax error
 2472	ok	
 2473	ok	
@@ -2642,9 +2642,9 @@
 2641	syntax	15:17 syntax error
 2642	ok	
 2643	syntax	15:15 syntax error
-2644	syntax	15:9 syntax error
-2645	syntax	15:9 syntax error
-2646	ok	
+2644	ok	
+2645	syntax	15:20 syntax error
+2646	semantic	15:0 Illegal outside of SUB or FUNCTION
 2647	syntax	15:23 syntax error
 2648	ok	
 2649	syntax	15:6 syntax error
@@ -2732,14 +2732,14 @@
 2731	ok	
 2732	ok	
 2733	ok	
-2734	ok	
-2735	ok	
-2736	ok	
+2734	syntax	15:3 syntax error
+2735	syntax	15:3 syntax error
+2736	semantic	15:0 Feature unavailable
 2737	ok	
 2738	ok	
 2739	ok	
-2740	ok	
-2741	ok	
+2740	semantic	15:7 Type mismatch
+2741	semantic	15:7 Type mismatch
 2742	syntax	15:20 syntax error
 2743	ok	
 2744	ok	
@@ -2765,14 +2765,14 @@
 2764	syntax	15:6 syntax error
 2765	syntax	15:6 syntax error
 2766	syntax	15:6 syntax error
-2767	ok	
-2768	ok	
-2769	ok	
+2767	semantic	15:0 Feature unavailable
+2768	semantic	15:0 Feature unavailable
+2769	semantic	15:0 Feature unavailable
 2770	ok	
 2771	ok	
 2772	ok	
-2773	ok	
-2774	ok	
+2773	semantic	15:4 Type mismatch
+2774	semantic	15:3 Type mismatch
 2775	syntax	15:10 syntax error
 2776	ok	
 2777	ok	
@@ -2791,17 +2791,17 @@
 2790	ok	
 2791	ok	
 2792	ok	
-2793	ok	
+2793	semantic	15:4 Type mismatch
 2794	ok	
 2795	ok	
 2796	ok	
-2797	ok	
-2798	ok	
+2797	semantic	15:7 String expression required
+2798	semantic	15:7 String expression required
 2799	syntax	15:9 syntax error
 2800	ok	
 2801	ok	
 2802	ok	
-2803	ok	
+2803	semantic	15:4 Type mismatch
 2804	syntax	15:24 syntax error
 2805	ok	
 2806	ok	
@@ -3500,43 +3500,43 @@
 3499	ok	
 3500	ok	
 3501	syntax	15:12 syntax error
-3502	ok	
-3503	ok	
-3504	ok	
-3505	ok	
+3502	semantic	15:12 Syntax error
+3503	semantic	15:12 Syntax error
+3504	semantic	15:12 Syntax error
+3505	semantic	15:12 Syntax error
 3506	semantic	15:12 Array not defined
 3507	syntax	15:12 syntax error
 3508	syntax	15:19 syntax error
-3509	ok	
-3510	ok	
-3511	ok	
-3512	ok	
+3509	semantic	15:12 Syntax error
+3510	semantic	15:12 Syntax error
+3511	semantic	15:12 Syntax error
+3512	semantic	15:12 Syntax error
 3513	semantic	15:12 Array not defined
 3514	syntax	15:12 syntax error
-3515	ok	
-3516	ok	
-3517	ok	
-3518	semantic	15:19 Type mismatch
-3519	semantic	15:19 Type mismatch
+3515	semantic	15:12 Syntax error
+3516	semantic	15:12 Syntax error
+3517	semantic	15:12 Syntax error
+3518	semantic	15:12 Syntax error
+3519	semantic	15:12 Syntax error
 3520	syntax	15:22 syntax error
-3521	ok	
-3522	ok	
-3523	ok	
-3524	ok	
+3521	semantic	15:12 Syntax error
+3522	semantic	15:12 Syntax error
+3523	semantic	15:12 Syntax error
+3524	semantic	15:12 Syntax error
 3525	semantic	15:12 Array not defined
 3526	syntax	15:12 syntax error
 3527	syntax	15:19 syntax error
-3528	ok	
-3529	ok	
-3530	ok	
-3531	ok	
+3528	semantic	15:12 Syntax error
+3529	semantic	15:12 Syntax error
+3530	semantic	15:12 Syntax error
+3531	semantic	15:12 Syntax error
 3532	semantic	15:12 Array not defined
 3533	syntax	15:12 syntax error
-3534	ok	
-3535	ok	
-3536	ok	
-3537	semantic	15:19 Type mismatch
-3538	semantic	15:19 Type mismatch
+3534	semantic	15:12 Syntax error
+3535	semantic	15:12 Syntax error
+3536	semantic	15:12 Syntax error
+3537	semantic	15:12 Syntax error
+3538	semantic	15:12 Syntax error
 3539	syntax	15:22 syntax error
 3540	syntax	15:15 syntax error
 3541	ok	
@@ -4019,19 +4019,19 @@
 4018	syntax	15:6 syntax error
 4019	ok	
 4020	syntax	15:8 syntax error
-4021	semantic	15:5 Overflow
+4021	semantic	15:5 Math overflow
 4022	syntax	15:10 syntax error
-4023	semantic	15:5 Overflow
+4023	semantic	15:5 Math overflow
 4024	syntax	15:10 syntax error
-4025	semantic	15:5 Overflow
+4025	ok	
 4026	syntax	15:15 syntax error
-4027	semantic	15:5 Overflow
+4027	semantic	15:5 Math overflow
 4028	syntax	15:9 syntax error
-4029	ok	
+4029	semantic	15:5 Math overflow
 4030	syntax	15:10 syntax error
 4031	ok	
 4032	syntax	15:11 syntax error
-4033	semantic	15:5 Overflow
+4033	semantic	15:5 Math overflow
 4034	syntax	15:12 syntax error
 4035	ok	
 4036	syntax	15:16 syntax error
