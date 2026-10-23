@@ -3681,7 +3681,20 @@ fn lea_alu_body_at(
     between: Vec<Arc<Insn>>,
     flags_read: bool,
 ) -> LirBody {
-    let ecx = rl(RegId::ECX, 4);
+    lea_alu_body_sized(address, op, d, between, flags_read, 4)
+}
+
+/// `lea_alu_body_at` with the lea's result and the ALU's destination `width`
+/// bytes wide (the address registers stay dwords).
+fn lea_alu_body_sized(
+    address: AddressRef,
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+    width: u32,
+) -> LirBody {
+    let ecx = rl(if width == 2 { RegId::CX } else { RegId::ECX }, width);
     let mut insns = vec![Arc::new(insn(
         1,
         Some((1, 1)),
@@ -3693,7 +3706,7 @@ fn lea_alu_body_at(
     insns.push(Arc::new(insn(
         3,
         Some((3, 3)),
-        Some(sem(Operation::Binary, op, vec![rl(d, 4)], vec![rl(d, 4), ecx])),
+        Some(sem(Operation::Binary, op, vec![rl(d, width)], vec![rl(d, width), ecx])),
         vec![12],
         vec![13, 11],
     )));
@@ -3750,6 +3763,21 @@ fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
             again.insns().iter().any(|one| one.uses.contains(&20) && one.uses.contains(&21)),
             "{op}: the steps read the address's values"
         );
+    }
+}
+
+/// A word `lea` of dword address registers (`lea dx,[edi+esi]`, an address the
+/// 32-bit forms sum at m16) read by a word add: the steps add the words `di`
+/// and `si`. They added `edi` and `esi` under a word destination, `sub dx,
+/// edi`, which no encoding has: ui/console.c died in the encoder at m16
+/// -O1..-O3.
+#[test]
+fn test_a_word_lea_of_dword_registers_splits_into_word_steps() {
+    for op in ["add", "sub"] {
+        let body = lea_alu_body_sized(sum(RegId::EAX, RegId::EDX, 1, 0), op, RegId::BX, vec![], false, 2);
+        let done = steps(&lea_alus(rules(), &body));
+        assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::BX, 2), rl(RegId::AX, 2)]), "{done:?}");
+        assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::BX, 2), rl(RegId::DX, 2)]), "{done:?}");
     }
 }
 
