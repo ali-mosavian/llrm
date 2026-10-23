@@ -1485,13 +1485,14 @@ impl Emitter<'_, '_> {
                 let cell = self
                     .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
                 // The object encoder has no field for the displacement of a
-                // symbol beside a register in a 16-bit address (strlen_idiom
-                // did not assemble).
+                // symbol beside a lone index register in a 16-bit address
+                // (strlen_idiom did not assemble); a base is encoded.
                 if self.ctx.address_mode == AddrMode::Real16
                     && cell.addr.is_some()
-                    && (cell.base.is_some() || cell.index.is_some())
+                    && cell.base.is_none()
+                    && cell.index.is_some()
                 {
-                    return Err(EmitError::Unsupported("a lea of a symbol and a register at m16".to_owned()));
+                    return Err(EmitError::Unsupported("a lea of a symbol and a lone index at m16".to_owned()));
                 }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
