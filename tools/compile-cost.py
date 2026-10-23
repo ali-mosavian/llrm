@@ -44,7 +44,8 @@ def instructions(command: list[str]) -> int:
     """User-space instructions `command` retires, children included. The compiler must succeed."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in ("LLRM_BIN", "LLRM_COUNTER")}  # LLRM_VERIFY adds checking work
     try:
-        count, _, done = levels_time.counted(command, env=env)
+        with llrmbin.with_object(command) as real:
+            count, _, done = levels_time.counted(real, env=env)
     except RuntimeError as why:
         raise NoCounter(str(why))
     if done.returncode:
@@ -73,7 +74,7 @@ def measure(compiler: Path, jobs: int) -> dict[str, int]:
     """Instructions per `file level`."""
     with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         work = Path(tmp)
-        todo = [(f"{name} {level}", [str(llrmbin.pinned(compiler)), level, *flags, str(source), "-o", os.devnull]) for name, (source, flags) in files(work).items() for level in LEVELS]
+        todo = [(f"{name} {level}", [str(llrmbin.pinned(compiler)), level, *flags, str(source), "-o", llrmbin.OBJECT]) for name, (source, flags) in files(work).items() for level in LEVELS]
         with ThreadPoolExecutor(jobs) as pool:
             return dict(zip((k for k, _ in todo), pool.map(instructions, (c for _, c in todo))))
 

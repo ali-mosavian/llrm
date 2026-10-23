@@ -52,6 +52,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
+| [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
 | [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
