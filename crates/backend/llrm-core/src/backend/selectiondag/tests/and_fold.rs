@@ -52,7 +52,9 @@ fn known_bits_of_the_nodes_the_folds_ask_about() {
     let masked = dag.get_node(ISD::And, EVT::I32, &[wide, ff]);
     dag.set_root(masked);
     combine(&mut dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes);
-    assert_eq!(dag.get_root(), wide);
+    // The `and` is gone; the extension of the load became the load's own.
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, EVT::I32));
     let c = dag.get_constant(6, EVT::I8);
     assert_eq!(known_bits(&dag, c), KnownBits::constant(6, 8));
     assert!(known_bits(&dag, c).is_constant());
