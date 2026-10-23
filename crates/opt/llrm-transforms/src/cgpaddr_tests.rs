@@ -93,3 +93,47 @@ b1:
     assert!(!entry.contains("getelementptr"), "the arms' addresses are not made in b0: {after}");
     assert!(rest.contains("select i1 %c, i16 2, i16 6") && rest.contains("getelementptr i8, ptr %a"), "{after}");
 }
+
+/// `optimizeExtUses`: a source read in a later block while its extension is too
+/// is read there through a `trunc` of the extension, so the narrow value need
+/// not be held across the edge beside the wide one.
+#[test]
+fn test_a_source_read_beside_its_live_out_extension_is_a_trunc_of_it() {
+    let after = sunk(
+        "define i32 @f(i16 %a) {
+b0:
+  %s = add i16 %a, 1
+  %e = sext i16 %s to i32
+  br label %b1
+
+b1:
+  %t = add i16 %s, 2
+  %v = zext i16 %t to i32
+  %w = add i32 %e, %v
+  ret i32 %w
+}
+",
+    );
+    let (entry, rest) = after.split_once("b1:").expect("a second block");
+    assert!(!entry.contains("trunc"), "{after}");
+    assert!(rest.contains("trunc i32 %e to i16"), "{after}");
+    assert!(!rest.contains("add i16 %s, 2"), "the source is no longer read in b1: {after}");
+}
+
+/// A load reading the source in another block keeps it (the pin: "we don't
+/// want this xform to end up introducing reloads just before load / store").
+#[test]
+fn test_a_source_read_by_a_store_elsewhere_is_left_alone() {
+    let text = "define i32 @f(i16 %a, ptr %p) {
+b0:
+  %s = add i16 %a, 1
+  %e = sext i16 %s to i32
+  br label %b1
+
+b1:
+  store i16 %s, ptr %p
+  ret i32 %e
+}
+";
+    assert_eq!(sunk(text), printed(&parsed(&format!("{HEAD}{text}"))));
+}
