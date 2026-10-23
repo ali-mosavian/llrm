@@ -23,7 +23,7 @@ fn hooks() -> X86Hooks {
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
 }
 
 fn input(

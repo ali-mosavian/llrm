@@ -40,7 +40,7 @@ use std::collections::HashSet;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
-use super::isd::ISD;
+use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
 
@@ -168,6 +168,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Simple(_) => self.tli.operation_action(self.dag.opcode(node), vt),
             EVT::Int(_) => Action::Expand,
         };
+        if self.dag.opcode(node) == ISD::SetCC
+            && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
+            && self.tli.cond_code_action(cc, operand) == Action::Expand
+        {
+            action = Action::Expand;
+        }
         if action == Action::Custom {
             if let Some(result) = self.hooks.lower_operation(self.dag, node) {
                 if result != node {
@@ -221,9 +227,26 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
         let address = self.dag.get_node(ISD::Add, pointer, &[table, index]);
-        let info = MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None };
+        let info = MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
+    }
+
+    /// `LegalizeSetCCCondCode` for the two codes that need two compares:
+    /// `oeq` is `eq` and ordered, `une` is `ne` or unordered.
+    fn expand_setcc_code(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
+        let (first, second, combine) = match cc {
+            CondCode::SetOEq => (CondCode::SetEq, CondCode::SetO, ISD::And),
+            CondCode::SetUNe => (CondCode::SetNe, CondCode::SetUo, ISD::Or),
+            _ => return None,
+        };
+        let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
+        let (one, other) = (self.dag.get_setcc(vt, lhs, rhs, first), self.dag.get_setcc(vt, lhs, rhs, second));
+        Some(self.dag.get_node(combine, vt, &[one, other]))
     }
 
     /// `ExpandNode`, for the cases translated: the replacement for each result
@@ -266,6 +289,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
             ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
+            ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
@@ -282,6 +306,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     volatile: false,
                     base: MemBase::Unknown,
                     ext: None,
+                    space: 0,
                 };
                 let loaded = self.dag.get_load(pointer, chain, src, info);
                 Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
@@ -446,7 +471,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => 4,
         };
         let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
-        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry), ext: None };
+        let info = MemInfo {
+            mem_vt: pool_vt,
+            align,
+            volatile: false,
+            base: MemBase::ConstantPool(entry),
+            ext: None,
+            space: 0,
+        };
         let chain = self.dag.entry_node();
         let loaded = self.dag.get_load(vt, chain, index, info);
         self.replace_node(node, loaded);

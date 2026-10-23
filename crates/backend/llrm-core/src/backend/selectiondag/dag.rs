@@ -107,6 +107,9 @@ pub struct MemInfo {
     /// The extension of a load narrower than its result (`LoadExtType`); none
     /// for a plain load.
     pub ext: Option<super::actions::LoadExt>,
+    /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
+    /// (`fs` 257, `gs` 256) the IR's pointer names.
+    pub space: u32,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -692,7 +695,7 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
         let offset = self.get_poison(self.value_type(ptr));
-        let info = MemInfo { ext: Some(ext), ..info };
+        let info = MemInfo { ext: Some(ext), space: 0, ..info };
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 
