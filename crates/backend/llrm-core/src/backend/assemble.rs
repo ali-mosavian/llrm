@@ -833,6 +833,9 @@ fn staged(
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let dag = match target.selector {
         Selector::Old => None,
+        // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
+        // selector for the rest -- to bisect a wrong result to a function
+        Selector::Dag | Selector::Shadow if !shadow::only(name) => None,
         Selector::Dag => Some(timed("dag isel", || {
             crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu, target.libcalls)
         })),

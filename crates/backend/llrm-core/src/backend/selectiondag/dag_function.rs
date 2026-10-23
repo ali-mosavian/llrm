@@ -148,6 +148,38 @@ impl super::emit::GlobalMap for Globals<'_> {
     }
 }
 
+/// What a call destroys, by the convention of the function it names: a
+/// declaration's own, the C one for a runtime routine, and for a call through
+/// a pointer (whose convention the node does not carry) the C one too.
+struct CallConventions<'a> {
+    module: &'a Module,
+    arch: &'a dyn Target,
+}
+
+impl super::emit::Conventions for CallConventions<'_> {
+    fn clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        let number = match callee {
+            Some(Callee::Global(id)) => {
+                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
+            }
+            _ => 0,
+        };
+        let found = self.arch.calling().by_number(number)?;
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        Some(
+            found
+                .clobbered
+                .iter()
+                .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+                .map(|name| regs.root(self.arch.register_named(name)))
+                .collect(),
+        )
+    }
+}
+
 /// What does not change between functions: the opcode map and names, built
 /// once (`x86.instr` is parsed at 5,000 instructions a row).
 struct Tables {
@@ -337,6 +369,7 @@ pub fn selected(
         .collect();
     let ctx = EmitContext {
         caller_saved: &caller_saved,
+        conventions: &CallConventions { module, arch },
         stack_pointer,
         globals: &globals,
         block_at: &block_at,
