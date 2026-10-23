@@ -4,7 +4,7 @@
     bcprobe.py BC_DIR FILE.bas...      # BC_DIR holds BC.EXE (llrm-private-tools/qb45)
 
 Runs on the dosrun fork of DOSBox-X (DOSBOX_BIN, else tools/dosbatch's pick):
-one booted machine per core, every file a job forked from it, so the start-up
+four booted machines per core, every file a job forked from it, so the start-up
 is paid once per core. Prints `ok`, `refused` with BC's first error, or `timeout`.
 """
 
@@ -68,8 +68,8 @@ def machine(bc_dir, sources):
 
 def main():
     bc_dir, files = Path(sys.argv[1]), [Path(f) for f in sys.argv[2:]]
-    cores = os.cpu_count() or 4
-    slices = [files[i::cores] for i in range(cores) if files[i::cores]]
+    machines = 4 * (os.cpu_count() or 4)  # four booted machines per core
+    slices = [files[i::machines] for i in range(machines) if files[i::machines]]
     with ThreadPoolExecutor(len(slices)) as pool:
         results = list(pool.map(lambda s: machine(bc_dir, s), slices))
     verdicts = {}
