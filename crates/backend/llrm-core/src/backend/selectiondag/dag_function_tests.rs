@@ -1543,3 +1543,22 @@ fn the_stack_pointer_is_a_word_at_m16() {
         .expect("an add of the stack pointer");
     assert!(matches!(&adjust.dests[..], [Loc::Reg(r)] if r.width == 2), "{adjust:?}");
 }
+
+const U64_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(i64 %x) {
+entry:
+  %r = uitofp i64 %x to double
+  ret double %r
+}
+";
+
+/// An unsigned 64-bit integer converts through the 80-bit register class and a
+/// pool entry of its fudge (0.0f at +0, 2^64 at +4): the entry is read four
+/// bytes inside its eight, and the register class alone is no long double.
+/// 19 functions stopped at the entry's type.
+#[test]
+fn an_unsigned_64_bit_integer_converts_to_a_double() {
+    let module = llrm_mir::parse::module(U64_TO_DOUBLE).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
