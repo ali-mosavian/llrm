@@ -739,9 +739,18 @@ impl SelectionDAG {
         offset: i64,
     ) -> SDValue {
         let vt = self.value_type(ptr);
-        // a two-word pointer is not an integer: its zero offset is no add
+        // a two-word pointer is not an integer: its zero offset is no add,
+        // and any other moves the offset word alone
         if offset == 0 && !vt.is_integer() {
             return ptr;
+        }
+        if vt == EVT::Simple(super::mvt::MVT::Far) {
+            let (zero, one) = (self.get_constant(0, EVT::I16), self.get_constant(1, EVT::I16));
+            let low = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, zero]);
+            let high = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, one]);
+            let step = self.get_constant(offset as u128 & 0xffff, EVT::I16);
+            let moved = self.get_node_flags(ISD::Add, EVT::I16, &[low, step], SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS));
+            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
