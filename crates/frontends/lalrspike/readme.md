@@ -158,6 +158,18 @@ whole pipeline 1.7x faster than the streamed one. Both build the same tree, so
 the allocation of `Node` vectors is in both; the difference is the driver, the
 tables and the reduce actions.
 
+### Tokens a line at a time
+
+`parse_qb_rd_by_line` fills one reused buffer from the lexer up to a newline, parses that
+line, and clears the buffer: no token vector and no spans, the leaves numbered by a running
+base. A fixed-size ring would not do: the parser looks three tokens ahead and backs up over a
+`GET (x,y)` coordinate pair, both within a logical line, and a continued line has no bound.
+A line is the window it needs. Same tree as the vector path (`tests/qb_rd.rs`). Speed: 25.9 to
+29.5 ms over three runs against 27.8 to 29.4 ms for pre-lex plus parse, so no gain. The token
+vector was never the cost: a `Tok` is two bytes. What it saves is the span vector (24 bytes a
+token, 4.6 MB for this corpus), which matters only if the later passes can re-lex from the
+source instead of reading spans.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

@@ -71,6 +71,25 @@ pub fn parse_qb_stream(
     })
 }
 
+/// The recursive-descent parser fed a line at a time: the lexer fills one reused buffer up to a
+/// newline, the parser reads that line, the buffer is cleared. No token vector, no spans.
+pub fn parse_qb_rd_by_line(source: &str, dialect: qbfront::Dialect) -> Result<qb_tree::Tree, String> {
+    let lines = qb_lexer::Lines::new(source, dialect).ok_or("dialect is lexed by the old lexer")?;
+    let mut buffer: Vec<qb_tokens::Tok> = Vec::with_capacity(256);
+    let (mut base, mut trees) = (0, Vec::new());
+    for item in lines.stream_bare() {
+        let (_, tok, _) = item.map_err(|error| format!("lex: {}", error.message))?;
+        let end = tok == qb_tokens::Tok::Kw(qb_kw::Kw::NewLine);
+        buffer.push(tok);
+        if end {
+            trees.push(qb_rd::parse_line(&buffer, base).map_err(|at| format!("token {}", base + at))?);
+            base += buffer.len();
+            buffer.clear();
+        }
+    }
+    Ok(qb_tree::Tree::List(trees))
+}
+
 /// A parse of kinds already in a vector, for comparing parsers on tokens no source spells.
 pub fn parse_qb_kinds(kinds: &[qb_tokens::Tok]) -> Result<qb_tree::Tree, usize> {
     let tokens = kinds.iter().enumerate().map(|(at, tok)| Ok((at, tok.clone(), at + 1)));
