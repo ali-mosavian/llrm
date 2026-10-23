@@ -14,6 +14,11 @@ fn main() {
         // BC inlines `'$INCLUDE:` files, so the front end sees the expanded text
         let source = match qbfront::source::load(std::path::Path::new(&path), &[]) {
             Ok(text) => lalrspike::dos_source(text.as_bytes()),
+            // a missing include file is BC's error too
+            Err(message) if message.contains("was not found") => {
+                println!("{path}\tsyntax\t{message}");
+                continue;
+            }
             Err(_) => lalrspike::dos_source(&std::fs::read(&path).unwrap()),
         };
         let (class, message) = match lalrspike::qb_ast::parse(&source, dialect) {
