@@ -1541,6 +1541,28 @@ mod llrm_intrinsics {
             (Some(FARCALL_OPCODE), vec![chain, target], vec![mvt::Other, mvt::Glue])
         );
     }
+
+    /// `LLRM_CODE` (24582, sdag-a's `llrm.ia16.code`) is its own pseudo, not
+    /// the asm one.
+    #[test]
+    fn a_code_node_is_the_code_pseudo() {
+        use crate::x86_llrm::{CODE_OPCODE, LLRM_CODE};
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let node = dag.node(LLRM_CODE, &[mvt::Other, mvt::Glue], &[chain]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Real16,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+        assert_eq!(dag.nodes[node as usize].machine, Some(CODE_OPCODE));
+    }
 }
 
 mod instruction_names {

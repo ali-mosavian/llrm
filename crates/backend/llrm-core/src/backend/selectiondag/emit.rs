@@ -687,21 +687,16 @@ impl Emitter<'_, '_> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
-            // The global rides in the node's own data.
-            let symbol = match node.data {
-                NodeData::Global { symbol, .. } => Some(symbol),
+            // The global rides as the operand (morph clears the node's data).
+            let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
+            let symbol = match (operand_data, node.data) {
+                (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
                 _ => None,
             };
-            // Naming no global it is DGROUP's, which the builder also writes
-            // for the start of a huge array (`addrspacecast (@big ...)`):
-            // tests/run/c/huge_array crashed. Refused until the builder says
-            // which segment it means.
-            let Some(symbol) = symbol else {
-                return Err(EmitError::Unsupported("SEGMENT_OF no global: DGROUP or a global's segment".to_owned()));
-            };
+            // Naming no global it is DGROUP's.
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(Some(symbol))) };
+            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
             return Ok(());
         }
@@ -1140,6 +1135,15 @@ impl Emitter<'_, '_> {
                 ("LEA16r", Some(NodeData::FrameIndex(_))) => {
                     Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
                 }
+                ("OR32rr", _) => {
+                    // A huge pointer built as `offset | (selector << 16)`.
+                    let selector = self
+                        .huge_selector(origin)
+                        .ok_or_else(
+                            || EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()),
+                        )?;
+                    return self.held_operand(selector);
+                }
                 _ => {
                     return Err(EmitError::Unsupported(
                         "a string operation on a pointer of no known segment".to_owned(),
@@ -1151,6 +1155,22 @@ impl Emitter<'_, '_> {
         };
         self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
         Ok(held)
+    }
+
+    /// The 16-bit selector of a huge pointer `origin` = `or(offset,
+    /// shl(insert(undef, selector), 16))`.
+    fn huge_selector(
+        &self,
+        origin: SDValue,
+    ) -> Option<SDValue> {
+        let shifted = *self.dag.node(origin).ops.iter().find(|op| self.is_machine_named(**op, "SHL32ri"))?;
+        let [inserted, amount] = self.dag.node(shifted).ops[..] else { return None };
+        let NodeData::Const { bits: 16, .. } = self.dag.node(amount).data else { return None };
+        if !self.is_machine_named(inserted, "INSERT_SUBREG") {
+            return None;
+        }
+        let [undef, selector, _] = self.dag.node(inserted).ops[..] else { return None };
+        (self.is_implicit_def(undef) && width_of(self.dag, selector) == 2).then_some(selector)
     }
 
     /// Whether `value` is a machine node of the pin's opcode `name`.
