@@ -5,6 +5,10 @@ use crate::backend::selectiondag::MemBase;
 struct Frame(Vec<(u32, u32)>);
 
 impl FrameObjects for Frame {
+    fn objects(&self) -> i32 {
+        self.0.len() as i32
+    }
+
     fn create_stack_temporary(
         &mut self,
         size: u32,

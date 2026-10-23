@@ -1030,3 +1030,31 @@ def test_a_pr_added_to_waits_during_the_batch_is_not_pushed_and_is_held(tmp_path
     assert ps.squash("4057", info, "body", run=run) is None
     assert not calls, "nothing was pushed or merged"
     assert ps.waiting("4057") and not ps.waiting("405") and not ps.waiting("2698")
+
+
+def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
+    """#4039 landed an unlinked docs page red (tests/docs_links): the scanner layer ran only with LAND_FAST_TESTS=1, which the runner does not set."""
+    asked = []
+
+    def on_merged(targets):
+        asked.append(list(targets))
+        return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
+
+    assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
+    assert asked == [["docs_links"]]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "docs_links" in asked[0] and len(asked[0]) > 1
+
+
+def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
+    """The batch's scanners ran on a tree with #4042 in it; #4042 failed at the squash ("Head branch was modified") and the others were pushed on a tree no scanner had seen."""
+    asked = []
+    red = lambda number, info: asked.append(number) or {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}  # noqa: E731
+    assert ps.rescanned_refusal("4039", {}, [], rescan=red) == "" and not asked, "nothing dropped: the batch's scan stands"
+    why = ps.rescanned_refusal("4039", {}, ["4042"], rescan=red)
+    assert asked == ["4039"] and "dropped #4042" in why and "docs_links" in why
+    assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
+    import inspect
+
+    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"

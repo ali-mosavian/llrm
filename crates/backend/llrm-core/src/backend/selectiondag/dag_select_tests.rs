@@ -34,6 +34,10 @@ impl super::emit::GlobalMap for NoGlobals {
 struct NoTemps;
 
 impl super::x86_preprocess::FrameObjects for NoTemps {
+    fn objects(&self) -> i32 {
+        0
+    }
+
     fn create_stack_temporary(
         &mut self,
         _size: u32,
