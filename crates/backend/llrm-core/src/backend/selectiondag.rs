@@ -173,6 +173,8 @@ mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
+mod overflow_tests;
+#[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
 mod switchbpi_tests;
@@ -180,7 +182,5 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
-#[cfg(test)]
-mod overflow_tests;
 #[cfg(test)]
 mod vararg_tests;
