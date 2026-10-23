@@ -124,8 +124,8 @@ fn the_real_m32_fact_names_memcpy_memmove_and_memset() {
 
 /// Every routine a runtime's `c.toml` lists in `libcalls` is defined in the
 /// runtime (its `ext.asm` and the files it includes), under the name its
-/// register ABI gives (`memmove_`) or the stack one (`_memmove`): a call of one
-/// that is not there does not link.
+/// register ABI gives (`memmove_`) or the stack one (`_memmove`, `_memmove@3`):
+/// a call of one that is not there does not link.
 #[test]
 fn every_libcall_a_c_toml_names_is_in_its_runtime() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c");
@@ -147,7 +147,7 @@ fn every_libcall_a_c_toml_names_is_in_its_runtime() {
         for name in names {
             let defined = |symbol: String| source.lines().any(|line| line.trim() == format!("public {symbol}"));
             assert!(
-                defined(format!("{name}_")) || defined(format!("_{name}")),
+                defined(format!("{name}_")) || defined(format!("_{name}")) || defined(format!("_{name}@3")),
                 "{}: libcalls names {name}, which no `public` of ext.asm defines",
                 directory.display()
             );

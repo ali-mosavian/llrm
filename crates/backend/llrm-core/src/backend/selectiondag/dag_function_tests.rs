@@ -1072,6 +1072,7 @@ fn a_runtime_routine_is_called_far_at_m16() {
     let sites: Vec<(&i64, &String)> = done.calls.iter().collect();
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert!(done.far.contains(sites[0].0), "{sites:?} far={:?}", done.far);
+}
 
 const FLOAT_TO_INT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(double %x) {
