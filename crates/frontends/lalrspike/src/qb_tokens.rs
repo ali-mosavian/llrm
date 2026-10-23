@@ -67,7 +67,16 @@ pub fn tokens(source: &[Token]) -> Vec<Spanned> {
         .enumerate()
         .map(|(at, token)| {
             let apart = matches!(&token.kind, TokenKind::Identifier(word) if word == "FN") && name(at + 1);
-            Ok((at, if apart { Tok::FnWord } else { terminal(&token.kind) }, at + 1))
+            // `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the suffix makes it a name
+            let suffixed = matches!(&token.kind, TokenKind::Reserved(id) if suffixed_name(*id, token));
+            Ok((at, if apart { Tok::FnWord } else if suffixed { Tok::Ident } else { terminal(&token.kind) }, at + 1))
         })
         .collect()
+}
+
+fn suffixed_name(id: u16, token: &Token) -> bool {
+    let (_, spelling, ..) = TOKENS[usize::from(id)];
+    spelling.starts_with(|c: char| c.is_ascii_alphabetic())
+        && token.span.end - token.span.start > spelling.len()
+        && token.span.end - token.span.start == spelling.len() + 1
 }

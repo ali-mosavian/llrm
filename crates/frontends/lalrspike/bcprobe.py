@@ -45,6 +45,15 @@ def verdict(out):
     return ("refused " if int(severe.group(1)) else "ok ") + first
 
 
+def compiler(bc_dir):
+    """BC's path on V:, by the family's layout: QB 4.5 beside the root, PDS 7.1 in BINB, VBDOS in BIN."""
+    if (bc_dir / "BINB" / "BC.EXE").exists():
+        return "pds71", r"V:\BINB\BC"
+    if (bc_dir / "BIN" / "BC.EXE").exists():
+        return "vbdos", r"V:\BIN\BC"
+    return "qb45", r"V:\BC"
+
+
 def switches(source):
     """The switches dosbatch gives: error trapping needs /E and /X."""
     text = source.read_bytes().upper()
@@ -61,7 +70,7 @@ def machine(bc_dir, sources, root, progress):
             if root:
                 rel = source.resolve().relative_to(root.resolve())
                 folder = "\\".join(rel.parts[:-1])
-                script += [*head, f"mount c {root}", f"mount d {work}", f"mount v {bc_dir}", "c:", f"cd \\{folder}", rf"V:\BC {rel.name},NUL,NUL /O{switches(source)}; > D:\O{at}.TXT", "."]
+                script += [*head, f"mount c {root}", f"mount d {work}", f"mount v {bc_dir}", "c:", f"cd \\{folder}", rf"{compiler(bc_dir)[1]} {rel.name},NUL,NUL /O{switches(source)}; > D:\O{at}.TXT", "."]
                 continue
             job = work / f"D{at}"
             job.mkdir()
@@ -69,7 +78,7 @@ def machine(bc_dir, sources, root, progress):
                 if sibling.suffix.lower() in INCLUDES and sibling.is_file():
                     shutil.copy(sibling, job / sibling.name.upper())
             (job / "T.BAS").write_bytes(dosbatch.crlf(source.read_bytes().replace(b"\x1a", b"")))
-            script += [*head, f"mount c {work}", f"mount v {bc_dir}", "c:", f"cd D{at}", rf"V:\BC T.BAS /O{switches(source)}; > O.TXT", "."]
+            script += [*head, f"mount c {work}", f"mount v {bc_dir}", "c:", f"cd D{at}", rf"{compiler(bc_dir)[1]} T.BAS /O{switches(source)}; > O.TXT", "."]
         (work / "job.conf").write_text(dosbatch.CONF)
         (work / "jobs.txt").write_text("\n".join(script) + "\n")
         events = work / "events.txt"
