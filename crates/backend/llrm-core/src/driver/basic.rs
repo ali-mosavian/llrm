@@ -888,6 +888,7 @@ pub fn assembled(
             runtime: runtime.tables(),
             basic: true,
             zeroed: matches!(frame, Frame::Runtime { .. }),
+            libcalls: &options.libcalls,
         };
         let (procedure, landing, statics) =
             llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || {
