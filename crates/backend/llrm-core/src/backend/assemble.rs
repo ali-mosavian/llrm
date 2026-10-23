@@ -141,7 +141,7 @@ pub fn assembled(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
 ) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16)
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16, &[])
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
@@ -154,6 +154,7 @@ pub fn assembled_by(
     selection: &'static isel::Compiled,
     selector: Selector,
     arch: &dyn llrm_target::Target,
+    libcalls: &[(String, u32, String)],
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
@@ -177,6 +178,7 @@ pub fn assembled_by(
         runtime: "",
         basic: false,
         zeroed: false,
+        libcalls,
     };
     // Callees first, so what a function that takes part writes is known when
     // its callers are selected.
@@ -490,6 +492,9 @@ pub struct Target<'t> {
     pub basic: bool,
     /// A framed function's locals start zeroed: B$ENRA zero-fills them.
     pub zeroed: bool,
+    /// The library routines the runtime has, with the calling convention and
+    /// symbol a call of each uses (`options.libcalls`).
+    pub libcalls: &'t [(String, u32, String)],
 }
 
 /// A function selected and through the machine phases, as llc's
@@ -829,11 +834,11 @@ fn staged(
     let dag = match target.selector {
         Selector::Old => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+            crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu, target.libcalls)
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)
+                crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu, target.libcalls)
             }) {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {

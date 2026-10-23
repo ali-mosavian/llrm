@@ -249,6 +249,7 @@ pub fn selected(
     name: &str,
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
         16 => true,
@@ -270,6 +271,7 @@ pub fn selected(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
+    let builder_target = builder_target.with_runtime_calls(libcalls);
     let tables = tables(arch);
     let frame = Frame::new(
         convention

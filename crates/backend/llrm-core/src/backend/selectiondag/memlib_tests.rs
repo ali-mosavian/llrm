@@ -65,16 +65,19 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
-/// On m32 the fact names `memcpy` only: a variable fill is `rep stosb` and a
-/// move is refused, as the old selector. A `memcpy` call with the fact on is
-/// the MIR pass's (`memcpycall`, with the fact's symbol and convention); the
-/// builder, which has neither, refuses one rather than call `memcpy` in the
-/// wrong convention.
+/// The call is the fact's: its symbol (`memset_`) and calling convention
+/// (watcom registers, not the stack) as `options.libcalls` states them. With
+/// no fact wired the builder refuses rather than call `memset` in the default
+/// convention: before, 9 m32 programs stopped there, and a call made with the
+/// wrong ones would have linked to nothing.
 #[test]
-fn the_real_m32_fact_names_memcpy_only() {
-    let target = BuilderTarget::m32();
-    let fill = built("fill", &target).expect("builds");
-    assert!(fill.contains("REP_STOS") && !fill.contains("'memset'"), "{fill}");
-    assert!(built("move", &target).is_err());
-    assert!(built("copy", &target).is_err());
+fn the_call_uses_the_facts_symbol_and_convention() {
+    let calls = [("memset".to_owned(), llrm_mir::opcode::WATCALL, "memset_".to_owned())];
+    let on = built("fill", &BuilderTarget::m32().with_runtime_calls(&calls)).expect("builds");
+    assert!(on.contains("TargetExternalSymbol:i32'memset_'") && !on.contains("'memset'"), "{on}");
+    assert!(on.contains("$eax") && on.contains("$edx") && on.contains("$ebx"), "register arguments:\n{on}");
+    assert!(!on.contains("store"), "no stack arguments:\n{on}");
+    // the `i8` fill value is widened to the register it goes in; it was copied to `$edx` as an `i8`
+    assert!(on.contains("any_extend") && on.contains("Register:i32 $edx") && !on.contains("Register:i8 $edx"), "{on}");
+    assert!(built("fill", &BuilderTarget::m32()).is_err());
 }
