@@ -67,6 +67,23 @@ fn simple_int(bits: u32) -> bool {
 
 /// `TargetLowering`'s hooks. Each default is the base class's.
 pub trait Lowering {
+    /// `isTypeLegal(EVT(iN))`: a register type of the target. The base class
+    /// has none.
+    fn is_type_legal(
+        &self,
+        bits: u32,
+    ) -> bool {
+        let _ = bits;
+        false
+    }
+
+    /// `enableExtLdPromotion` (TargetLowering.h#L977): whether CodeGenPrepare
+    /// may promote the operands of an extension towards the load that feeds
+    /// them. The base class says no.
+    fn enable_ext_ld_promotion(&self) -> bool {
+        false
+    }
+
     /// `isOperationLegalOrCustom(op, EVT(iN))`
     /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
     /// whether the type is legal and the target does `op` on it itself or by a

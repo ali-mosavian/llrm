@@ -27,6 +27,19 @@ impl Lowering for X86 {
         true
     }
 
+    // The register classes (X86ISelLowering L179-183).
+    fn is_type_legal(
+        &self,
+        bits: u32,
+    ) -> bool {
+        matches!(bits, 8 | 16 | 32) || (bits == 64 && self.is_64bit)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L2955
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
     // The registers: i8, i16 and i32 (i64 on a 64-bit target). Divide and
     // remainder are `Expand` (L327: `SDIVREM` does them), every other scalar
     // operation here is `Legal` or `Custom` (`Select` and `SetCC` L361).
