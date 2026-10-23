@@ -125,6 +125,13 @@ pub fn tied(
             let dist = walk.pass(&one);
             // The copies to and from registers this instruction carries.
             walk.process_copy(&one);
+            // `scanUses(regA)` of a tied instruction that is not yet tied.
+            if let Some(what) = one.what.as_ref().filter(|what| ties(what))
+                && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
+                && into.value != first.value
+            {
+                walk.scan_uses_of(into.value);
+            }
             let commuted = walk.try_instruction_commute(&one, dist);
             if let Some(chosen) = &commuted {
                 facts.rewrite(at, work[place].id(), Arc::clone(chosen));
@@ -163,6 +170,32 @@ pub fn tied(
             if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
                 continue;
             }
+            // An instruction with a load folded into it whose first source
+            // lives on: the load is unfolded and the instruction
+            // commuted, so the loaded value is the tied one
+            // (`mov t, [m]; add t, a`, not `mov d, a; add d, [m]`;
+            // `tryInstructionTransform`).
+            if commuted.is_none()
+                && let Some((load, add)) = _unfolded(&one, &mut mint)
+                && let Some(Loc::Held(first)) = add.what.as_ref().and_then(|what| what.sources.get(1))
+                && !walk.killed_at(&work[place], first.value)
+                && let Some(fix) = _untied(&add, &mut mint)
+            {
+                place += 1;
+                walk.remove_clobbered_src_reg_map(&one);
+                let mut made = vec![load];
+                made.extend(fix);
+                if let [load, copy, fixed] = &made[..]
+                    && let (Some(&into), Some(&tied)) = (copy.defines.first(), copy.uses.first())
+                {
+                    let _ = load;
+                    let dies = !fixed.uses.contains(&tied);
+                    walk.tied_pair_processed(copy.id(), fixed.id(), into, tied, dies);
+                }
+                facts.replace(at, &one, &made);
+                insns.extend(made);
+                continue;
+            }
             place += 1;
             walk.remove_clobbered_src_reg_map(&one);
             let Some(fix) = _untied(&one, &mut mint) else {
@@ -186,6 +219,41 @@ pub fn tied(
         );
     }
     facts.finish(body)
+}
+
+/// `unfoldMemoryOperand` of a commutative instruction `d := op a, [m]` whose
+/// `a` is another value: the load `t := mov [m]` and `d := op t, a`, commuted
+/// so that `t` is the tied source.
+fn _unfolded(
+    one: &Insn,
+    mint: &mut dyn FnMut() -> u32,
+) -> Option<(Arc<Insn>, Arc<Insn>)> {
+    let what = one.what.as_ref()?;
+    if what.op != Operation::Binary
+        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+        || what.dests.len() != 1
+        || what.sources.len() != 2
+        || one.volatile
+        || one.group.is_some()
+        || !one.requires.is_empty()
+        || !one.delivers.is_empty()
+    {
+        return None;
+    }
+    let (Loc::Held(into), Loc::Held(first), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0], &what.sources[1])
+    else {
+        return None;
+    };
+    if into.value == first.value || into.width != first.width || cell.width != first.width {
+        return None;
+    }
+    let loaded = Held { value: mint(), width: first.width };
+    let reads: Vec<u32> = ir::values(&Loc::Mem(cell.clone())).iter().map(|held| held.value).collect();
+    let load = _inserted(one, _move(Loc::Held(loaded), Loc::Mem(cell.clone())), vec![loaded.value], reads);
+    let mut add = one.clone();
+    add.what = Some(Semantics { sources: vec![Loc::Held(loaded), Loc::Held(*first)], ..what.clone() });
+    add.uses = std::iter::once(loaded.value).chain(std::iter::once(first.value)).collect();
+    Some((load, Arc::new(add)))
 }
 
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
@@ -1468,5 +1536,32 @@ mod tests {
         assert_eq!(walk.src_register(9), None, "a source that lives on maps nothing");
         walk.tied_pair_processed(copy.id(), mi.id(), 9, 7, true);
         assert_eq!(walk.src_register(9), Some(RegId::EAX));
+    }
+
+    /// `tryInstructionTransform`'s unfold: `d := add a, [m]` where `a` is read
+    /// again takes the load out and commutes, so the loaded value is the
+    /// tied one: `mov t,[m]; mov d,t; add d,a` (the copy joins the load),
+    /// not `mov d,a; add d,[m]`, which holds `a` and `d` apart.
+    #[test]
+    fn test_a_folded_load_beside_a_live_source_is_unfolded_and_commuted() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Binary)
+        };
+        let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let got = tied(&of(vec![imm_def(0, 7), add, read(2, 8), read(3, 7)]), Off);
+        let mut shapes = Vec::new();
+        for one in got.insns().iter() {
+            let Some(what) = one.what.as_ref() else { continue };
+            shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
+        }
+        let mem = |at: usize| matches!(shapes[at].1.first(), Some(Loc::Mem(_)));
+        assert!(
+            shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
+            "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
+        );
     }
 }
