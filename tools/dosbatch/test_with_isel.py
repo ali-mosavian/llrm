@@ -60,3 +60,16 @@ def test_a_selection_count_needs_the_selectors_report(tmp_path):
     assert dosbatch.isel_proof(report, "old") == (0, 2)
     report.write_text("f dag\ng old\nh dag\n")
     assert dosbatch.isel_proof(report, "dag") == (2, 1)
+
+
+def test_real_mode_c_takes_the_selector_when_the_run_is_the_real_mode_check(monkeypatch, tmp_path):
+    """LLRM_ISEL_REAL=1 is the m16 execution check: real-mode C programs go through LLRM_ISEL too."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    monkeypatch.setenv("LLRM_ISEL_REAL", "1")
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
+    assert command[1] == "--isel=dag", command
