@@ -1045,3 +1045,9 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
+
+
+def test_the_scanner_line_names_the_tree_it_scanned():
+    """#4039 landed after `scanners: 13 targets, 0 red`; replaying its PRs on the head is red, and the log did not say which tree the scanners saw."""
+    assert ps.scanner_tests_line(["docs_links"], set(), "abc123def") == "scanners: 1 targets, 0 red (tree abc123def)"
+    assert ps.scanner_tests_line(["docs_links"], {"x"}) == "scanners: 1 targets, 1 red"
