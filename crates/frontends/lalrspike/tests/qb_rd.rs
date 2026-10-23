@@ -81,3 +81,25 @@ fn recursive_descent_refuses_what_lalrpop_refuses() {
     disagreements.retain(|variant| !signed(variant));
     assert!(disagreements.is_empty(), "{} of {checked}: {:?}", disagreements.len(), disagreements.first());
 }
+
+/// Fed a line at a time through one reused buffer, the parser builds the same tree.
+#[test]
+fn recursive_descent_by_line_builds_the_same_tree() {
+    let mut parsed = 0;
+    for path in tracked() {
+        let source = lalrspike::dos_source(&std::fs::read(&path).unwrap());
+        for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            let Some(Ok((kinds, _))) = lalrspike::qb_lexer::prelex(&source, dialect) else { continue };
+            let by_line = lalrspike::parse_qb_rd_by_line(&source, dialect);
+            match (lalrspike::qb_rd::parse(&kinds), by_line) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a, b, "{} under {dialect:?}", path.display());
+                    parsed += 1;
+                }
+                (Err(_), Err(_)) => {}
+                (a, b) => panic!("{} under {dialect:?}: {:?} vs {:?}", path.display(), a.map(|_| ()), b.map(|_| ())),
+            }
+        }
+    }
+    assert!(parsed > 1500, "parsed {parsed}");
+}
