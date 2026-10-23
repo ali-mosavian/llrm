@@ -1082,6 +1082,12 @@ impl<'a> TypeLegalizer<'a> {
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[lo])
             }
+            ISD::ExtractElement if at == 0 => {
+                // `ExpandOp_EXTRACT_ELEMENT`: the low or the high half of the
+                // pair.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
+            }
             ISD::Store if at == 1 => self.expand_store(node),
             ISD::SetCC
                 if matches!(self.setcc_code(node), Some(CondCode::SetLt | CondCode::SetGe))
