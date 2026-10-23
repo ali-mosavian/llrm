@@ -108,6 +108,8 @@ pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
 pub mod dagisel_adapter;
+pub mod div_combine;
+pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
