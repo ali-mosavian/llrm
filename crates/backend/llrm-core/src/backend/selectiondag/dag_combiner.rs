@@ -292,6 +292,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 if self.dag.is_opaque(constant) {
                     continue;
                 }
+                // `(and (anyext x), c)` is `(zext x)` when `c` keeps no bit
+                // above `x` and every bit `x` may set (`SimplifyDemandedBits`
+                // drops the `and` of a promoted boolean).
+                if self.dag.opcode(other) == ISD::AnyExtend {
+                    let source = self.dag.operand(other, 0);
+                    let width = self.dag.value_type(source).size_in_bits();
+                    let narrow = super::fold::mask(width);
+                    let known = super::known_bits::known_bits(self.dag, source);
+                    if c & !narrow == 0 && narrow & !(known.zero | c) == 0 {
+                        return Some(self.dag.get_node(ISD::ZeroExtend, vt, &[source]));
+                    }
+                }
                 let known = super::known_bits::known_bits(self.dag, other);
                 if all & !(known.zero | c) == 0 {
                     return Some(other);
