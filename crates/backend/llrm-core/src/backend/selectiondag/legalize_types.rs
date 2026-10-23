@@ -255,7 +255,8 @@ impl<'a> TypeLegalizer<'a> {
         users.dedup();
         for user in users {
             // One operand slot per read of `n`, whichever of its results.
-            let slots = self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
+            let slots =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
                 NodeId::Pending(count) => {
                     if count <= slots {
