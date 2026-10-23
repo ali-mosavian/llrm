@@ -65,16 +65,32 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
-/// On m32 the fact names `memcpy` only: a variable fill is `rep stosb` and a
-/// move is refused, as the old selector. A `memcpy` call with the fact on is
-/// the MIR pass's (`memcpycall`, with the fact's symbol and convention); the
-/// builder, which has neither, refuses one rather than call `memcpy` in the
-/// wrong convention.
+/// The libcalls the m32 runtime's `c.toml` names, read from the file.
+fn real_m32_fact() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c/x86-m32/c.toml");
+    let table: toml::Table = std::fs::read_to_string(path).expect("c.toml").parse().expect("parses");
+    table
+        .get("libcalls")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|one| one.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The fact the m32 runtime states while its QB link lacks the routines (qbrt
+/// was 183/218 with `memcpy` named): none. A variable fill is `rep stosb`, a
+/// copy `rep movsb`, and a variable move is refused. Turn this into the
+/// memcpy/memmove/memset case when the flip returns: a `memcpy` call with the
+/// fact on is the MIR pass's (`memcpycall`, with the fact's symbol and
+/// convention); the builder, which has neither, refuses one rather than call
+/// `memcpy` in the wrong convention.
 #[test]
-fn the_real_m32_fact_names_memcpy_only() {
+fn the_real_m32_fact_names_no_libcall_while_the_qb_link_lacks_them() {
+    assert!(real_m32_fact().is_empty(), "the fact changed: {:?}; state the new one here", real_m32_fact());
     let target = BuilderTarget::m32();
     let fill = built("fill", &target).expect("builds");
     assert!(fill.contains("REP_STOS") && !fill.contains("'memset'"), "{fill}");
     assert!(built("move", &target).is_err());
-    assert!(built("copy", &target).is_err());
+    assert!(built("copy", &target).is_ok(), "a copy is rep movsb with no memcpy named");
 }
