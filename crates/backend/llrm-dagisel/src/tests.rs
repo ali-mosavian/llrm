@@ -767,6 +767,24 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
     }
 
+    /// Real mode has no scaled index, so `lea` cannot take a multiply by 3, 5
+    /// or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
+    /// functions).
+    #[test]
+    fn a_multiply_by_a_lea_constant_is_imul_when_lea_cannot_take_it() {
+        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "IMUL32rri")] {
+            let mut dag = TestDag::new();
+            let x = dag.input(1, vt);
+            let three = dag.make_constant(3, vt);
+            let node = dag.node(x86isd::MUL_IMM, &[vt], &[x, three]);
+            let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+            assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, node), Outcome::Selected);
+
+            assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), want);
+        }
+    }
+
     #[test]
     fn the_pins_own_table_has_no_pattern_for_a_far_load() {
         let (mut dag, node, _) = far_load(x86isd::LES);
