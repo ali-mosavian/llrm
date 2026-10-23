@@ -1,4 +1,4 @@
 DIM x%
-SUB q ()
+SUB q
 x% = 1
 END SUB

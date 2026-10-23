@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 DATA 1
 READ x%
 END SUB

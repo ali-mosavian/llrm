@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 TYPE T2
 a AS INTEGER
 END TYPE

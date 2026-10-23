@@ -31,6 +31,8 @@ pub enum Ty {
     Double,
     /// PDS and VBDOS's CURRENCY.
     Currency,
+    /// A property of a VBDOS form or control, whose type the form's file would say.
+    Variant,
     /// A string; a fixed one has its length.
     Str(Option<usize>),
     Record(String),
@@ -38,11 +40,11 @@ pub enum Ty {
 
 impl Ty {
     fn numeric(&self) -> bool {
-        matches!(self, Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double)
+        matches!(self, Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double | Ty::Variant)
     }
 
     fn string(&self) -> bool {
-        matches!(self, Ty::Str(_))
+        matches!(self, Ty::Str(_) | Ty::Variant)
     }
 
     fn rank(&self) -> u8 {
@@ -132,6 +134,8 @@ struct Scope {
 #[derive(Clone, Debug)]
 struct Record {
     fields: Vec<(String, Ty, Option<usize>)>,
+    /// VBDOS's FORM and CONTROL: any property name goes.
+    opaque: bool,
 }
 
 /// What an expression is: its type, and whether it names a variable that can be assigned or
@@ -247,7 +251,7 @@ impl Checker {
         let first_executable = module
             .statements
             .iter()
-            .find(|statement| !matches!(statement, Statement::Dim(_) | Statement::Redim(_) | Statement::Const { .. } | Statement::TypeDecl { .. } | Statement::DefType { .. } | Statement::Comment(_) | Statement::OptionBase(..) | Statement::OptionExplicit(_) | Statement::Common { .. } | Statement::Static(_) | Statement::Shared(_) | Statement::Label(..)))
+            .find(|statement| !matches!(statement, Statement::Dim(_) | Statement::Const { .. } | Statement::TypeDecl { .. } | Statement::DefType { .. } | Statement::Comment(_) | Statement::OptionBase(..) | Statement::OptionExplicit(_) | Statement::Common { .. } | Statement::Static(_) | Statement::Shared(_) | Statement::Label(..) | Statement::FormDeclaration(..)))
             .map(|statement| statement.span().line);
         if let Some(line) = first_executable {
             for statement in &module.statements {
@@ -304,9 +308,16 @@ impl Checker {
             TypeName::Currency => Some(Ty::Currency),
             TypeName::String => Some(Ty::Str(None)),
             TypeName::Named(name) if name == "ANY" => None,
-            TypeName::Named(name) => self.records.contains_key(name).then(|| Ty::Record(name.clone())),
+            TypeName::Named(name) => {
+                (self.records.contains_key(name) || self.builtin_object(name)).then(|| Ty::Record(name.clone()))
+            }
             _ => None,
         }
+    }
+
+    /// VBDOS's own record types: a FORM and a CONTROL.
+    fn builtin_object(&self, name: &str) -> bool {
+        matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && matches!(name, "FORM" | "CONTROL")
     }
 
     /// A word BC reserves cannot name anything; dotted names are checked as the variables they are.
@@ -327,6 +338,34 @@ impl Checker {
         // `SUB p ()` is VBDOS's; QB 4.5 and PDS take `SUB p`
         if procedure.empty_list && !procedure.declaration && !procedure.module_scope && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
             self.err(procedure.span, "Formal parameter specification illegal");
+        }
+        // the parameter list: names unique, types known, no fixed-length strings, BYVAL only where the family has it
+        let mut seen: Vec<String> = Vec::new();
+        for parameter in &procedure.parameters {
+            let declaration = &parameter.declaration;
+            let upper = declaration.name.to_ascii_uppercase();
+            if seen.contains(&upper) {
+                self.err(procedure.span, "Formal parameters not unique");
+            }
+            seen.push(upper);
+            if declaration.fixed_length.is_some() {
+                self.err(procedure.span, "Fixed-length string illegal");
+            }
+            match &declaration.type_name {
+                Some(TypeName::Named(name)) if !procedure.declaration || name != "ANY" => {
+                    if !self.records.contains_key(name) && !self.builtin_object(name) {
+                        self.err(procedure.span, "TYPE not defined");
+                    }
+                }
+                _ => {}
+            }
+            if parameter.by_value && !procedure.declaration && matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+                self.err(procedure.span, "Formal parameter specification illegal");
+            }
+        }
+        // an AS clause after FUNCTION's parameters is VBDOS's
+        if procedure.kind == ProcedureKind::Function && !procedure.module_scope && procedure.result.is_some() && Ty::of_suffix(&procedure.name).is_none() && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
+            self.err(procedure.span, "Syntax error");
         }
         let params: Vec<ParamInfo> = procedure
             .parameters
@@ -364,12 +403,16 @@ impl Checker {
             unchecked: procedure.unchecked,
             first_line: procedure.span.line,
         };
-        match self.procs.get(&key) {
+        let previous = self.procs.get(&key).cloned();
+        match previous {
             Some(existing) if existing.defined && info.defined => self.err(procedure.span, "Duplicate definition"),
             Some(existing) if existing.kind != info.kind || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) => {
                 self.err(procedure.span, "Argument-count mismatch")
             }
             Some(existing) => {
+                if !existing.unchecked && !info.unchecked && existing.params.iter().zip(&info.params).any(|(a, b)| !a.any && !b.any && (a.ty.plain() != b.ty.plain() || a.array != b.array)) {
+                    self.err(procedure.span, if info.kind == ProcedureKind::Function { "Duplicate definition" } else { "Parameter type mismatch" });
+                }
                 info.declared |= existing.declared;
                 info.defined |= existing.defined;
                 info.unchecked |= existing.unchecked;
@@ -401,6 +444,11 @@ impl Checker {
     /// The variable `name` names in the current scope: found, or implicitly created.
     fn variable(&mut self, name: &str, array: bool, span: Span) -> Option<Var> {
         if self.reserved_name(name, span) {
+            return None;
+        }
+        // a scalar cannot share a procedure's name
+        if !array && self.procs.get(stem(name)).is_some_and(|p| !p.def_fn) && !self.procedure.as_ref().is_some_and(|(_, own)| stem(own) == stem(name)) {
+            self.err(span, "Syntax error");
             return None;
         }
         let key = stem(name).to_owned();
@@ -664,11 +712,18 @@ impl Checker {
             }
         }
         let base_typed = self.expr(base)?;
+        // a property of a property of a form: nothing here says its type
+        if base_typed.ty == Ty::Variant {
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+        }
         let Ty::Record(record) = &base_typed.ty else {
             self.err(span, "Type mismatch");
             return None;
         };
-        let record = self.records.get(record)?.clone();
+        let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true });
+        if record.opaque {
+            return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+        }
         // a field may be named with its type character (`menu.text$`)
         let wanted = Ty::of_suffix(name);
         match record.fields.iter().find(|(field, ty, _)| stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)) {
@@ -689,6 +744,11 @@ impl Checker {
     fn name_expr(&mut self, name: &str, span: Span) -> Option<Typed> {
         let key = stem(name);
         if let Some(constant) = self.consts.get(key) {
+            // `CONST x = 1` then `x$`: the suffix names a string where the constant is a number
+            if Ty::of_suffix(name).is_some_and(|suffix| suffix.string() != constant.ty.string()) {
+                self.err(span, "Type mismatch");
+                return None;
+            }
             return Some(constant.clone());
         }
         if let Some(sig) = qb_sigs::function(name, self.dialect) {
@@ -759,7 +819,21 @@ impl Checker {
         if let Some(sig) = qb_sigs::function(name, self.dialect) {
             return self.intrinsic(sig, name, arguments, span);
         }
+        // `SCREEN.ControlPanel(i)`, `frm.List(i)`: an indexed property of a VBDOS object
+        if let Some((root, _)) = name.split_once('.') {
+            if matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) && (matches!(root.to_ascii_uppercase().as_str(), "SCREEN" | "PRINTER" | "CLIPBOARD") || self.lookup_record_var(root)) {
+                for argument in arguments {
+                    self.expr(argument);
+                }
+                return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
+            }
+        }
         if let Some(procedure) = self.procs.get(key).or_else(|| self.procs.get(name)).cloned() {
+            if procedure.kind == ProcedureKind::Function && span.line < procedure.first_line {
+                // above its DECLARE or definition the name is an array that was never dimensioned
+                self.err(span, if procedure.def_fn { "Function not defined" } else { "Array not dimensioned" });
+                return None;
+            }
             if procedure.kind == ProcedureKind::Function {
                 self.check_arguments(&procedure, arguments, span, false);
                 return procedure.result.map(Typed::value);
@@ -880,7 +954,7 @@ impl Checker {
             Class::Array => self.array_argument(argument),
             Class::Label => {
                 if let Expr::Name(name, span) = argument {
-                    if !self.labels.contains(name) && !self.module_labels.contains(name) {
+                    if !self.labels.contains(name) {
                         self.err(*span, "Label not defined");
                     }
                     return Some(Typed::value(Ty::Int));
@@ -1020,6 +1094,17 @@ impl Checker {
             }
             let argument = self.unwrap_step(argument);
             let letter = part.chars().next().unwrap_or('n');
+            if letter == 'r' {
+                // a label anywhere in the module or in this procedure (RESTORE)
+                if let Expr::Name(label, at) = argument {
+                    if !self.labels.contains(label) && !self.module_labels.contains(label) {
+                        self.err(*at, "Label not defined");
+                    }
+                } else {
+                    self.err(argument.span(), "Syntax error");
+                }
+                continue;
+            }
             if letter == 'k' {
                 // a keyword the statement spells (ON, KEY, a device name): nothing to evaluate
                 continue;
@@ -1223,7 +1308,9 @@ impl Checker {
                     self.on_local_error(*span);
                 }
                 // an error handler is module-level code, even when the statement stands in a procedure
-                if label != "0" && !self.labels.contains(label) && !self.module_labels.contains(label) {
+                // ON ERROR names a module-level handler; ON LOCAL ERROR one of the procedure
+                let known = if self.procedure.is_some() && !*local { self.module_labels.contains(label) } else { self.labels.contains(label) };
+                if label != "0" && !known {
                     self.err(*span, "Label not defined");
                 }
             }
@@ -1336,6 +1423,17 @@ impl Checker {
                 }
             }
             Statement::Runtime { name, arguments, span } => self.runtime(name, arguments, *span),
+            Statement::MethodCall { object, arguments, .. } => {
+                self.expr(object);
+                for argument in arguments {
+                    self.expr(argument);
+                }
+            }
+            // '$FORM name: the form is a variable of the form type, seen everywhere
+            Statement::FormDeclaration(name, _) => {
+                let var = Var { ty: Ty::Record("FORM".into()), rank: None, declared: true, shared: true, dynamic: false, explicit: true, suffixed: false, redimmed: false };
+                self.scope.vars.entry(stem(name).to_ascii_uppercase()).or_default().push(var);
+            }
         }
     }
 
@@ -1418,6 +1516,13 @@ impl Checker {
         if let (Expr::Name(name, _), Some((ProcedureKind::Function, own))) = (target, &self.procedure) {
             if stem(name) == stem(own) {
                 let ty = self.procs.get(stem(own)).or_else(|| self.procs.get(own.as_str())).and_then(|p| p.result.clone());
+                // `f$ = …` in FUNCTION f% names another variable than the result
+                if let (Some(suffix), Some(result)) = (Ty::of_suffix(name), &ty) {
+                    if suffix.plain() != result.plain() {
+                        self.err(span, "Duplicate definition");
+                        return;
+                    }
+                }
                 if let (Some(ty), Some(v)) = (ty, value_typed) {
                     self.assignable(&ty, &v, value.span());
                 }
@@ -1449,6 +1554,8 @@ impl Checker {
             return;
         }
         let ok = match (target, &value.ty) {
+            // a property of a form or control: its file says what it is
+            (Ty::Variant, _) | (_, Ty::Variant) => true,
             (Ty::Record(a), Ty::Record(b)) => a == b,
             (Ty::Str(_), Ty::Str(_)) => true,
             (a, b) if a.numeric() && b.numeric() => {
@@ -1606,7 +1713,7 @@ impl Checker {
             }
             out.push((field.name.clone(), ty, None));
         }
-        self.records.insert(name.to_owned(), Record { fields: out });
+        self.records.insert(name.to_owned(), Record { fields: out, opaque: false });
     }
 
     fn declare(&mut self, d: &Declaration, redim: bool) {
@@ -1743,6 +1850,10 @@ impl Checker {
 
     fn share(&mut self, d: &Declaration) {
         let key = stem(&d.name).to_owned();
+        if self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.explicit && v.rank.is_none() == !d.array)) {
+            self.err(d.span, "Variable required");
+            return;
+        }
         let found = self.module_scope.vars.get(&key).cloned().unwrap_or_default();
         let wanted = d.type_name.as_ref().and_then(|name| self.type_of_name(name));
         let pick = found.into_iter().find(|v| v.rank.is_some() == d.array);
@@ -1817,8 +1928,27 @@ impl Checker {
                 return;
             }
         }
+        // `frmMain.cmdOK.Move 1, 2`, `SCREEN.HIDE`: a method of a VBDOS form, control or object
+        if let Some((root, _)) = name.split_once('.') {
+            let object = matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)
+                && (matches!(root.to_ascii_uppercase().as_str(), "SCREEN" | "PRINTER" | "CLIPBOARD") || self.lookup_record_var(root));
+            if object {
+                for argument in arguments {
+                    let inner = match argument {
+                        Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => &**operand,
+                        other => other,
+                    };
+                    self.expr(inner);
+                }
+                return;
+            }
+        }
         let key = stem(name);
         match self.procs.get(key).cloned() {
+            // a SUB named only below its first use is no statement yet: BC takes the name for an assignment
+            Some(procedure) if procedure.kind == ProcedureKind::Sub && !explicit && span.line < procedure.first_line => {
+                self.err(span, "Equal sign missing");
+            }
             Some(procedure) if procedure.kind == ProcedureKind::Sub => {
                 self.check_arguments(&procedure, arguments, span, true);
             }
@@ -1970,7 +2100,7 @@ impl Checker {
             "ERROR" => "n",
             "NAME" => "s s",
             "SWAP" => "v v",
-            "RESTORE" => "l?",
+            "RESTORE" => "r?",
             "DATE$" | "TIME$" => "s",
             "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "k",
             "KEY" => "n s",
@@ -1983,6 +2113,7 @@ impl Checker {
             "STACK" => "n?",
             "EVENT_SWITCH" => "k",
             "ROLLBACK" => "n?",
+            "ROLLBACK_ALL" => "",
             "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" => "n",
             "DELETEINDEX" => "n s",
             "DELETETABLE" => "s s",

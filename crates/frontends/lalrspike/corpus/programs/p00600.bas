@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 DIM y%
 y% = 1
 END SUB

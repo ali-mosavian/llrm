@@ -1,4 +1,4 @@
 DIM x%
-SUB q ()
+SUB q
 CONST k = 1
 END SUB

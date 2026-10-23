@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 SUB q
 END SUB
 f% = 1

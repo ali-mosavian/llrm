@@ -1,4 +1,4 @@
 DIM x%
-SUB q ()
+SUB q
 EXIT FUNCTION
 END SUB

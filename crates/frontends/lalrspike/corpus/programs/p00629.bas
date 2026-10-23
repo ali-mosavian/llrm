@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 DIM x%(5)
 REDIM x%(10)
 f% = 1

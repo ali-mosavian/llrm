@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 COMMON x%
 f% = 1
 END FUNCTION

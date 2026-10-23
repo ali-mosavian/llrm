@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 DIM x%(5)
 REDIM x%(10)
 END SUB

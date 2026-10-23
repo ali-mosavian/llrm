@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 CONST k = 1
 f% = 1
 END FUNCTION

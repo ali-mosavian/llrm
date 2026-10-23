@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 SHARED x%
 f% = 1
 END FUNCTION
