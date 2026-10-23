@@ -110,7 +110,16 @@ fn libcalls(
     format: &str,
 ) -> Result<Vec<(String, u32, String)>, String> {
     let description = target.runtime("c").ok_or("this target has no C runtime")?;
-    let names = libcall_names(&description.table()?);
+    libcalls_named(target, abi, format, libcall_names(&description.table()?))
+}
+
+/// `libcalls` for `names`: what a runtime that named them would get.
+fn libcalls_named(
+    target: &dyn llrm_target::Target,
+    abi: Option<&str>,
+    format: &str,
+    names: Vec<String>,
+) -> Result<Vec<(String, u32, String)>, String> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -1795,7 +1804,7 @@ mod tests {
         let names =
             |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
         assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
-        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy", "memmove", "memset"]);
+        assert!(names(&llrm_x86_m32::M32).is_empty(), "m32 names none until its QB runtime link has the routines");
     }
 
     /// The call of `memcpy` named the routine `memcpy` in the stack convention:
@@ -1805,8 +1814,9 @@ mod tests {
     #[test]
     fn test_the_libcall_is_the_symbol_a_declared_memcpy_would_have() {
         let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
-        let watcom = super::libcalls(m32, Some("watcom"), "omf").unwrap();
-        let sysv = super::libcalls(m32, Some("sysv"), "omf").unwrap();
+        let named = || ["memcpy", "memmove", "memset"].map(str::to_owned).to_vec();
+        let watcom = super::libcalls_named(m32, Some("watcom"), "omf", named()).unwrap();
+        let sysv = super::libcalls_named(m32, Some("sysv"), "omf", named()).unwrap();
         assert_eq!(watcom.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["memcpy_", "memmove_", "memset_"]);
         assert_eq!(sysv.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["_memcpy", "_memmove", "_memset"]);
     }
@@ -1820,9 +1830,10 @@ mod tests {
     fn test_the_m32_runtime_defines_every_symbol_its_libcalls_name() {
         let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
         let ext = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("runtime/c/x86-m32/ext.asm")).unwrap();
+        let named = || ["memcpy", "memmove", "memset"].map(str::to_owned).to_vec();
         let defined: Vec<&str> = ext.lines().filter_map(|line| line.trim().strip_prefix("public ")).collect();
         for abi in ["watcom", "sysv"] {
-            for (name, _, symbol) in super::libcalls(m32, Some(abi), "omf").unwrap() {
+            for (name, _, symbol) in super::libcalls_named(m32, Some(abi), "omf", named()).unwrap() {
                 assert!(
                     defined.contains(&symbol.as_str()),
                     "{name} under {abi} is {symbol}, which ext.asm does not define: {defined:?}"
@@ -3066,9 +3077,14 @@ mod tests {
         let argv: Vec<String> =
             ["-m32"].into_iter().chain(flags.iter().copied()).chain(["x.c"]).map(str::to_owned).collect();
         let mut args = super::parse_args(&argv).unwrap();
-        if !libcalls {
-            args.codegen.libcalls.clear();
-        }
+        // As c.toml would name them, the runtime's own table naming none for
+        // now.
+        args.codegen.libcalls = if libcalls {
+            super::libcalls_named(&llrm_x86_m32::M32, args.codegen.abi.as_deref(), "omf", vec!["memcpy".to_owned()])
+                .unwrap()
+        } else {
+            Vec::new()
+        };
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }

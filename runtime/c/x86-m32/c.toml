@@ -4,7 +4,9 @@
 # Library routines this runtime has (ext.asm, under the names its ABI gives them: `memcpy_` in registers, `_memcpy` for sysv), which the
 # compiler may call for what it does not move inline: `memcpy` for a copy of a variable length, over 128 bytes or of unaligned pointers
 # (the pin's EmitTargetCodeForMemcpy). Absent, those are `rep movs`. `memmove` and `memset` are named for the passes that will call them.
-libcalls = ["memcpy", "memmove", "memset"]
+# OFF: the QB runtime's flat C sources (fin.c, varptr.c) are compiled with this table and link without ext.asm, so a call of `memcpy_`
+# was an undefined reference (qbrt 183/218, 2026-10-23). On again when the QB link has the routines.
+# libcalls = ["memcpy", "memmove", "memset"]
 
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"
