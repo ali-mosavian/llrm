@@ -238,3 +238,41 @@ def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_
     with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
         dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
     assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()
+
+
+ROOTS = {"a": "eax", "b": "ebx", "c": "ecx", "d": "edx", "si": "esi", "di": "edi"}
+
+
+def register_root(name: str) -> str:
+    """`dl`, `cx` and `ecx` are all ECX."""
+    name = name.removeprefix("e")
+    return ROOTS[name[0] if name[0] in "abcd" else name]
+
+
+class ReportStubTests(unittest.TestCase):
+    """`report` is called as the compiler's default convention says: it may change only what that convention destroys.
+    A stub that changed ECX or EDX (the gcc-built stubs of an execution check did) corrupted what the compiler kept in
+    them across the call, and a correct program failed with wrong output."""
+
+    def check(self, target: str, convention: str, symbol: str) -> None:
+        import re
+        import tomllib
+
+        root = Path(__file__).resolve().parents[2]
+        table = tomllib.loads((root / f"crates/target/llrm-x86-{target}/src/machines/calling.toml").read_text())
+        destroyed = {register_root(one) for one in table[convention]["clobbered"] if re.fullmatch(r"e?([abcd]x|si|di)", one)}
+        asm = (root / f"runtime/c/x86-{target}/ext.asm").read_text()
+        body = re.search(rf"^{symbol}\s+proc.*?^{symbol}\s+endp", asm, re.S | re.M).group(0).splitlines()[1:-1]
+        lines = [one.split(";")[0].strip() for one in body]
+        names = re.compile(r"\b(e?[abcd][xlh]|e?si|e?di)\b")
+        named = {register_root(t) for one in lines for t in names.findall(one)}
+        saved = {register_root(l.split()[1]) for l in lines if re.fullmatch(r"push e?([abcd]x|si|di)", l)} & {
+            register_root(l.split()[1]) for l in lines if re.fullmatch(r"pop e?([abcd]x|si|di)", l)
+        }
+        self.assertEqual(named - destroyed - saved, set(), f"x86-{target} {symbol} changes registers {convention} keeps, unsaved")
+
+    def test_the_m32_report_keeps_what_watcall_keeps(self):
+        self.check("m32", "watcall32", "report_")
+
+    def test_the_m16_report_keeps_what_cdecl16_keeps(self):
+        self.check("m16", "cdecl16", "_report")
