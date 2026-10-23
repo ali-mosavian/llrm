@@ -437,6 +437,15 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::Select => {
+                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+                // is.
+                let (cond, then, other) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
+                let wide = self.dag.value_type(then);
+                self.dag.get_node(ISD::Select, wide, &[cond, then, other])
+            }
             ISD::SetCC => {
                 // Compare into the target's own result type, then sign extend
                 // or truncate to the promoted type.
