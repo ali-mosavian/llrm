@@ -1894,10 +1894,10 @@ pub(super) fn f80_from_double_bits(bits: u64) -> u128 {
 mod f80_tests {
     use llrm_mir::datalayout::DataLayout;
 
+    use super::super::dag::NodeData;
     use super::super::function_lowering::FunctionLoweringInfo;
     use super::super::isd::ISD;
     use super::super::mvt::MVT;
-    use super::super::dag::NodeData;
     use super::{BuilderTarget, build_block, f80_from_double_bits};
 
     /// A long double constant in a block is the x87 encoding in the DAG, for
@@ -1908,7 +1908,8 @@ mod f80_tests {
         let module = llrm_mir::parse::module(text).expect("parses");
         let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
         let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
-        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         let dag = build_block(
             &module,
