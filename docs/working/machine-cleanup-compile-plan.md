@@ -50,5 +50,7 @@ registers MM0..MM6 for FP0..FP6) with the normal region split, so values cross b
 width. Nothing is missing there. `floatassign::prepared` (FloatPrep) does three things LLVM does in isel: fild from a
 register via a cell, a float-to-int store into an owned cell, and `_aliased` load reuse. They are the input legalization
 (sdag-b's `FILD` from a slot and `FP_TO_INT_IN_MEM`), so FloatPrep is deleted when selection emits them; the stackifier
-replaces `fpstack.rs` and `floatalloc.rs`.
+`fpstack.rs` is already the translation of X86FloatingPoint and stays; what goes is `floatalloc.rs` and `floatassign.rs`
+(the flat assignment and its own liveness), once selection feeds RFP values to the allocator. Step 9 is that switch-over
+plus the deletion; the 32.8 M is those two passes.
 
