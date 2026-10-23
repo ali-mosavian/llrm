@@ -4,17 +4,14 @@ Survey of `SelectionDAGBuilder.cpp` at the pin (d1106deb71cc) against `selection
 
 ## Translated
 
-`visitPHI` (as register exports), `visitRet`, `visitUncondBr`/`visitCondBr`, `visitSwitch` with `lowerWorkItem`, jump tables and bit tests, `visitInvoke` and `visitLandingPad` (QB only, SD102), `visitUnreachable`, `visitBinary`/`visitUnary`/`visitShift`/`visitSDiv`, `visitICmp`/`visitFCmp`, `visitSelect`, every cast, `visitAddrSpaceCast`, `visitGetElementPtr`, static `visitAlloca`, `visitLoad`/`visitStore`, `visitCall` (direct, indirect, byval, sret), `visitInlineAsm` (as `LLRM_ASM`), `visitVAStart`/`VAEnd`/`VACopy`, `visitFreeze`, and in `visitIntrinsicCall`: mem*, funnel shifts, lifetime, min/max, bit counts, bswap, abs, float functions, lrint, plus llrm's `asm`/`code`/`window`/`ptrdiff`.
+`visitPHI` (as register exports), `visitRet`, `visitUncondBr`/`visitCondBr`, `visitSwitch` with `lowerWorkItem`, jump tables and bit tests, `visitInvoke` and `visitLandingPad` (QB only, SD102), `visitUnreachable`, `visitBinary`/`visitUnary`/`visitShift`/`visitSDiv`, `visitICmp`/`visitFCmp`, `visitSelect`, every cast, `visitAddrSpaceCast`, `visitGetElementPtr`, static `visitAlloca`, `visitLoad`/`visitStore`, `visitCall` (direct, indirect, byval, sret), `visitInlineAsm` (as `LLRM_ASM`), `visitVAStart`/`VAEnd`/`VACopy`, `visitFreeze`, and in `visitIntrinsicCall`: mem*, funnel shifts, lifetime, min/max, bit counts, bswap, abs, float functions, lrint, plus llrm's `asm`/`code`/`window`/`ptrdiff`; `*.with.overflow` and `extractvalue` (#4058), `scmp`/`ucmp`, `fmuladd`, `smul.fix`/`sdiv.fix`, `assume`/`expect`, `stacksave`/`stackrestore` (#4061), dynamic `alloca` (#4062); far and huge pointers, QB `invoke`/`landingpad`, `freeze`, `memcpy` from constant data, float call results.
 
 ## Gaps
 
-| Pin function | MIR source | Date | Note |
+| Pin function | MIR source | Status | Note |
 |---|---|---|---|
-| `visitIntrinsicCall`: `*.with.overflow`, `smul.fix`/`sdiv.fix`, `scmp`/`ucmp`, `fmuladd` | `Intrinsic::{WithOverflow, Fixed, Compare, FMulAdd}` | 11-20 | the pipeline lowers them at -O1 and up; -O0 and other frontends can reach them |
-| `visitIntrinsicCall`: `assume`, `expect`, `stacksave`, `stackrestore`, port in/out | `Intrinsic::{Assume, Expect, StackSave, StackRestore, PortIn, PortOut}` | 11-20 | `assume`/`expect` build nothing or the value; the rest are nodes |
-| `visitAlloca`, dynamic | `Alloca` outside the entry block | 11-27 | `DYNAMIC_STACKALLOC`; absent from the corpus |
-| `visitExtractValue`/`visitInsertValue` | `ExtractValue`, `InsertValue` | 11-27 | aggregates in registers; absent from the corpus |
-| `visitUnaryFloatCall`/`visitBinaryFloatCall` | a call of `sin`, `fmod`, `copysign`, ... by name | 11-27 | the pin turns a libm call into `FSIN`/`FREM`/... when the declaration allows; ours keeps the call |
+| `visitUnaryFloatCall`/`visitBinaryFloatCall`, `copysign` | a call of `sin`, `fmod`, `copysign`, ... by name | open, no corpus use | the pin makes `FSIN`/`FREM`/... of a call to a declared libm function that is no local, known to `TargetLibraryInfo`, and (for `copysign`) `onlyReadsMemory`; the middle-end canonicalizes most to intrinsics, which are built; ours keeps the call |
+| `visitIntrinsicCall`: port in/out | `Intrinsic::{PortIn, PortOut}` | open, none in the corpus | llrm's own (`llvm.x86.*` are the pin's analogue); a node pair like `LLRM_ASM` |
 | `visitMemCmpBCmpCall`, `visitStrCpyCall`, `visitStrLenCall`, ... | calls of `memcmp`, `strlen`, ... | none | X86 has no `EmitTargetCodeFor*` for them, so the pin makes the same call |
 | `visitMaskedLoad`, `visitVP*`, vector ops, `visitVectorReduce` | no vector MIR | deferred | vectors wait for 32-bit parity |
 | `visitAtomic*`, `visitFence` | no atomic MIR | none | |
