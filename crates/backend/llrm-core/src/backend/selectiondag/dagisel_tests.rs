@@ -214,3 +214,22 @@ fn a_load_in_the_fs_space_addresses_through_fs() {
     let segment = dag.nodes()[load.node as usize].ops[4];
     assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::FS));
 }
+
+/// The segment `les` leaves in ES is address space 259 (llrm's own, after the
+/// pin's 256 to 258).
+#[test]
+fn a_load_in_space_259_addresses_through_es() {
+    use llrm_lir::registers::RegId;
+
+    use super::dag::NodeData;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let ptr = input(&mut dag, 1);
+    let load = dag.get_load(EVT::I32, entry, ptr, MemInfo { space: 259, ..mem_info() });
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    let segment = dag.nodes()[load.node as usize].ops[4];
+    assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::ES));
+}
