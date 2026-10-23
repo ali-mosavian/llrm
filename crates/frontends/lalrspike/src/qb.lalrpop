@@ -489,9 +489,11 @@ Parms: Tree = {
     "tkLParen" <l:Opt<Sep<Parm>>> "tkRParen" => l,
 };
 Parm: Tree = {
-    <m:Opt<ParmMode>> <i:Ident> <p:Opt<EmptyParens>> <a:OptAs> => Tree::node("Parm", vec![m, i, a]),
+    <m:Opt<ParmMode>> <i:Ident> <p:Opt<ParmBounds>> <a:OptAs> => Tree::node("Parm", vec![m, i, a]),
 };
 ParmMode: Tree = { Kws<"tkBYVAL">, Kws<"tkSEG"> };
+// `Args$()` or `Args$(1)`: an array parameter, its bounds an argument list
+ParmBounds: Tree = "tkLParen" <a:ArgList> "tkRParen" => a;
 EmptyParens: Tree = "tkLParen" "tkRParen" => Tree::Empty;
 OptReturnAs: Tree = { Nil, "tkAS" <c:AsClause> => c };
 // `AS VOLATILE INTEGER`: a modifier is a name before the type
@@ -580,8 +582,8 @@ ChannelComma: Tree = "tkLbs" <e:Exp> "tkComma" => e;
 // `PRINT a; b, TAB(3) c USING f$; x`: an expression is followed by a
 // separator, the end of the statement, ELSE or USING, never by another
 // expression, so the last expression is the list's final item.
-PrintList: Tree = <h:PrintHead> <f:Opt<Exp>> <u:UsingTail?> => Tree::node("PrintList", vec![h, f, Tree::opt(u)]);
-UsingTail: Tree = "tkUSING" <e:Exp> "tkSColon" <h:PrintHead> <f:Opt<Exp>> => Tree::List(vec![e, h, f]);
+PrintList: Tree = <h:PrintHead> <f:Opt<PrintRun>> <u:UsingTail?> => Tree::node("PrintList", vec![h, f, Tree::opt(u)]);
+UsingTail: Tree = "tkUSING" <e:Exp> "tkSColon" <h:PrintHead> <f:Opt<PrintRun>> => Tree::List(vec![e, h, f]);
 PrintHead: Tree = {
     => Tree::List(vec![]),
     <l:PrintHead> <s:PrintStep> => Tree::push(l, s),
@@ -591,9 +593,28 @@ PrintStep: Tree = {
     "tkSPC" <a:Paren1> => Tree::node("SPC", vec![a]),
     "tkComma" => Tree::Empty,
     "tkSColon" => Tree::Empty,
-    <e:Exp> "tkComma" => e,
-    <e:Exp> "tkSColon" => e,
+    <e:PrintRun> "tkComma" => e,
+    <e:PrintRun> "tkSColon" => e,
 };
+// Items need no separator between them, QB reads `PRINT a "x" b` as `a; "x"; b`,
+// but a later item may not start with a sign or a parenthesis: those continue
+// the item before.
+PrintRun: Tree = {
+    Exp,
+    <r:PrintRun> <e:JoinedExp> => Tree::node("Joined", vec![r, e]),
+};
+JoinedExp: Tree = JImp<PrimaryJoined>;
+PrimaryJoined: Tree = { PrimaryBase, ErrName };
+JImp<P>: Tree = { JEqv<P>, Binary<"tkIMP", JImp<P>, Eqv<Primary>> };
+JEqv<P>: Tree = { JXor<P>, Binary<"tkEQV", JEqv<P>, Xor<Primary>> };
+JXor<P>: Tree = { JOr<P>, Binary<"tkXOR", JXor<P>, Or<Primary>> };
+JOr<P>: Tree = { JAnd<P>, Binary<"tkOR", JOr<P>, And<Primary>> };
+JAnd<P>: Tree = { JRel<P>, Binary<"tkAND", JAnd<P>, Not<Primary>> };
+JRel<P>: Tree = { JAdd<P>, <l:JRel<P>> <o:RelOp> <r:Add<Primary>> => Tree::node("Binary", vec![l, o, r]) };
+JAdd<P>: Tree = { JMod<P>, Binary<AddOp, JAdd<P>, Mod<Primary>> };
+JMod<P>: Tree = { JIDiv<P>, Binary<"tkMOD", JMod<P>, IDiv<Primary>> };
+JIDiv<P>: Tree = { JMul<P>, Binary<"tkIdiv", JIDiv<P>, Mul<Primary>> };
+JMul<P>: Tree = { Pow<P>, Binary<MulOp, JMul<P>, Neg<Primary>> };
 WriteList: Tree = {
     <e:Exp> => Tree::List(vec![e]),
     <l:WriteList> <s:WriteSep> <e:Exp> => Tree::push(l, e),

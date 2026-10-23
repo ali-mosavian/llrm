@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
 
-DOSBOX = os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX))
+FORK = Path.home() / "dosbox-x-fork" / "src" / "dosbox-x"
+DOSBOX = os.environ.get("DOSBOX_BIN") or str(FORK if FORK.exists() else dosbatch.DOSBOX)
 INCLUDES = (".bi", ".inc")
 
 
@@ -75,7 +76,7 @@ def main():
     for chunk, got in zip(slices, results):
         verdicts.update(zip(chunk, got))
     for f in files:
-        print(f"{f.name}: {verdicts[f]}".rstrip())
+        print(f"{f}: {verdicts[f]}".rstrip())
 
 
 main()
