@@ -25,9 +25,10 @@
 //!
 //! DEVIATE SD403: no branch probabilities (`odds`) or counted-loop trip
 //! counts, so the executed-work estimate of a loop is lower than the old
-//! selector's until they are carried; and no calls, locals, register arguments, switch lowering or
-//! multi-register phis yet. Reason: they need the call sequence and frame
-//! objects in the emitter (D1e). Exit: D1e. Owner: sdag-d. Review 2026-12-03.
+//! selector's until they are carried; and no calls, locals, register arguments,
+//! switch lowering or multi-register phis yet. Reason: they need the call
+//! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
+//! Review 2026-12-03.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
