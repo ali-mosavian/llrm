@@ -35,6 +35,12 @@ impl Builder<'_> {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
+            Intrinsic::MinMax { .. }
+            | Intrinsic::BitCount(_)
+            | Intrinsic::ByteSwap
+            | Intrinsic::Abs
+            | Intrinsic::LRint
+            | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
             _ => Err(Refused("intrinsic call")),
         }
     }
