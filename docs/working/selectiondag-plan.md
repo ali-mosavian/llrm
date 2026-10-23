@@ -210,7 +210,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
 
-| SD200 | sdag-b | condition lowering without the bit-test and carry folds | `selectiondag/x86_lowering.rs` |
+| SD200 | sdag-b | condition lowering without the reassociated/immediate bit-test forms and the carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
