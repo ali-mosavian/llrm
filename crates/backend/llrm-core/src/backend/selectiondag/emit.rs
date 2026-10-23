@@ -687,9 +687,10 @@ impl Emitter<'_, '_> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
-            // The global rides in the node's own data.
-            let symbol = match node.data {
-                NodeData::Global { symbol, .. } => Some(symbol),
+            // The global is the node's operand (selection clears a node's
+            // data).
+            let symbol = match node.ops.first().map(|op| self.dag.node(*op).data) {
+                Some(NodeData::Global { symbol, .. }) => Some(symbol),
                 _ => None,
             };
             // Naming no global it is DGROUP's, which the builder also writes
@@ -1212,7 +1213,7 @@ impl Emitter<'_, '_> {
             }
             // A call through a far pointer: the offset and the selector sit in
             // a four-byte cell, which the call reads (`call dword ptr [cell]`).
-            "LLRM_FARCALL" => {
+            "CALL_FAR" => {
                 let NodeData::FrameIndex(index) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a far call without a cell".to_owned()));
                 };
