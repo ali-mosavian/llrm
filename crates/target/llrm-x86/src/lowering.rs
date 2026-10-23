@@ -3,7 +3,7 @@
 //!
 //! # Example
 //! ```
-//! use llrm_mir::lowering::Lowering;
+//! use llrm_mir::lowering::{LoadExt, Lowering};
 //! use llrm_x86::lowering::X86;
 //! assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
 //! assert!(X86 { is_64bit: false }.is_truncate_free(32, 16));
@@ -14,7 +14,7 @@
 //! # Runs
 //! `cargo test -p llrm-x86 lowering`.
 
-use llrm_mir::lowering::Lowering;
+use llrm_mir::lowering::{LoadExt, Lowering};
 
 /// The x86 family's answers. `is_64bit` is `Subtarget.is64Bit()`.
 pub struct X86 {
@@ -25,6 +25,20 @@ impl Lowering for X86 {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3807-L3810
     fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
         true
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L186-L187
+    // `setLoadExtAction(SEXTLOAD, VT, i1, Promote)` for every integer; the
+    // rest is the base class's `Legal`.
+    fn is_load_ext_legal(
+        &self,
+        ext: LoadExt,
+        value_bits: u32,
+        memory_bits: u32,
+    ) -> bool {
+        !(ext == LoadExt::Sign && memory_bits == 1)
+            && matches!(value_bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
+            && matches!(memory_bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L36708-L36714
@@ -57,6 +71,17 @@ mod tests {
     #[test]
     fn test_x86_folds_a_mask_and_compare_with_zero() {
         assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
+    }
+
+    /// An extending load of 8, 16 or 32 bits is one operation, a sign
+    /// extension of a bit is not (`Promote`), and a width that is no machine
+    /// type is not.
+    #[test]
+    fn test_x86_extending_loads_are_legal_but_a_sign_extended_bit() {
+        let x86 = X86 { is_64bit: false };
+        assert!(x86.is_load_ext_legal(LoadExt::Zero, 32, 8) && x86.is_load_ext_legal(LoadExt::Sign, 32, 16));
+        assert!(x86.is_load_ext_legal(LoadExt::Zero, 32, 1) && !x86.is_load_ext_legal(LoadExt::Sign, 32, 1));
+        assert!(!x86.is_load_ext_legal(LoadExt::Zero, 32, 24) && !x86.is_load_ext_legal(LoadExt::Any, 40, 8));
     }
 
     /// A truncation is free on every x86 target; a zero extension from 32 to
