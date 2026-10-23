@@ -589,3 +589,11 @@ def test_a_selectiondag_change_runs_the_selectiondag_registry():
     packages, _ = ps.workspace_graph()
     chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
     assert "selectiondag_registry" in chosen, chosen
+
+
+def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
+    """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
+    compiler.chmod(0o755)
+    assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
