@@ -107,6 +107,9 @@ pub struct MemInfo {
     /// The extension of a load narrower than its result (`LoadExtType`); none
     /// for a plain load.
     pub ext: Option<super::actions::LoadExt>,
+    /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
+    /// (`fs` 257, `gs` 256) the IR's pointer names.
+    pub space: u32,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -117,6 +120,8 @@ pub enum MemBase {
     Stack(i32),
     /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
     ConstantPool(u32),
+    /// A jump table entry (`MachinePointerInfo::getJumpTable`).
+    JumpTable,
 }
 
 #[derive(Clone, Debug)]
@@ -690,7 +695,7 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
         let offset = self.get_poison(self.value_type(ptr));
-        let info = MemInfo { ext: Some(ext), ..info };
+        let info = MemInfo { ext: Some(ext), space: 0, ..info };
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 
@@ -889,6 +894,16 @@ impl SelectionDAG {
         key: u32,
     ) -> SDValue {
         self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
+    }
+
+    /// `SEGMENT_OF`: the selector of the segment a global lives in, or of
+    /// DGROUP, where the near data is, when it names none.
+    pub fn get_segment_of(
+        &mut self,
+        symbol: Option<u32>,
+    ) -> SDValue {
+        let data = symbol.map_or(NodeData::None, |symbol| NodeData::Global { symbol, offset: 0 });
+        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &[], SDNodeFlags::default(), data)
     }
 
     pub fn get_jump_table(

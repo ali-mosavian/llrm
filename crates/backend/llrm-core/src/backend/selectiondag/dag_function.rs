@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
-use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
+use llrm_dagisel::generated::{x86_i486, x86_m16};
 use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
@@ -53,8 +53,8 @@ use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
 use super::x86_preprocess::FrameObjects;
 use crate::backend::isel::{Parameter, Selected, Unselected};
-use crate::model::ir::{Addr, Mem, Space};
-use crate::model::lir::{Block, LirBlock, LirBody, Phi};
+use crate::model::ir::{Addr, Held, Mem, Space};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info;
 
@@ -155,22 +155,27 @@ struct Tables {
     names: HashMap<u16, &'static str>,
 }
 
-static TABLES: LazyLock<Mutex<Option<std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(None));
+/// One per target width.
+static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
-    let mut slot = TABLES.lock().expect("the DAG tables");
-    slot.get_or_insert_with(|| {
-        let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-        std::sync::Arc::new(Tables {
-            map: OpcodeMap::new(forms),
-            names: MACHINE_OPCODES
-                .iter()
-                .copied()
-                .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                .collect(),
+    let bits = arch.object().bitness;
+    let mut slots = TABLES.lock().expect("the DAG tables");
+    slots
+        .entry(bits)
+        .or_insert_with(|| {
+            let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let opcodes = if bits == 16 { x86_m16::MACHINE_OPCODES } else { x86_i486::MACHINE_OPCODES };
+            std::sync::Arc::new(Tables {
+                map: OpcodeMap::new(forms),
+                names: opcodes
+                    .iter()
+                    .copied()
+                    .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
+                    .collect(),
+            })
         })
-    })
-    .clone()
+        .clone()
 }
 
 /// The addresses each LIR block can go to: the targets of its jumps and
@@ -206,6 +211,34 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
         .collect()
 }
 
+/// The byte width of each live-in's value: the type of the `CopyFromReg` that
+/// reads it.
+fn arrival_widths(
+    dag: &super::SelectionDAG,
+    live_ins: &[(llrm_lir::registers::RegId, u32)],
+) -> Vec<(u32, u32)> {
+    use super::dag::NodeData;
+    let mut out = Vec::new();
+    for node in dag.nodes() {
+        if node.opcode != super::isd::ISD::CopyFromReg {
+            continue;
+        }
+        if let NodeData::Register(vreg) = dag.node(node.ops[1]).data {
+            if live_ins.iter().any(|(_, v)| *v == vreg) {
+                out.push((vreg, node.values[0].size_in_bits() / 8));
+            }
+        }
+    }
+    out
+}
+
+fn arrived_width(
+    widths: &[(u32, u32)],
+    vreg: u32,
+) -> Option<u32> {
+    widths.iter().find(|(v, _)| *v == vreg).map(|(_, w)| *w)
+}
+
 fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
@@ -217,9 +250,11 @@ pub fn selected(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
 ) -> Result<Selected, Unselected> {
-    if arch.object().bitness != 32 {
-        return refuse("only m32 is built so far");
-    }
+    let m16 = match arch.object().bitness {
+        16 => true,
+        32 => false,
+        _ => return refuse("only m16 and m32 are built so far"),
+    };
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -228,7 +263,13 @@ pub fn selected(
     let layout = DataLayout::parse(text).map_err(Unselected)?;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
-    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let tli = if m16 {
+        TargetLowering::x86_16(Features::default(), MVT::I16)
+    } else {
+        TargetLowering::x86_32(Features::default(), MVT::I32)
+    };
+    let (builder_target, address_mode) =
+        if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
     let tables = tables(arch);
     let frame = Frame::new(
         convention
@@ -262,14 +303,14 @@ pub fn selected(
         debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
     }
     let mut hooks = X86Hooks::new(Options {
-        cpu: Cpu::I486,
+        cpu: if m16 { Cpu::M16 } else { Cpu::I486 },
         opt_none: false,
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
-        address_mode: AddrMode::Flat32,
+        address_mode,
     });
-    let selector = Selector::new(TABLE);
+    let selector = Selector::new(if m16 { x86_m16::TABLE } else { x86_i486::TABLE });
     let mut state = EmitState::default();
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
@@ -284,7 +325,7 @@ pub fn selected(
         .filter(|(full, pushed)| full == pushed)
         .map(|(full, _)| regs.root(full))
         .collect();
-    let stack_pointer = arch.register_named("esp");
+    let stack_pointer = arch.stack_pointer();
     let frame_registers = [stack_pointer, llrm_lir::registers::RegId::BP].map(|r| regs.root(r));
     let caller_saved: std::collections::BTreeSet<_> = cpu
         .general
@@ -298,7 +339,7 @@ pub fn selected(
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
-        address_mode: AddrMode::Flat32,
+        address_mode,
         map: &tables.map,
         names: &tables.names,
     };
@@ -308,12 +349,15 @@ pub fn selected(
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     for &block in function.layout() {
-        let mut built =
-            build_block(module, function, &layout, &BuilderTarget::m32(), arch, &convention, &mut info, block)
-                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
-        if !built.live_ins.is_empty() || !built.extra.is_empty() {
-            return refuse("register arguments or a switch lowering");
+        let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
+            .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        if !built.extra.is_empty() {
+            return refuse("a switch lowering");
         }
+        if !built.live_ins.is_empty() && block != function.layout()[0] {
+            return refuse("register arguments outside the entry block");
+        }
+        let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = select_block(
             &mut built.dag,
             &tli,
@@ -328,6 +372,25 @@ pub fn selected(
             &mut Temporaries(&frame),
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
+        let mut done = done;
+        if !built.live_ins.is_empty() {
+            // The entry says which registers the arguments arrive in; it is no
+            // code, and nothing placed at the entry may come before
+            // it.
+            let regs = llrm_lir::registers::Regs(arch.registers());
+            let mut arrival =
+                Insn::new(block_at[&block.0], None, Some(crate::model::lir::inert()), Vec::new(), Vec::new());
+            for (register, vreg) in &built.live_ins {
+                let value = state.vreg(*vreg);
+                // The argument arrives in the view of the register as wide as
+                // its type.
+                let width = arrived_width(&arrived, *vreg).unwrap_or_else(|| regs.bytes(*register).unwrap_or(4) as u32);
+                let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
+                arrival.defines.push(value);
+                arrival.delivers.push((Held { value, width }, view));
+            }
+            done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
+        }
         let from = emitted.len();
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {

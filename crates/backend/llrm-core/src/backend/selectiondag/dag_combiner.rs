@@ -42,7 +42,7 @@
 
 use std::collections::HashSet;
 
-use super::actions::LoadExt;
+use super::actions::{LoadExt, TargetLowering};
 use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
@@ -82,11 +82,13 @@ pub struct NoCombines;
 impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
-    dag: &'a mut SelectionDAG,
+    pub(super) dag: &'a mut SelectionDAG,
     hooks: &'a mut H,
-    level: CombineLevel,
+    pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
+    /// The action table, for the folds that ask what the target can do.
+    pub(super) tli: Option<&'a TargetLowering>,
 }
 
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
@@ -95,10 +97,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new() }
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new(), tli: None }
     }
 
-    fn add_to_worklist(
+    /// The action table the folds query (`TLI`).
+    pub fn with_tli(
+        mut self,
+        tli: &'a TargetLowering,
+    ) -> DagCombiner<'a, H> {
+        self.tli = Some(tli);
+        self
+    }
+
+    pub(super) fn add_to_worklist(
         &mut self,
         node: u32,
     ) {
@@ -107,7 +118,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    fn add_to_worklist_with_users(
+    pub(super) fn add_to_worklist_with_users(
         &mut self,
         node: u32,
     ) {
@@ -201,6 +212,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
+            ISD::Or => self.visit_or(node),
+            ISD::SDiv => self.visit_sdiv(node),
+            ISD::UDiv => self.visit_udiv(node),
+            ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self.visit_extend(node),
             _ => None,
         }
@@ -252,7 +267,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(_) => return None,
         };
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
-        let info = super::dag::MemInfo { ext: None, ..info };
+        let info = super::dag::MemInfo { ext: None, space: 0, ..info };
         let wide = self.dag.value_type(node);
         let extended = self.dag.get_ext_load(ext, wide, chain, ptr, info);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
@@ -267,6 +282,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
+            return Some(folded);
+        }
         let vt = self.dag.value_type(n0);
         let all = super::fold::mask(vt.size_in_bits());
         for (other, constant) in [(n0, n1), (n1, n0)] {

@@ -24,7 +24,7 @@ fn names(text: &str) -> Result<Vec<String>, String> {
 /// two stack arguments comes out as the instructions the pin selects.
 #[test]
 fn a_function_of_one_block_is_selected_to_lir() {
-    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", "ret"]);
+    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", ""]);
 }
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -365,12 +365,12 @@ fn a_comparison_stored_to_a_byte_is_a_setcc_on_memory() {
     assert!(matches!(set.dests[0], crate::model::ir::Loc::Mem(_)), "{set:?}");
 }
 
-const COPY_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
-define void @f(ptr %d, ptr %s, i32 %n) {
+const REGISTER_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @g(i32)
+define i32 @main() {
 entry:
-  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)
-  ret void
+  %r = call cc 1002 i32 @g(i32 7)
+  ret i32 %r
 }
 ";
 
@@ -380,11 +380,35 @@ entry:
 /// (`es_across_copy`).
 #[test]
 fn a_call_names_the_registers_it_takes_arguments_in() {
-    let module = llrm_mir::parse::module(COPY_CALL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let module = llrm_mir::parse::module(REGISTER_CALL).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
-    assert!(call.requires.len() >= 3, "{:?} {:?} {:?}", call.requires, call.clobbers, call.what);
+    assert!(call.requires.len() == 1, "{:?} {:?} {:?}", call.requires, call.clobbers, call.what);
     assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
+}
+
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
+entry:
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+
+/// At m16 the arguments arrive in registers and the procedure is far. The
+/// driver refused every m16 function ("only m32"); once it took them, the
+/// return was named `ret` and printed as a near return in a far procedure.
+#[test]
+fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
+    let module = llrm_mir::parse::module(M16_SUM).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let arrival = insns.iter().find(|i| !i.delivers.is_empty()).expect("an arrival instruction");
+    assert_eq!(arrival.delivers.len(), 2, "both arguments arrive in registers");
+    assert!(arrival.delivers.iter().all(|(held, _)| held.width == 2), "as 16-bit views");
+    let last = insns.last().and_then(|i| i.what.as_ref()).expect("a return");
+    assert_eq!((last.op, last.name.as_deref()), (crate::model::ir::Operation::Return, Some("")));
 }
