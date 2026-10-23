@@ -172,4 +172,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ext;
 #[cfg(test)]
+mod memlib_tests;
+#[cfg(test)]
 mod vararg_tests;

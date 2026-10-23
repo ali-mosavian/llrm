@@ -38,15 +38,29 @@ pub struct BuilderTarget {
     pub shift_amount: EVT,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The library routines the target's runtime has, when not the ones its
+    /// `c.toml` names (`libcalls`): tests of the pin's shape say all.
+    pub libcalls: Option<Vec<String>>,
 }
 
 impl BuilderTarget {
+    /// This target with a runtime that has `names`, whatever its `c.toml`
+    /// says.
+    pub fn with_libcalls(
+        mut self,
+        names: &[&str],
+    ) -> BuilderTarget {
+        self.libcalls = Some(names.iter().map(|name| (*name).to_owned()).collect());
+        self
+    }
+
     /// i486 and P5: 32-bit pointers, `i8`/`i16`/`i32` in registers.
     pub fn m32() -> BuilderTarget {
         BuilderTarget {
             dag: DagConfig { offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
+            libcalls: None,
         }
     }
 
@@ -57,6 +71,7 @@ impl BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
+            libcalls: None,
         }
     }
 }

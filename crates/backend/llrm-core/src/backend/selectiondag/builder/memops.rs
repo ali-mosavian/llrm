@@ -511,6 +511,15 @@ impl Builder<'_> {
                     (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => {
                         self.rep_movs(root, dst, other, bytes, alignment.min(4), dst_align, src_align)?
                     }
+                    _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                        self.rep_movsb(root, dst, other, size)
+                    }
+                    _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
+                        // the old selector refuses it too: no instruction moves
+                        // overlapping bytes, and a call of a routine the
+                        // runtime lacks would not link
+                        return Err(Refused("memmove with no memmove in the runtime"));
+                    }
                     _ => self.mem_libcall(
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
@@ -532,12 +541,79 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
+                    _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
             }
         };
         self.dag.set_root(chain);
         Ok(())
+    }
+
+    /// Whether the target's runtime has the library routine `name`: its
+    /// `c.toml`'s `libcalls`, the fact the old selector and `memcpycall` read.
+    fn runtime_has(
+        &self,
+        name: &str,
+    ) -> bool {
+        if let Some(names) = &self.target.libcalls {
+            return names.iter().any(|one| one == name);
+        }
+        self.arch
+            .runtime("c")
+            .and_then(|description| description.table().ok())
+            .and_then(|table| table.get("libcalls").and_then(|calls| calls.as_array()).cloned())
+            .is_some_and(|calls| calls.iter().any(|one| one.as_str() == Some(name)))
+    }
+
+    /// `rep movsb` of a size not known at compile time: `cx` bytes from `si`
+    /// to `di`, as the old selector copies when there is no `memcpy` to call.
+    fn rep_movsb(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        let pointer = self.target.dag.pointer;
+        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(di, dst), (si, src)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let byte = self.dag.get_value_type_node(EVT::I8);
+        let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        SDValue { node: rep.node, res: 0 }
+    }
+
+    /// `rep stosb` of a size not known at compile time.
+    fn rep_stosb(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        let pointer = self.target.dag.pointer;
+        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let al = self.arch.register_named("al");
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(cx, count), (di, dst)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let byte = self.dag.get_value_type_node(EVT::I8);
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        SDValue { node: rep.node, res: 0 }
     }
 
     /// `getMemcpy`'s libcall: `name(dst, src, size)` for a copy, `name(dst,

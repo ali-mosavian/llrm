@@ -35,7 +35,7 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
         .datalayout
         .as_deref()
         .map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
-    let target = BuilderTarget::m32();
+    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
     let mut built = BTreeMap::new();
     let mut refused = Vec::new();
     for (id, global, function) in module.functions() {
