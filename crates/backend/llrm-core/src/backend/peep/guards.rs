@@ -614,6 +614,17 @@ pub fn operand(
         )
 }
 
+/// The registers, scale and displacement of the address an LEA names, whether
+/// LIR spells it as an address or, as the two-address pass makes it, as a
+/// memory operand: (symbol, base, index, scale, offset).
+fn lea_cell(one: &Loc) -> Option<(bool, RegId, RegId, i64, i64)> {
+    match one {
+        Loc::Address(a) => Some((a.addr.is_some(), a.through, a.index_through, a.scale, a.offset)),
+        Loc::Mem(m) => Some((m.addr.is_some(), m.through, m.index_through, m.scale, m.offset)),
+        _ => None,
+    }
+}
+
 /// `lea d,[x+y]`: an address of scale 1, no displacement, no symbol or
 /// segment, that names `d` and a second register (`optTwoAddrLEA`, case 1).
 pub fn sums_into(
@@ -628,6 +639,43 @@ pub fn sums_into(
         && a.through != RegId::None
         && a.index_through != RegId::None
         && (a.through == d.register || a.index_through == d.register)
+}
+
+/// `sums_into` for an `lea` spelled as a memory operand, as the two-address
+/// pass makes it: `lea t,[x+t]` that an add reads next is `add t,x`
+/// (`optTwoAddrLEA` case 1, in the one shape `optLEAALU` meets it).
+pub fn sums_into_cell(
+    _cx: &Cx,
+    one: &Loc,
+    d: Reg,
+) -> bool {
+    let Some((symbol, base, index, scale, offset)) = lea_cell(one) else { return false };
+    !symbol
+        && scale == 1
+        && offset == 0
+        && base != RegId::None
+        && index != RegId::None
+        && (base == d.register || index == d.register)
+}
+
+/// `lea t,[x+y]`: scale 1, no displacement, symbol or segment, two registers
+/// that are not `t`, and not both the destination `d` of the add or subtract
+/// that reads `t` (`optLEAALU`, case 3: `d + (x+y)` as two steps on `d`).
+pub fn splits_into(
+    _cx: &Cx,
+    one: &Loc,
+    t: Reg,
+    d: Reg,
+) -> bool {
+    let Some((symbol, base, index, scale, offset)) = lea_cell(one) else { return false };
+    !symbol
+        && scale == 1
+        && offset == 0
+        && base != RegId::None
+        && index != RegId::None
+        && base != t.register
+        && index != t.register
+        && !(base == d.register && index == d.register)
 }
 
 /// `lea d,[d+disp]`: a base and a displacement alone, no symbol or segment

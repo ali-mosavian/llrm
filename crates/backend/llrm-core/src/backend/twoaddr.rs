@@ -143,10 +143,18 @@ pub fn tied(
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
-                && !walk.killed_at(&work[place], base.value)
+                && (!walk.killed_at(&work[place], base.value)
+                    || profitable_to_convert(&fixed, &one, base.value, body.regs()))
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
             {
                 changed = true;
+                if let Some(what) = one.what.as_ref()
+                    && what.name.as_deref() == Some("add")
+                    && matches!(what.sources.get(1), Some(Loc::Held(_)))
+                    && let Some(Loc::Held(into)) = what.dests.first()
+                {
+                    walk.note_lea(into.value);
+                }
                 insns.push(three);
                 place += 1;
                 continue;
@@ -305,6 +313,23 @@ pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     Some((into, first, second))
 }
 
+/// `isProfitableToConv3Addr`: a source that dies is still made three-address
+/// when the sum is to end in a register other than the one the source arrives
+/// in, so no copy of it is made (`SrcRegMap[regB]` against `DstRegMap[regA]`,
+/// `regsAreCompatible` false).
+fn profitable_to_convert(
+    fixed: &Fixed,
+    one: &Insn,
+    source: u32,
+    regs: llrm_lir::registers::Regs,
+) -> bool {
+    let Some(Loc::Held(into)) = one.what.as_ref().and_then(|what| what.dests.first()) else { return false };
+    match (fixed.from.get(&source), fixed.to.get(&into.value)) {
+        (Some(from), Some(to)) => regs.root(*from) != regs.root(*to),
+        _ => false,
+    }
+}
+
 /// The registers values are fixed to: those delivered in one (`from`) and
 /// those that must end in one (`to`), the latter followed back along the
 /// values that die into a sum (LLVM's `SrcRegMap` and `DstRegMap`).
@@ -335,12 +360,25 @@ fn _fixed(body: &LirBody) -> Fixed {
     // over the body gives the same registers.
     for block in &body.blocks {
         for one in block.insns.iter().rev() {
-            let Some((into, first, second)) = _swappable(one) else { continue };
-            let Some(register) = fixed.to.get(&into).copied() else { continue };
-            for value in [first, second] {
-                if reads.get(&value) == Some(&1) {
-                    fixed.to.entry(value).or_insert(register);
+            if let Some((into, first, second)) = _swappable(one) {
+                let Some(register) = fixed.to.get(&into).copied() else { continue };
+                for value in [first, second] {
+                    if reads.get(&value) == Some(&1) {
+                        fixed.to.entry(value).or_insert(register);
+                    }
                 }
+                continue;
+            }
+            // A tied instruction with another kind of second source (a memory
+            // operand folded into the add):
+            // `findOnlyInterestingUse` follows its tied source all the same.
+            let Some(what) = one.what.as_ref().filter(|what| ties(what)) else { continue };
+            let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
+                continue;
+            };
+            let Some(register) = fixed.to.get(&into.value).copied() else { continue };
+            if reads.get(&first.value) == Some(&1) {
+                fixed.to.entry(first.value).or_insert(register);
             }
         }
     }
@@ -653,6 +691,69 @@ mod tests {
             .map(|what| what.sources.clone())
             .collect();
         assert_eq!(copied[0], vec![held(1, 4)], "the first add copies the operand that arrives in EAX: {first:?}");
+    }
+
+    /// The sum of four arguments in registers, the pin's tree: `(a+b)+(c+d)`.
+    /// `c` and `d` die into `c+d`, whose sum ends in EAX, not where `c`
+    /// arrives: it is an `lea` (`isProfitableToConv3Addr`), no copy of `c`, and
+    /// the add it feeds keeps the `lea` as its second source
+    /// (`hasCommutePreference`) so X86FixupLEAs can split the pair. Without
+    /// both the listing of `six` kept `mov` + `add` for `c+d` and ended
+    /// `mov eax, edx`.
+    #[test]
+    fn test_a_dying_source_whose_sum_ends_elsewhere_is_an_lea_that_the_next_add_keeps_second() {
+        use llrm_lir::registers::RegId;
+        let nothing = |at: i64| {
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+            Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        };
+        let mut arrival = nothing(0);
+        arrival.defines = vec![1, 2, 3, 4];
+        arrival.delivers = vec![
+            (Held { value: 1, width: 4 }, RegId::EAX),
+            (Held { value: 2, width: 4 }, RegId::EDX),
+            (Held { value: 3, width: 4 }, RegId::EBX),
+            (Held { value: 4, width: 4 }, RegId::ECX),
+        ];
+        let mut ret = nothing(4);
+        ret.requires = vec![(Held { value: 9, width: 4 }, RegId::EAX)];
+        ret.uses = vec![9];
+        let input = LirBody::new(
+            "six",
+            0,
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        Arc::new(arrival),
+                        sum_into(1, 7, 2, 1),
+                        sum_into(2, 12, 3, 4),
+                        sum_into(3, 9, 7, 12),
+                        Arc::new(ret),
+                    ],
+                )
+                .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = tied(&input, All);
+        let named = |name: &str| {
+            got.insns()
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .filter(|what| what.name.as_deref() == Some(name))
+                .count()
+        };
+        assert_eq!(named("lea"), 1, "c+d is an lea");
+        let insns = got.insns();
+        let adds: Vec<&Semantics> = insns
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .filter(|what| what.name.as_deref() == Some("add"))
+            .collect();
+        let last = adds.last().expect("an add");
+        assert_eq!(last.sources, vec![held(9, 4), held(12, 4)], "the lea stays second: the sum is tied to (a+b)");
     }
 
     /// LNGMXX copied its accumulator out and back each iteration to preserve

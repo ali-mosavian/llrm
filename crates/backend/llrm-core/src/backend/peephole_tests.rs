@@ -3662,6 +3662,139 @@ fn test_lea_that_is_not_two_address_stays() {
     }
 }
 
+/// `lea ecx,[eax+edx]`, the `between` instructions, `op d, d, ecx`, then a
+/// compare that writes every flag (or a `jb` that reads them, where
+/// `flags_read`).
+fn lea_alu_body(
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    lea_alu_body_at(sum(RegId::EAX, RegId::EDX, 1, 0), op, d, between, flags_read)
+}
+
+fn lea_alu_body_at(
+    address: AddressRef,
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    let ecx = rl(RegId::ECX, 4);
+    let mut insns = vec![Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![ecx.clone()], vec![Loc::Address(address)])),
+        vec![11],
+        vec![20, 21],
+    ))];
+    insns.extend(between);
+    insns.push(Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, op, vec![rl(d, 4)], vec![rl(d, 4), ecx])),
+        vec![12],
+        vec![13, 11],
+    )));
+    if flags_read {
+        insns.push(Arc::new(insn(
+            4,
+            Some((4, 4)),
+            Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))),
+            vec![],
+            vec![],
+        )));
+        return body("leaalu", 1, vec![block(1, insns, vec![3]).into(), block(3, vec![], vec![]).into()]);
+    }
+    insns.push(Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EBX, 4), im(8, 4)])),
+        vec![],
+        vec![],
+    )));
+    // The return reads only eax: everything else is dead after it.
+    insns.push(Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    }));
+    body("leaalu", 1, vec![block(1, insns, vec![]).into()])
+}
+
+fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
+    done.insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.as_deref().unwrap_or_default().to_owned(), what.sources.clone()))
+        .collect()
+}
+
+/// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
+/// add ebx,edx`, and a subtract the same two steps. Without the case the
+/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// `mov eax, edx`.
+#[test]
+fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
+    for op in ["add", "sub"] {
+        let done = steps(&lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false)));
+        assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+        assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EDX, 4)]), "{done:?}");
+        assert_eq!(done.len(), 4, "the lea is gone: two steps, the compare and the return: {done:?}");
+        // The lea's value (11) is gone with it: a step reading it was "read but
+        // never defined" in call_keeps.c.
+        let again = lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false));
+        assert!(again.insns().iter().all(|one| !one.uses.contains(&11)), "{op}: a step still reads the lea's value");
+        assert!(
+            again.insns().iter().any(|one| one.uses.contains(&20) && one.uses.contains(&21)),
+            "{op}: the steps read the address's values"
+        );
+    }
+}
+
+/// Where the address register `d` is the index, `d` is added first: `d + (x+d)`
+/// is `(d+d)+x`.
+#[test]
+fn test_the_destination_that_is_an_address_register_is_added_first() {
+    let done = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EDX, vec![], false)));
+    assert_eq!(done[0].1, vec![rl(RegId::EDX, 4), rl(RegId::EDX, 4)], "{done:?}");
+    assert_eq!(done[1].1, vec![rl(RegId::EDX, 4), rl(RegId::EAX, 4)], "{done:?}");
+}
+
+/// `lea ecx,[eax+ecx]; add ebx,ecx` (the LEA's register is one of its terms, as
+/// six_ allocated it): `add ecx,eax`, and the add stays (`optTwoAddrLEA` case
+/// 1, in the shape the two-address pass makes). It stayed an `lea` whose result
+/// the add read, and six_ listed one instruction more than the pin's chain of
+/// adds.
+#[test]
+fn test_an_lea_that_sums_into_its_own_register_before_an_add_is_an_add() {
+    let done = steps(&lea_alus(
+        rules(),
+        &lea_alu_body_at(sum(RegId::EAX, RegId::ECX, 1, 0), "add", RegId::EBX, vec![], false),
+    ));
+    assert_eq!(done[0], ("add".to_owned(), vec![rl(RegId::ECX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+    assert_eq!(done[1], ("add".to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::ECX, 4)]), "{done:?}");
+}
+
+/// The search ends where the ALU is not the next instruction (the pin looks
+/// five ahead: DEVIATE LF-2), where the flags are read after the add, and where
+/// the `lea`'s register is read again.
+#[test]
+fn test_an_lea_stays_where_the_add_is_not_next_or_its_flags_are_read() {
+    let between = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::ESI, 4)], vec![rl(RegId::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let read = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![between], false)));
+    assert_eq!(read[0].0, "lea", "{read:?}");
+    let flags = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![], true)));
+    assert_eq!(flags[0].0, "lea", "{flags:?}");
+}
+
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
 /// only for `sub x, 1`, so recmany and recfloat grew (`dec ecx` became `add
 /// edx, -1`, 3 bytes against 1). X86's patterns select DEC for `add x, -1` as
