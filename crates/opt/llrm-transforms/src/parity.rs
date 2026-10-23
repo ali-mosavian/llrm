@@ -362,12 +362,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Old,
         "lir-cleanup-poc",
     ),
-    partial(
-        "machinesched@5",
-        Backend,
-        "machine-scheduler (MachineScheduler.cpp)",
-        "criterion: a block region longer than half the allocatable registers is ordered bottom-up by pressure (DEVIATE MS3: no pass-through pressure, one limit for all register sets); exit: per-set limits and tracking (row 65 piece 2), then pressuresink.rs is deleted",
-    ),
     entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
     entry("callframe@5", Backend, "x86-cf-opt (X86CallFrameOptimization.cpp)", Translated, ""),
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
