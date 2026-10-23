@@ -267,9 +267,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
         let mut compares = Vec::new();
         if !others.is_empty() {
-            // `isLoadExtLegal`, and `ExtendUsesToFormExtLoad`: the other readers
-            // are compares against a constant, which can be widened, or take the
-            // value back through a (free) truncate.
+            // `isLoadExtLegal`, and `ExtendUsesToFormExtLoad`: the other
+            // readers are compares against a constant, which can be
+            // widened, or take the value back through a (free)
+            // truncate.
             let EVT::Simple(wide_mvt) = wide else { return None };
             let EVT::Simple(mem_mvt) = info.mem_vt else { return None };
             let legal = self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal);
@@ -335,7 +336,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if copy_to_reg {
             // Both the narrow and the wide value are live out: only worth it if
             // a compare is widened.
-            let both = self.dag.users(node).any(|user| self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg);
+            let both =
+                self.dag.users(node).any(|user| self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg);
             if both {
                 return !compares.is_empty();
             }
