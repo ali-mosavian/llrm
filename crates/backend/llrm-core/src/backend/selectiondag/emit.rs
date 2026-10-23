@@ -1343,6 +1343,12 @@ impl Emitter<'_, '_> {
         n: u32,
         name: &str,
     ) -> Result<Option<()>, EmitError> {
+        // The 80-bit forms (long double) are refused until their moves, spills
+        // and arguments are proved: long_double_arguments and
+        // long_double_constant_store printed wrong values.
+        if (name.contains("_Fp") || name.starts_with("FP")) && name.contains("80") {
+            return Err(EmitError::Unsupported(format!("{name}: long double")));
+        }
         // `FP64_TO_INT32_IN_MEM`: the truncating store of a float as an
         // integer. It is `fistt` (the pin's custom inserter writes the
         // control-word dance around a `fist`); `floatalloc` makes `fistt` what
@@ -1545,6 +1551,17 @@ impl Emitter<'_, '_> {
             cell.base = None;
             return Ok(cell);
         }
+        // A base made of the address of a pool entry (`MOV32ri` of the
+        // constant) reads that entry: as wide as its constant, and no wider.
+        if let ISD::Machine(op) = self.dag.opcode(group[0])
+            && self.ctx.names.get(&(op as u16)).is_some_and(|name| name.split('|').next() == Some("MOV32ri"))
+            && let NodeData::PoolIndex(entry) = self.dag.node(self.dag.node(group[0]).ops[0]).data
+        {
+            let size = self.pool_cell(entry)?.width;
+            if size != cell_width {
+                return Err(EmitError::Unsupported(format!("a pool entry of {size} bytes read as {cell_width}")));
+            }
+        }
         let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
@@ -1562,7 +1579,16 @@ impl Emitter<'_, '_> {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
             let pooled = self.pool_cell(entry)?;
-            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
+            // The entry is as wide as its constant; read at another width it
+            // is the neighbouring data (a double that is exactly a float is a
+            // float entry the legalizer loads without saying it extends).
+            if pooled.width != cell_width {
+                return Err(EmitError::Unsupported(format!(
+                    "a pool entry of {} bytes read as {cell_width}",
+                    pooled.width
+                )));
+            }
+            return Ok(Mem { base, index, scale, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
