@@ -22,6 +22,13 @@ use crate::model::ir::{Addr, Mem, Space};
 struct NoGlobals;
 
 impl super::emit::GlobalMap for NoGlobals {
+    fn segment(
+        &self,
+        _symbol: Option<u32>,
+    ) -> crate::model::ir::Addr {
+        crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0)
+    }
+
     fn address(
         &self,
         symbol: u32,
