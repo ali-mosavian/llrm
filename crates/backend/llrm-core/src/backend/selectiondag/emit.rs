@@ -1023,6 +1023,13 @@ impl Emitter<'_, '_> {
             let address = Addr::new(crate::model::ir::Space::Literal, disp);
             return Ok(Mem { disp_width: 4, ..Mem::new(Some(address), cell_width) });
         }
+        // An indexed cell's displacement is a literal address, as the old
+        // selector makes it: without one later passes read `[base]` alone and
+        // the index is dropped (strlen_idiom looped forever).
+        if index.is_some() {
+            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
+        }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
 
@@ -1049,21 +1056,31 @@ impl Emitter<'_, '_> {
         group: &[SDValue],
         cell_width: u32,
     ) -> Result<Mem, EmitError> {
-        let NodeData::FrameIndex(index) = self.dag.node(group[0]).data else {
+        let NodeData::FrameIndex(index_of) = self.dag.node(group[0]).data else {
             return Err(EmitError::Unsupported("a frame index without an index".to_owned()));
         };
-        if self.address_register(group[2], Role::Index)?.is_some()
-            || self.address_register(group[4], Role::Segment)?.is_some()
-        {
-            return Err(EmitError::Unsupported("an indexed or segment-overridden frame cell".to_owned()));
+        let index = self.address_register(group[2], Role::Index)?;
+        if self.address_register(group[4], Role::Segment)?.is_some() {
+            return Err(EmitError::Unsupported("a segment-overridden frame cell".to_owned()));
         }
+        let scale = self.constant(group[1])?;
         let disp = self.constant(group[3])?;
         let cell = self
             .ctx
             .frame
-            .cell(index, cell_width)
-            .ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
-        Ok(Mem { offset: cell.offset + disp, ..cell })
+            .cell(index_of, cell_width)
+            .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
+        // The object's place is its `addr`; the displacement moves that, as
+        // `offset` of a cell with an `addr` is only how it is encoded.
+        let addr = cell.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });
+        // With an index the frame register is the base of the address and,
+        // for a dword index, EBP (the 67h form's base).
+        let through = match &index {
+            Some(held) if held.width == 4 => llrm_lir::registers::RegId::EBP,
+            _ => cell.through,
+        };
+        let addr = addr.map(|addr| if index.is_some() { Addr { base: through.iced(), ..addr } } else { addr });
+        Ok(Mem { addr, through, offset: cell.offset + disp, index, scale, ..cell })
     }
 
     /// An address component: a value, or the `$noreg` register.

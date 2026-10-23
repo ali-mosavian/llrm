@@ -479,3 +479,68 @@ fn a_long_copy_and_fill_are_rep_string_operations() {
     assert_eq!(strings.len(), 2, "{strings:?}");
     assert!(strings.iter().all(|w| w.sources.len() == 3), "count, source and destination are operands: {strings:?}");
 }
+
+const FRAME_PLUS_ONE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+entry:
+  %l = alloca [8 x i8], align 4
+  store i32 5, ptr %l
+  %p = getelementptr i8, ptr %l, i32 1
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+
+/// A load at a frame object plus one was `[esp]`: the displacement was added to
+/// an `offset` the cell's `addr` overrides (bitfield_overhang_init and four
+/// more programs printed wrong values).
+#[test]
+fn a_frame_object_plus_a_displacement_keeps_the_displacement() {
+    let module = llrm_mir::parse::module(FRAME_PLUS_ONE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let disps: Vec<i64> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.dests.iter().chain(&w.sources))
+        .filter_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) => m.addr.map(|a| a.disp),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(disps.len(), 2, "{disps:?}");
+    assert_eq!(disps[1] - disps[0], 1, "the load is one byte past the store: {disps:?}");
+}
+
+const INDEXED_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f(ptr %s, i32 %n) {
+entry:
+  %a = getelementptr i8, ptr %s, i32 %n
+  %b = getelementptr i8, ptr %a, i32 1
+  %v = load i8, ptr %b
+  ret i8 %v
+}
+";
+
+/// A based cell with an index must carry a literal address: without one the
+/// later passes read `[base]` and dropped the index, so `strlen_idiom` looped
+/// forever.
+#[test]
+fn an_indexed_cell_carries_a_literal_address() {
+    let module = llrm_mir::parse::module(INDEXED_LOAD).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let cell = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .find_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) if m.index.is_some() => Some(m.clone()),
+            _ => None,
+        })
+        .expect("an indexed load");
+    assert!(cell.base.is_some() && cell.addr.is_some(), "{cell:?}");
+    assert_eq!(cell.offset, 1);
+}

@@ -50,6 +50,31 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
                 Ok(())
             }
+            Intrinsic::Assume => Ok(()),
+            // a hint the passes read: its value is its argument
+            Intrinsic::Expect | Intrinsic::Restrict => {
+                let value = self.get_value(instruction.operands[0])?;
+                self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
+                Ok(())
+            }
+            Intrinsic::StackSave => {
+                let vt = self.target.dag.pointer;
+                let root = self.root();
+                let node = self.dag.get_node_multi(ISD::StackSave, &[vt, EVT::OTHER], &[root]);
+                self.dag.set_root(SDValue { node: node.node, res: 1 });
+                self.set_value(instruction.result.ok_or(Refused("a stacksave without a result"))?, node);
+                Ok(())
+            }
+            Intrinsic::StackRestore => {
+                let saved = self.get_value(instruction.operands[0])?;
+                let root = self.root();
+                let node = self.dag.get_node(ISD::StackRestore, EVT::OTHER, &[root, saved]);
+                self.dag.set_root(node);
+                Ok(())
+            }
+            Intrinsic::Compare { .. } | Intrinsic::FMulAdd | Intrinsic::Fixed { .. } => {
+                self.visit_math(instruction, intrinsic)
+            }
             Intrinsic::WithOverflow { .. }
             | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
