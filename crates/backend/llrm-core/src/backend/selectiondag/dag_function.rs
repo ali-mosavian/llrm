@@ -52,6 +52,7 @@ use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
 use super::x86_preprocess::FrameObjects;
+use crate::backend::constpool::Pool;
 use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Held, Mem, Space};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
@@ -308,7 +309,9 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
 
 /// `name` of `module` selected by the DAG path. A panic in a stage (a builder
 /// meeting a type it does not know) is a refusal of the function, as any other
-/// gap: it stopped 18 QCport modules from compiling in the shadow.
+/// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
+/// needs in memory go to a pool of its own; [`selected_in_pool`] shares the
+/// module's.
 pub fn selected(
     module: &Module,
     name: &str,
@@ -316,14 +319,43 @@ pub fn selected(
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selected_in(module, name, arch, cpu, libcalls)))
-        .unwrap_or_else(|why| {
-            let why = why
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
-            refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
-        })
+    selected_in_pool(module, name, arch, cpu, libcalls, &mut Pool::new(module.globals.len() as i64))
+}
+
+pub fn selected_in_pool(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    let mark = pool.mark();
+    let done =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selected_in(module, name, arch, cpu, libcalls, pool)))
+            .unwrap_or_else(|why| {
+                let why = why
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
+                refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
+            });
+    if done.is_err() {
+        pool.rewind(mark);
+    }
+    done
+}
+
+/// The module's constant pool as the emitter asks it.
+struct PoolCells<'a>(std::cell::RefCell<&'a mut Pool>);
+
+impl super::emit::ConstantCells for PoolCells<'_> {
+    fn cell(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Mem {
+        self.0.borrow_mut().cell(bytes)
+    }
 }
 
 fn selected_in(
@@ -332,6 +364,7 @@ fn selected_in(
     arch: &dyn Target,
     cpu: &crate::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
+    pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let m16 = match arch.object().bitness {
         16 => true,
@@ -461,6 +494,7 @@ fn selected_in(
     let ctx = EmitContext {
         caller_saved: &caller_saved,
         conventions: &CallConventions { module, arch },
+        constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
         globals: &globals,
         block_at: &block_at,

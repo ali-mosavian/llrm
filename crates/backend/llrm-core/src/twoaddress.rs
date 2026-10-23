@@ -588,6 +588,15 @@ impl<'a> Commuter<'a> {
         self.dst.entry(dst_reg).or_insert(to);
     }
 
+    /// `tryInstructionTransform`'s `scanUses(regA)`: where `value`, the result
+    /// of a tied instruction, goes.
+    pub fn scan_uses_of(
+        &mut self,
+        value: u32,
+    ) {
+        self.scan_uses(value);
+    }
+
     /// `processTiedPairs`, after the copy `into := mov first` was put before
     /// `mi`: the copy takes the distance `mi` had and `mi` the next
     /// (`DistanceMap`), and where `first` died at `mi` and `mi` reads it no

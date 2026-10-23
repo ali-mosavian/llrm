@@ -561,7 +561,11 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         info = {**info, "headRefOid": fresh}
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
     stage(f"squash #{number}")
-    return run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body]).returncode == 0
+    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True)
+    if done.returncode:
+        # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
+        print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")
+    return done.returncode == 0
 
 
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
@@ -960,6 +964,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     def land(number: str) -> None:
         if number in left_out:
+            print(f"#{number}: REFUSED: left out: {left_out[number]}")
             refused.append(number)
             return
         if waiting(number):  # before the formatted head is pushed to the PR's branch
