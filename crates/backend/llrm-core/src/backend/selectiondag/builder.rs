@@ -1347,11 +1347,13 @@ impl Builder<'_> {
         };
         // a far access goes through the offset half after `LES`, so `ES`
         // (llrm's own space 259); the pin's 256..258 are `gs`, `fs`, `ss`
-        let space = match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty)) {
-            Some(Type::Pointer(_)) if self.operand_type(pointer)? == MVT::Far.into() => 259,
-            Some(Type::Pointer(space)) if (256..259).contains(space) => *space,
-            _ => 0,
-        };
+        let space =
+            match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty))
+            {
+                Some(Type::Pointer(_)) if self.operand_type(pointer)? == MVT::Far.into() => 259,
+                Some(Type::Pointer(space)) if (256..259).contains(space) => *space,
+                _ => 0,
+            };
         Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
     }
 
