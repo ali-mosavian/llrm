@@ -6603,6 +6603,35 @@ r:
     assert_eq!(extensions(&shared)[0].1, 1, "made in the entry block: {:?}", extensions(&shared));
 }
 
+/// The same expression in a body with no frequency table from selection got no
+/// PRE: `isProfitableToHoistInto` asks `MachineBlockFrequencyInfo` of the
+/// body's own CFG, which every body has.
+#[test]
+fn test_a_partially_redundant_expression_is_hoisted_in_a_body_with_no_frequency_table() {
+    let text = "@g = global i16 0
+@h = global i16 0
+define void @f(i8 %b, i1 %c, i1 %d) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %m
+a:
+  %z1 = zext i8 %b to i16
+  store i16 %z1, ptr @g
+  br i1 %d, label %m, label %r
+m:
+  %z2 = zext i8 %b to i16
+  store i16 %z2, ptr @h
+  ret void
+r:
+  ret void
+}
+";
+    let mut body = selected(text, "f").expect("selects").body;
+    body.frequencies = None;
+    assert_eq!(extensions(&body).iter().map(|one| one.1).sum::<usize>(), 2, "the premise: two, no table");
+    let shared = crate::backend::precse::shared(&body, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(extensions(&shared).iter().map(|one| one.1).sum::<usize>(), 1);
+}
+
 /// The same shape where the dominator runs far more often than the two blocks
 /// together: hoisting would add work, so the copies stay.
 #[test]
