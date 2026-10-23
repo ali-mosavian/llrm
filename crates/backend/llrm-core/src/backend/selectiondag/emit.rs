@@ -180,6 +180,10 @@ struct Emitter<'a, 'd> {
     /// The nodes that read each value of a glue chain, from their operands (the
     /// matcher's nodes are not in the DAG's use lists).
     glue_users: HashMap<SDValue, Vec<u32>>,
+    /// The node whose flags EFLAGS holds now.
+    flags_now: Option<u32>,
+    /// The compares that made flags, to make them again.
+    flag_insns: HashMap<u32, Arc<Insn>>,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -260,6 +264,8 @@ pub fn emit_in(
         arguments: Vec::new(),
         calls: Vec::new(),
         last_call: None,
+        flags_now: None,
+        flag_insns: HashMap::new(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -412,7 +418,8 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
-            ISD::CopyToReg if self.writes_flags(node.ops[1]) || self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
+            ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
             ISD::CopyToReg if self.feeds_call(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
@@ -476,6 +483,50 @@ impl Emitter<'_, '_> {
     }
 
     fn machine(
+        &mut self,
+        n: u32,
+        opcode: u32,
+    ) -> Result<(), EmitError> {
+        self.machine_in(n, opcode)?;
+        // What it left in EFLAGS: a compare with no result is cheap to make
+        // again where a consumer needs it (`ensure_flags`).
+        if instr::desc(opcode as u16)
+            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS))
+        {
+            self.flags_now = Some(n);
+            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last())
+                && last.what.as_ref().is_some_and(|what| what.op == Operation::Compare && what.dests.is_empty())
+            {
+                self.flag_insns.insert(n, Arc::clone(last));
+            }
+        }
+        Ok(())
+    }
+
+    /// The flags `producer` made are what EFLAGS holds for the consumer glued
+    /// after this: made again if something else wrote them since. The pin's
+    /// scheduler may place a flag-writing unit between a compare and the second
+    /// of two selects on it (the sink block of the first select reads EFLAGS
+    /// live-in), and a pass here may place one anywhere: shift_int64_variable
+    /// at -O2 branched on the flags of an unrelated `sub`.
+    fn ensure_flags(
+        &mut self,
+        producer: u32,
+    ) -> Result<(), EmitError> {
+        if self.flags_now == Some(producer) {
+            return Ok(());
+        }
+        let Some(compare) = self.flag_insns.get(&producer).cloned() else {
+            return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
+        };
+        let at = self.next_address();
+        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
+        self.flags_now = Some(producer);
+        Ok(())
+    }
+
+    fn machine_in(
         &mut self,
         n: u32,
         opcode: u32,
