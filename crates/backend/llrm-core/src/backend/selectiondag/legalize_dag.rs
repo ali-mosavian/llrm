@@ -246,10 +246,43 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             _ => None,
         }
+    }
+
+    /// `TargetLowering::expandABS` ([L11308][pin]) for scalars: `smax(x, 0 -
+    /// x)` or `umin` when legal, else `(x ^ s) - s` for `s = x >>s (bits -
+    /// 1)`.
+    ///
+    /// DEVIATE SD306: the pin freezes `x` first because `x` is read twice;
+    /// selection deletes the `FREEZE` again, so the machine code is the
+    /// same and the node is left out. Owner sdag-c. Exit: when the DAG has
+    /// `FREEZE`. Review 2026-12-10.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L11308
+    fn expand_abs(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let x = self.dag.operand(node, 0);
+        if self.tli.is_operation_legal(ISD::Sub, vt) {
+            for op in [ISD::SMax, ISD::UMin] {
+                if self.tli.is_operation_legal(op, vt) {
+                    let zero = self.dag.get_constant(0, vt);
+                    let neg = self.dag.get_node(ISD::Sub, vt, &[zero, x]);
+                    return self.dag.get_node(op, vt, &[x, neg]);
+                }
+            }
+        }
+        let amount = self.dag.get_constant(u128::from(vt.size_in_bits() - 1), EVT::I8);
+        let sign = self.dag.get_node(ISD::Sra, vt, &[x, amount]);
+        let flipped = self.dag.get_node(ISD::Xor, vt, &[x, sign]);
+        self.dag.get_node(ISD::Sub, vt, &[flipped, sign])
     }
 
     /// `TargetLowering::expandCTPOP` ([L10830][pin]), scalar: the parallel
