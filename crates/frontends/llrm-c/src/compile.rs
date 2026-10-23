@@ -1795,7 +1795,7 @@ mod tests {
         let names =
             |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
         assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
-        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy"]);
+        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy", "memmove", "memset"]);
     }
 
     /// The call of `memcpy` named the routine `memcpy` in the stack convention:
@@ -1807,8 +1807,28 @@ mod tests {
         let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
         let watcom = super::libcalls(m32, Some("watcom"), "omf").unwrap();
         let sysv = super::libcalls(m32, Some("sysv"), "omf").unwrap();
-        assert_eq!(watcom.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["memcpy_"]);
-        assert_eq!(sysv.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["_memcpy"]);
+        assert_eq!(watcom.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["memcpy_", "memmove_", "memset_"]);
+        assert_eq!(sysv.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["_memcpy", "_memmove", "_memset"]);
+    }
+
+    /// A listed libcall is called by the symbol its ABI decorates, so a name
+    /// the runtime does not define is an undefined reference at link: every
+    /// (routine, ABI) of m32's `libcalls` is a `public` of ext.asm. Their
+    /// results are tests/run/c/memcpy_runtime.c and memfuncs_runtime.c (n =
+    /// 0..70000, both conventions).
+    #[test]
+    fn test_the_m32_runtime_defines_every_symbol_its_libcalls_name() {
+        let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
+        let ext = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("runtime/c/x86-m32/ext.asm")).unwrap();
+        let defined: Vec<&str> = ext.lines().filter_map(|line| line.trim().strip_prefix("public ")).collect();
+        for abi in ["watcom", "sysv"] {
+            for (name, _, symbol) in super::libcalls(m32, Some(abi), "omf").unwrap() {
+                assert!(
+                    defined.contains(&symbol.as_str()),
+                    "{name} under {abi} is {symbol}, which ext.asm does not define: {defined:?}"
+                );
+            }
+        }
     }
 
     #[test]
