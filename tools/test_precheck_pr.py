@@ -69,13 +69,13 @@ def test_a_squash_that_deletes_a_file_needs_it_named_in_a_deletes_line(tmp_path)
     assert pc.parity_squash.body_checks("HEAD", "Owner: x\nRows: none\nDeletes: keep.rs", "parity", root, "fix: remove") == []
 
 
-def test_an_added_line_naming_a_claude_path_is_refused(tmp_path):
+def test_an_added_line_naming_a_config_dir_path_is_refused(tmp_path):
     root = repo(tmp_path)
     commit(root, "notes.md", "see " + "." + "clau" + "de/worktrees/x for it\n", "pr")
-    why = pc.claude_paths(root, "parity")
+    why = pc.config_dir_paths(root, "parity")
     assert len(why) == 1 and "notes.md" in why[0]
     commit(root, "notes.md", "nothing here\n", "pr")
-    assert pc.claude_paths(root, "parity") == []
+    assert pc.config_dir_paths(root, "parity") == []
 
 
 def test_an_added_line_naming_the_assistant_is_refused_by_the_runners_own_check(tmp_path):

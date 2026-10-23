@@ -87,7 +87,7 @@ def description_failures(
     return why
 
 
-def claude_paths(
+def config_dir_paths(
     root: Path,
     base: str = BASE,
     head: str = "HEAD",
@@ -224,7 +224,7 @@ def precheck(
         why += parity_squash.refusals("HEAD", body, base, root, title or "")
     why += [f"{path}: tools/fmt.sh would change it; run tools/fmt.sh (the runner formats an unformatted PR with a commit on your branch, which races with your pushes)" for path in sorted(parity_squash.fmt_differs(root, files))]
     why += slot_without_pipeline_test(root, base)
-    why += claude_paths(root, base)
+    why += config_dir_paths(root, base)
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)
