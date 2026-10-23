@@ -28,14 +28,14 @@
 //! Nothing runs it yet: the emitter (D1b) takes [`schedule`]'s units. The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
 //!
-//! DEVIATE SD30: not translated yet: physical-register live interference
-//! (`DelayForLiveRegsBottomUp`, `BacktrackBottomUp`, `CopyAndMoveSuccessors`,
-//! the call-frame resource), `ClusterNodes`, and the virtual-register cycle
-//! check (`initVRegCycle`, only for blocks that branch to themselves).
-//! Reason: they need the machine instruction descriptions and register
-//! classes of the matcher's output (sdag-c), which does not exist yet; the
-//! flags register travels as glue, so the schedule of a glue-only function
-//! is the pin's. Exit: D1c, before the switch gate. Owner: sdag-d. Review
+//! DEVIATE SD30: part translated. Physical-register live interference
+//! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
+//! `Interferences`, `releaseInterferences`) is in; not translated:
+//! `BacktrackBottomUp`, `CopyAndMoveSuccessors` (when every candidate waits
+//! the first goes anyway), the call-frame resource, `ClusterNodes`, and the
+//! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
+//! to themselves). Reason: they need register classes of the matcher's output
+//! for copies. Exit: before the switch gate. Owner: sdag-d. Review
 //! 2026-12-03.
 //!
 //! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
