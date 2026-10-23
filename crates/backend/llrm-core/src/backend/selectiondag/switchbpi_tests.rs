@@ -1,6 +1,7 @@
-//! SwitchCG with the IR switch\'s own edge probabilities (SD101 closed): a case whose block is
-//! `unreachable` or ends in a `noreturn` call is nearly never taken, which changes how the
-//! clusters are split and ordered. Uniform probabilities (1/(cases+1)) make other blocks.
+//! SwitchCG with the IR switch\'s own edge probabilities (SD101 closed): a case
+//! whose block is `unreachable` or ends in a `noreturn` call is nearly never
+//! taken, which changes how the clusters are split and ordered. Uniform
+//! probabilities (1/(cases+1)) make other blocks.
 
 use super::bundle_tests::{ours, pins};
 

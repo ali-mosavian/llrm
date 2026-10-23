@@ -150,19 +150,23 @@ impl Builder<'_> {
         let cond_type = self.operand_type(cond)?;
         let width = cond_type.size_in_bits();
         let Operand::Block(default) = instruction.operands[1] else { return Err(Refused("switch default")) };
-        let bpi = self.info.bpi.get_or_insert_with(|| {
-            llrm_analysis::bpi::BranchProbabilityInfo::of(
-                llrm_analysis::bpi::Module {
-                    context: &self.module.context,
-                    declarations: &self.module.globals,
-                    metadata: &self.module.metadata,
-                    layout: self.layout,
-                },
-                self.function,
-            )
-        });
-        let edge =
-            |index: usize| BranchProbability(bpi.get_edge_probability(self.function, self.block, index).get_numerator());
+        let bpi = self
+            .info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &self.module.context,
+                        declarations: &self.module.globals,
+                        metadata: &self.module.metadata,
+                        layout: self.layout,
+                    },
+                    self.function,
+                ),
+            );
+        let edge = |index: usize| {
+            BranchProbability(bpi.get_edge_probability(self.function, self.block, index).get_numerator())
+        };
         let default_edge =
             BranchProbability(bpi.get_edge_probability_to(self.function, self.block, default).get_numerator());
         let mut cases = Vec::new();
