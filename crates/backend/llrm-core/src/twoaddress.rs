@@ -183,8 +183,10 @@ impl BodyFacts {
     }
 
     /// `one` replaced by `made`, in order (the copy of a tied pair and the
-    /// instruction that reads it): the intervals of the values they name are
-    /// made afresh (`processTiedPairs`: `removeInterval`,
+    /// instruction that reads it): the last takes the place and the index of
+    /// `one`, the others go before it. Only the intervals of the values the
+    /// others name, and of those `one` and the last name differently, are made
+    /// afresh (`processTiedPairs`: `removeInterval`,
     /// `createAndComputeVirtRegInterval`).
     pub fn replace(
         &self,
@@ -192,20 +194,22 @@ impl BodyFacts {
         one: &Insn,
         made: &[Arc<Insn>],
     ) {
+        use std::collections::BTreeSet;
+        let named = |one: &Insn| -> BTreeSet<u32> {
+            one.defines.iter().chain(&one.uses).chain(&one.undefs).copied().collect()
+        };
+        let (last, rest) = made.split_last().expect("an instruction replaced by none");
         let mut lis = self.lis.borrow_mut();
-        let key = one.id();
-        for new in made {
-            lis.insert_instr_before(block, Some(key), Arc::clone(new));
+        lis.rewrite_instr(block, one.id(), Arc::clone(last));
+        let mut changed: BTreeSet<u32> = named(one).symmetric_difference(&named(last)).copied().collect();
+        for new in rest {
+            lis.insert_instr_before(block, Some(last.id()), Arc::clone(new));
+            changed.extend(named(new));
         }
-        lis.remove_instr(block, key);
-        for value in
-            one.defines.iter().chain(&one.uses).chain(made.iter().flat_map(|new| new.defines.iter().chain(&new.uses)))
-        {
+        for value in &changed {
             lis.remove_interval(*value);
         }
-        for value in
-            one.defines.iter().chain(&one.uses).chain(made.iter().flat_map(|new| new.defines.iter().chain(&new.uses)))
-        {
+        for value in &changed {
             lis.interval(*value);
         }
     }
@@ -217,6 +221,10 @@ impl BodyFacts {
     ) -> LirBody {
         let lis = self.lis.into_inner();
         let done = lis.body_like(body);
+        if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
+            // The premise: the intervals the edits left are the ones made afresh.
+            assert!(lis.assert_intervals_equal_afresh(&done) > 0, "{}: the check compared no interval", body.name);
+        }
         crate::liveness::liveintervals::hand_over(lis, &done);
         done
     }
