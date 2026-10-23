@@ -181,6 +181,10 @@ fn dotted_name(expr: &Expr) -> Option<String> {
 }
 
 /// The type a real literal's suffix gives it.
+fn without_type_character(name: &str) -> bool {
+    !name.ends_with(['%', '&', '!', '#', '$', '@'])
+}
+
 fn real_type(suffix: Option<char>) -> TypeName {
     match suffix {
         Some('#') => TypeName::Double,
@@ -625,6 +629,13 @@ impl Ast<'_> {
         }
     }
 
+    fn identifier_text(&self, at: usize) -> String {
+        match &self.tokens[at].kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => String::new(),
+        }
+    }
+
     fn field_name(&mut self) -> R<(String, Span)> {
         let at = self.i;
         match self.tok_n(0) {
@@ -810,6 +821,14 @@ impl Ast<'_> {
                 if !(0..=65_529).contains(value) {
                     return self.fail();
                 }
+                // `1a:` is a single label, a line number run into a name
+                if let (Some(TokenKind::Identifier(name)), Some(Tok::Kw(Kw::Colon))) = (self.tokens.get(at + 1).map(|t| &t.kind), self.kinds.get(at + 2)) {
+                    if self.tokens[at + 1].span.start == self.tokens[at].span.end && without_type_character(name) {
+                        self.out.push(Statement::Label(format!("{value}{name}"), self.span(at)));
+                        self.i += 2;
+                        return Ok(());
+                    }
+                }
                 self.out.push(Statement::Label(value.to_string(), self.span(at)));
                 self.i += 1;
                 if !(self.is(Kw::NewLine) || self.is(Kw::Colon)) {
@@ -847,7 +866,8 @@ impl Ast<'_> {
     }
 
     fn line_start(&self) -> bool {
-        self.i == 0 || self.is_prev_newline()
+        // after a line number, a label may follow (`1a:`)
+        self.i == 0 || self.is_prev_newline() || (self.i > 0 && matches!(self.tokens.get(self.i - 1).map(|t| &t.kind), Some(TokenKind::Integer(_, None))))
     }
 
     fn is_prev_newline(&self) -> bool {
@@ -861,10 +881,22 @@ impl Ast<'_> {
         if let Some(done) = self.isam_statement()? {
             return Ok(done);
         }
-        if matches!(self.kinds[start], Tok::Ident) && self.line_start() && self.is_n(1, Kw::Colon) {
-            let name = self.identifier()?.0;
-            self.out.push(Statement::Label(name, start_span));
-            return Ok(());
+        if matches!(self.kinds[start], Tok::Ident) && self.line_start() && without_type_character(&self.identifier_text(start)) {
+            // a label: `a:` or the dotted `a.b:`
+            let mut end = start + 1;
+            while matches!(self.kinds.get(end), Some(Tok::Period)) && matches!(self.kinds.get(end + 1), Some(Tok::Ident)) {
+                end += 2;
+            }
+            if self.kinds.get(end) == Some(&Tok::Kw(Kw::Colon)) {
+                let mut name = self.identifier()?.0;
+                while matches!(self.tok_n(0), Some(Tok::Period)) {
+                    self.i += 1;
+                    name.push('.');
+                    name.push_str(&self.field_name()?.0);
+                }
+                self.out.push(Statement::Label(name, start_span));
+                return Ok(());
+            }
         }
         if let Ok(target) = self.name_ref() {
             if self.eat(Kw::EQ) {
@@ -1508,14 +1540,21 @@ impl Ast<'_> {
         }
         let mut arms = Vec::new();
         let mut otherwise = Vec::new();
+        let mut otherwise_seen = false;
         loop {
             self.skip_separators();
             if self.at_end_select() {
                 self.i += 2;
                 break;
             }
-            self.expect(Kw::CASE)?;
+            // nothing but END SELECT follows CASE ELSE
+            if !otherwise_seen {
+                self.expect(Kw::CASE)?;
+            } else {
+                return self.fail();
+            }
             let is_else = self.eat(Kw::ELSE);
+            otherwise_seen |= is_else;
             let mut matches = Vec::new();
             if !is_else {
                 loop {
