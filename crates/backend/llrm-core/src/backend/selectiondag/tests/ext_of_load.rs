@@ -39,11 +39,9 @@ fn ext_of(
 /// (10 pin-only MOVZX/MOVSX rows of the m32 shadow).
 #[test]
 fn an_extension_of_a_load_is_an_extending_load() {
-    for (op, ext) in [
-        (ISD::ZeroExtend, LoadExt::ZExtLoad),
-        (ISD::SignExtend, LoadExt::SExtLoad),
-        (ISD::AnyExtend, LoadExt::ExtLoad),
-    ] {
+    for (op, ext) in
+        [(ISD::ZeroExtend, LoadExt::ZExtLoad), (ISD::SignExtend, LoadExt::SExtLoad), (ISD::AnyExtend, LoadExt::ExtLoad)]
+    {
         let (dag, root) = folded(op, false);
         assert_eq!(dag.opcode(root), ISD::Load, "{op:?}");
         assert_eq!(ext_of(&dag, root), (EVT::I32, EVT::I8, Some(ext)), "{op:?}");
