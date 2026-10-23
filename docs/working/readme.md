@@ -66,6 +66,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
