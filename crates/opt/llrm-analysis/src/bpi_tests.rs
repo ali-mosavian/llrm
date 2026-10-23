@@ -90,28 +90,30 @@ fn test_the_edges_of_a_block_are_set_swapped_copied_and_erased() {
     let layout = DataLayout::default();
     let (_, _, function) = module.functions().next().expect("a function");
     let mut bpi = BranchProbabilityInfo::of(
-        Module {
-            context: &module.context,
-            declarations: &module.globals,
-            metadata: &module.metadata,
-            layout: &layout,
-        },
+        Module { context: &module.context, declarations: &module.globals, metadata: &module.metadata, layout: &layout },
         function,
     );
-    let named = |name: &str| *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).unwrap();
+    let named =
+        |name: &str| *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).unwrap();
     let (entry, other) = (named("entry"), named("other"));
     let (taken, kept) = (bpi.get_edge_probability(function, entry, 0), bpi.get_edge_probability(function, entry, 1));
     assert_eq!((taken, kept), (BranchProbability::new(3, 8), BranchProbability::new(5, 8)));
     // Swapped.
     bpi.swap_succ_edges_probabilities(function, entry);
-    assert_eq!((bpi.get_edge_probability(function, entry, 0), bpi.get_edge_probability(function, entry, 1)), (kept, taken));
+    assert_eq!(
+        (bpi.get_edge_probability(function, entry, 0), bpi.get_edge_probability(function, entry, 1)),
+        (kept, taken)
+    );
     // Set all at once.
     let (quarter, rest) = (BranchProbability::new(1, 4), BranchProbability::new(3, 4));
     bpi.set_edge_probability(function, other, &[quarter, rest]);
     assert_eq!(bpi.get_edge_probability(function, other, 1), rest);
     // Copied from one block to another.
     bpi.copy_edge_probabilities(function, other, entry);
-    assert_eq!((bpi.get_edge_probability(function, entry, 0), bpi.get_edge_probability(function, entry, 1)), (quarter, rest));
+    assert_eq!(
+        (bpi.get_edge_probability(function, entry, 0), bpi.get_edge_probability(function, entry, 1)),
+        (quarter, rest)
+    );
     // Erased: 1/N again.
     bpi.erase_block(entry);
     assert_eq!(bpi.get_edge_probability(function, entry, 0), BranchProbability::new(1, 2));
