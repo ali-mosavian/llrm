@@ -162,4 +162,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ext;
 #[cfg(test)]
+mod fallthrough_tests;
+#[cfg(test)]
 mod vararg_tests;
