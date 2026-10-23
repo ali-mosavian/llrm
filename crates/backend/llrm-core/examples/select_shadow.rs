@@ -47,23 +47,39 @@ fn main() {
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
     let layout =
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("a datalayout"));
-    let target = BuilderTarget::m32();
-    let tli = TargetLowering::x86_32(
-        Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false },
-        MVT::I32,
-    );
-    let selector = Selector::new(table::TABLE);
+    // `M16=1` selects for real mode: 16-bit pointers, the m16 table, real-mode
+    // addresses.
+    let m16 = std::env::var_os("M16").is_some();
+    let features = Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false };
+    let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
+        (
+            BuilderTarget::m16(),
+            TargetLowering::x86_16(features, MVT::I16),
+            &llrm_x86_m16::M16,
+            Cpu::M16,
+            AddrMode::Real16,
+        )
+    } else {
+        (
+            BuilderTarget::m32(),
+            TargetLowering::x86_32(features, MVT::I32),
+            &llrm_x86_m32::M32,
+            Cpu::I486,
+            AddrMode::Flat32,
+        )
+    };
+    let selector = Selector::new(if m16 { llrm_dagisel::generated::x86_m16::TABLE } else { table::TABLE });
     let mut hooks = X86Hooks::new(Options {
-        cpu: Cpu::I486,
+        cpu,
         opt_none: false,
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
-        address_mode: AddrMode::Flat32,
+        address_mode,
     });
 
     for (id, global, function) in module.functions() {
-        let convention = match llrm_core::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32) {
+        let convention = match llrm_core::backend::isel::convention(&module, &layout, id, arch) {
             Ok(c) => c,
             Err(why) => {
                 println!("REFUSED {}: convention: {why:?}", global.name.as_deref().unwrap_or("?"));
@@ -78,16 +94,7 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(
-                &module,
-                function,
-                &layout,
-                &target,
-                &llrm_x86_m32::M32,
-                &convention,
-                &mut info,
-                block,
-            ) {
+            let mut done = match build_block(&module, function, &layout, &target, arch, &convention, &mut info, block) {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);
