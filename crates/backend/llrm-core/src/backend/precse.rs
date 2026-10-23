@@ -20,9 +20,10 @@
 //! - a value is shared only if every reader of the new one also reads the old
 //!   one, or the old one is read in the block (heuristics 2 and 3).
 //!
-//! Before the table is asked, an operand made by a plain copy names the copy's
-//! source (`PerformTrivialCopyPropagation`), and a commutative operation is
-//! asked with its sources swapped if the first form is not there.
+//! When the table has no entry, an operand made by a plain copy is moved to the
+//! copy's source and a copy nothing else reads is erased
+//! (`PerformTrivialCopyPropagation`); a commutative operation is then asked
+//! with its sources swapped if the first form is still not there.
 //!
 //! An operation that sets flags is shared only where nothing after it in its
 //! block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
@@ -57,12 +58,6 @@
 //! by a pattern from a constant global is invariant. The pin also takes
 //! `!invariant.load`, GOT and constant-pool loads and the immutable fixed stack
 //! objects (incoming arguments); those loads are kept.
-//!
-//! DEVIATE CSE4 (owner funcattrs-port, exit 2026-11-13):
-//! `PerformTrivialCopyPropagation` renames an operand in the table's key
-//! without moving the instruction's read to the copy's source, so the readers
-//! of a copy's source are counted from the body as it was. Heuristics 2 and 3
-//! see the pin's lists except for that.
 //!
 //! DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
 //! same elimination after allocation, is ours alone (the pin runs MachineCSE
@@ -208,6 +203,11 @@ struct Walk<'a> {
     /// The value each removed one is read as.
     rename: HashMap<u32, u32>,
     removed: HashSet<u64>,
+    /// The copy that defines a value, and the value it copies.
+    copy_of: HashMap<u32, (u64, u32)>,
+    /// The operands `PerformTrivialCopyPropagation` moved to a copy's source,
+    /// by instruction: `(value read, value read now)`.
+    moved: HashMap<u64, Vec<(u32, u32)>>,
     /// `expression -> (value, block, instruction)`.
     table: HashMap<Semantics, (u32, usize)>,
     regs: llrm_lir::registers::Regs,
@@ -222,6 +222,64 @@ impl Walk<'_> {
             value = next;
         }
         value
+    }
+
+    /// `value` as `one` reads it now: renamed by the removals, then moved to a
+    /// copy's source.
+    fn read_as(
+        &self,
+        one: u64,
+        value: u32,
+    ) -> u32 {
+        let named = self.name(value);
+        match self.moved.get(&one).and_then(|pairs| pairs.iter().find(|pair| pair.0 == named)) {
+            Some(&(_, to)) => self.name(to),
+            None => named,
+        }
+    }
+
+    /// `PerformTrivialCopyPropagation`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L170>):
+    /// an operand made by a plain copy reads the copy's source, and a copy
+    /// nothing else reads is erased. Whether an operand moved.
+    fn propagate_copies(
+        &mut self,
+        one: &Insn,
+    ) -> bool {
+        let id = one.id();
+        let mut changed = false;
+        for &used in &one.uses {
+            let used = self.read_as(id, used);
+            let Some(&(copy, source)) = self.copy_of.get(&used) else { continue };
+            if self.removed.contains(&copy) {
+                continue;
+            }
+            let source = self.name(source);
+            let reads = one
+                .what
+                .as_ref()
+                .map_or(
+                    0,
+                    |what| what.sources
+                        .iter()
+                        .filter(|place| matches!(place, Loc::Held(held) if self.name(held.value) == used))
+                        .count(),
+                );
+            let only_one = reads == 1 && self.readers.get(&used).is_some_and(|readers| readers.len() == 1);
+            self.moved.entry(id).or_default().push((used, source));
+            if let Some(readers) = self.readers.get_mut(&used) {
+                readers.remove(&Reader::Insn(id));
+            }
+            self.readers.entry(source).or_default().insert(Reader::Insn(id));
+            if only_one {
+                self.removed.insert(copy);
+                if let Some(readers) = self.readers.get_mut(&source) {
+                    readers.remove(&Reader::Insn(copy));
+                }
+            }
+            changed = true;
+        }
+        changed
     }
 
     /// `isProfitableToCSE(CSReg, Reg, CSBB, MI)`
@@ -541,6 +599,28 @@ pub fn shared(
             }
         }
     }
+    let mut copy_of: HashMap<u32, (u64, u32)> = HashMap::default();
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            if let Some(what) = one.what.as_ref()
+                && what.op == Operation::Move
+                && let ([Loc::Held(from)], [Loc::Held(to)]) = (what.sources.as_slice(), what.dests.as_slice())
+                && from.width == to.width
+                && one.defines == [to.value]
+                && one.call.is_none()
+                && one.group.is_none()
+                && !one.volatile()
+                && !one.spill_reload
+                && !one.spill_store
+                && classes.requirements(what).is_empty()
+                && one.clobbers.is_empty()
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+            {
+                copy_of.insert(to.value, (one.id(), from.value));
+            }
+        }
+    }
     let mut walk = Walk {
         body,
         block_of,
@@ -548,6 +628,8 @@ pub fn shared(
         by_at,
         rename: HashMap::default(),
         removed: HashSet::default(),
+        copy_of,
+        moved: HashMap::default(),
         table: HashMap::default(),
         regs,
     };
@@ -569,16 +651,24 @@ pub fn shared(
             }
             let Some(what) = one.what.as_ref() else { continue };
             // The operands as the values they have become.
-            let mut named = what.clone();
-            for place in &mut named.sources {
-                *place = llrm_lir::mapped(place, |held| Held { value: walk.name(held.value), width: held.width });
+            let keyed = |walk: &Walk| {
+                let mut named = what.clone();
+                for place in &mut named.sources {
+                    *place = llrm_lir::mapped(place, |held| Held {
+                        value: walk.read_as(one.id(), held.value),
+                        width: held.width,
+                    });
+                }
+                expression(&named)
+            };
+            let mut key = keyed(&walk);
+            let mut found = walk.table.get(&key).copied();
+            // Copy propagation finds more of them (`ProcessBlockCSE`).
+            if found.is_none() && walk.propagate_copies(one) {
+                key = keyed(&walk);
+                found = walk.table.get(&key).copied();
             }
-            let key = expression(&named);
-            let found = walk
-                .table
-                .get(&key)
-                .copied()
-                .or_else(|| commuted(&key).and_then(|swapped| walk.table.get(&swapped).copied()));
+            let found = found.or_else(|| commuted(&key).and_then(|swapped| walk.table.get(&swapped).copied()));
             let Some((shared_value, shared_block)) = found else {
                 walk.table.insert(key.clone(), (one.defines[0], number));
                 mine.push(key);
@@ -601,7 +691,7 @@ pub fn shared(
             walk.removed.insert(one.id());
             // The erased instruction no longer reads its operands.
             for &used in &one.uses {
-                let used = walk.name(used);
+                let used = walk.read_as(one.id(), used);
                 if let Some(readers) = walk.readers.get_mut(&used) {
                     readers.remove(&Reader::Insn(one.id()));
                 }
@@ -634,7 +724,7 @@ pub fn shared(
                 .insns
                 .iter()
                 .filter(|one| !walk.removed.contains(&one.id()))
-                .map(|one| one.renamed(&swap))
+                .map(|one| one.renamed(&|value| walk.read_as(one.id(), value)))
                 .collect();
             let mut out = block.with_insns(insns);
             for phi in out.phis.iter_mut() {
@@ -646,4 +736,67 @@ pub fn shared(
         })
         .collect();
     body.with_blocks(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::lir::LirBlock;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4 })
+    }
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        defines: Vec<u32>,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `v12 = add v10, v2` where `v10 = mov v1` read `add v10, v2` as a new
+    /// expression, so the `add v1, v2` of a dominating block was made again
+    /// (`PerformTrivialCopyPropagation` was missing), and the copy stayed.
+    #[test]
+    fn test_an_add_of_a_copy_is_the_add_of_its_source_and_the_copy_goes() {
+        let entry = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Move, "mov", vec![held(10)], vec![held(1)], vec![10], vec![1]),
+                    insn(1, Operation::Binary, "add", vec![held(11)], vec![held(1), held(2)], vec![11], vec![1, 2]),
+                ],
+            )
+        };
+        let next = LirBlock::new(
+            1,
+            vec![
+                insn(2, Operation::Binary, "add", vec![held(12)], vec![held(10), held(2)], vec![12], vec![10, 2]),
+                insn(3, Operation::Move, "mov", vec![held(13)], vec![held(12)], vec![13], vec![12]),
+            ],
+        );
+        let mut body =
+            LirBody::new("copy", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let count = |body: &LirBody, name: &str| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name))
+                .count()
+        };
+        assert_eq!(count(&body, "add"), 2, "the premise: two adds");
+        let shared = shared(&body, &RegisterClasses::m16());
+        assert_eq!(count(&shared, "add"), 1);
+        let copy_of_v1 = shared.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| one.defines == [10]);
+        assert!(!copy_of_v1, "the copy nothing reads is erased");
+    }
 }

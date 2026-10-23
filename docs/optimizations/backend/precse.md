@@ -25,9 +25,10 @@ table's, when `profitable` agrees:
 - a value is shared only if every reader of the new one also reads the old
   one, or the old one is read in the block (heuristics 2 and 3).
 
-Before the table is asked, an operand made by a plain copy names the copy's
-source (`PerformTrivialCopyPropagation`), and a commutative operation is
-asked with its sources swapped if the first form is not there.
+When the table has no entry, an operand made by a plain copy is moved to the
+copy's source and a copy nothing else reads is erased
+(`PerformTrivialCopyPropagation`); a commutative operation is then asked with
+its sources swapped if the first form is still not there.
 
 An operation that sets flags is shared only where nothing after it in its
 block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
@@ -62,12 +63,6 @@ DEVIATE CSE3 (owner funcattrs-port, exit 2026-11-13): only a load selected
 by a pattern from a constant global is invariant. The pin also takes
 `!invariant.load`, GOT and constant-pool loads and the immutable fixed stack
 objects (incoming arguments); those loads are kept.
-
-DEVIATE CSE4 (owner funcattrs-port, exit 2026-11-13):
-`PerformTrivialCopyPropagation` renames an operand in the table's key
-without moving the instruction's read to the copy's source, so the readers
-of a copy's source are counted from the body as it was. Heuristics 2 and 3
-see the pin's lists except for that.
 
 DEVIATE CSE5 (owner funcattrs-port, exit 2026-11-13): `machinecse.rs`, the
 same elimination after allocation, is ours alone (the pin runs MachineCSE

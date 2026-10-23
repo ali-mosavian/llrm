@@ -4733,7 +4733,7 @@ define i16 @f() addrspace(1) {
             "db 0fah",
             "xor ax, ax",
             "db 0cdh,01ah",
-            "lea ax, [edx+ecx]",
+            "lea ax, [ecx+edx]",
             "pop bp",
             "retf"
         ]
