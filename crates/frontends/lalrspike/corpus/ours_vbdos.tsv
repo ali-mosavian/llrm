@@ -1425,7 +1425,7 @@
 1424	ok	
 1425	ok	
 1426	ok	
-1427	semantic	15:5 String expression required
+1427	semantic	15:5 Record/String assignment required
 1428	syntax	15:5 syntax error
 1429	syntax	15:5 syntax error
 1430	ok	
@@ -1437,7 +1437,7 @@
 1436	ok	
 1437	ok	
 1438	ok	
-1439	semantic	15:5 String expression required
+1439	semantic	15:5 Record/String assignment required
 1440	syntax	15:5 syntax error
 1441	syntax	15:5 syntax error
 1442	ok	

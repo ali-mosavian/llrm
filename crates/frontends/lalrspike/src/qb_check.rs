@@ -113,6 +113,8 @@ struct ProcInfo {
     defined: bool,
     declared: bool,
     def_fn: bool,
+    /// `DECLARE SUB name` with no parameter list: its calls are not checked.
+    unchecked: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -160,6 +162,8 @@ struct Checker {
     scope: Scope,
     /// Inside a procedure: its kind and name.
     procedure: Option<(ProcedureKind, String)>,
+    /// The procedure is STATIC, or a STATIC statement is being declared: its arrays are fixed.
+    static_scope: bool,
     /// CONSTs and TYPEs registered ahead of the statements that declare them (`const N`, `type N`).
     pre_done: HashSet<String>,
     labels: HashSet<String>,
@@ -182,6 +186,7 @@ impl Checker {
             module_scope: Scope::default(),
             scope: Scope::default(),
             procedure: None,
+            static_scope: false,
             pre_done: HashSet::new(),
             labels: HashSet::new(),
             module_labels: HashSet::new(),
@@ -293,15 +298,20 @@ impl Checker {
             defined: !procedure.declaration,
             declared: procedure.declaration,
             def_fn,
+            unchecked: procedure.unchecked,
         };
         match self.procs.get(&key) {
             Some(existing) if existing.defined && info.defined => self.err(procedure.span, "Duplicate definition"),
-            Some(existing) if existing.kind != info.kind || existing.params.len() != info.params.len() => {
+            Some(existing) if existing.kind != info.kind || (!existing.unchecked && !info.unchecked && existing.params.len() != info.params.len()) => {
                 self.err(procedure.span, "Argument-count mismatch")
             }
             Some(existing) => {
                 info.declared |= existing.declared;
                 info.defined |= existing.defined;
+                info.unchecked |= existing.unchecked;
+                if existing.unchecked && !info.unchecked {
+                    info.params = existing.params.clone();
+                }
             }
             None => {}
         }
@@ -360,6 +370,7 @@ impl Checker {
         let saved_scope = std::mem::take(&mut self.scope);
         let saved_labels = std::mem::take(&mut self.labels);
         self.procedure = Some((procedure.kind, procedure.name.clone()));
+        self.static_scope = procedure.is_static;
         if procedure.module_scope {
             // DEF FN sees the module's variables
             self.scope = self.module_scope.clone();
@@ -824,11 +835,26 @@ impl Checker {
 
     fn check_arguments(&mut self, procedure: &ProcInfo, arguments: &[Expr], span: Span, is_call: bool) {
         let _ = is_call;
+        if procedure.unchecked {
+            for argument in arguments {
+                let inner = match argument {
+                    Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => operand,
+                    other => other,
+                };
+                self.expr(inner);
+            }
+            return;
+        }
         if procedure.params.len() != arguments.len() {
             self.err(span, "Argument-count mismatch");
             return;
         }
         for (parameter, argument) in procedure.params.iter().zip(arguments) {
+            // BYVAL and SEG at the call mark how the value goes; the value is what is typed
+            let argument = match argument {
+                Expr::Unary { op: Unary::ByValue | Unary::Segmented, operand, .. } => &**operand,
+                other => other,
+            };
             if parameter.array {
                 match self.array_argument_for(argument) {
                     Some(typed) => {
@@ -959,9 +985,12 @@ impl Checker {
                 }
             }
             Statement::Dim(items) | Statement::Static(items) => {
+                let keep = self.static_scope;
+                self.static_scope |= matches!(statement, Statement::Static(_));
                 for item in items {
                     self.declare(item, false);
                 }
+                self.static_scope = keep;
             }
             Statement::Redim(items) | Statement::RedimPreserve(items) => {
                 for item in items {
@@ -1447,11 +1476,12 @@ impl Checker {
                 ty = Ty::Str(typed.constant.map(|c| c as usize));
             }
         }
+        let mut constant_bounds = true;
         for bound in &d.bounds {
             if let Some(lower) = &bound.lower {
-                self.numeric(lower);
+                constant_bounds &= self.numeric(lower).is_some_and(|typed| typed.constant.is_some());
             }
-            self.numeric(&bound.upper);
+            constant_bounds &= self.numeric(&bound.upper).is_some_and(|typed| typed.constant.is_some());
         }
         let key = stem(&d.name).to_owned();
         let as_declared = d.type_name.is_some() && Ty::of_suffix(&d.name).is_none();
@@ -1462,15 +1492,22 @@ impl Checker {
         let existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
         if d.array {
             if let Some(old) = existing.iter().find(|v| v.rank.is_some()) {
-                if redim && old.dynamic {
-                    // REDIM resizes a dynamic array
-                    if old.ty.plain() != ty.plain() {
-                        self.err(span, "Duplicate definition");
+                // `COMMON a() AS T` named the array; its DIM gives the bounds
+                if old.rank == Some(usize::MAX) && !d.bounds.is_empty() {
+                    if let Some(vars) = self.scope.vars.get_mut(&key) {
+                        vars.retain(|v| v.rank != Some(usize::MAX));
                     }
+                } else {
+                    if redim && old.dynamic {
+                        // REDIM resizes a dynamic array
+                        if old.ty.plain() != ty.plain() {
+                            self.err(span, "Duplicate definition");
+                        }
+                        return;
+                    }
+                    self.err(span, "Array already dimensioned");
                     return;
                 }
-                self.err(span, "Array already dimensioned");
-                return;
             }
         } else if existing.iter().any(|v| v.explicit && v.rank.is_none() && (v.ty.plain() == ty.plain() || v.declared || as_declared)) {
             self.err(span, "Duplicate definition");
@@ -1486,7 +1523,12 @@ impl Checker {
             rank: d.array.then_some(if d.bounds.is_empty() { usize::MAX } else { d.bounds.len() }),
             declared: as_declared,
             shared: d.shared,
-            dynamic: redim || d.dynamic || (d.array && d.bounds.is_empty()),
+            dynamic: redim
+                || d.dynamic
+                || (d.array && d.bounds.is_empty())
+                // variable bounds, or an automatic array in a procedure that is not STATIC
+                || (d.array && !constant_bounds)
+                || (d.array && self.procedure.is_some() && !self.static_scope),
             explicit: true,
         };
         self.scope.vars.entry(key).or_default().push(var);
@@ -1537,8 +1579,23 @@ impl Checker {
             }
             if matches!(name, "LSET" | "RSET") {
                 if let [Expr::Binary { left, right, .. }] = arguments {
-                    self.argument_of_class(Class::StrVar, left);
-                    self.string_expr(right);
+                    // LSET moves a string into a string variable, or one record into another
+                    if let Some(target) = self.argument_of_class(Class::Var, left) {
+                        match &target.ty {
+                            Ty::Str(_) => {
+                                self.string_expr(right);
+                            }
+                            Ty::Record(_) if name == "LSET" => {
+                                if let Some(value) = self.expr(right) {
+                                    if !matches!(value.ty, Ty::Record(_)) {
+                                        self.err(right.span(), "Type mismatch");
+                                    }
+                                }
+                            }
+                            Ty::Record(_) => self.err(left.span(), "String assignment required"),
+                            _ => self.err(left.span(), "Record/String assignment required"),
+                        }
+                    }
                 } else {
                     self.err(span, "Syntax error");
                 }

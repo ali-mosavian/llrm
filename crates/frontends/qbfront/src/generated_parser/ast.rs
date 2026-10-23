@@ -1344,6 +1344,7 @@ fn extension_procedure(
                 exported: true,
                 private: false,
                 module_scope: false,
+                unchecked: false,
                 span,
             },
         );
@@ -1513,6 +1514,7 @@ fn synthesize_statement(
             exported: !inline_def_fn,
             private: false,
             module_scope: def_fn,
+            unchecked: false,
             span: header.span,
         };
         state.procedures.push(procedure);
