@@ -217,6 +217,7 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
+            ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
@@ -353,6 +354,20 @@ impl Emitter<'_, '_> {
 
     fn next_address(&mut self) -> i64 {
         self.state.next_address()
+    }
+
+    /// Whether `value` is an implicit result of a machine node (EFLAGS from
+    /// `SUB32rr`, say) rather than one of its defs. Flags are implicit in
+    /// LIR: the branch that reads them follows the instruction that sets
+    /// them, so the `CopyToReg EFLAGS` the matcher adds writes nothing. (The
+    /// register number is not asked: the adapter's pin numbers share the
+    /// range of the builder's virtual registers.)
+    fn is_flags_result(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let ISD::Machine(op) = self.dag.opcode(value) else { return false };
+        instr::desc(op as u16).is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
     /// Opcodes `x86.instr` has no row for but LIR has a form of: the constant
