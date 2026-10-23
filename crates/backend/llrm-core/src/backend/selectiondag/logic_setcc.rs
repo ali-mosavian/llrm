@@ -82,7 +82,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 self.add_to_worklist(or.node);
                 return Some(self.dag.get_setcc(vt, or, lr, cc1));
             }
-            // All bits set / all sign bits set / any bit clear / any sign clear.
+            // All bits set / all sign bits set / any bit clear / any sign
+            // clear.
             let by_and = (is_and && cc1 == CondCode::SetEq && is_neg1)
                 || (is_and && cc1 == CondCode::SetLt && is_zero)
                 || (!is_and && cc1 == CondCode::SetNe && is_neg1)
@@ -134,7 +135,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let zero = self.dag.get_constant(0, op_vt);
                 return Some(self.dag.get_setcc(vt, or, zero, cc1));
             }
-            // Constants a single bit apart: `x != 5 && x != 4` is `(x - 4) & ~1 != 0`.
+            // Constants a single bit apart: `x != 5 && x != 4` is `(x - 4) & ~1
+            // != 0`.
             if (is_and && cc1 == CondCode::SetNe) || (!is_and && cc1 == CondCode::SetEq) {
                 if let (true, Some(c0), Some(c1)) = (ll == rl, self.dag.constant(lr), self.dag.constant(rr)) {
                     let (high, low) = (c0.max(c1), c0.min(c1));

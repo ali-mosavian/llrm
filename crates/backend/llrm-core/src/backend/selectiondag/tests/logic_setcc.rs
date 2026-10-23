@@ -1,7 +1,8 @@
 use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
 use super::*;
 
-const SAMPLES: [u32; 14] = [0, 1, 2, 3, 4, 5, 100, 104, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFE, 0xFFFF_FFFF, 12345, 0xDEAD_BEEF];
+const SAMPLES: [u32; 14] =
+    [0, 1, 2, 3, 4, 5, 100, 104, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFE, 0xFFFF_FFFF, 12345, 0xDEAD_BEEF];
 
 /// The value of `v` when register 5 holds `x` and register 6 `y`.
 fn eval(
@@ -68,11 +69,8 @@ fn fold(
         .collect();
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     let root = dag.get_root();
-    let folded: Vec<u32> = SAMPLES
-        .iter()
-        .flat_map(|&p| SAMPLES.iter().map(move |&q| (p, q)))
-        .map(|pair| eval(&dag, root, pair))
-        .collect();
+    let folded: Vec<u32> =
+        SAMPLES.iter().flat_map(|&p| SAMPLES.iter().map(move |&q| (p, q))).map(|pair| eval(&dag, root, pair)).collect();
     assert_eq!(original, folded, "the fold changed the value");
     (dag, root)
 }
@@ -86,7 +84,10 @@ fn with_const(c: u32) -> impl Fn(&mut SelectionDAG, SDValue, SDValue) -> (SDValu
 /// D_FACES_LAYOUT_OK of the m32 shadow).
 #[test]
 fn equality_of_two_variables_to_constants_is_one_compare_of_xors() {
-    let (a, b) = (|dag: &mut SelectionDAG, x, _| (x, dag.get_constant(104, EVT::I32)), |dag: &mut SelectionDAG, _, y| (y, dag.get_constant(100, EVT::I32)));
+    let (a, b) = (
+        |dag: &mut SelectionDAG, x, _| (x, dag.get_constant(104, EVT::I32)),
+        |dag: &mut SelectionDAG, _, y| (y, dag.get_constant(100, EVT::I32)),
+    );
     let (dag, root) = fold(ISD::And, (&a, &b), (CondCode::SetEq, CondCode::SetEq));
     assert_eq!(dag.opcode(root), ISD::SetCC);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Or);
