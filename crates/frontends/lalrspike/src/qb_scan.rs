@@ -263,7 +263,7 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 at += 1;
                 punct(b')')
             }
-            b'+' | b'-' | b'*' | b'/' | b'\\' | b'^' | b',' | b'#' | b';' | b':' | b'?' => {
+            b'+' | b'-' | b'*' | b'/' | b'\\' | b'^' | b',' | b'#' | b';' | b':' => {
                 at += 1;
                 punct(byte)
             }

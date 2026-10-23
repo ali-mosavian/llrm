@@ -359,6 +359,11 @@ impl Checker {
     }
 }
 
+/// The value of a real literal's text (`D` and `E` both mark the exponent).
+fn parse_real(text: &str) -> Option<f64> {
+    text.replace(['D', 'd'], "E").parse().ok()
+}
+
 /// A name without its type suffix, upper case.
 fn stem(name: &str) -> &str {
     name.trim_end_matches(['%', '&', '!', '#', '$', '@'])
@@ -419,9 +424,15 @@ impl Checker {
                 Literal::Integer(value, TypeName::Long) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Long) },
                 Literal::Integer(value, _) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Int) },
                 Literal::Real(text, TypeName::Double) => {
-                    Typed { constant: text.parse().ok(), ..Typed::value(Ty::Double) }
+                    Typed { constant: parse_real(text), ..Typed::value(Ty::Double) }
                 }
-                Literal::Real(text, _) => Typed { constant: text.parse().ok(), ..Typed::value(Ty::Single) },
+                Literal::Real(text, _) => {
+                    let constant = parse_real(text);
+                    if constant.is_some_and(|c| c.abs() > f64::from(f32::MAX)) {
+                        self.err(expr.span(), "Math overflow");
+                    }
+                    Typed { constant, ..Typed::value(Ty::Single) }
+                }
                 Literal::String(_) => Typed::value(Ty::Str(None)),
             }),
             Expr::Name(name, span) => self.name_expr(name, *span),
@@ -719,6 +730,24 @@ impl Checker {
                 Some(typed)
             }
             Class::Whole => self.expr(argument),
+            Class::VarLenString => {
+                let typed = self.argument_of_class(Class::StrVar, argument)?;
+                if matches!(typed.ty, Ty::Str(Some(_))) {
+                    self.err(argument.span(), "Fixed-length string illegal");
+                    return None;
+                }
+                Some(typed)
+            }
+            Class::ArrayStart => match argument {
+                Expr::Apply { name, arguments, span } if !arguments.is_empty() => match self.array_var(name) {
+                    Some(var) => Some(Typed { ty: var.ty, variable: true, constant: None, array: Some(var.rank.unwrap_or(1)) }),
+                    None => {
+                        self.err(*span, "Array not defined");
+                        None
+                    }
+                },
+                other => self.array_argument(other),
+            },
             Class::Array => self.array_argument(argument),
             Class::Label => {
                 if let Expr::Name(name, span) = argument {
@@ -736,10 +765,9 @@ impl Checker {
     /// An array named as an argument: `a()` or a bare name of an array.
     fn array_argument(&mut self, argument: &Expr) -> Option<Typed> {
         let (name, span) = match argument {
-            Expr::Apply { name, arguments, span } if arguments.is_empty() => (name.clone(), *span),
             Expr::Name(name, span) => (name.clone(), *span),
             other => {
-                self.err(other.span(), "Array not defined");
+                self.err(other.span(), if matches!(other, Expr::Apply { arguments, .. } if arguments.is_empty()) { "Syntax error" } else { "Array not defined" });
                 return None;
             }
         };
@@ -846,6 +874,7 @@ impl Checker {
                 'v' => Class::Var,
                 't' => Class::StrVar,
                 'a' => Class::Array,
+                'e' => Class::ArrayStart,
                 'l' => Class::Label,
                 'm' => {
                     // B or BF
@@ -905,7 +934,13 @@ impl Checker {
             }
             Statement::Const { name, value, span } => self.constant(name, value, *span),
             Statement::Assign { target, value, span } => self.assign(target, value, *span),
-            Statement::Label(..) | Statement::Comment(_) | Statement::OptionExplicit(_) | Statement::OptionBase(..) => {}
+            Statement::Label(..) | Statement::Comment(_) | Statement::OptionExplicit(_) => {}
+            Statement::OptionBase(_, span) => {
+                let dimensioned = |scope: &Scope| scope.vars.values().flatten().any(|v| v.rank.is_some());
+                if dimensioned(&self.scope) || dimensioned(&self.module_scope) {
+                    self.err(*span, "Array already dimensioned");
+                }
+            }
             Statement::Goto(label, span) | Statement::CallOrGoto(label, span) => {
                 if !self.labels.contains(label) && !label.bytes().all(|b| b.is_ascii_digit()) {
                     self.err(*span, "Label not defined");
@@ -917,7 +952,17 @@ impl Checker {
                     self.statement(s);
                 }
             }
-            Statement::For { counter, start, end, step, body, .. } => {
+            Statement::For { counter, start, end, step, body, next_variable, .. } => {
+                if !matches!(counter, Expr::Name(..)) {
+                    self.err(counter.span(), "FOR index variable illegal");
+                }
+                if let (Expr::Name(counter, _), Some((next, span))) = (counter, next_variable) {
+                    let same = counter.eq_ignore_ascii_case(next)
+                        || (stem(counter).eq_ignore_ascii_case(stem(next)) && (Ty::of_suffix(counter).is_none() || Ty::of_suffix(next).is_none()));
+                    if !same {
+                        self.err(*span, "NEXT without FOR");
+                    }
+                }
                 let typed = self.expr(counter);
                 if let Some(typed) = typed {
                     if !typed.variable || !typed.ty.numeric() {
@@ -972,12 +1017,21 @@ impl Checker {
                     self.numeric(value);
                 }
             }
-            Statement::OnError { label, span, .. } => {
+            Statement::OnError { label, span, local } => {
+                if *local {
+                    self.on_local_error(*span);
+                }
                 if label != "0" && !self.labels.contains(label) {
                     self.err(*span, "Label not defined");
                 }
             }
-            Statement::OnErrorResumeNext { .. } => {}
+            Statement::OnErrorResumeNext { local, span } => {
+                if *local {
+                    self.on_local_error(*span);
+                } else if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+                    self.err(*span, "GOTO missing");
+                }
+            }
             Statement::Resume { target, span } => {
                 if let ResumeTarget::Label(label) = target {
                     if label != "0" && !self.labels.contains(label) {
@@ -1179,15 +1233,18 @@ impl Checker {
             (Ty::Record(a), Ty::Record(b)) => a == b,
             (Ty::Str(_), Ty::Str(_)) => true,
             (a, b) if a.numeric() && b.numeric() => {
-                // a constant that cannot fit
+                // a constant that cannot fit; PDS and VBDOS fold only integer literals into integers
                 if let (Some(c), true) = (value.constant, !value.variable) {
+                    let classic = matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45);
+                    let integer_literal = matches!(b, Ty::Int | Ty::Long);
                     let fits = match a {
                         Ty::Int => c.round() >= -32768.0 && c.round() <= 32767.0,
                         Ty::Long => c.round() >= -2147483648.0 && c.round() <= 2147483647.0,
+                        Ty::Single => c.abs() <= f64::from(f32::MAX),
                         _ => true,
                     };
-                    if !fits && !matches!(b, Ty::Single | Ty::Double) || (!fits && c.abs() > 1e9) {
-                        self.err(span, "Overflow");
+                    if !fits && (classic || integer_literal || matches!(a, Ty::Single)) {
+                        self.err(span, "Math overflow");
                         return;
                     }
                 }
@@ -1283,6 +1340,18 @@ impl Checker {
 
     fn declare(&mut self, d: &Declaration, redim: bool) {
         let span = d.span;
+        if let Some((prefix, _)) = d.name.split_once('.') {
+            // `r.a` names a field of the record variable `r`; a record variable's dotted names are not free
+            let record = |scope: &Scope| scope.vars.get(stem(prefix)).is_some_and(|vars| vars.iter().any(|v| matches!(v.ty, Ty::Record(_))));
+            if record(&self.scope) || record(&self.module_scope) {
+                self.err(span, "Duplicate definition");
+                return;
+            }
+            if d.type_name.is_none() && matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr) {
+                self.err(span, "AS clause required");
+                return;
+            }
+        }
         let mut ty = match d.type_name.as_ref() {
             Some(name) => match self.type_of_name(name) {
                 Some(ty) => ty,
@@ -1402,8 +1471,9 @@ impl Checker {
             }
             Some(_) => self.err(span, if explicit { "Name of subprogram illegal" } else { "Variable required" }),
             None => {
-                if !explicit && !arguments.is_empty() {
-                    self.err(span, "DECLARE required");
+                if !explicit {
+                    // a statement that starts with an unknown name is taken for an assignment
+                    self.err(span, if arguments.is_empty() { "Equal sign missing" } else { "DECLARE required" });
                     return;
                 }
                 for argument in arguments {
@@ -1441,6 +1511,36 @@ impl Checker {
         }
     }
 
+    /// FIELD #n, width AS string-variable, ...: the variables are variable-length strings.
+    fn field_statement(&mut self, arguments: &[Expr], span: Span) {
+        let [file, pairs @ ..] = arguments else {
+            self.err(span, "Syntax error");
+            return;
+        };
+        self.numeric(file);
+        for pair in pairs.chunks(2) {
+            let [width, variable] = pair else {
+                self.err(span, "Syntax error");
+                return;
+            };
+            self.numeric(width);
+            if let Some(typed) = self.expr(variable) {
+                if !typed.variable || !matches!(typed.ty, Ty::Str(None)) {
+                    self.err(variable.span(), "Variable-length string required");
+                }
+            }
+        }
+    }
+
+    /// LOCAL ERROR belongs to PDS and VBDOS, and to procedures.
+    fn on_local_error(&mut self, span: Span) {
+        if matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+            self.err(span, "Syntax error");
+        } else if self.procedure.is_none() {
+            self.err(span, "Illegal outside of SUB or FUNCTION");
+        }
+    }
+
     fn runtime(&mut self, name: &str, arguments: &[Expr], span: Span) {
         let spec = match name {
             "SCREEN" => "n? n? n? n?",
@@ -1455,8 +1555,8 @@ impl Checker {
             "CIRCLE" => "n n n n? n? n? n?",
             "PAINT" => "n n x? n? s?",
             "DRAW" | "PLAY" => "s",
-            "GET" => "n n n n a",
-            "PUT" => "n n a m?",
+            "GET" => "n n n n e",
+            "PUT" => "n n e m?",
             "VIEW" | "VIEW_SCREEN" => "n? n? n? n? n? n?",
             "VIEW_PRINT" => "n? n?",
             "WINDOW" => "n? n? n? n?",
@@ -1472,17 +1572,56 @@ impl Checker {
             "SWAP" => "v v",
             "RESTORE" => "l?",
             "DATE$" | "TIME$" => "s",
-            "KEY" => "x x?",
-            "EVENT" => "x x? x x?",
+            "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "x",
+            "KEY" => "n s",
+            "EVENT" => "x n? x x?",
             "LOCK" | "UNLOCK" => "n n? n?",
-            "IOCTL" => "n x",
-            "FIELD" => "n n v n? v? n? v?",
+            "IOCTL" => "n s",
+            "FIELD" => "",
             "ENDIF" => "",
             _ => {
                 self.err(span, "Syntax error");
                 return;
             }
         };
+        if name == "FIELD" {
+            self.field_statement(arguments, span);
+            return;
+        }
+        if name == "RUN" {
+            // RUN "file", RUN line-number
+            if let [argument] = arguments {
+                if !matches!(argument, Expr::Literal(Literal::Integer(..), _)) {
+                    self.string_expr(argument);
+                }
+            }
+            return;
+        }
+        if name == "EVENT" && matches!(arguments.first(), Some(Expr::Name(device, _)) if device == "SIGNAL") {
+            self.err(span, "Feature unavailable");
+            return;
+        }
+        if name == "PALETTE" && arguments.len() == 1 {
+            self.err(span, "Syntax error");
+            return;
+        }
+        if name == "PALETTE_USING" {
+            // an INTEGER or LONG array, or an element of one to start from
+            if let [array] = arguments {
+                let typed = match array {
+                    Expr::Apply { arguments, .. } if !arguments.is_empty() => self.expr(array).filter(|typed| typed.variable),
+                    _ => self.array_argument(array),
+                };
+                if let Some(typed) = typed {
+                    if !matches!(typed.ty.plain(), Ty::Int | Ty::Long) {
+                        self.err(span, "Syntax error");
+                    }
+                } else if !matches!(array, Expr::Apply { .. } | Expr::Name(..)) {
+                    self.err(span, "Syntax error");
+                }
+            }
+            return;
+        }
         if name == "PAINT" {
             self.paint(arguments, span);
             return;
