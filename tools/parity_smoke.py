@@ -539,6 +539,8 @@ SCANNERS = {
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",
+    "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
+    "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
