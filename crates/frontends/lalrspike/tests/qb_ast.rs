@@ -64,6 +64,9 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
                     let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
                     out.replace_range(at..close, "next_variable: None");
                 }
+                // CURRENCY is a type of its own here; the old parser read it as a user type's name
+                // (and a FUNCTION named with `@` has a CURRENCY result, where the old parser left it untyped)
+                let out = out.replace("result: Some(Currency)", "result: None").replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
                 out.replace("\", Single)", "\", _)").replace("\", Double)", "\", _)")
             };
             assert!(strip(&old) == strip(&new), "{} under {dialect:?}: the modules differ", path.display());

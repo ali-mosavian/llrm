@@ -963,7 +963,7 @@ impl Checker {
                     self.declare(item, false);
                 }
             }
-            Statement::Redim(items) => {
+            Statement::Redim(items) | Statement::RedimPreserve(items) => {
                 for item in items {
                     self.declare(item, true);
                 }
@@ -1102,6 +1102,14 @@ impl Checker {
                     }
                 }
             }
+            Statement::OpenIsam { database, record_type, table, file, span } => {
+                self.string_expr(database);
+                if !self.records.contains_key(record_type) {
+                    self.err(*span, "User-defined type not defined");
+                }
+                self.string_expr(table);
+                self.numeric(file);
+            }
             Statement::Open { path, file, record_length, .. } => {
                 self.string_expr(path);
                 self.numeric(file);
@@ -1238,6 +1246,11 @@ impl Checker {
 
     fn assign(&mut self, target: &Expr, value: &Expr, span: Span) {
         let value_typed = self.expr(value);
+        // PDS and VBDOS: ERR = n
+        if matches!(target, Expr::Name(name, _) if name == "ERR") {
+            self.numeric(value);
+            return;
+        }
         // MID$(s$, n, n) = x
         if let Expr::Apply { name, arguments, .. } = target {
             if name == "MID$" {
@@ -1584,6 +1597,48 @@ impl Checker {
         }
     }
 
+    /// The ISAM statements whose argument lists have a shape of their own.
+    fn isam_list(&mut self, name: &str, arguments: &[Expr], span: Span) {
+        let [table, rest @ ..] = arguments else {
+            self.err(span, "Syntax error");
+            return;
+        };
+        self.numeric(table);
+        match name {
+            // INSERT #table, record
+            "INSERT" | "RETRIEVE" | "UPDATE" => {
+                if let [record] = rest {
+                    if let Some(typed) = self.argument_of_class(Class::Var, record) {
+                        if !matches!(typed.ty, Ty::Record(_)) {
+                            self.err(record.span(), "Record variable required");
+                        }
+                    }
+                } else {
+                    self.err(span, "Syntax error");
+                }
+            }
+            // CREATEINDEX #table, name$, unique, column$...
+            "CREATEINDEX" => {
+                if rest.len() < 3 {
+                    self.err(span, "Syntax error");
+                    return;
+                }
+                self.string_expr(&rest[0]);
+                self.numeric(&rest[1]);
+                for column in &rest[2..] {
+                    self.string_expr(column);
+                }
+            }
+            // SEEKEQ #table, key...
+            _ => {
+                for key in rest {
+                    let typed = self.expr(key);
+                    self.scalar(typed, key.span());
+                }
+            }
+        }
+    }
+
     /// FIELD #n, width AS string-variable, ...: the variables are variable-length strings.
     fn field_statement(&mut self, arguments: &[Expr], span: Span) {
         let [file, pairs @ ..] = arguments else {
@@ -1650,13 +1705,26 @@ impl Checker {
             "EVENT" => "x n? x x?",
             "LOCK" | "UNLOCK" => "n n? n?",
             "IOCTL" => "n s",
-            "FIELD" | "PALETTE_USING" => "",
+            "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT" => "",
+            "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => "",
+            "CHDRIVE" => "s",
+            "STACK" => "n?",
+            "EVENT_SWITCH" => "x",
+            "ROLLBACK" => "n?",
+            "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" => "n",
+            "DELETEINDEX" => "n s",
+            "DELETETABLE" => "s s",
+            "SETINDEX" => "n s?",
             "ENDIF" => "",
             _ => {
                 self.err(span, "Syntax error");
                 return;
             }
         };
+        if matches!(name, "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT") {
+            self.isam_list(name, arguments, span);
+            return;
+        }
         if name == "FIELD" {
             self.field_statement(arguments, span);
             return;
