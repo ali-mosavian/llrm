@@ -1045,3 +1045,16 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
+
+
+def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
+    """The batch's scanners ran on a tree with #4042 in it; #4042 failed at the squash ("Head branch was modified") and the others were pushed on a tree no scanner had seen."""
+    asked = []
+    red = lambda number, info: asked.append(number) or {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}  # noqa: E731
+    assert ps.rescanned_refusal("4039", {}, [], rescan=red) == "" and not asked, "nothing dropped: the batch's scan stands"
+    why = ps.rescanned_refusal("4039", {}, ["4042"], rescan=red)
+    assert asked == ["4039"] and "dropped #4042" in why and "docs_links" in why
+    assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
+    import inspect
+
+    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
