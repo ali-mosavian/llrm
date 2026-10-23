@@ -18,6 +18,7 @@ mod bit_counts;
 mod builder;
 mod combiner;
 mod expand_node;
+mod div_by_constant;
 mod extract_element;
 mod far_load;
 mod float_constants;

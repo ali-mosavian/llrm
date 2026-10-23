@@ -35,6 +35,7 @@
 
 use std::collections::HashSet;
 
+use super::actions::TargetLowering;
 use super::dag::{Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
@@ -74,11 +75,13 @@ pub struct NoCombines;
 impl CombineHooks for NoCombines {}
 
 pub struct DagCombiner<'a, H: CombineHooks> {
-    dag: &'a mut SelectionDAG,
+    pub(super) dag: &'a mut SelectionDAG,
     hooks: &'a mut H,
-    level: CombineLevel,
+    pub(super) level: CombineLevel,
     worklist: Vec<u32>,
     queued: HashSet<u32>,
+    /// The action table, for the folds that ask what the target can do.
+    pub(super) tli: Option<&'a TargetLowering>,
 }
 
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
@@ -87,10 +90,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         hooks: &'a mut H,
         level: CombineLevel,
     ) -> DagCombiner<'a, H> {
-        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new() }
+        DagCombiner { dag, hooks, level, worklist: Vec::new(), queued: HashSet::new(), tli: None }
     }
 
-    fn add_to_worklist(
+    /// The action table the folds query (`TLI`).
+    pub fn with_tli(
+        mut self,
+        tli: &'a TargetLowering,
+    ) -> DagCombiner<'a, H> {
+        self.tli = Some(tli);
+        self
+    }
+
+    pub(super) fn add_to_worklist(
         &mut self,
         node: u32,
     ) {
@@ -99,7 +111,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    fn add_to_worklist_with_users(
+    pub(super) fn add_to_worklist_with_users(
         &mut self,
         node: u32,
     ) {
@@ -193,6 +205,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
+            ISD::SDiv => self.visit_sdiv(node),
+            ISD::UDiv => self.visit_udiv(node),
+            ISD::SRem | ISD::URem => self.visit_rem(node),
             _ => None,
         }
     }

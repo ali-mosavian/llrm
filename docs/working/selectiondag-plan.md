@@ -218,6 +218,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
 | SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
+| SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form), no DIVREM merge | `selectiondag/div_combine.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
