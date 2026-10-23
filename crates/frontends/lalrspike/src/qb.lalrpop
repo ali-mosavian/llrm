@@ -357,8 +357,12 @@ SimpleNoBare: Tree = {
     <n:Ident> <a:ExpListNP> => Tree::node("CallArgs", vec![n, a]),
     // `foo (a), b` and `foo(a)`: parentheses that are the call's or the first
     // argument's, which only the symbol table can tell
+    // The first argument may go on past the parenthesis, `foo (a) * b, c`:
+    // an arithmetic expression whose left end is the applied name.
     <n:NameRefApplied> => Tree::node("CallApplied", vec![n]),
     <n:NameRefApplied> "tkComma" <a:ExpList> => Tree::node("CallAppliedList", vec![n, a]),
+    <e:AddApplied> => Tree::node("CallAppliedExp", vec![e]),
+    <e:AddApplied> "tkComma" <a:ExpList> => Tree::node("CallAppliedExpList", vec![e, a]),
     // TYPE members: `name AS type`, the name any word
     <n:Ident> <a:AsPart> => Tree::node("Member", vec![n, a]),
     <n:NameRefApplied> <a:AsPart> => Tree::node("Member", vec![n, a]),
@@ -400,7 +404,7 @@ Flow: Tree = {
     "tkON" <e:OnEvent> "tkGOSUB" <l:LabLn> => Tree::node("ONEVENT", vec![e, l]),
     // PEN, PLAY(n) and STRIG(n) traps are `ON expr GOSUB` with a function
     // call for expr, read by a pass that knows the trap spellings
-    "tkON" <e:Exp> <g:GotoGosub> <l:Sep<LabLn>> => Tree::node("ON", vec![e, g, l]),
+    "tkON" <e:ExpOn> <g:GotoGosub> <l:Sep<LabLn>> => Tree::node("ON", vec![e, g, l]),
 };
 
 LoopCond: Tree = {
@@ -495,7 +499,14 @@ VarName: Tree = <n:VarWord> <p:Opt<EmptyParens>> <a:OptAs> => Tree::node("Var", 
 ArrayName: Tree = <n:VarWord> <p:Opt<EmptyParens>> => n;
 // a function's name is a variable's too when no parenthesis follows
 VarWord: Tree = { Ident, FnKeyword, CtxName };
-ConstAssign: Tree = <i:Ident> "tkEQ" <e:Exp> => Tree::node("ConstAssign", vec![i, e]);
+ConstAssign: Tree = <i:ConstName> "tkEQ" <e:Exp> => Tree::node("ConstAssign", vec![i, e]);
+// a constant may be named like `TFX.MASK%` or `mod.mem`: dots and words
+ConstName: Tree = {
+    Ident,
+    CtxName,
+    "tkMOD" => Tree::node("Name", vec![]),
+    <r:ConstName> "period" <f:FieldName> => Tree::node("Field", vec![r, f]),
+};
 LetterRanges: Tree = Sep<LetterRange>;
 LetterRange: Tree = <a:Ident> <b:("tkMinus" <Ident>)?> => Tree::node("Range", vec![a, Tree::opt(b)]);
 
@@ -783,7 +794,24 @@ Primary: Tree = {
     PrimaryNP,
     "tkLParen" <e:Exp> "tkRParen" => Tree::node("Paren", vec![e]),
 };
-PrimaryNP: Tree = { IntLit, RealLit, StrLit, Function, NameRef, CtxName };
+PrimaryNP: Tree = { PrimaryBase, ErrName };
+PrimaryBase: Tree = { IntLit, RealLit, StrLit, Function, NameRef, CtxName };
+// ERROR is a name in an expression (`ERROR$`), but not first after ON, where
+// `ON ERROR GOTO` is the trap.
+ErrName: Tree = "tkERROR" => Tree::node("Name", vec![]);
+PrimaryNoErr: Tree = {
+    PrimaryBase,
+    "tkLParen" <e:Exp> "tkRParen" => Tree::node("Paren", vec![e]),
+};
+// not NameRefApplied alone (that is CallApplied above)
+AddApplied: Tree = {
+    <l:Add<NameRefApplied>> <o:AddOp> <r:Mod<Primary>> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+    <l:Mod<NameRefApplied>> <o:"tkMOD"> <r:IDiv<Primary>> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+    <l:IDiv<NameRefApplied>> <o:"tkIdiv"> <r:Mul<Primary>> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+    <l:Mul<NameRefApplied>> <o:MulOp> <r:Neg<Primary>> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+    <l:Pow<NameRefApplied>> <o:"tkPwr"> <r:PowOperand> => Tree::node("Binary", vec![l, Tree::tok(o), r]),
+};
+ExpOn: Tree = Imp<PrimaryNoErr>;
 
 // Built-in functions by the shape of their arguments.
 Function: Tree = {

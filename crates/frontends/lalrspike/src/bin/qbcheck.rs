@@ -10,7 +10,8 @@ fn main() {
     let (mut both, mut neither) = (0, 0);
     let (mut only_hand, mut only_lalr) = (Vec::new(), Vec::new());
     for path in std::env::args().skip(1) {
-        let Ok(source) = std::fs::read_to_string(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let source = String::from_utf8_lossy(&bytes).into_owned();
         let dialect = DIALECTS.into_iter().find(|&dialect| qbfront::parse(&source, dialect).is_ok());
         let lalr = DIALECTS
             .into_iter()
