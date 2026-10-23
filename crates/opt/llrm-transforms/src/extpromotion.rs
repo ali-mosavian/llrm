@@ -37,9 +37,8 @@
 //! In `cgpaddr`'s run, before `optimizeExtUses`, where the target enables the
 //! promotion (`enableExtLdPromotion`).
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::context::{Constant, ConstantKind, Context, signed};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::lowering::{Ext, Isd, LoadExt, Lowering};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
@@ -59,10 +58,10 @@ enum Seen {
 /// `PromotedInsts` and `InsertedInsts`.
 #[derive(Default)]
 pub struct State {
-    promoted: HashMap<InstId, (TypeId, Seen)>,
+    promoted: IdMap<InstId, (TypeId, Seen)>,
     /// The instructions the other CodeGenPrepare optimizations inserted: not
     /// promoted again, or the two would undo each other.
-    pub inserted: HashSet<InstId>,
+    pub inserted: IdSet<InstId>,
 }
 
 enum Action {
