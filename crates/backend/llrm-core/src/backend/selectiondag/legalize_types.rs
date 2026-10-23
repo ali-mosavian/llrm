@@ -1162,20 +1162,23 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         node: SDValue,
     ) -> Result<SDValue, LegalizeError> {
-        let shift = self.target.and_then(|target| target.machine().huge_shift()).ok_or(LegalizeError::Unsupported {
-            op: x86isd::LLRM_PTRDIFF,
-            ty: self.dag.value_type(node),
-            what: "expand operand: no selector stride",
-        })?;
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_PTRDIFF,
+                    ty: self.dag.value_type(node),
+                    what: "expand operand: no selector stride",
+                },
+            )?;
         let vt = self.dag.value_type(node);
         let ((a_off, a_sel), (b_off, b_sel)) =
             (self.expanded_integer(self.dag.operand(node, 0)), self.expanded_integer(self.dag.operand(node, 1)));
         let half = self.dag.value_type(a_off);
         let widen = |dag: &mut SelectionDAG, value| dag.get_node(ISD::ZeroExtend, vt, &[value]);
-        let (offsets, selectors) = (
-            (widen(self.dag, a_off), widen(self.dag, b_off)),
-            (widen(self.dag, a_sel), widen(self.dag, b_sel)),
-        );
+        let (offsets, selectors) =
+            ((widen(self.dag, a_off), widen(self.dag, b_off)), (widen(self.dag, a_sel), widen(self.dag, b_sel)));
         let within = self.dag.get_node(ISD::Sub, vt, &[offsets.0, offsets.1]);
         let between = self.dag.get_node(ISD::Sub, vt, &[selectors.0, selectors.1]);
         let (by_stride, by_offset) = (
