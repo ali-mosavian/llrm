@@ -497,7 +497,7 @@ entry:
 #[test]
 fn a_frame_object_plus_a_displacement_keeps_the_displacement() {
     let module = llrm_mir::parse::module(FRAME_PLUS_ONE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let disps: Vec<i64> = insns
@@ -529,7 +529,7 @@ entry:
 #[test]
 fn an_indexed_cell_carries_a_literal_address() {
     let module = llrm_mir::parse::module(INDEXED_LOAD).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let cell = insns
