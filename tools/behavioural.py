@@ -35,6 +35,8 @@ PROGRAMS = (
     "regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4", "call_keeps", "double_across_a_call_result", "far_pointer_call", "far_return", "float_return",
     "frame_address_stack_args", "fsgs_call", "i64_param_home", "ia16_abi", "inlined_calls_keep_stores_through_far_alias", "inlined_tail_call_keeps_frame_stores",
     "long_double_arguments", "old_style_extra_args", "pair_return", "register_args_truncate", "spill_store_order", "sysv_abi", "x87_arguments",
+    # the other frontends and runtimes #4146 broke (10 of 1014 at a1d904596): a memfuncs C program, QB programs, Nib examples, grep in BASIC
+    "memfuncs_runtime", "bounds", "range_power", "channels", "level", "grep",
 )
 
 
