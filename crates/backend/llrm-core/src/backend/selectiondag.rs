@@ -150,3 +150,5 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
+#[cfg(test)]
+mod vararg_tests;

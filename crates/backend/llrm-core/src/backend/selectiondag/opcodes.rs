@@ -118,6 +118,24 @@ impl OpcodeMap {
     }
 }
 
+/// The bytes a memory operand of `name` reads or writes: the width in the
+/// name (`MOV16mr`: 2, `ADD32mi8`: 4), or for an extension (`MOVZX32rm8`,
+/// `MOVSX32rm16`) the size after the letters, the source's. `None` if the
+/// name has no width.
+pub fn memory_bytes(name: &str) -> Option<u32> {
+    let (mnemonic, width, _) = split(name)?;
+    let bits = if matches!(mnemonic.as_str(), "movzx" | "movsx") {
+        let rest = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
+        let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        let size: String =
+            rest.chars().skip_while(|c| c.is_ascii_lowercase()).take_while(|c| c.is_ascii_digit()).collect();
+        size.parse().unwrap_or(8)
+    } else {
+        width?
+    };
+    Some(bits.div_ceil(8))
+}
+
 /// `ADD32ri8` -> (`add`, 32, `ri`); `SHL32rCL` -> (`shl`, 32, `rr`);
 /// `MOVZX32rr8` -> (`movzx`, 32, `rr`).
 fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
@@ -135,7 +153,9 @@ fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
                 letters.push('r');
                 tail = &tail[1..];
             }
-            '1' => letters.push('i'),
+            // A lone `1` is the shift-by-one immediate (`SHL32r1`); a digit run
+            // (`rr16`, `ri8`) is a size.
+            '1' if !tail[1..].starts_with(|d: char| d.is_ascii_digit()) => letters.push('i'),
             '0'..='9' => {}
             _ => return None,
         }
