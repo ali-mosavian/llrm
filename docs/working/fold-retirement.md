@@ -77,3 +77,9 @@ in. So the growth is not a rewrite `combine` lacks, and not one `fold` did: remo
 then decides differently on the same text (the `xor i1 %c, true` before a branch is one of its outputs). The three late InstCombines
 (#3929) clean that form and change none of these objects, which fits. Open (w-6, 2026-11-13): which order SimplifyCFG reads (predecessor
 order from the use list, a phi order) and what the pin's reads there; until then the rows stay numbered as order sensitivity of SimplifyCFG@1438.
+
+Checked against the pin (w-6): the pin's SimplifyCFG iterates `predecessors(BB)` (24 uses in SimplifyCFG.cpp, e.g. L2994, L3492, L3642,
+L4419), which is the block's use-list order, newest use first; ours reads `Function::predecessors` from `block_users`, the use list,
+also newest first (uselist.rs). So the order sensitivity is the pin's too: the same text built in another order of uses decides
+differently in both. Not a gap in SimplifyCFG; the rows FR-2 and FR-3 stay numbered as that sensitivity, with no owner action beyond
+the numbers. What could still differ is how a pass leaves the use lists (the order RAUW and phi edits push uses in): not checked.
