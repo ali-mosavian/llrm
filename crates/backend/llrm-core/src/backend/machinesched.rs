@@ -57,6 +57,8 @@ fn boundary(
     matches!(
         what.op,
         Operation::Call
+            | Operation::Push
+            | Operation::Pop
             | Operation::Branch
             | Operation::Jump
             | Operation::Return
@@ -544,5 +546,22 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the zero stays before the add");
+    }
+
+    /// `push` writes the stack pointer, which no lane orders: the scheduler put
+    /// `push ss; push ax` ahead of the two `pushd` that preceded them, and
+    /// the far call read its arguments reversed (regparm3_matrix_4 printed
+    /// 2552 for 653). The pin ends a region at what writes
+    /// the stack pointer (`isSchedulingBoundary`).
+    #[test]
+    fn test_a_push_ends_a_region_and_is_in_none() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Push, "push", vec![], vec![held(1)]), vec![], vec![1]),
+            insn(2, semantics(Operation::Push, "push", vec![], vec![held(1)]), vec![], vec![1]),
+            insn(3, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(8)]), vec![2], vec![]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        assert_eq!(regions(&insns, regs, 16), [0..1, 3..4]);
     }
 }
