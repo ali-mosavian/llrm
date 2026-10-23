@@ -1084,11 +1084,13 @@ impl<'a> TypeLegalizer<'a> {
         let shift = self
             .target
             .and_then(|target| target.machine().huge_shift())
-            .ok_or(LegalizeError::Unsupported {
-                op: x86isd::HUGE_ADD,
-                ty: self.dag.value_type(node),
-                what: "expand result: no selector stride",
-            })?;
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::HUGE_ADD,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
         let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let (offset, selector) = self.expanded_integer(far);
         let dword = self.dag.value_type(delta);
