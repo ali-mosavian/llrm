@@ -81,3 +81,24 @@ fn casts_take_the_halves_apart_and_put_them_together() {
     let dump = dag.dump();
     assert!(dump.contains("extract_element") && dump.contains("$ss"), "{dump}");
 }
+
+/// A load through a far pointer reads through `ES` (space 259) and one through
+/// `fs` its own space, so the matcher picks the segment. Without the space
+/// the DAG path addressed far data through DS: wrong output.
+#[test]
+fn far_and_override_accesses_carry_their_address_space() {
+    let dag = built(
+        "define i16 @f(ptr addrspace(1) %p, ptr addrspace(257) %q) {\n  %a = load i16, ptr addrspace(1) %p\n  %b = load i16, ptr addrspace(257) %q\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    );
+    let mut spaces: Vec<u32> = dag
+        .nodes()
+        .iter()
+        .filter(|node| node.opcode == ISD::Load && dag.value_type(node.ops[1]) != super::mvt::EVT::I32)
+        .filter_map(|node| match node.data {
+            super::dag::NodeData::Mem(info) if info.mem_vt == super::mvt::EVT::I16 => Some(info.space),
+            _ => None,
+        })
+        .collect();
+    spaces.sort();
+    assert_eq!(spaces, [0, 257, 259], "the near argument load, then the two accesses:\n{}", dag.dump());
+}
