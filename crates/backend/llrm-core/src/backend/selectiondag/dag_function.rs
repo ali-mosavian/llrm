@@ -168,6 +168,26 @@ struct CallConventions<'a> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn clobbers_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let number = match callee {
+            Some(Callee::Global(id)) => {
+                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
+            }
+            _ => 0,
+        };
+        let Some(found) = self.arch.calling().by_number(number) else { return Default::default() };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        self.arch
+            .convention_callee_saved(found)
+            .into_iter()
+            .filter(|(full, pushed)| regs.bytes(*pushed) < regs.bytes(*full))
+            .map(|(full, _)| full)
+            .collect()
+    }
+
     fn clobbers(
         &self,
         callee: Option<&Callee>,
