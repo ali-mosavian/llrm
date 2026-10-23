@@ -65,3 +65,13 @@ The "cause" of FR-2 A (and FR-3 A) is the *first* normalised stage where the two
 pin's L1403, L1464 and L1499) clean exactly that form, and with them QCport's FR-2 objects (savegame, weapons, ls, d_alias, ...) do not
 change (`lateic` pair, base 1586dd80c1): the growth comes from a later divergence the first difference only precedes. The per-object
 cause stays open (w-6, 2026-11-06); `foldNot` is not shown to matter for it either.
+
+## LI-1: recpow +96..+124 B with the late InstCombines (owner w-6)
+
+Size bisection (tools/sizebisect, `lateic` dists, recpow m32 -O2 +103 B): the first differing step is the new `combine@1464`, which
+rewrites `icmp eq (add nsw %n, -1), 1` to `icmp eq %n, 2` in each of the 7 recursion copies (D10) and merges 6 blocks; the MIR has the
+same size (179 instructions). At instruction selection the base has `v := add v, -1; je` (the add's flags decide the branch), the new
+build has the add and `cmp v, 2; je`: one `cmp` more per copy, 7 in all, +7 instructions through RegAlloc to the object (+103 B). The
+rewrite is InstCombine's own canonical form (the pin applies the same one), so the form is the pin's; the multiplier is ours: seven
+recursion copies where the pin makes none. Exit: the machine side of the same shape, a compare of `%n` against a constant next to an
+`add %n, -1` that is live sharing the add's flags (`X86 EmitCmp` for a `sub`/`add` in the same block), w-6, 2026-11-13.
