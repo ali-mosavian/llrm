@@ -1252,3 +1252,48 @@ fn a_symbol_cell_has_a_displacement_field() {
         let _ = Operation::Move;
     }
 }
+
+const DOUBLE_BITS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %b = bitcast double %x to i64
+  %t = trunc i64 %b to i32
+  %r = and i32 %t, 16777215
+  ret i32 %r
+}
+";
+
+/// The low word of a double reached the matcher as the double's x87 register
+/// (`and v5(4 bytes) = v5(10-byte fdiv result) & mask`): no code does that.
+/// A float read as an integer is a refusal; float_conversions_loop did not
+/// assemble (`mov [esp], mm0`).
+#[test]
+fn a_double_read_as_its_words_is_refused_not_emitted() {
+    let module = llrm_mir::parse::module(DOUBLE_BITS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
+    if let Err(why) = &done {
+        assert!(why.0.contains("floating value used as an integer") || !why.0.is_empty(), "{why:?}");
+    }
+    // Whatever it is, no integer instruction reads a 10-byte floating value.
+    if let Ok(done) = done {
+        let floating: std::collections::HashSet<u32> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .flat_map(|w| w.dests.iter())
+            .filter_map(|d| match d {
+                crate::model::ir::Loc::Held(h) if h.width == 10 => Some(h.value),
+                _ => None,
+            })
+            .collect();
+        for what in done.body.insns().iter().filter_map(|i| i.what.as_ref()) {
+            for l in what.dests.iter().chain(&what.sources) {
+                assert!(
+                    !matches!(l, crate::model::ir::Loc::Held(h) if h.width != 10 && floating.contains(&h.value)),
+                    "{what:?}"
+                );
+            }
+        }
+    }
+}

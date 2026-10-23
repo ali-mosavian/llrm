@@ -629,6 +629,33 @@ fn selected_in(
             }
         }
     }
+    // A floating value is a 10-byte register value: read at another width it is
+    // an integer's bits taken from an x87 register (`bitcast` of a double to
+    // its words, reaching the matcher as a no-op), which no code can do.
+    {
+        let floating: std::collections::HashSet<u32> = emitted
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|insn| insn.what.as_ref())
+            .flat_map(|what| what.dests.iter())
+            .filter_map(|dest| match dest {
+                crate::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
+                _ => None,
+            })
+            .collect();
+        for insn in emitted.iter().flat_map(|block| block.insns.iter()) {
+            let Some(what) = insn.what.as_ref() else { continue };
+            let mentions = what.dests.iter().chain(&what.sources);
+            if mentions.into_iter().any(|loc| {
+                matches!(
+                    loc,
+                    crate::model::ir::Loc::Held(held) if held.width != 10 && floating.contains(&held.value)
+                )
+            }) {
+                return refuse(format!("--isel=dag: a floating value used as an integer ({:?})", what.name));
+            }
+        }
+    }
     // The x87 stack is empty at a call: a floating value live across one is
     // spilled by the pin's allocator, which no pass here does for this LIR, so
     // the function is refused (the stackifier would fail the compile).
