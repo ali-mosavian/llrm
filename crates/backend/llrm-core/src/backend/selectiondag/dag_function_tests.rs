@@ -1075,3 +1075,29 @@ fn a_float_to_int_conversion_is_a_truncating_store() {
         .expect("a fistt");
     assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
 }
+
+const FLOAT_COMPARE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %a, double %b) {
+entry:
+  %c = fcmp olt double %a, %b
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+";
+
+/// A float compare is an `fcom` of two values and the set that reads its flags;
+/// the stackifier adds the `fnstsw ax; sahf`, so the pin's `FNSTSW16r`, the AH
+/// copy and `SAHF` emit nothing. 12 programs stopped at `UCOM_Fpr*`.
+#[test]
+fn a_float_compare_is_an_fcom_and_a_set() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_COMPARE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let compare = whats.iter().position(|w| w.op == Operation::Compare).expect("an fcom");
+    assert_eq!(whats[compare].name.as_deref(), Some("fcom"));
+    assert!(whats[compare].sources.iter().all(|l| matches!(l, Loc::Held(h) if h.width == 10)), "{:?}", whats[compare]);
+    assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
+}
