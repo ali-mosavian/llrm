@@ -567,6 +567,14 @@ fn selected_in(
         made.insert(parent.0, start..emitted.len());
         exports.push((parent, built.phi_updates));
     }
+    if std::env::var("LLRM_DAG_DUMP").is_ok_and(|n| n == name) {
+        for b in &emitted {
+            eprintln!("DAG block {} phis {:?}", b.at, b.phis.iter().map(|p| (p.result, p.incoming.clone())).collect::<Vec<_>>());
+            for i in &b.insns {
+                eprintln!("DAG   d{:?} u{:?} {:?}", i.defines, i.uses, i.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+            }
+        }
+    }
     let succ = successors(&emitted);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
     // that leaves for it, the register the predecessor copied its value to.

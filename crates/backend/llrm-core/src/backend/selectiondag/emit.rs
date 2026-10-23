@@ -366,6 +366,7 @@ fn pushed_arguments(
             )
     };
     let mut at = 0;
+    let mut refused = false;
     while at < insns.len() {
         if !is_area(&insns[at]) {
             at += 1;
@@ -385,6 +386,12 @@ fn pushed_arguments(
         };
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
+            .inspect(|&place| {
+                // Only a move of a word or a dword can be a push.
+                if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
+                    refused = true;
+                }
+            })
             .map(|place| {
                 let Some(Loc::Mem(cell)) = insns[place].what.as_ref().and_then(|what| what.dests.first()) else {
                     unreachable!("a store has its cell")
@@ -392,6 +399,9 @@ fn pushed_arguments(
                 (place, cell.offset, cell.width)
             })
             .collect();
+        if refused {
+            return Err(EmitError::Unsupported("a floating argument stored into the area at m16".to_owned()));
+        }
         stores.sort_by_key(|&(_, offset, _)| offset);
         let mut next = 0;
         for &(_, offset, width) in &stores {
