@@ -695,7 +695,7 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
         let offset = self.get_poison(self.value_type(ptr));
-        let info = MemInfo { ext: Some(ext), space: 0, ..info };
+        let info = MemInfo { ext: Some(ext), ..info };
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 
