@@ -17,6 +17,7 @@ from pathlib import Path
 R = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(R / "tools"))
 import llrmbin
+import pin_clang
 import benchlist
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
@@ -34,6 +35,8 @@ UNRANDOMIZED = ["setarch", "-R"]
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
         return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", llrmbin.OBJECT, str(source)]
+    if compiler == "clang":
+        compiler = pin_clang.path()  # not PATH's: the distro's 20.1.8 is not the pin
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 

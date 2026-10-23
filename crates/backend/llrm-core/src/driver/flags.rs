@@ -102,6 +102,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
+    ("inline-recursive", |options, on| options.inline.recursive = on),
     ("ipa-vrp", |options, on| options.ipa_ranges = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),

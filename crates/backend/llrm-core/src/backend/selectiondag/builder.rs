@@ -677,6 +677,27 @@ impl Builder<'_> {
             &info.argument_attrs,
         )
         .map_err(|_| Refused("call the convention does not describe"))?;
+        // A call of a function with more arguments than it declares (an
+        // old-style `()` definition): the callee pops what it declares, the
+        // rest is the caller's to remove.
+        let mut plan = plan;
+        let declared = direct.and_then(|id| self.module.global(id).function()).map(|one| one.parameters().len());
+        if let Some(declared) = declared.filter(|declared| *declared < arg_types.len() && !variadic && plan.popped > 0)
+        {
+            plan.popped = convention_for(
+                self.module,
+                self.layout,
+                self.arch,
+                first,
+                info.calling_convention,
+                result_type,
+                variadic,
+                &arg_types[..declared],
+                &info.argument_attrs,
+            )
+            .map_err(|_| Refused("call the convention does not describe"))?
+            .popped;
+        }
         // Evaluate the callee and the arguments before the call sequence
         // starts.
         let called = self.get_value(*callee)?;

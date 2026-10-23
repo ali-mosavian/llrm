@@ -254,14 +254,14 @@ impl ProgramPass for Walk {
                     // (gcc's peeling, not at -Os).
                     let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
                         .values()
-                        .filter(|one| one.self_calls.is_some() && !self.inline.single)
+                        .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
                         .filter_map(|one| Some((one.callee?, one.clone())))
                         .collect();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
                         recursive: recursive.contains(&id),
                         self_inlining: None,
-                        peeling: !self.inline.single,
+                        peeling: !self.inline.single && self.inline.recursive,
                     };
                     let spliced =
                         crate::inline::expanded_all(context, function, &by, &peeled, Some(&constant), &mut declared)?
@@ -269,7 +269,7 @@ impl ProgramPass for Walk {
                     // DEVIATE (recursion): a tree-recursive function waits for
                     // its tail-call elimination until its copies are made
                     // (`SelfInline`, after ipa-cp has seen it whole).
-                    if self_calls(module, &program.layout, id, self.inline.single).is_some() {
+                    if self.inline.recursive && self_calls(module, &program.layout, id, self.inline.single).is_some() {
                         function_mut(module, id)
                             .1
                             .attrs

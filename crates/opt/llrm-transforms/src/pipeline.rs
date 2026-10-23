@@ -1075,7 +1075,7 @@ pub fn recorded(
     };
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = applied.options.llvm_order.then(|| {
+    let late = (applied.options.llvm_order && applied.options.inline.recursive).then(|| {
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
