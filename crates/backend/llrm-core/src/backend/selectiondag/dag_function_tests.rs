@@ -963,6 +963,15 @@ entry:
 }
 ";
 
+const SHIFT_OPTIMIZED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %c = zext i32 %1 to i64
+  %r = lshr i64 %0, %c
+  ret i64 %r
+}
+";
+
 /// `pair(a, b)` returned `(b << 32) | b`: the low half was copied to EAX, where
 /// `a` was held for the high half, and the `ret` required nothing, so the
 /// allocator saw no claim on EAX. The `ret` requires both return registers.
@@ -976,4 +985,22 @@ fn a_ret_requires_the_registers_it_returns_in() {
     let mut registers: Vec<_> = ret.requires.iter().map(|(_, register)| *register).collect();
     registers.sort_by_key(|r| r.index());
     assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{ret:?}");
+}
+
+/// The two selects of a 64-bit shift read one compare: the pin cascades the
+/// second into the first's sink block (`EmitLoweredSelect`), one branch with
+/// two phis. Two branches, the second with an empty arm, reached the
+/// allocator as a shape that lost the zero of the high word (shr -O2 printed
+/// the low word's bits there).
+#[test]
+fn two_selects_on_one_compare_are_one_branch() {
+    let module = llrm_mir::parse::module(SHIFT_OPTIMIZED).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let branches =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Branch).count();
+    assert_eq!(branches, 1);
+    let phis: Vec<usize> = done.body.blocks.iter().map(|b| b.phis.len()).collect();
+    assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
