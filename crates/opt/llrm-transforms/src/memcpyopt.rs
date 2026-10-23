@@ -1099,7 +1099,14 @@ impl State<'_> {
             let llrm_mir::module::ValueDef::Instruction(def) = self.function.value(value).def else { return operand };
             let instruction = self.function.instruction(def);
             match instruction.opcode {
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => operand = instruction.operands[0],
+                Opcode::Cast(CastOp::BitCast) => operand = instruction.operands[0],
+                // A selector cast back to far is `segment:0`, not the pointer
+                // it was made from (DEVIATE C1 of BasicAA).
+                Opcode::Cast(CastOp::AddrSpaceCast)
+                    if llrm_analysis::basicaa::BasicAA::new(&self.view()).passes_through(instruction) =>
+                {
+                    operand = instruction.operands[0]
+                }
                 Opcode::GetElementPtr { .. }
                     if instruction.operands[1..]
                         .iter()

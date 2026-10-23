@@ -1156,6 +1156,26 @@ impl Emitter<'_, '_> {
                 self.calls.push((at, callee));
                 return Ok(Some(()));
             }
+            // A call through a far pointer: the offset and the selector sit in
+            // a four-byte cell, which the call reads (`call dword ptr [cell]`).
+            "LLRM_FARCALL" => {
+                let NodeData::FrameIndex(index) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("a far call without a cell".to_owned()));
+                };
+                let cell = self
+                    .ctx
+                    .frame
+                    .cell(index, 4)
+                    .ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+                let what = Semantics {
+                    indirect: true,
+                    name: Some("call".into()),
+                    sources: vec![Loc::Mem(cell)],
+                    ..Semantics::new(Operation::Call)
+                };
+                self.push_call(what, None);
+                return Ok(Some(()));
+            }
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
             | "CALL16m_NT" => {

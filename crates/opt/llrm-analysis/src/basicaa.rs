@@ -202,6 +202,16 @@ impl<'a> BasicAA<'a> {
         !self.forged()
     }
 
+    /// [`Self::transparent`] for a pass that strips casts as the pin's
+    /// `stripPointerCasts` does: the selector of an object cast back to a far
+    /// pointer is not the pointer it came from.
+    pub fn passes_through(
+        &self,
+        one: &llrm_mir::module::Instruction,
+    ) -> bool {
+        self.transparent(one)
+    }
+
     /// Whether the module forges pointers into the data segment; without the
     /// module's facts it may.
     fn forged(&self) -> bool {
