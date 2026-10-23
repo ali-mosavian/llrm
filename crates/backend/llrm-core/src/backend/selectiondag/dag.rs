@@ -916,8 +916,12 @@ impl SelectionDAG {
         &mut self,
         symbol: Option<u32>,
     ) -> SDValue {
-        let data = symbol.map_or(NodeData::None, |symbol| NodeData::Global { symbol, offset: 0 });
-        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &[], SDNodeFlags::default(), data)
+        // The global is an operand, not the node's data: selection morphs the
+        // node to a pseudo and clears its data, and nodes of two globals with
+        // no operands would be one.
+        let ops: Vec<SDValue> =
+            symbol.map(|symbol| self.get_target_global_address(EVT::I16, symbol, 0)).into_iter().collect();
+        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &ops, SDNodeFlags::default(), NodeData::None)
     }
 
     pub fn get_jump_table(
