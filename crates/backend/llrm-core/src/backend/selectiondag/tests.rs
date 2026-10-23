@@ -19,6 +19,7 @@ mod bit_test;
 mod bitcast_float;
 mod br_jt;
 mod builder;
+mod cmov_constants;
 mod combiner;
 mod div_by_constant;
 mod expand_node;
