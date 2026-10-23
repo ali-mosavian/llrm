@@ -24,6 +24,8 @@ pub enum Tok {
     Ext,
     Dynamic,
     Static,
+    /// `FN` written apart from the name it prefixes: `DEF FN twice`, `FN twice(4)`.
+    FnWord,
 }
 
 #[derive(Debug)]
@@ -59,5 +61,13 @@ pub fn terminal(kind: &TokenKind) -> Tok {
 }
 
 pub fn tokens(source: &[Token]) -> Vec<Spanned> {
-    source.iter().enumerate().map(|(at, token)| Ok((at, terminal(&token.kind), at + 1))).collect()
+    let name = |at: usize| matches!(source.get(at).map(|token| &token.kind), Some(TokenKind::Identifier(_)));
+    source
+        .iter()
+        .enumerate()
+        .map(|(at, token)| {
+            let apart = matches!(&token.kind, TokenKind::Identifier(word) if word == "FN") && name(at + 1);
+            Ok((at, if apart { Tok::FnWord } else { terminal(&token.kind) }, at + 1))
+        })
+        .collect()
 }
