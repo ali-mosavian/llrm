@@ -3618,8 +3618,11 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 ///
 /// DEVIATE AN2 (owner funcattrs-port, review 2026-11-13): an index's range is
 /// `computeConstantRange` at the access, with the dominator tree and no
-/// assumption cache; BasicAA's SCEV `getSignedRange` of an add recurrence is
-/// not asked, so a loop counter's interval is its ValueTracking range only.
+/// assumption cache; BasicAA's `analyzeVariableOffsets` passes both. It asks no
+/// SCEV and no LVI range of an index, so a loop counter's interval is its
+/// ValueTracking range, as at the pin; what `Bounded` knew beyond it (a counted
+/// loop's span, a dominating guard) is not the pin's answer. Exit: the
+/// assumption cache is passed (MemorySSA S3, where BasicAA asks per query).
 /// The range `analyzeVariableOffsets` finds of a variable index:
 /// `computeConstantRange` at `at` intersected with `fromKnownBits(Known,
 /// IsSigned)`, read as the signed interval of `value`; none where it is the
