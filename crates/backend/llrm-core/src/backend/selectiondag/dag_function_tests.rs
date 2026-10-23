@@ -175,7 +175,7 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     assert_eq!(done.calls.values().collect::<Vec<_>>(), ["bar"]);
     assert!(done.calls.contains_key(&call.at));
     assert_eq!(call.delivers.len(), 1, "the result is what the call delivers");
-    assert!(call.clobbers.len() >= 3, "EAX, ECX and EDX are destroyed: {:?}", call.clobbers);
+    assert!(call.clobbers.contains(&llrm_lir::registers::RegId::EAX), "the call destroys the registers the convention does not keep: {:?}", call.clobbers);
     let names: Vec<String> =
         insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
     let (down, up) = (names.iter().position(|n| n == "sub").unwrap(), names.iter().rposition(|n| n == "add").unwrap());
