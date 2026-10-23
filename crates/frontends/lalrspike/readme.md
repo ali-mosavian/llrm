@@ -91,6 +91,24 @@ to the `dosrun` branch of the fork and rebuild; a fork without it runs the
 line as a shell command and PDS stays slow). With that, one shared queue of
 (compiler, file) pairs over four machines per core: 28 s.
 
+## A generated lexer
+
+`src/qb_lexer.rs` is a [logos](https://docs.rs/logos) lexer with the old lexer's
+token stream (`qbfront::generated_parser::Token`, same spans). logos dispatches on
+the first byte and matches the reserved words with a DFA generated from
+`qbasbnf.prs` by `gen_words.py` (`src/qb_words.rs`, 221 words, case-insensitive);
+callbacks keep the old rules for numbers, strings, `REM`/`'` directives and the
+`.`/digit context forms. QuickrBASIC's `f"…"` dialect falls back to the old lexer.
+Logical lines are borrowed unless an `_` continues them.
+
+`tests/qb_lexer.rs` is the check: equal tokens or equal error on every tracked
+`.bas`/`.bi` in all four dialects, on every prefix of the first 60 lines of every
+7th file (error paths), and on a list of odd forms. It passed on the first run.
+
+Release build, 737 files, 766 KB: old lexer 33.5 ms (23 MB/s), logos 12.5 ms
+(63 MB/s), 2.7x. The old one's cost was the linear scan of the token table, up to
+three times per word, plus `String` per logical line.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

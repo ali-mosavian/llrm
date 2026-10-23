@@ -47,10 +47,11 @@ fn qb(paths: &[String]) {
         .collect();
     let bytes = both.iter().map(String::len).sum();
     let lex = time(ROUNDS, || both.iter().map(|s| qbfront::generated_parser::lex(s, dialect).unwrap().len()).sum::<usize>());
+    let logos = time(ROUNDS, || both.iter().map(|s| lalrspike::qb_lexer::lex(s, dialect).unwrap().len()).sum::<usize>());
     let old = time(ROUNDS, || both.iter().filter(|s| qbfront::parse(s, dialect).is_ok()).count());
     let tokens: Vec<_> = both.iter().map(|s| qbfront::generated_parser::lex(s, dialect).unwrap()).collect();
     let lalr = time(ROUNDS, || tokens.iter().filter(|t| lalrspike::parse_qb(t).is_ok()).count());
-    report("QB", both.len(), bytes, &[("lexer", lex), ("table-driven lex+parse+AST", old), ("lalrpop parser (no lex)", lalr)]);
+    report("QB", both.len(), bytes, &[("lexer", lex), ("logos lexer", logos), ("table-driven lex+parse+AST", old), ("lalrpop parser (no lex)", lalr)]);
 }
 
 fn main() {
