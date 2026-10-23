@@ -80,3 +80,31 @@ fn every_opcode_of_the_i486_set_is_one_form_or_listed() {
     let expected = include_str!("opcodes_unmapped.txt");
     assert_eq!(text, expected, "unmapped opcodes changed ({mapped} map)");
 }
+
+/// `MOVZX32rr16` is the form of `movzx`, 16 to 32: its `16` is the source
+/// size, not a `1` and a `6`. It was read as register, register, immediate
+/// and refused (18 + 11 + 1 functions of the corpora).
+#[test]
+fn a_size_after_the_letters_is_not_an_operand() {
+    let map = map();
+    for name in ["MOVZX32rr16", "MOVSX32rr16", "MOVZX32rm16", "MOVSX32rm16"] {
+        assert_eq!(
+            map.forms()[map.form(name).unwrap_or_else(|e| panic!("{name}: {e:?}"))].name,
+            name[..5].to_lowercase()
+        );
+    }
+    assert_eq!(map.forms()[map.form("SHL32r1").unwrap()].name, "shl", "a lone 1 is still the shift by one");
+}
+
+/// A store of a word is a word-wide cell: `mov [base+index], v` took the
+/// width of the node's first value, the chain, and wrote four bytes from a
+/// 16-bit register (two modules of the vsgcc corpus stopped compiling).
+#[test]
+fn a_memory_operand_has_the_width_the_name_gives() {
+    use super::opcodes::memory_bytes;
+    assert_eq!(
+        [("MOV16mr", 2), ("MOV8mi", 1), ("MOV32rm", 4), ("ADD32mi8", 4), ("MOVZX32rm8", 1), ("MOVSX32rm16", 2)]
+            .map(|(name, _)| memory_bytes(name)),
+        [Some(2), Some(1), Some(4), Some(4), Some(1), Some(2)]
+    );
+}
