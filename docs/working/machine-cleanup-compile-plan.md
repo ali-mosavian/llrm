@@ -44,3 +44,11 @@ constant-pool loads, `fp_round` as store and reload, loads and stores as `LD_Fp*
 result as `POP_FROM_X87_REG`. Calls, returns, block edges and inline asm follow the pin's X86FloatingPoint (stack
 empty at call and ret except the ST0 result, `LiveBundle` layouts at edges). Exact pseudos per instruction:
 sdag-c and sdag-d (reply pending).
+
+Allocator (splitkit, from the code at parity): greedy allocates x87 values from the RFP class (`allocate.rs`, seven flat
+registers MM0..MM6 for FP0..FP6) with the normal region split, so values cross block edges; the spiller spills at float
+width. Nothing is missing there. `floatassign::prepared` (FloatPrep) does three things LLVM does in isel: fild from a
+register via a cell, a float-to-int store into an owned cell, and `_aliased` load reuse. They are the input legalization
+(sdag-b's `FILD` from a slot and `FP_TO_INT_IN_MEM`), so FloatPrep is deleted when selection emits them; the stackifier
+replaces `fpstack.rs` and `floatalloc.rs`.
+
