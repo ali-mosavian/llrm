@@ -35,6 +35,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod handlemove;
+
 use super::cfg::{Cfg, DomTree};
 use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
