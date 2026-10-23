@@ -278,7 +278,8 @@ fn a_shift_by_cl_reads_cl() {
         let units = schedule(&dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let lines = text(&blocks[0].insns);
-        let shl = blocks[0].insns.iter().find(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shl")));
+        let shl =
+            blocks[0].insns.iter().find(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shl")));
         let shl = shl.unwrap_or_else(|| panic!("{lines:?}")).what.as_ref().unwrap();
         assert!(matches!(shl.sources.last(), Some(Loc::Reg(Reg { register: RegId::CL, .. }))), "{lines:?}");
     });
