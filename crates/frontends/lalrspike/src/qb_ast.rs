@@ -44,7 +44,13 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseErr
     }
     let tokens = crate::qb_lexer::lex_with(source, dialect, true).map_err(qbfront::ParseError::from)?;
     let (tokens, volatile_at) = without_volatile(tokens);
-    let kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
+    let mut kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
+    // `FN twice`: FN written apart from the name it prefixes
+    for at in 0..tokens.len().saturating_sub(1) {
+        if matches!(&tokens[at].kind, TokenKind::Identifier(word) if word == "FN") && kinds[at + 1] == Tok::Ident {
+            kinds[at] = Tok::FnWord;
+        }
+    }
     let mut ast = Ast {
         tokens: &tokens,
         kinds: &kinds,

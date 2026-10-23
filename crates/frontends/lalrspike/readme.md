@@ -194,7 +194,7 @@ wrong or loses something):
   `2 ^ 3 ^ 2` = 64, `NOT 1 = 2` = -1, `NOT 0 + 1` = -2, `-2 ^ 2` = -4, `-3 * 2 ^ 2` = -12 and
   `7 MOD 3 * 2` = 1. The table-driven parser reads `^` right to left (512), `NOT` above the
   relations and sums (`NOT 1 = 2` is 0, `NOT 0 + 1` is 0), and a sign over a whole product
-  (`-a * b` is `-(a * b)`). The first two compile to wrong values there; the third is the same
+  (`-a * b` is `-(a * b)`). Its trees for the first two therefore compute 512 and 0; for the third the same
   value in a different shape. The new tree has QB's: `tests/qb_ast.rs::precedence_is_the_compilers`.
 * a type suffix on a word that is also reserved is part of the name: `ERROR$`, `COLOR$(n)`, `key%`
   (the old lexer drops the suffix, so `COLOR$` was `COLOR`).
