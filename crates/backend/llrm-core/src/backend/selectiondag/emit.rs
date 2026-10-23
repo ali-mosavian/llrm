@@ -970,7 +970,12 @@ impl Emitter<'_, '_> {
         &self,
         glue: Option<SDValue>,
     ) -> bool {
-        let Some(glue) = glue else { return false };
+        let Some(mut glue) = glue else { return false };
+        // A second result is read through the glue of the first read.
+        while self.dag.opcode(glue) == ISD::CopyFromReg {
+            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+            glue = next;
+        }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
         matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)

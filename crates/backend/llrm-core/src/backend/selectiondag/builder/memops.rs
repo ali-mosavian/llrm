@@ -515,11 +515,6 @@ impl Builder<'_> {
         which: &Intrinsic,
     ) -> Result<(), Refused> {
         let operands = &instruction.operands;
-        // A memmove a pass proved to run forward is a memcpy (the old
-        // selector's `llrm.forward`): no routine moves overlapping bytes.
-        let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
-        let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
-        let which = if forward && matches!(which, Intrinsic::MemMove) { &Intrinsic::MemCpy } else { which };
         let volatile = match operands.get(3) {
             Some(Operand::Constant(id)) => matches!(self.module.context.get(*id).kind, ConstantKind::Int(1)),
             _ => return Err(Refused("memory intrinsic with a variable volatile flag")),

@@ -1349,3 +1349,33 @@ fn the_caller_removes_the_arguments_the_callee_does_not_declare() {
     let text = format!("{:?}", done.body.insns().iter().filter_map(|i| i.what.as_ref()).collect::<Vec<_>>());
     assert!(text.contains("\"add\"") && text.contains("Imm(Imm { value: 8,"), "{text}");
 }
+
+const REMAINDER_EXTENDED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a) {
+entry:
+  %r = srem i64 %a, 1000003
+  %t = trunc i64 %r to i32
+  %s = sext i32 %t to i64
+  %m = mul i64 %s, 1000003
+  ret i64 %m
+}
+";
+
+/// The sign extension of a 64-bit remainder's low word reads EDX through the
+/// glue of its `CDQ` read of EAX; that read was taken for a second result of
+/// the remainder libcall, which then delivered two values in EDX and the
+/// allocator could not place them ("could not place every range", the
+/// regparm3 matrix callees 4, 22 and 31 under `--isel=dag`).
+#[test]
+fn no_call_delivers_two_values_in_one_register() {
+    let module = llrm_mir::parse::module(REMAINDER_EXTENDED).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    for insn in done.body.insns().iter().filter(|i| !i.delivers.is_empty()) {
+        let mut registers: Vec<_> = insn.delivers.iter().map(|(_, register)| *register).collect();
+        let all = registers.len();
+        registers.sort_by_key(|r| r.index());
+        registers.dedup();
+        assert_eq!(registers.len(), all, "{:?}", insn.delivers);
+    }
+}

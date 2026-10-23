@@ -45,15 +45,17 @@ FAIL  c/b.c [-O2]: compile: llrm-c: _main: Semantics(op=<Operation.CALL: 'call'>
 FAIL  c/c.c [-O0]: compile: llrm-c: isel: 0x000a names 25 at width 4, which is not the width that register is
 FAIL  c/d.c [-O0]: compile: llrm-c: isel: value#28 is read but never defined or supplied by the caller
 FAIL  c/e.c [-O0]: compile: llrm-c: @_main: _main: the greedy allocator could not place every range
+FAIL  c/f.c [-O0]: compile: llrm-c: @_main: floatalloc: _main reads edx before every path writes it, and the entry does not deliver it
 """
 
 
 def test_the_real_mode_failures_have_causes_and_owners():
     rows, unclassified = classify_isel.classify(M16)
     assert unclassified == []
-    assert sum(len(programs) for programs in rows.values()) == 5
+    assert sum(len(programs) for programs in rows.values()) == 6
     assert ("panic in selectiondag/dag.rs: integer constant of Simple(Far)", "sdag-a") in rows
     assert ("lir: a direct call is emitted as an indirect call of an immediate", "sdag-d") in rows
+    assert ("floatalloc: a register read before any path writes it", "sdag-d") in rows
 
 
 def test_ssa_and_address_verify_failures_have_causes():
