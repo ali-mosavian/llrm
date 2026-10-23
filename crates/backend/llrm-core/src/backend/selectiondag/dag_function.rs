@@ -117,7 +117,7 @@ impl FrameMap for Frame {
 }
 
 /// `CreateStackTemporary`: the preprocess makes its slots here.
-pub(super) struct Temporaries<'a>(&'a Frame);
+pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
 
 impl FrameObjects for Temporaries<'_> {
     fn create_stack_temporary(

@@ -129,6 +129,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &ctx,
             &mut super::emit::EmitState::default(),
             0,
+            &machine,
+            &mut NoTemps,
         )
         .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
         for b in emitted.blocks {
