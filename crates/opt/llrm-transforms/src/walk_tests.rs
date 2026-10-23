@@ -253,7 +253,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
-                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                let mut walk = crate::walk::Walk { inline: crate::inline::Threshold { recursive: true, ..Default::default() }, simplify: Box::new(|_, _, _, _| {}) };
                 walk.run(program, &mut analyses)?;
                 let mut modules = super::managers(program, &mut analyses);
                 let mut late = crate::walk::SelfInline {
@@ -393,7 +393,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk { inline: crate::inline::Threshold { recursive: true, ..Default::default() }, simplify: Box::new(|_, _, _, _| {}) };
             walk.run(program, &mut Default::default())
         },
     )
@@ -602,13 +602,13 @@ b0:
 #[test]
 fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
     use llrm_mir::program::ProgramPass;
-    let marked = |text: &str, name: &str| {
+    let marked_with = |text: &str, name: &str, recursive: bool| {
         let mut module = parsed(text);
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
             |program: &mut llrm_mir::program::Program| {
-                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                let mut walk = crate::walk::Walk { inline: crate::inline::Threshold { recursive, ..Default::default() }, simplify: Box::new(|_, _, _, _| {}) };
                 walk.run(program, &mut Default::default())
             },
         )
@@ -662,8 +662,10 @@ b0:
   ret i32 %r
 }
 ";
+    let marked = |text: &str, name: &str| marked_with(text, name, true);
     assert!(marked(tree, "fib"), "fib waits for tail-call elimination");
     assert!(!marked(linear, "down"), "a count-down does not");
+    assert!(!marked_with(tree, "fib", false), "by default nothing waits: the copies are `-finline-recursive`'s");
 }
 
 /// ipa-cp prices the callee whole: copies made in the walk first left
@@ -688,13 +690,18 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
 
 /// The module `text` after the walk alone (no simplifier), `top`'s body.
 fn walked_top(text: &str) -> String {
+    walked_top_with(text, true)
+}
+
+/// `walked_top` with gcc's recursive inlining (`-finline-recursive`) on or off.
+fn walked_top_with(text: &str, recursive: bool) -> String {
     use llrm_mir::program::ProgramPass;
     let mut module = parsed(text);
     llrm_mir::program::Program::lend(
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk { inline: crate::inline::Threshold { recursive, ..Default::default() }, simplify: Box::new(|_, _, _, _| {}) };
             walk.run(program, &mut Default::default())
         },
     )
@@ -738,6 +745,14 @@ fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     let top = walked_top(LINEAR);
     let copies = top.matches("mul i32 %").count();
     assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
+}
+
+/// The default is the pin's inliner: a recursive callee is copied once into its caller and the copy's own calls are left (hanoi's nine copies and its lookup table, 40
+/// instructions where gcc runs 35,764 and clang 249,852, are `-finline-recursive`, a DEVIATE (recursion) the pin has no counterpart of).
+#[test]
+fn test_the_default_does_not_peel_a_recursive_callee() {
+    let copies = walked_top_with(LINEAR, false).matches("mul i32 %").count();
+    assert_eq!(copies, 1, "{copies} copies of down in top by default");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
