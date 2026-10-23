@@ -739,6 +739,52 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), "LDS16rm");
     }
 
+    /// The pin's `lea32addr` is typed i32 and `LEA16r` has no pattern: a frame
+    /// object's address at m16 was `CannotSelect` (sieve's three
+    /// `FrameIndex` nodes).
+    #[test]
+    fn the_address_of_a_frame_object_is_lea16r() {
+        let mut dag = TestDag::new();
+        let frame = dag.frame_index(0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, frame.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, frame.node), "LEA16r");
+    }
+
+    /// The pin moves a relocatable symbol into an i32 register; at m16 the
+    /// wrapped address of a global is an i16 and had no pattern (38
+    /// `GlobalAddress` nodes stopped the m16 corpus).
+    #[test]
+    fn the_address_of_a_global_is_mov16ri() {
+        let mut dag = TestDag::new();
+        let wrapped = dag.wrapped_global(1, 0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, wrapped.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
+    }
+
+    /// Real mode has no scaled index, so `lea` cannot take a multiply by 3, 5
+    /// or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
+    /// functions).
+    #[test]
+    fn a_multiply_by_a_lea_constant_is_imul_when_lea_cannot_take_it() {
+        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "IMUL32rri")] {
+            let mut dag = TestDag::new();
+            let x = dag.input(1, vt);
+            let three = dag.make_constant(3, vt);
+            let node = dag.node(x86isd::MUL_IMM, &[vt], &[x, three]);
+            let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+            assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, node), Outcome::Selected);
+
+            assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), want);
+        }
+    }
+
     #[test]
     fn the_pins_own_table_has_no_pattern_for_a_far_load() {
         let (mut dag, node, _) = far_load(x86isd::LES);

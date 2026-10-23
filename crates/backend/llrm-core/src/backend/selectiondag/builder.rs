@@ -45,12 +45,13 @@ impl BuilderTarget {
         BuilderTarget { dag: DagConfig::default(), shift_amount: EVT::I8, legal_ints: vec![8, 16, 32] }
     }
 
-    /// Real mode: 16-bit near pointers, `i8`/`i16` in registers.
+    /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
+    /// pin's `In16BitMode` has `GR32` legal).
     pub fn m16() -> BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, ..DagConfig::default() },
             shift_amount: EVT::I8,
-            legal_ints: vec![8, 16],
+            legal_ints: vec![8, 16, 32],
         }
     }
 }
@@ -706,7 +707,14 @@ impl Builder<'_> {
         }
         let vt = self.type_of(result_type)?;
         if vt.is_floating_point() {
-            return Err(Refused("floating-point result of a call"));
+            // X86's `LowerCallResult`: the value is popped from st(0), which
+            // the allocator knows as `FP0`
+            let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
+            let pop = self
+                .dag
+                .get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+            self.dag.set_root(SDValue { node: pop.node, res: 1 });
+            return Ok(Some(pop));
         }
         let (part_vt, parts) = self.parts(vt)?;
         if plan.returns.len() != parts {
