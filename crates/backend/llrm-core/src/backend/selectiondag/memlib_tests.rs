@@ -65,33 +65,41 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
-/// A memmove a pass proved to run forward (`!llrm.forward`) is a memcpy, as the
-/// old selector lowers it. The DAG path refused it where the runtime has no
-/// `memmove` (5 m16 programs, idioms and idiom_edges, under `LLRM_ISEL_REAL`).
+/// A memmove proved to run forward is lowered as any memmove, loads before
+/// stores: as a memcpy its pieces were free to reorder, and `for (i < 10) b[i]
+/// = b[i + 3]` copied the high words first and read back what it had written
+/// (memmove_overlap.c -O2, wrong output at m16 and m32).
 #[test]
-fn a_forward_move_is_a_copy() {
-    let forward = BODY.replace(
+fn a_forward_move_is_lowered_as_a_move() {
+    let plain = BODY.replace(
         "@llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)",
-        "@llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false), !llrm.forward !0",
-    ) + "!0 = !{}\n";
-    assert_ne!(forward, BODY);
-    let module = llrm_mir::parse::module(&forward).unwrap_or_else(|error| panic!("{error}"));
-    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-    let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("move")).unwrap();
-    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
-    let mut info = FunctionLoweringInfo::new(function);
-    let built = build_block(
-        &module,
-        function,
-        &layout,
-        &BuilderTarget::m32().with_libcalls(&[]),
-        &llrm_x86_m32::M32,
-        &convention,
-        &mut info,
-        function.entry().unwrap(),
-    )
-    .unwrap_or_else(|why| panic!("{}", why.0));
-    assert!(built.dag.dump().contains("REP_MOVS"), "{}", built.dag.dump());
+        "@llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 10, i1 false)",
+    );
+    let forward = plain.replace("i32 10, i1 false)", "i32 10, i1 false), !llrm.forward !0") + "!0 = !{}\n";
+    assert_ne!(plain, forward);
+    let dump = |text: &str| {
+        let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("move")).unwrap();
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        build_block(
+            &module,
+            function,
+            &layout,
+            &BuilderTarget::m32().with_libcalls(&[]),
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0))
+        .dag
+        .dump()
+    };
+    assert_eq!(dump(&forward), dump(&plain));
 }
 
 /// The libcalls the m32 runtime's `c.toml` names, read from the file.
