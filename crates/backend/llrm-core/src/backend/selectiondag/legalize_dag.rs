@@ -262,7 +262,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
         let address = self.dag.get_node(ISD::Add, pointer, &[table, index]);
-        let info = MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
+        let info =
+            MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
