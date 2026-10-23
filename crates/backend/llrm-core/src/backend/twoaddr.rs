@@ -1385,6 +1385,50 @@ mod tests {
         assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 1);
     }
 
+    /// The pin updates the intervals of a tied pair in place: the destination
+    /// from the copy to the instruction, the source ending at the copy
+    /// (`processTiedPairs`). `replace` removed both and computed them again, so
+    /// every register of `v4 = add v5, v7` was computed twice (3.4 M Ir on
+    /// d_faces).
+    #[test]
+    fn test_a_tied_pair_updates_the_two_intervals_it_names_without_computing_them_again() {
+        let imm = |at: i64, value: u32| imm_def(at, value);
+        let add = |at: i64, into: u32, first: u32, second: u32| {
+            let what = Semantics {
+                name: Some("add".into()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(first, 4), held(second, 4)],
+                ..Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
+        };
+        let copy = |at: i64, into: u32, from: u32| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![held(into, 4)],
+                sources: vec![held(from, 4)],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![from]))
+        };
+        let input = LirBody::new(
+            "tied",
+            0,
+            vec![LirBlock::new(0, vec![imm(0, 5), imm(1, 7), add(2, 4, 5, 7), copy(3, 6, 4)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow_mut().clear());
+        let got = tied(&input, Default::default());
+        let names: Vec<_> =
+            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        assert_eq!(names, ["mov", "mov", "mov", "add", "mov"], "the premise: the add was untied: {names:?}");
+        let computed = crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow().clone());
+        let twice: Vec<u32> =
+            computed.iter().copied().filter(|reg| computed.iter().filter(|r| *r == reg).count() > 1).collect();
+        assert!(twice.is_empty(), "computed more than once: {twice:?} of {computed:?}");
+    }
+
     /// The walk of one block of `insns`, every instruction passed and its
     /// copies read (`processCopy`), then asked.
     fn walked(insns: Vec<Arc<Insn>>) -> (LirBody, Vec<(u32, Option<RegId>, Option<RegId>)>) {
