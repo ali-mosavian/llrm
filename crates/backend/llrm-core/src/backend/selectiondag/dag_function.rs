@@ -312,13 +312,32 @@ pub fn selected(
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
     let builder_target = builder_target.with_runtime_calls(libcalls);
     let tables = tables(arch);
-    let frame = Frame::new(
-        convention
-            .parameters
-            .iter()
-            .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
-            .collect(),
-    );
+    // The builder numbers the fixed objects the stack parameters make: a byval
+    // aggregate one, a cell one for each register-sized part of its value (an
+    // integer of twice the widest register is two). Dropping a byval one
+    // moved every later parameter by its size (byvalue_struct_address passed
+    // the wrong address).
+    let widest = if m16 { 16 } else { 32 };
+    let mut cells = Vec::new();
+    for (at, parameter) in convention.parameters.iter().enumerate() {
+        match parameter {
+            Parameter::Bytes(disp) => cells.push(*disp),
+            Parameter::Cell(disp) => {
+                let two = function
+                    .parameters()
+                    .get(at)
+                    .is_some_and(
+                        |arg| matches!(
+                            module.context.types.get(function.value(*arg).ty),
+                            llrm_mir::types::Type::Int(bits) if *bits == 2 * widest
+                        ),
+                    );
+                cells.extend((0..if two { 2 } else { 1 }).map(|part| disp + part * i64::from(widest / 8)));
+            }
+            Parameter::Registers(_) => {}
+        }
+    }
+    let frame = Frame::new(cells);
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
     // type's alignment.

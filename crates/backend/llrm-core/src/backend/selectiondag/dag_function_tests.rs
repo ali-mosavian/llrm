@@ -592,3 +592,30 @@ b10:
         .expect("the cell past the object");
     assert!(past.base.is_some() && past.index.is_some(), "{past:?}");
 }
+
+const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @bar(ptr)
+define void @f(ptr %z, ptr byval([20 x i8]) %x, ptr %y) {
+entry:
+  call void @bar(ptr %x)
+  ret void
+}
+";
+
+/// The builder numbers a byval parameter's fixed object like any other; the
+/// frame left it out, so the address of `x` was the next parameter's, 20 bytes
+/// up (byvalue_struct_address passed `y`'s place to `bar`).
+#[test]
+fn a_byval_parameter_is_a_fixed_object_of_its_own() {
+    let module = llrm_mir::parse::module(BYVAL_ADDRESS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let lea = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Address)
+        .expect("the address of x");
+    let crate::model::ir::Loc::Address(a) = &lea.sources[0] else { panic!("{lea:?}") };
+    assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
+}
