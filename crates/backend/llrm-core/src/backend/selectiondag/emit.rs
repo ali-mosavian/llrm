@@ -139,14 +139,16 @@ impl EmitState {
         if let Some(&v) = self.vregs.get(&reg) {
             return v;
         }
-        let v = self.state.next_value;
-        self.state.next_value += 1;
+        let v = self.next_value;
+        self.next_value += 1;
         self.vregs.insert(reg, v);
         v
     }
 
     pub fn next_address(&mut self) -> i64 {
-        self.state.next_address()
+        let at = self.at;
+        self.at += 1;
+        at
     }
 }
 
