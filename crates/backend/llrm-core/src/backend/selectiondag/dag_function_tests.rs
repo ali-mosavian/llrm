@@ -1095,7 +1095,7 @@ fn a_float_to_int_conversion_is_a_truncating_store() {
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fistt"))
+        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fisttp"))
         .expect("a fistt");
     assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
 }
@@ -1165,6 +1165,135 @@ fn every_part_of_a_far_phi_is_defined() {
     for insn in done.body.insns().iter() {
         for used in &insn.uses {
             assert!(defined.contains(used), "value {used} is read and never defined: {:?}", insn.what);
+        }
+    }
+}
+
+const FLOAT_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare float @rf()
+declare double @rd(double)
+define float @g() {
+entry:
+  %a = call float @rf()
+  %b = fmul float %a, 2.0
+  ret float %b
+}
+define double @h(double %x) {
+entry:
+  %a = call double @rd(double %x)
+  %b = call double @rd(double %x)
+  %c = fadd double %a, %b
+  ret double %c
+}
+";
+
+/// A float call result is the stack's top after the call (an unnamed load of no
+/// cell); one live across another call cannot stay on the x87 stack and the
+/// function is refused, not left for the stackifier to fail the compile.
+#[test]
+fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "g", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    assert!(
+        insns.iter().filter_map(|i| i.what.as_ref()).any(|w| {
+            w.op == Operation::FloatLoad
+                && w.name.as_deref() == Some("")
+                && w.sources.is_empty()
+                && matches!(&w.dests[..], [Loc::Held(h)] if h.width == 10)
+        }),
+        "an unnamed load of the stack top"
+    );
+    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
+    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+}
+
+const GLOBAL_INDEXED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [64 x i8] zeroinitializer
+define ptr @f(i32 %i, i32 %j) {
+entry:
+  %p = getelementptr i8, ptr @a, i32 %i
+  %q = getelementptr i8, ptr %p, i32 %j
+  ret ptr %q
+}
+define i8 @g(i32 %i) {
+entry:
+  %p = getelementptr i8, ptr @a, i32 %i
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+";
+
+/// A cell of a symbol has a displacement field to carry the relocation: a `lea`
+/// of a symbol and two registers had none and the object encoder refused it
+/// ("no field for", memfuncs_runtime did not assemble).
+#[test]
+fn a_symbol_cell_has_a_displacement_field() {
+    use crate::model::ir::{Loc, Operation, Space};
+    let module = llrm_mir::parse::module(GLOBAL_INDEXED).expect("parses");
+    for name in ["g"] {
+        let done =
+            selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let cells: Vec<_> = insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .flat_map(|w| w.sources.iter().chain(&w.dests))
+            .filter_map(|l| match l {
+                Loc::Mem(m) if m.addr.is_some_and(|a| a.space == Space::Segment) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!cells.is_empty(), "{name} has a cell of the symbol");
+        assert!(cells.iter().all(|m| m.disp_width >= 2), "{name}: {cells:?}");
+        let _ = Operation::Move;
+    }
+}
+
+const DOUBLE_BITS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %b = bitcast double %x to i64
+  %t = trunc i64 %b to i32
+  %r = and i32 %t, 16777215
+  ret i32 %r
+}
+";
+
+/// The low word of a double reached the matcher as the double's x87 register
+/// (`and v5(4 bytes) = v5(10-byte fdiv result) & mask`): no code does that.
+/// A float read as an integer is a refusal; float_conversions_loop did not
+/// assemble (`mov [esp], mm0`).
+#[test]
+fn a_double_read_as_its_words_is_refused_not_emitted() {
+    let module = llrm_mir::parse::module(DOUBLE_BITS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
+    if let Err(why) = &done {
+        assert!(why.0.contains("floating value used as an integer") || !why.0.is_empty(), "{why:?}");
+    }
+    // Whatever it is, no integer instruction reads a 10-byte floating value.
+    if let Ok(done) = done {
+        let floating: std::collections::HashSet<u32> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .flat_map(|w| w.dests.iter())
+            .filter_map(|d| match d {
+                crate::model::ir::Loc::Held(h) if h.width == 10 => Some(h.value),
+                _ => None,
+            })
+            .collect();
+        for what in done.body.insns().iter().filter_map(|i| i.what.as_ref()) {
+            for l in what.dests.iter().chain(&what.sources) {
+                assert!(
+                    !matches!(l, crate::model::ir::Loc::Held(h) if h.width != 10 && floating.contains(&h.value)),
+                    "{what:?}"
+                );
+            }
         }
     }
 }
