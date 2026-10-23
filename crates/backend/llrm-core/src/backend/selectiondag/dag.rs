@@ -872,7 +872,10 @@ impl SelectionDAG {
     }
 
     /// `getSrcValue`.
-    pub fn get_src_value(&mut self, key: u32) -> SDValue {
+    pub fn get_src_value(
+        &mut self,
+        key: u32,
+    ) -> SDValue {
         self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
