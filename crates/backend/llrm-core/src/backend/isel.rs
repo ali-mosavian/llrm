@@ -800,7 +800,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-fn natural_align(
+pub(crate) fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,

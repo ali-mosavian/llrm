@@ -237,6 +237,30 @@ pub fn selected(
             .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
             .collect(),
     );
+    // The function's static allocas are frame objects 0, 1, ... in the order
+    // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
+    // type's alignment.
+    let mut allocas: Vec<(i32, llrm_mir::module::ValueId)> =
+        info.static_allocas.iter().map(|(value, index)| (*index, value.clone())).collect();
+    allocas.sort();
+    for (index, value) in allocas {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return refuse("an alloca that is not an instruction");
+        };
+        let instruction = function.instruction(def);
+        let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
+            return refuse("an alloca that is not an alloca");
+        };
+        if !instruction.operands.is_empty() {
+            return refuse("an alloca with a count");
+        }
+        let types = &module.context.types;
+        let size = layout.alloc_size(types, allocated) as i64;
+        let align =
+            crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
+        debug_assert_eq!(made, index, "frame objects are numbered as the builder numbered them");
+    }
     let mut hooks = X86Hooks::new(Options {
         cpu: Cpu::I486,
         opt_none: false,
