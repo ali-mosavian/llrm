@@ -831,3 +831,29 @@ fn nothing_that_sets_flags_goes_between_a_test_and_the_branches_that_read_it() {
         );
     }
 }
+
+const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @far() addrspace(1)
+declare void @near()
+define void @f() {
+entry:
+  call addrspace(1) void @far()
+  call void @near()
+  ret void
+}
+";
+
+/// A call of far code is a far call: the call sites are marked in `far`, as
+/// the old selector marks them. The DAG path left the set empty, so every
+/// call was a near `call` of a far routine and the program crashed at once
+/// (99 real-mode programs under `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_far_code_is_marked_far() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(i64, String)> = done.calls.iter().map(|(at, name)| (*at, name.clone())).collect();
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let far: Vec<&str> = sites.iter().filter(|(at, _)| done.far.contains(at)).map(|(_, name)| name.as_str()).collect();
+    assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
+}
