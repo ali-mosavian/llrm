@@ -175,7 +175,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD | Owner | What | Where |
 |---|---|---|---|
 | SD1 | plan | MIR, not LLVM IR, is the builder's input | §2 |
-| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `selectiondag/lowering.rs` |
+| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `llrm-x86/src/dag/lowering.rs` |
 | SD3 | sdag-c | 16-bit real-mode address components | §2 |
 | SD4 | sdag-c | BX/SI/DI/BP address classes on virtual registers | §2 |
 | SD5 | sdag-a | calling conventions from `Convention::place` | §2 |
@@ -187,7 +187,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
-| SD14 | sdag-b | floating types always legal (no soften/expand) | `selectiondag/lowering.rs` |
+| SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-x86/src/dag/lowering.rs` |
 | SD15 | sdag-a | `FindMergedConditions` not ported | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
@@ -199,7 +199,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
 | SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
-| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `llrm-x86/src/dag/actions.rs` |
 | SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
 | SD34 | sdag-c | address folds not translated: BEXTR, x32 `any_extend`, sign/zero-extend re-association | `llrm-dagisel/src/x86_addr.rs` |
 | SD35 | sdag-c | no 64-bit, x32, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
