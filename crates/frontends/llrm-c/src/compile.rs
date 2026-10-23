@@ -107,18 +107,21 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 fn libcalls(
     target: &dyn llrm_target::Target,
     abi: Option<&str>,
-) -> Result<Vec<(String, u32)>, String> {
+    format: &str,
+) -> Result<Vec<(String, u32, String)>, String> {
     let description = target.runtime("c").ok_or("this target has no C runtime")?;
     let names = libcall_names(&description.table()?);
     if names.is_empty() {
         return Ok(Vec::new());
     }
     let profile = Profile::for_abi(target, abi)?;
-    let cc = target
-        .calling()
-        .named(&profile.convention)
-        .and_then(|one| one.cc.clone())
-        .ok_or_else(|| format!("calling.toml has no {} with a cc", profile.convention))?;
+    // A routine the source declares and does not mark: in the default registers
+    // where the ABI has them, else C's.
+    let convention = if profile.flags.iter().any(|flag| flag == "-ecc") { &profile.cdecl } else { &profile.registers };
+    let calling = target.calling();
+    let one = calling.named(convention).ok_or_else(|| format!("calling.toml has no {convention}"))?;
+    let cc = one.cc.clone().ok_or_else(|| format!("calling.toml has no {convention} with a cc"))?;
+    let pattern = one.symbol.get(format).map_or("*", String::as_str);
     let number = match cc.as_str() {
         "cdecl" => 0,
         other => llrm_mir::opcode::CONVENTIONS
@@ -127,7 +130,13 @@ fn libcalls(
             .map(|(_, number)| *number)
             .ok_or_else(|| format!("no calling convention {other:?}"))?,
     };
-    Ok(names.into_iter().map(|name| (name, number)).collect())
+    Ok(names
+        .into_iter()
+        .map(|name| {
+            let symbol = pattern.replace('*', &name);
+            (name, number, symbol)
+        })
+        .collect())
 }
 
 /// The routines a runtime description names as its own (`libcalls`): none
@@ -654,7 +663,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         entry_requests,
         codegen: {
             let options = bound.options(&flags, machine);
-            let libcalls = libcalls(&*bound.target, options.abi.as_deref())?;
+            let libcalls = libcalls(&*bound.target, options.abi.as_deref(), options.object_format)?;
             llrm_core::driver::Options { rounds_float_spills: true, libcalls, ..options }
         },
         flags,
@@ -1777,17 +1786,29 @@ mod tests {
     /// type.
     /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
     /// there), a named one is a call: the m16 runtime names none and the m32
-    /// one names none until its `memcpy` is shipped
-    /// (runtime/c/x86-m32/ext.asm).
+    /// one names `memcpy` (runtime/c/x86-m32/ext.asm).
     #[test]
     fn test_a_runtime_names_its_libcalls_and_none_by_default() {
         let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
         assert_eq!(super::libcall_names(&table), ["memcpy"]);
         assert!(super::libcall_names(&toml::Table::new()).is_empty());
-        for target in [&llrm_x86_m16::M16 as &dyn llrm_target::Target, &llrm_x86_m32::M32] {
-            let described = target.runtime("c").unwrap().table().unwrap();
-            assert!(super::libcall_names(&described).is_empty(), "{} names no libcalls yet", target.name());
-        }
+        let names =
+            |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
+        assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
+        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy"]);
+    }
+
+    /// The call of `memcpy` named the routine `memcpy` in the stack convention:
+    /// the m32 runtime has `memcpy_` (registers) and `_memcpy` (sysv), so the
+    /// link failed with "memcpy is an undefined reference" once it was flipped
+    /// on.
+    #[test]
+    fn test_the_libcall_is_the_symbol_a_declared_memcpy_would_have() {
+        let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
+        let watcom = super::libcalls(m32, Some("watcom"), "omf").unwrap();
+        let sysv = super::libcalls(m32, Some("sysv"), "omf").unwrap();
+        assert_eq!(watcom.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["memcpy_"]);
+        assert_eq!(sysv.iter().map(|one| one.2.as_str()).collect::<Vec<_>>(), ["_memcpy"]);
     }
 
     #[test]
