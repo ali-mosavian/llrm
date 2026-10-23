@@ -80,6 +80,13 @@ pub trait GlobalMap {
         symbol: u32,
         offset: i64,
     ) -> Addr;
+
+    /// The address whose value is the segment `symbol` lives in (`seg g`), or
+    /// DGROUP's where it names none or a near one.
+    fn segment(
+        &self,
+        symbol: Option<u32>,
+    ) -> Addr;
 }
 
 /// The readonly cell that holds a constant's bytes (`constpool`), one for each
@@ -646,6 +653,19 @@ impl Emitter<'_, '_> {
         n: u32,
         opcode: u32,
     ) -> Result<(), EmitError> {
+        // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
+        if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let symbol = match node.ops.first().map(|op| self.dag.node(*op).data.clone()) {
+                Some(NodeData::Global { symbol, .. }) => Some(symbol),
+                _ => None,
+            };
+            let held = self.fresh(2);
+            self.values.insert(SDValue { node: n, res: 0 }, held.value);
+            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
+            return Ok(());
+        }
         let name =
             *self.ctx.names.get(&(opcode as u16)).ok_or_else(|| EmitError::Unsupported(format!("opcode {opcode}")))?;
         if name == "COPY" {
@@ -1249,7 +1269,10 @@ impl Emitter<'_, '_> {
                         vec![Loc::Held(lo), divisor],
                     );
                 }
-                // The product of the byte form is the word AX.
+                // The product of the byte form is the word AX; the node's own
+                // result is that value too, for a reader that does not go
+                // through the register.
+                self.values.insert(SDValue { node: n, res: 0 }, first.value);
                 self.accumulator.insert(if bytes == 1 { llrm_lir::registers::RegId::AX } else { low }, first);
                 self.accumulator.insert(high, second);
                 return Ok(Some(()));

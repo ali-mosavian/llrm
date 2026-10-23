@@ -147,9 +147,22 @@ impl FrameObjects for Temporaries<'_> {
 }
 
 /// The module's globals by `GlobalId`: where each symbol is.
-struct Globals<'a>(&'a Module);
+struct Globals<'a>(&'a Module, llrm_mir::spaces::Spaces);
 
 impl super::emit::GlobalMap for Globals<'_> {
+    fn segment(
+        &self,
+        symbol: Option<u32>,
+    ) -> Addr {
+        let (space, index) = match symbol {
+            Some(symbol) if self.0.global(llrm_mir::context::GlobalId(symbol)).address_space != self.1.near => {
+                (Space::Group, crate::backend::globals::segment_of(llrm_mir::context::GlobalId(symbol)))
+            }
+            _ => crate::hir::symbols::DGROUP,
+        };
+        Addr { index, ..Addr::new(space, 0) }
+    }
+
     fn address(
         &self,
         symbol: u32,
@@ -473,7 +486,7 @@ fn selected_in(
             work.push((id, block, extra));
         }
     }
-    let globals = Globals(module);
+    let globals = Globals(module, arch.layout().spaces.roles);
     // What a call destroys: the general registers the convention does not
     // keep for the caller.
     let regs = llrm_lir::registers::Regs(arch.registers());
