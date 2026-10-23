@@ -419,7 +419,7 @@ impl Emitter<'_, '_> {
                 let cell = self.cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
-                self.push(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(cell.address())]);
+                self.push(Operation::Address, "lea", vec![Loc::Held(held)], vec![if cell.addr.is_some() { Loc::Address(cell.address()) } else { Loc::Mem(cell) }]);
                 Ok(Some(()))
             }
             _ => Ok(None),
