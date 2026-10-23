@@ -585,10 +585,12 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             // A call through a register or a cell of memory.
-            "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" => {
-                let target = if name.contains('m') && !name.starts_with("CALL32r") {
+            "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
+            | "CALL16m_NT" => {
+                let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
+                let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;
-                    Loc::Mem(self.cell(group, 4)?)
+                    Loc::Mem(self.cell(group, bytes)?)
                 } else {
                     self.operand(node.ops[0])?
                 };
@@ -746,6 +748,21 @@ impl Emitter<'_, '_> {
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let name = format!("set{}", &jump[1..]);
                 self.push(Operation::Unary, &name, vec![Loc::Held(held)], Vec::new());
+                Ok(Some(()))
+            }
+            // A condition stored straight to a byte of memory.
+            "SETCCm" => {
+                let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short setcc".to_owned()))?;
+                let cc = node
+                    .ops
+                    .get(5)
+                    .and_then(|op| self.dag.constant(*op))
+                    .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
+                    as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let cell = self.cell(group, 1)?;
+                let name = format!("set{}", &jump[1..]);
+                self.push(Operation::Unary, &name, vec![Loc::Mem(cell)], Vec::new());
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {

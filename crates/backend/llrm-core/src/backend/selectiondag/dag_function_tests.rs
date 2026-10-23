@@ -342,3 +342,25 @@ fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
         "idiv operands are held values: {divide:?}"
     );
 }
+
+const SETCC_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@flag = global i8 0
+define void @f(i32 %a, i32 %b) {
+entry:
+  %c = icmp slt i32 %a, %b
+  %z = zext i1 %c to i8
+  store i8 %z, ptr @flag
+  ret void
+}
+";
+
+/// A comparison stored to a byte is `SETCCm`, which the emitter did not know.
+#[test]
+fn a_comparison_stored_to_a_byte_is_a_setcc_on_memory() {
+    let module = llrm_mir::parse::module(SETCC_STORE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let set = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("setl")).expect("a setl");
+    assert!(matches!(set.dests[0], crate::model::ir::Loc::Mem(_)), "{set:?}");
+}
