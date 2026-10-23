@@ -353,6 +353,12 @@ SimpleNoBare: Tree = {
     Flow, Declaration, Data, Io, Graphics, Machine,
     // `x = e`, `a(i) = e`, `r.f = e`: a name until a pass knows what it names
     <t:NameRef> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
+    // `data = 1`, `error = 3`: a statement word shadowed by a variable, told by the `=`
+    <t:CtxName> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
+    <t:ErrName> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
+    // `Graphics.Init` and `obj.Method a, b`: a dotted name called as a statement
+    <r:NameRef> "period" <f:FieldName> => Tree::node("CallField", vec![r, f]),
+    <r:NameRef> "period" <f:FieldName> <a:ExpListNP> => Tree::node("CallFieldArgs", vec![r, f, a]),
     // `foo a, b`: a call without CALL or parentheses
     <n:Ident> <a:ExpListNP> => Tree::node("CallArgs", vec![n, a]),
     // `foo (a), b` and `foo(a)`: parentheses that are the call's or the first
@@ -465,7 +471,13 @@ ProcStmt: Tree = {
     "tkSUB" <n:ProcName> <p:Parms> <s:Opt<Kws<"tkSTATIC">>> => Tree::node("SUB", vec![n, p, s]),
 };
 ProcKind: Tree = { Kws<"tkFUNCTION">, Kws<"tkSUB"> };
-ProcName: Tree = { Ident, FnKeyword };
+ProcName: Tree = Dotted<ProcWord>;
+ProcWord: Tree = { Ident, FnKeyword };
+// `Math.Add` is one name or a field of `Math`: the symbol table says which.
+Dotted<W>: Tree = {
+    W,
+    <r:Dotted<W>> "period" <f:FieldName> => Tree::node("Field", vec![r, f]),
+};
 TypeName: Tree = { Ident, FnKeyword };
 CdeclAlias: Tree = {
     "tkCDECL" <a:("tkALIAS" <StrLit>)?> => Tree::opt(a),
@@ -498,7 +510,8 @@ DimName: Tree = <n:VarWord> <d:("tkLParen" <Opt<Sep<ArgItem>>> "tkRParen")?> <a:
 VarName: Tree = <n:VarWord> <p:Opt<EmptyParens>> <a:OptAs> => Tree::node("Var", vec![n, a]);
 ArrayName: Tree = <n:VarWord> <p:Opt<EmptyParens>> => n;
 // a function's name is a variable's too when no parenthesis follows
-VarWord: Tree = { Ident, FnKeyword, CtxName };
+VarWord: Tree = Dotted<VarWordBase>;
+VarWordBase: Tree = { Ident, FnKeyword, CtxName, ErrName };
 ConstAssign: Tree = <i:ConstName> "tkEQ" <e:Exp> => Tree::node("ConstAssign", vec![i, e]);
 // a constant may be named like `TFX.MASK%` or `mod.mem`: dots and words
 ConstName: Tree = {
