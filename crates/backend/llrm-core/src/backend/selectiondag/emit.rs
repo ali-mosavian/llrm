@@ -220,7 +220,7 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
-            ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg if self.writes_flags(node.ops[1]) || self.is_flags_result(node.ops[2]) => Ok(()),
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
@@ -359,12 +359,19 @@ impl Emitter<'_, '_> {
         self.state.next_address()
     }
 
+    /// Whether `register` is the flags register: LIR has no flags value, the
+    /// branch that reads them follows the instruction that sets them, so the
+    /// `CopyToReg EFLAGS` the matcher adds writes nothing.
+    fn writes_flags(
+        &self,
+        register: SDValue,
+    ) -> bool {
+        self.dag.node(register).data == NodeData::PhysReg(super::dagisel_adapter::EFLAGS_ID)
+    }
+
     /// Whether `value` is an implicit result of a machine node (EFLAGS from
-    /// `SUB32rr`, say) rather than one of its defs. Flags are implicit in
-    /// LIR: the branch that reads them follows the instruction that sets
-    /// them, so the `CopyToReg EFLAGS` the matcher adds writes nothing. (The
-    /// register number is not asked: the adapter's pin numbers share the
-    /// range of the builder's virtual registers.)
+    /// `SUB32rr`, say) rather than one of its defs: the same flags write
+    /// when the register is not named.
     fn is_flags_result(
         &self,
         value: SDValue,
