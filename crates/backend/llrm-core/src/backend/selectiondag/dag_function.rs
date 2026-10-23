@@ -294,7 +294,7 @@ pub fn selected(
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
         let from = emitted.len();
-        calls.extend(done.calls.iter().map(|(at, symbol)| (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.clone().unwrap_or_default())));
+        calls.extend(done.calls.iter().map(|(at, symbol)| (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())));
         emitted.extend(done.blocks);
         made.insert(block.0, from..emitted.len());
         exports.push((block, built.phi_updates));
