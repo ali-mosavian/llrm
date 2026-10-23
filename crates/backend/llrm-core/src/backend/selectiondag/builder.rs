@@ -482,6 +482,11 @@ impl Builder<'_> {
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
         }
+        // `LowerFormalArguments`: the first variadic argument is the next
+        // fixed object, which `va_start` stores the address of
+        if self.module.signature(self.function.ty).2 {
+            self.dag.var_args_frame_index = Some(-(fixed + 1));
+        }
         Ok(())
     }
 
