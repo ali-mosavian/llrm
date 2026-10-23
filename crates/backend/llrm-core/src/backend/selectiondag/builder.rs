@@ -532,6 +532,29 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `visitInvoke`: the call, then the branch to the normal block. The
+    /// unwind edge is a CFG edge only; QB's runtime enters its pad, so no
+    /// `EH_LABEL`s or tables (DEVIATE SD102).
+    fn visit_invoke(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: &llrm_mir::opcode::CallInfo,
+    ) -> Result<(), Refused> {
+        // the arguments, the normal and unwind blocks, then the callee
+        let [.., Operand::Block(normal), Operand::Block(_), callee] = instruction.operands[..] else {
+            return Err(Refused("invoke without its blocks"));
+        };
+        let mut call = instruction.clone();
+        call.operands.truncate(instruction.operands.len() - 3);
+        call.operands.push(callee);
+        self.visit_call(&call, info)?;
+        let root = self.control_root();
+        let dest = self.dag.get_basic_block(normal.0);
+        let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
@@ -1030,7 +1053,10 @@ impl Builder<'_> {
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
-            Opcode::Invoke(_) => return Err(Refused("invoke")),
+            Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
+            // QB's pad is entered by the runtime, which `ehprepare` set up
+            // and whose selector it took out: nothing to build
+            Opcode::LandingPad { .. } => {}
             other => return Err(Refused(Box::leak(format!("instruction {}", other.mnemonic()).into_boxed_str()))),
         }
         if !instruction.opcode.is_terminator() {
