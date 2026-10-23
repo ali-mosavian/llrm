@@ -38,6 +38,7 @@ mod setcc_result;
 mod switch_dags;
 mod switches;
 mod type_actions;
+mod undef_float;
 mod vastart;
 mod wide_compare;
 mod wide_counts;
