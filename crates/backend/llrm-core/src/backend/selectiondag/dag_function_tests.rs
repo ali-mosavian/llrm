@@ -249,6 +249,8 @@ fn an_absolute_address_has_a_four_byte_displacement() {
         (Some((crate::model::ir::Space::Literal, 753664)), 4),
         "{cell:?}"
     );
+}
+
 const LOCAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a) {
 entry:
