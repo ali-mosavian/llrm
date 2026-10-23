@@ -660,6 +660,25 @@ impl Ast<'_> {
         }
     }
 
+    /// An argument of a call: `BYVAL x` and `SEG x` keep their marks.
+    fn call_argument(&mut self) -> R<Expr> {
+        let op = if self.eat(Kw::BYVAL) {
+            Some(Unary::ByValue)
+        } else if self.eat(Kw::SEG) {
+            Some(Unary::Segmented)
+        } else {
+            None
+        };
+        let value = self.exp()?;
+        Ok(match op {
+            Some(op) => {
+                let span = value.span();
+                Expr::Unary { op, operand: Box::new(value), span }
+            }
+            None => value,
+        })
+    }
+
     /// After `(`: the arguments to the `)`.
     fn arguments(&mut self) -> R<Vec<Expr>> {
         let mut values = Vec::new();
@@ -832,6 +851,9 @@ impl Ast<'_> {
             self.out.push(Statement::Label(name, start_span));
             return Ok(());
         }
+        if let Some(done) = self.isam_statement()? {
+            return Ok(done);
+        }
         if let Ok(target) = self.name_ref() {
             if self.eat(Kw::EQ) {
                 let value = self.exp().map_err(|_| self.i)?;
@@ -847,6 +869,18 @@ impl Ast<'_> {
             }
         }
         self.i = start;
+        // `a.b.Method (x) \ 2, y`: a dotted name, then arguments that may open with a parenthesis
+        if matches!(self.tok_n(1), Some(Tok::Period)) {
+            let (mut name, _) = self.identifier()?;
+            while matches!(self.tok_n(0), Some(Tok::Period)) {
+                self.i += 1;
+                name.push('.');
+                name.push_str(&self.field_name()?.0);
+            }
+            let arguments = self.call_arguments()?;
+            self.out.push(Statement::Call { name, arguments, explicit: false, span: start_span });
+            return Ok(());
+        }
         let (name, span) = match self.kinds[start] {
             Tok::FnWord => return self.fail(),
             _ => self.identifier()?,
@@ -856,10 +890,93 @@ impl Ast<'_> {
         Ok(())
     }
 
+    /// PDS and VBDOS have the ISAM file statements.
+    fn dialect_has_isam(&self) -> bool {
+        matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos)
+    }
+
+    /// An ISAM statement (`MOVEFIRST #1`, `SEEKEQ #t, key`, `CHECKPOINT`...), if the line starts with one.
+    fn isam_statement(&mut self) -> R<Option<()>> {
+        if !self.dialect_has_isam() || !matches!(self.kinds[self.i], Tok::Ident) {
+            return Ok(None);
+        }
+        let TokenKind::Identifier(word) = self.tokens[self.i].kind.clone() else { return Ok(None) };
+        match word.as_str() {
+            "CHDRIVE" | "STACK" => {
+                let span = self.span(self.i);
+                self.i += 1;
+                let arguments = if self.starts_exp() { vec![self.exp()?] } else { Vec::new() };
+                self.runtime(&word, arguments, span);
+                return Ok(Some(()));
+            }
+            "EVENT" => {
+                let span = self.span(self.i);
+                self.i += 1;
+                let at = self.i;
+                let verb = match self.kw() {
+                    Some(Kw::ON) => "ON",
+                    Some(Kw::OFF) => "OFF",
+                    _ => return self.fail(),
+                };
+                self.i += 1;
+                self.runtime("EVENT_SWITCH", vec![Expr::Name(verb.into(), self.span(at))], span);
+                return Ok(Some(()));
+            }
+            "DEFCUR" => {
+                self.def_type_of(TypeName::Currency)?;
+                return Ok(Some(()));
+            }
+            _ => {}
+        }
+        let name = match word.as_str() {
+            "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" | "ROLLBACK" | "CREATEINDEX" | "DELETE" | "DELETEINDEX"
+            | "DELETETABLE" | "INSERT" | "RETRIEVE" | "UPDATE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS"
+            | "SEEKEQ" | "SEEKGE" | "SEEKGT" | "SETINDEX" => word,
+            _ => return Ok(None),
+        };
+        let span = self.span(self.i);
+        self.i += 1;
+        let mut arguments = Vec::new();
+        match name.as_str() {
+            "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => {}
+            "ROLLBACK" => {
+                if self.starts_exp() {
+                    arguments.push(self.exp()?);
+                }
+            }
+            "DELETETABLE" => {
+                arguments.push(self.exp()?);
+                self.expect(Kw::Comma)?;
+                arguments.push(self.exp()?);
+            }
+            _ => {
+                // [#]table, then the statement's own list
+                self.eat(Kw::Lbs);
+                arguments.push(self.exp()?);
+                let list_required = !matches!(name.as_str(), "DELETE" | "MOVEFIRST" | "MOVELAST" | "MOVENEXT" | "MOVEPREVIOUS" | "SETINDEX");
+                if list_required || self.is(Kw::Comma) {
+                    self.expect(Kw::Comma)?;
+                    if matches!(name.as_str(), "INSERT" | "RETRIEVE" | "UPDATE") {
+                        arguments.push(self.name_ref()?);
+                    } else {
+                        loop {
+                            arguments.push(self.exp()?);
+                            if !self.eat(Kw::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.runtime(&name, arguments, span);
+        Ok(Some(()))
+    }
+
     fn call_arguments(&mut self) -> R<Vec<Expr>> {
         let mut arguments = Vec::new();
         while !(self.ends_statement() || self.is(Kw::ELSE)) {
-            arguments.push(self.exp()?);
+            arguments.push(self.call_argument()?);
             if !self.eat(Kw::Comma) {
                 break;
             }
@@ -951,6 +1068,14 @@ impl Ast<'_> {
             Kw::TYPE => return self.type_statement(),
             Kw::END => return self.end(),
             Kw::DIM | Kw::REDIM | Kw::STATIC | Kw::SHARED => return self.declaration_statement(k),
+            // PDS and VBDOS: ERR = n sets the error code
+            Kw::ERR if self.dialect_has_isam() && self.is_n(1, Kw::EQ) => {
+                self.i += 2;
+                let value = self.exp()?;
+                let target = Expr::Name("ERR".into(), span);
+                let whole = span_of(span, value.span());
+                self.out.push(Statement::Assign { target, value, span: whole });
+            }
             Kw::COMMON => return self.common(),
             Kw::CONST => return self.const_statement(),
             Kw::DEFINT | Kw::DEFLNG | Kw::DEFSNG | Kw::DEFDBL | Kw::DEFSTR => return self.def_type(k),
@@ -1020,9 +1145,7 @@ impl Ast<'_> {
                 let mut arguments = Vec::new();
                 if self.eat(Kw::LParen) && !self.eat(Kw::RParen) {
                     loop {
-                        self.eat(Kw::BYVAL);
-                        self.eat(Kw::SEG);
-                        arguments.push(self.exp()?);
+                        arguments.push(self.call_argument()?);
                         if self.eat(Kw::Comma) {
                             continue;
                         }
@@ -1586,6 +1709,13 @@ impl Ast<'_> {
     fn declaration_statement(&mut self, k: Kw) -> R<()> {
         self.i += 1;
         let shared = matches!(k, Kw::DIM | Kw::REDIM) && self.eat(Kw::SHARED);
+        let preserve = k == Kw::REDIM
+            && self.dialect_has_isam()
+            && matches!(self.tokens.get(self.i).map(|t| &t.kind), Some(TokenKind::Identifier(name)) if name == "PRESERVE")
+            && {
+                self.i += 1;
+                true
+            };
         let mut declarations = vec![self.declaration(shared, k == Kw::REDIM)?];
         while self.eat(Kw::Comma) {
             declarations.push(self.declaration(shared, k == Kw::REDIM)?);
@@ -1598,6 +1728,7 @@ impl Ast<'_> {
         };
         self.out.push(match k {
             Kw::DIM => Statement::Dim(declarations),
+            Kw::REDIM if preserve => Statement::RedimPreserve(declarations),
             Kw::REDIM => Statement::Redim(declarations),
             Kw::STATIC => Statement::Static(declarations),
             _ => Statement::Shared(declarations),
@@ -2215,6 +2346,17 @@ impl Ast<'_> {
         }
         let mut mode_written = false;
         let mut mode = FileMode::Random;
+        // PDS and VBDOS: OPEN database FOR ISAM RecordType "table" AS [#]file
+        if self.is(Kw::FOR) && self.dialect_has_isam() && matches!(self.tokens.get(self.i + 1).map(|t| &t.kind), Some(TokenKind::Identifier(name)) if name == "ISAM") {
+            self.i += 2;
+            let (record_type, _) = self.identifier()?;
+            let table = self.exp()?;
+            self.expect(Kw::AS)?;
+            self.eat(Kw::Lbs);
+            let file = self.exp()?;
+            self.out.push(Statement::OpenIsam { database: first, record_type, table, file, span });
+            return Ok(());
+        }
         if self.eat(Kw::FOR) {
             mode_written = true;
             mode = match self.kw() {

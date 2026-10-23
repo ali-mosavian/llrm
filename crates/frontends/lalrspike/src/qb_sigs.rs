@@ -155,7 +155,10 @@ MKC$ n=>Str:pv
 SSEG t=>Int:pv
 SSEGADD t=>Long:pv
 STACK =>Long:pv
-GETINDEX$ n=>Str:pv
+GETINDEX$ n=>Str:pvP
+BOF n=>Int:pvP
+TEXTCOMP s,s=>Int:pv
+SAVEPOINT =>Int:pv
 DATESERIAL n,n,n=>Double:v
 DATEVALUE s=>Double:v
 DOEVENTS =>Int:vP
@@ -164,6 +167,18 @@ MSGBOX s|s,n|s,n,s=>Int:vS
 TIMESERIAL n,n,n=>Double:v
 TIMEVALUE s=>Double:v
 FORMAT$ n|n,s=>Str:v
+YEAR n=>Int:vP
+MONTH n=>Int:vP
+DAY n=>Int:vP
+HOUR n=>Int:vP
+MINUTE n=>Int:vP
+SECOND n=>Int:vP
+WEEKDAY n=>Int:vP
+NOW =>Double:v
+RGB n,n,n=>Long:v
+QBCOLOR n=>Int:v
+TEXTWIDTH s=>Int:v
+TEXTHEIGHT s=>Int:v
 ";
 
 fn class_of(letter: char) -> Class {

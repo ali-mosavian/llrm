@@ -3548,6 +3548,8 @@ impl Compiler {
                         self.tag_last(Tag::SetSegment);
                     }
                 }
+                Statement::RedimPreserve(_) => return self.fail("REDIM PRESERVE is not supported"),
+                Statement::OpenIsam { .. } => return self.fail("OPEN FOR ISAM is not supported"),
                 Statement::OpenClassic { .. } => return self.fail("the classic OPEN mode$, #file, path$ form is not supported"),
                 Statement::Open { access, lock, record_length, mode_written, mode, .. }
                     if access.is_some() || lock.is_some() || record_length.is_some() || !mode_written || *mode == FileMode::Random =>
