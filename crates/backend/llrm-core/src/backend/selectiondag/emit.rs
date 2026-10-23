@@ -270,14 +270,14 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let name =
             *self.ctx.names.get(&(opcode as u16)).ok_or_else(|| EmitError::Unsupported(format!("opcode {opcode}")))?;
-        let desc =
-            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "COPY" {
             return self.copy(n);
         }
         if let Some(done) = self.special(n, name)? {
             return Ok(done);
         }
+        let desc =
+            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -394,6 +394,15 @@ impl Emitter<'_, '_> {
             .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
+    /// Whether `value` is an `IMPLICIT_DEF` machine node.
+    fn is_implicit_def(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let ISD::Machine(op) = self.dag.opcode(value) else { return false };
+        self.ctx.names.get(&(op as u16)).is_some_and(|name| name.split('|').next() == Some("IMPLICIT_DEF"))
+    }
+
     /// Opcodes `x86.instr` has no row for but LIR has a form of: the constant
     /// loads (`MOV32r0` is `mov r, 0`, which a later pass makes `xor r, r`),
     /// `MOV32ImmSExti8`, and `LEA32r`/`LEA16r` (`lea r, [address]`). `None`:
@@ -405,6 +414,50 @@ impl Emitter<'_, '_> {
     ) -> Result<Option<()>, EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let width = width(node.values[0]);
+        let result = SDValue { node: n, res: 0 };
+        match name.split('|').next().unwrap_or(name) {
+            // The low byte, word or dword of a register is the same value
+            // viewed narrower (`Held { width, ..held }`); the high byte
+            // (AH) is a different register.
+            "EXTRACT_SUBREG" => {
+                let index = self.constant(node.ops[1])?;
+                if !matches!(index, 1 | 4 | 6) {
+                    return Err(EmitError::Unsupported(format!("EXTRACT_SUBREG index {index}")));
+                }
+                let Loc::Held(source) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("EXTRACT_SUBREG of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // A register-class constraint is the allocator's business.
+            "COPY_TO_REGCLASS" => {
+                let Loc::Held(source) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("COPY_TO_REGCLASS of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            // An undefined value reads as zero, as the old selector's undef does.
+            "IMPLICIT_DEF" => {
+                let held = self.fresh(width);
+                self.values.insert(result, held.value);
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: 0, width, address: None })]);
+                return Ok(Some(()));
+            }
+            // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider value.
+            "INSERT_SUBREG" => {
+                if !self.is_implicit_def(node.ops[0]) {
+                    return Err(EmitError::Unsupported("INSERT_SUBREG into a defined register".to_owned()));
+                }
+                let Loc::Held(source) = self.operand(node.ops[1])? else {
+                    return Err(EmitError::Unsupported("INSERT_SUBREG of a non-value".to_owned()));
+                };
+                self.values.insert(result, source.value);
+                return Ok(Some(()));
+            }
+            _ => {}
+        }
         let constant = match name {
             "MOV32r0" => Some(0),
             "MOV32r1" => Some(1),
