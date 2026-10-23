@@ -441,7 +441,7 @@ scan_one        proc    near
                 jmp     @@scanbytes
 ;; the bytes between, none of them al: repe scasb, backwards when bp is -1
 @@scanbytes:
-                xor     ch, ch
+                movzx   ecx, cl                 ;; all of ecx counts: the caller's upper half is not 0
                 cld
                 cmp     ebp, 0
                 jg      @F

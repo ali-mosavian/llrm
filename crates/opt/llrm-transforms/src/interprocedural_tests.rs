@@ -1233,3 +1233,60 @@ fn test_an_available_externally_function_is_not_cloned_for_a_constant() {
     stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, ..Threshold::none() });
     assert!(module.named("g.constprop.1").is_none(), "{}", printed(&module));
 }
+
+/// `stamp_with` over `module` three times with one cache: as it is, with the
+/// caller `@f` edited (its first actual is 1), and with a fact of the module
+/// moved (`@place` states a return attribute). Each call's solves, and the
+/// ranges the first call stamped.
+fn stamped_thrice() -> ([usize; 3], String) {
+    let mut module = parsed(&bounded_recursion(""));
+    llrm_mir::program::Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        let eligible = unexported(program);
+        let mut cache = llrm_analysis::parameter_ranges::Cache::default();
+        let mut solves = [0; 3];
+        let mut last = 0;
+        for call in 0..3 {
+            match call {
+                1 => {
+                    let (context, f) = program.modules[0].function_mut("f").expect("@f");
+                    let (_, inst) = f
+                        .walk()
+                        .find(|&(_, inst)| matches!(f.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_)))
+                        .expect("the call");
+                    let mut operands = f.instruction(inst).operands.clone();
+                    let llrm_mir::module::Operand::Constant(zero) = operands[0] else { panic!("a constant") };
+                    operands[0] = llrm_mir::module::Operand::Constant(context.int(context.get(zero).ty, 1));
+                    f.set_operands(inst, operands);
+                }
+                2 => {
+                    let (_, place) = program.modules[0].function_mut("place").expect("@place");
+                    place.return_attrs.push(llrm_mir::facts::Fact::NoUndef.carrier());
+                }
+                _ => {}
+            }
+            llrm_analysis::parameter_ranges::stamp_with(program, &eligible, &mut cache);
+            solves[call] = cache.solves - last;
+            last = cache.solves;
+        }
+        solves
+    })
+    .map(|solves| (solves, printed(&module)))
+    .unwrap()
+}
+
+/// A calling body is solved once while it, its own parameters' attributes and
+/// the module's facts stand: the first call solves `@f` once and `@place` once
+/// a round (its own parameter is stamped each round); an edited caller is
+/// solved again and nothing else; a moved module fact solves them all. Without
+/// the cache every round of every call solved every caller.
+#[test]
+fn test_the_stamp_solves_a_calling_body_again_only_when_it_or_the_facts_moved() {
+    let (solves, text) = stamped_thrice();
+    assert!(text.contains("range(i16 "), "premise: something was stamped: {text}");
+    assert!(solves[0] >= 2, "the first call solves its callers: {solves:?}");
+    assert_eq!(solves[1], 1, "only the edited @f is solved again; @place stands: {solves:?}");
+    assert_eq!(
+        solves[2], 2,
+        "a moved module fact solves both callers again, the cache must not return the stale solve: {solves:?}"
+    );
+}

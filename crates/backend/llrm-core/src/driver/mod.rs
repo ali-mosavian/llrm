@@ -458,6 +458,11 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    if options.isel == crate::backend::shadow::Selector::Dag {
+        timed("mir memset patterns", || {
+            program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
+        })?;
+    }
     timed("mir bit counts", || {
         program
             .modules
@@ -603,7 +608,7 @@ pub fn statement_table(
         code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
     code.push(masm::InlinePart::Bytes(vec![0; word]));
-    let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
+    let what = Semantics { name: Some("statement-table".into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let mut body = lir::LirBody::new(
         "$QB$STAT",

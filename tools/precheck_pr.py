@@ -7,7 +7,8 @@ Run in the worktree of the PR's branch. Every check runs and every failure is na
 stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `new_lib_failures`) on the branch itself:
 
 1. the branch contains the current feat/parity tip, and merges with it cleanly (a conflict names its files);
-2. the description has `Owner:` and `Rows:` lines at the start of a line, a `Deletes:` or `Reverts:` line naming every path whose
+2. the description has `Owner:` and `Rows:` lines at the start of a line, a perf PR's description states the ledger command and a
+   `d_faces qbq-llrm` number, a `Deletes:` or `Reverts:` line naming every path whose
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
@@ -36,6 +37,9 @@ from buildslot import slotted  # noqa: E402
 
 BASE = "origin/feat/parity"
 OWNER = re.compile(r"^Owner:\s*\S+", re.M)
+# The board's compile-cost command (docs/working/ledger-command.md): a perf PR's before/after pair is taken with it.
+LEDGER_COMMAND = "-m32 -mabi=sysv -march=i486 -O2"
+LEDGER_NUMBER = re.compile(r"d_faces qbq-llrm[^\n]*\d", re.I)
 ROWS = re.compile(r"^Rows:\s*\S+", re.M)
 # Built from pieces: this file must not itself name what it looks for (the runner refuses an added line that does).
 CONFIG_DIR = re.compile(r"\." + "clau" + r"de\b")
@@ -75,6 +79,11 @@ def description_failures(
         why.append("no `Owner: <session>` line at the start of a line in the description")
     if not ROWS.search(body):
         why.append("no `Rows:` line at the start of a line in the description (`Rows: none` for a PR with no rows)")
+    if parity_squash.PERF_TITLE.search(title) and not (LEDGER_COMMAND in body and LEDGER_NUMBER.search(body)):
+        why.append(
+            "a perf PR states the board's ledger command (`" + LEDGER_COMMAND + "`) and a `d_faces qbq-llrm: <M Ir>` number "
+            "(docs/working/ledger-command.md); other programs may follow, labelled with their name"
+        )
     return why
 
 

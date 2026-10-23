@@ -62,7 +62,7 @@ fn made_implicit(
     let mut made = one.clone();
     made.what = Some(Semantics {
         op: Operation::Nothing,
-        name: Some(IMPLICIT_DEF.to_owned()),
+        name: Some(IMPLICIT_DEF.into()),
         dests: vec![dest],
         sources: Vec::new(),
         ..Semantics::new(Operation::Nothing)
@@ -91,7 +91,7 @@ pub fn left_as_zero(body: &LirBody) -> LirBody {
                     let mut made = (**one).clone();
                     made.what = Some(Semantics {
                         op: Operation::Move,
-                        name: Some("mov".to_owned()),
+                        name: Some("mov".into()),
                         dests: one.what.as_ref().expect("semantics").dests.clone(),
                         sources: vec![crate::model::ir::Loc::Imm(Imm { value: 0, width, address: None })],
                         ..Semantics::new(Operation::Move)
@@ -215,7 +215,7 @@ mod tests {
 
     fn def(value: u32) -> Arc<Insn> {
         let what = Semantics {
-            name: Some(IMPLICIT_DEF.to_owned()),
+            name: Some(IMPLICIT_DEF.into()),
             dests: vec![held(value)],
             ..Semantics::new(Operation::Nothing)
         };
@@ -227,7 +227,7 @@ mod tests {
         from: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(into)],
             sources: vec![held(from)],
             ..Semantics::new(Operation::Move)
@@ -241,7 +241,7 @@ mod tests {
         second: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(into)],
             sources: vec![held(first), held(second)],
             ..Semantics::new(Operation::Binary)
@@ -258,7 +258,7 @@ mod tests {
     }
 
     fn names(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     /// The use becomes an undef read and the definition goes.

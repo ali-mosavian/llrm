@@ -26,13 +26,19 @@ fn tracked(pattern: &str) -> Vec<Source> {
     String::from_utf8_lossy(&out.stdout)
         .split('\0')
         .filter(|path| !path.is_empty() && Path::new(ROOT).join(path).is_file())
-        .map(|path| Source { path: path.to_owned(), text: fs::read_to_string(Path::new(ROOT).join(path)).expect("tracked file reads") })
+        .map(|path| Source {
+            path: path.to_owned(),
+            text: fs::read_to_string(Path::new(ROOT).join(path)).expect("tracked file reads"),
+        })
         .collect()
 }
 
 /// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
 /// to sdag-a, SD200.. to sdag-b, SD300.. to sdag-c, SD400.. to sdag-d.
-fn block_problem(id: u32, owner: &str) -> Option<String> {
+fn block_problem(
+    id: u32,
+    owner: &str,
+) -> Option<String> {
     if (44..100).contains(&id) {
         return Some(format!("SD{id} is in the closed range SD44..SD99"));
     }
@@ -47,7 +53,11 @@ fn block_problem(id: u32, owner: &str) -> Option<String> {
 
 /// Every problem with the registry in `plan` given the declarations in
 /// `code` (the `//!` headers of Rust files) and `docs` (other working docs).
-fn problems(plan: &Source, code: &[Source], docs: &[Source]) -> Vec<String> {
+fn problems(
+    plan: &Source,
+    code: &[Source],
+    docs: &[Source],
+) -> Vec<String> {
     let row = Regex::new(r"^\|\s*SD(\d+)\s*\|\s*([\w-]+)\s*\|").unwrap();
     let bold = Regex::new(r"^\s*[-*]\s+\*\*SD(\d+)\*\*").unwrap();
     let deviate = Regex::new(r"^//!\s*(?:[-*]\s+\*\*SD(\d+)\*\*|DEVIATE\s+SD(\d+):)").unwrap();
@@ -95,7 +105,10 @@ fn problems(plan: &Source, code: &[Source], docs: &[Source]) -> Vec<String> {
     out
 }
 
-fn source(path: &str, text: &str) -> Source {
+fn source(
+    path: &str,
+    text: &str,
+) -> Source {
     Source { path: path.to_owned(), text: text.to_owned() }
 }
 
@@ -123,7 +136,10 @@ fn a_number_declared_twice_is_reported() {
     let code = [source("a.rs", "//! DEVIATE SD2: one\n"), source("b.rs", "//! - **SD2** two\n")];
     let found = problems(&plan, &code, &[]);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("SD2 is declared 2 times") && found[0].contains("a.rs:1") && found[0].contains("b.rs:1"), "{found:?}");
+    assert!(
+        found[0].contains("SD2 is declared 2 times") && found[0].contains("a.rs:1") && found[0].contains("b.rs:1"),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -137,7 +153,10 @@ fn a_number_with_no_row_is_reported() {
 /// owner's block is reported.
 #[test]
 fn a_number_outside_its_owners_block_is_reported() {
-    let plan = source("plan.md", "| SD50 | sdag-a | x | y |\n| SD150 | sdag-b | x | y |\n| SD120 | sdag-a | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n");
+    let plan = source(
+        "plan.md",
+        "| SD50 | sdag-a | x | y |\n| SD150 | sdag-b | x | y |\n| SD120 | sdag-a | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n",
+    );
     let found = problems(&plan, &[], &[]);
     assert!(found.iter().any(|problem| problem.contains("SD50 is in the closed range")), "{found:?}");
     assert!(found.iter().any(|problem| problem.contains("SD150") && problem.contains("sdag-a's block")), "{found:?}");
@@ -152,7 +171,10 @@ fn a_missing_next_free_line_is_reported() {
 
 #[test]
 fn a_duplicate_registry_row_is_reported() {
-    let plan = source("plan.md", "| SD1 | a | x | y |\n| SD1 | b | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n");
+    let plan = source(
+        "plan.md",
+        "| SD1 | a | x | y |\n| SD1 | b | x | y |\n\nNext free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400.\n",
+    );
     let found = problems(&plan, &[], &[]);
     assert!(found.iter().any(|problem| problem.contains("SD1 has 2 rows")), "{found:?}");
 }
@@ -162,6 +184,9 @@ fn a_duplicate_registry_row_is_reported() {
 #[test]
 fn references_are_not_declarations() {
     let plan = source("plan.md", PLAN_TEXT);
-    let code = [source("a.rs", "//! DEVIATE SD1: real\n//! see (DEVIATE SD1) and SD2 in the text\nfn f() { /* DEVIATE SD1: not a header */ }\n")];
+    let code = [source(
+        "a.rs",
+        "//! DEVIATE SD1: real\n//! see (DEVIATE SD1) and SD2 in the text\nfn f() { /* DEVIATE SD1: not a header */ }\n",
+    )];
     assert!(problems(&plan, &code, &[]).is_empty());
 }

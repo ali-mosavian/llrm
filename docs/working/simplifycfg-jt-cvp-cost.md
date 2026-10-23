@@ -59,3 +59,10 @@ The targets are guesses from the callee costs until each is profiled in isolatio
 Two sites that name their cost: `masm::frame_omitted` clones the whole item list 11 times (5.65 M inclusive: `stack_addressed` does `items.clone()` for each pass of its retry loop), and `peephole::_register_effects_worked` clones a `Semantics` as the cache key 5,559 times (5.8 M inclusive, `EffectsHeld::remember`). `Semantics` carries a `String` name and two `Vec<Loc>`: every clone of an `Insn` is three allocations.
 
 Next, each its own PR with Ir on both arms and objects identical: `Semantics` names as `&'static str`/`Arc<str>` (removes the String clones), the key of `EffectsHeld` by reference, `stack_addressed` without the per-pass clone, and `with_capacity` at the `RawVec<u32>` pushes.
+
+## Closed: the flat tail (2026-10-24, parity 4b9b80871f)
+
+- `RawVec<u32>::grow_one` is 1.69 M Ir inclusive (the 5.4 M above was `finish_grow`'s share), in a dozen callers of at most 0.57 M each (`exposed_allocas`, `LiveIntervals::new`, `push_operand`, `references::of`): a `with_capacity` at each is about 1 M.
+- The SimplifyCfg visitors are 0.4 to 1.4 M each after #3834; `occurrence::arms` allocates 2.6 M in 14 callers, and `undefpred::removed` mutates while it walks them, so no iterator replaces the `Vec`.
+- LVI: the asks equal the pin's (593 / 574 against 516 / 475), the edge evaluations are 1.85x (12.3 K against 6.6 K), `get_edge_value_local` is a faithful port (1,153 against 498 Ir a call, flat); sharing CVP's `LviCache` with JumpThreading moved nothing (+37 K Ir, objects identical) and was not landed.
+- Landed: #3792 (-1.41 M), #3834 (-3.62 M), #3871 (-1.86 M), #3872 (-3.43 M). Open: `Vec<Loc>` clones in `Semantics` (11 M inclusive), 2026-11-06.

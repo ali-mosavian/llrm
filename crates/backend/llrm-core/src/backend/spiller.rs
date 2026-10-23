@@ -117,23 +117,26 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
-use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
+use crate::analysis::intervals::{self as ranges, Segment, key};
 use crate::backend::allocate::Error;
+use crate::backend::bodyfacts::{
+    _addresses_by, _at, _copies, _literals_by, _may_write, _one_definition, _plain_move, _renamed, _stable_loads,
+    _stable_loads_by, _widest, check_postings, folded_source_in,
+};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
+use crate::backend::slots::{_existing_colors, Shared, WORD};
 use crate::greedy::remat::group_source;
 use crate::greedy::tii::{
     _inserted, _mov, _width, _with, fold_copy_member, is_encodable, load_reg_from_stack_slot, store_reg_to_stack_slot,
 };
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
-use crate::support::hash::{IndexMap, IndexSet};
+use crate::model::lir::{self, Block, Insn, LirBody};
+use crate::support::hash::IndexMap;
 use crate::support::pyset::PySet;
 
-/// `frame.WORD` at the width type this module uses.
-const WORD: u32 = frames::WORD as u32;
 /// Python duck-types `frame.cell(value, width)` over a `Frame` and a
 /// `_Cells`; this is that one method.
 pub trait CellOf {
@@ -559,7 +562,7 @@ pub fn materialized(
                     _inserted(
                         &one,
                         Semantics {
-                            name: Some("lea".to_owned()),
+                            name: Some("lea".into()),
                             dests: vec![Loc::Held(Held { value: fresh, width: _width(&one, value) })],
                             sources: vec![Loc::Address(address.clone())],
                             ..Semantics::new(Operation::Address)
@@ -1081,20 +1084,6 @@ fn _identity(
     slots.contains_key(&SlotKey::from(pair.0)) && slots.get(&SlotKey::from(pair.0)) == slots.get(&SlotKey::from(pair.1))
 }
 
-pub fn _plain_move(one: &Insn) -> Option<(u32, u32)> {
-    let what = one.what.as_ref()?;
-    if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
-        return None;
-    }
-    let (Loc::Held(dest), Loc::Held(source)) = (&what.dests[0], &what.sources[0]) else {
-        return None;
-    };
-    if dest.width != source.width || !one.requires.is_empty() || !one.delivers.is_empty() {
-        return None;
-    }
-    Some((dest.value, source.value))
-}
-
 /// Values copied to and from a spilled one that are cheaper in its slot.
 ///
 /// A group is a Python set whose iteration order decides which new keys
@@ -1443,369 +1432,6 @@ fn _color_slots(
     Ok(())
 }
 
-/// The colours of the homes from their `LiveStacks` ranges, the allocator's
-/// own: the ranges of what was spilled to each, not the liveness of the cell
-/// worked out again. None where a home has no range (it was not made by an
-/// inline spill).
-fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interval>)>> {
-    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
-    homes.sort_unstable();
-    let first = u32::MAX - homes.len() as u32;
-    homes
-        .iter()
-        .enumerate()
-        .map(|(index, home)| {
-            let segments = frame.stacks.get(home)?;
-            let capacity = frame.capacities.get(home).map_or(WORD, |one| *one as u32).max(WORD);
-            let segments = segments.iter().map(|(start, end)| Segment { start: *start, end: *end }).collect();
-            Some((*home, capacity, vec![Interval::new(first + index as u32, segments)]))
-        })
-        .collect()
-}
-
-/// The spill slots of `body` shared by what is never live together, once, as
-/// the allocation is kept: LLVM's `StackSlotColoring`, which runs after
-/// register allocation over the slots `InlineSpiller` gave each spilled
-/// register, and GCC's IRA slot reuse (`ira_reuse_stack_slot`), which colours
-/// slots after the spill decisions. Colouring each slot as it was made cost
-/// every spill the intervals of every home (`intervals homes`, 5% of a large
-/// function's compile) for allocations that were then thrown away.
-///
-/// The homes are coloured most-named first, as LLVM colours by decreasing
-/// weight, and in the order they were made too; the colouring with fewer bytes
-/// is kept (the first where they tie). A home goes to the slot of a home it is
-/// copied to or from, where that fits (`slots::choose`: the copy vanishes),
-/// else the first that fits. The slots are laid out again, the most named where
-/// a one-byte displacement reaches: from BP the top of the frame, the first
-/// slot made, as 16-bit code reaches it; from SP the bottom, where 32-bit code,
-/// which omits the frame register, reaches it. Every cell moves with its home.
-/// The frame and the body are returned changed; a body with no two homes that
-/// can share is returned as it is.
-pub fn slots_colored(
-    body: &LirBody,
-    frame: &mut Frame,
-) -> LirBody {
-    if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
-        return body.clone();
-    }
-    if llrm_support::env_flag!("LLRM_STACKS_DEBUG") {
-        let homes: std::collections::BTreeSet<i64> = frame.slots.values().copied().collect();
-        let covered = homes.iter().filter(|home| frame.stacks.contains_key(*home)).count();
-        eprintln!("stacks {}: {} homes, {} with a LiveStacks range", body.name, homes.len(), covered);
-    }
-    let colors = match _stacked_colors(frame) {
-        Some(colors) if !llrm_support::env_flag!("LLRM_NO_STACKS") => {
-            COLOURED.with(|one| one.set((one.get().0 + 1, one.get().1)));
-            colors
-        }
-        _ => {
-            COLOURED.with(|one| one.set((one.get().0, one.get().1 + 1)));
-            _existing_colors(body, frame).0
-        }
-    };
-    let by_home: IndexMap<i64, &(i64, u32, Vec<Interval>)> = colors.iter().map(|color| (color.0, color)).collect();
-    // The order the homes were made in.
-    let mut order: Vec<i64> = Vec::new();
-    for home in frame.slots.values() {
-        if !order.contains(home) {
-            order.push(*home);
-        }
-    }
-    let mut sorted_homes: Vec<i64> = order.clone();
-    sorted_homes.sort_unstable();
-    // The home a cell lies in: a cell of the selector's slots lies in none.
-    let home_of = |disp: i64| -> Option<i64> {
-        let home = sorted_homes.partition_point(|home| *home <= disp).checked_sub(1).map(|at| sorted_homes[at])?;
-        by_home.get(&home).filter(|color| disp < home + i64::from(color.1)).map(|_| home)
-    };
-    let mut home_uses: IndexMap<i64, usize> = IndexMap::default();
-    for block in &body.blocks {
-        for one in block.insns.iter() {
-            for (disp, _, _) in frame_cells(one) {
-                if let Some(home) = home_of(disp) {
-                    *home_uses.entry(home).or_default() += 1;
-                }
-            }
-        }
-    }
-    // The homes a loop reads or writes: `loopslots` holds one in a register
-    // through the loop unless some access is wider than a word.
-    let depths = body.facts.0.get::<crate::analysis::graph::LoopDepths>(body);
-    let mut in_loop: BTreeSet<i64> = BTreeSet::new();
-    for block in &body.blocks {
-        if depths.get(&block.at).copied().unwrap_or(0) == 0 {
-            continue;
-        }
-        for one in block.insns.iter() {
-            for (disp, _, _) in frame_cells(one) {
-                if let Some(home) = home_of(disp) {
-                    in_loop.insert(home);
-                }
-            }
-        }
-    }
-    let mut partners_of: IndexMap<i64, Vec<i64>> = IndexMap::default();
-    for (from, to) in _slot_copies(body) {
-        if let (Some(a), Some(b)) = (home_of(from.0), home_of(to.0)) {
-            if a != b {
-                partners_of.entry(a).or_default().push(b);
-                partners_of.entry(b).or_default().push(a);
-            }
-        }
-    }
-    let colour = |processing: &[i64]| -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<i64, usize>) {
-        let mut shared: Vec<(i64, u32, Vec<Interval>)> = Vec::new();
-        let mut looped: Vec<bool> = Vec::new();
-        let mut into: IndexMap<i64, usize> = IndexMap::default();
-        for home in processing {
-            let Some((_, capacity, occupants)) = by_home.get(home).copied() else { continue };
-            let mut interval = Interval::new(0, Vec::new());
-            interval.segments = occupants.iter().flat_map(|one| one.segments.iter().copied()).collect();
-            interval.segments.sort_unstable_by_key(|segment| (segment.start, segment.end));
-            let partners: Vec<i64> = partners_of
-                .get(home)
-                .into_iter()
-                .flatten()
-                .filter_map(|other| into.get(other).map(|at| shared[*at].0))
-                .collect();
-            // A loop's slot is shared only by what is as wide: a word shares no
-            // slot a double word is read from, which no register stands in for
-            // (`loopslots`).
-            let same = |at: &usize| shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home));
-            let chosen = partners
-                .iter()
-                .find_map(|home| {
-                    shared
-                        .iter()
-                        .position(|one| one.0 == *home && crate::backend::slots::fits(one, &interval, *capacity))
-                })
-                .filter(same)
-                .or_else(|| {
-                    (0..shared.len())
-                        .filter(same)
-                        .find(|at| crate::backend::slots::fits(&shared[*at], &interval, *capacity))
-                });
-            match chosen {
-                Some(at) => {
-                    shared[at].2.push(interval);
-                    looped[at] |= in_loop.contains(home);
-                    into.insert(*home, at);
-                }
-                None => {
-                    shared.push((*home, *capacity, vec![interval]));
-                    looped.push(in_loop.contains(home));
-                    into.insert(*home, shared.len() - 1);
-                }
-            }
-        }
-        (shared, into)
-    };
-    // The colouring with fewest bytes of the orders tried: by where each home
-    // begins (first-fit in that order is optimal for intervals of one
-    // segment), most named, and made.
-    let begins = |home: &i64| -> i64 {
-        by_home
-            .get(home)
-            .and_then(|(_, _, occupants)| {
-                occupants.iter().flat_map(|one| one.segments.first()).map(|one| one.start).min()
-            })
-            .unwrap_or(i64::MAX)
-    };
-    let mut by_start = order.clone();
-    by_start.sort_by_key(begins);
-    let mut by_weight = order.clone();
-    by_weight.sort_by_key(|home| std::cmp::Reverse(home_uses.get(home).copied().unwrap_or(0)));
-    let mut by_size = order.clone();
-    by_size.sort_by_key(|home| (std::cmp::Reverse(by_home.get(home).map_or(0, |one| one.1)), begins(home)));
-    // What a colouring costs: the cells (by how many name each slot) beyond the
-    // reach of a one-byte displacement once the most named slots are nearest,
-    // then the bytes of the slots.
-    let score = |found: &(Vec<(i64, u32, Vec<Interval>)>, IndexMap<i64, usize>)| -> (usize, u64) {
-        let mut uses: Vec<(usize, u32)> = found.0.iter().map(|one| (0, one.1)).collect();
-        for (home, count) in &home_uses {
-            if let Some(color) = found.1.get(home) {
-                uses[*color].0 += count;
-            }
-        }
-        uses.sort_by_key(|one| std::cmp::Reverse(one.0));
-        let (mut at, mut far) = (0u32, 0usize);
-        for (count, capacity) in uses {
-            at += capacity;
-            if at > REACH {
-                far += count;
-            }
-        }
-        (far, found.0.iter().map(|one| u64::from(one.1)).sum())
-    };
-    let mut best = colour(&by_start);
-    for tried in [&by_size, &by_weight, &order] {
-        let found = colour(tried);
-        if score(&found) < score(&best) {
-            best = found;
-        }
-    }
-    let (shared, into) = best;
-    if shared.len() == order.len() {
-        return body.clone();
-    }
-    let mut uses: Vec<usize> = vec![0; shared.len()];
-    for (home, count) in &home_uses {
-        if let Some(color) = into.get(home) {
-            uses[*color] += count;
-        }
-    }
-    let mut ranked: Vec<usize> = (0..shared.len()).collect();
-    ranked.sort_by_key(|color| (std::cmp::Reverse(uses[*color]), *color));
-    if body.bits >= 32 {
-        ranked.reverse();
-    }
-    // The homes move: their ranges are of the old ones.
-    let mut again = Frame {
-        slots: IndexMap::default(),
-        capacities: IndexMap::default(),
-        stacks: IndexMap::default(),
-        ..frame.clone()
-    };
-    let mut first_key: Vec<Option<SlotKey>> = vec![None; shared.len()];
-    for (key, home) in &frame.slots {
-        if let Some(color) = into.get(home) {
-            first_key[*color].get_or_insert_with(|| key.clone());
-        }
-    }
-    let mut placed: Vec<Option<i64>> = vec![None; shared.len()];
-    for color in ranked {
-        let Some(key) = first_key[color].clone() else { continue };
-        let Ok(new) = again.slot(key, i64::from(shared[color].1)) else { return body.clone() };
-        placed[color] = Some(new);
-    }
-    let mut moved: IndexMap<i64, i64> = IndexMap::default();
-    for (key, home) in &frame.slots {
-        let new = into.get(home).and_then(|color| placed[*color]).unwrap_or(*home);
-        again.slots.insert(key.clone(), new);
-        moved.insert(*home, new);
-    }
-    let Some(out) = crate::backend::slots::moved(body, &moved) else { return body.clone() };
-    *frame = again;
-    _identities_dropped(&out)
-}
-
-/// A plain move between a value and one frame cell: the value and the cell
-/// (displacement, width).
-fn _cell_move(
-    one: &Insn,
-    load: bool,
-    floats: bool,
-) -> Option<(u32, (i64, u32))> {
-    let what = one.what.as_ref()?;
-    // An x87 value read from or written to its cell is the same move.
-    let float = floats && what.op == if load { Operation::FloatLoad } else { Operation::FloatStore };
-    if !float && (what.op != Operation::Move || what.name.as_deref() != Some("mov"))
-        || one.group.is_some()
-        || !one.requires.is_empty()
-        || !one.delivers.is_empty()
-        || !one.clobbers.is_empty()
-        || what.dests.len() != 1
-        || what.sources.len() != 1
-    {
-        return None;
-    }
-    let (held, cell) = if load { (&what.dests[0], &what.sources[0]) } else { (&what.sources[0], &what.dests[0]) };
-    let (Loc::Held(held), Loc::Mem(cell)) = (held, cell) else { return None };
-    let addr = cell.addr.filter(|addr| addr.space == Space::Frame)?;
-    // An element of an array is no slot: the index says which cell it is.
-    if cell.index.is_some() || cell.index_through != RegId::None {
-        return None;
-    }
-    (float || held.width == cell.width).then_some((held.value, (addr.disp, cell.width)))
-}
-
-/// The cells a value is reloaded from and stored back to in the next
-/// instruction of `block`: a copy of one slot to another, through a value read
-/// only there.
-fn _slot_copies(body: &LirBody) -> Vec<((i64, u32), (i64, u32))> {
-    let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
-    for one in body.insns() {
-        for value in &one.defines {
-            *defined.entry(*value).or_default() += 1;
-        }
-        for value in &one.uses {
-            *used.entry(*value).or_default() += 1;
-        }
-    }
-    let mut found = Vec::new();
-    for block in &body.blocks {
-        for pair in block.insns.windows(2) {
-            if let (Some((value, from)), Some((stored, to))) =
-                (_cell_move(&pair[0], true, false), _cell_move(&pair[1], false, false))
-            {
-                if value == stored && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
-                    found.push((from, to));
-                }
-            }
-        }
-    }
-    found
-}
-
-/// `StackSlotColoring::RemoveDeadStores`
-/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/StackSlotColoring.cpp#L482>):
-/// `body` without the store that follows a load of the same value from the
-/// same cell (a move between two spilled values that sharing slots put in one
-/// cell, or a reload a hoisted spill stores back). The load goes too when the
-/// store is the last read of its value.
-///
-/// DEVIATE D-SSC1: the store may follow copies of the loaded value. LLVM runs
-/// this after the rewriter, which has dropped the copies whose two ends got one
-/// register; the body here still has them. Exit: run after the rewrite.
-fn _identities_dropped(body: &LirBody) -> LirBody {
-    let (mut defined, mut used): (IndexMap<u32, usize>, IndexMap<u32, usize>) = Default::default();
-    let mut candidates = 0usize;
-    for one in body.insns() {
-        for value in &one.defines {
-            *defined.entry(*value).or_default() += 1;
-        }
-        for value in &one.uses {
-            *used.entry(*value).or_default() += 1;
-        }
-        candidates += usize::from(frame_cells(&one).next().is_some());
-    }
-    if candidates == 0 {
-        return body.clone();
-    }
-    let cell_move = |one: &Insn, load: bool| _cell_move(one, load, true);
-    let mut changed = false;
-    let mut blocks = Vec::with_capacity(body.blocks.len());
-    for block in &body.blocks {
-        let mut gone = vec![false; block.insns.len()];
-        for at in 0..block.insns.len() {
-            let Some((value, cell)) = cell_move(&block.insns[at], true) else { continue };
-            // The value and the copies of it before the store.
-            let mut same = vec![value];
-            let mut next = at + 1;
-            while let Some(one) = block.insns.get(next) {
-                match one.copy_of() {
-                    Some((to, from)) if same.contains(&from) && one.group.is_none() => same.push(to),
-                    _ => break,
-                }
-                next += 1;
-            }
-            let Some(store) = block.insns.get(next) else { continue };
-            if !same.iter().any(|alias| cell_move(store, false) == Some((*alias, cell))) {
-                continue;
-            }
-            changed = true;
-            gone[next] = true;
-            if next == at + 1 && defined.get(&value) == Some(&1) && used.get(&value) == Some(&1) {
-                gone[at] = true;
-            }
-        }
-        let insns: Vec<Arc<Insn>> =
-            block.insns.iter().zip(&gone).filter(|(_, gone)| !**gone).map(|(one, _)| Arc::clone(one)).collect();
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
-    }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
-}
-
 /// What each of `values` is copied to or from: another value, or a frame cell's
 /// home. Only the instructions that name one of `values` are looked at: those
 /// the postings of the body give, not every instruction of it.
@@ -1859,260 +1485,6 @@ fn _copied_among<'a>(
     copies
 }
 
-/// Spill-slot colors already present in the current rewritten body, and
-/// every value's interval: one liveness pass answers both.
-///
-/// Python numbers each home's pseudo-value below every held value, which is
-/// negative; `u32` cannot say that, so they are numbered in the same order
-/// at the top of the range instead. Nothing compares them with a real value.
-fn _existing_colors(
-    body: &LirBody,
-    frame: &mut Frame,
-) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
-    let found = _existing_colors_by(body, frame, false);
-    if llrm_support::env_flag!("LLRM_CHECK_COLORS") {
-        let whole = _existing_colors_by(body, frame, true);
-        // What is asked of a value is where it is live (`slots::fits` overlaps
-        // segments of values with those of homes), so the homes and the values
-        // are compared together, the weight not read: it counts a value an
-        // instruction names twice once more than the body made of the homes
-        // does.
-        assert!(
-            found.1.len() == whole.1.len()
-                && found.1.iter().all(|(value, _)| whole.1.get(value).is_some())
-                && _same_liveness(&found, &whole),
-            "{}: the slot colors or where a value is live differ from working them out whole",
-            body.name
-        );
-    }
-    found
-}
-
-/// Whether two sets of slot colors, with the values' intervals beside them, say
-/// the same of where each is live, whatever numbers their positions carry. A
-/// body found by parts numbers its instructions as it remembers them and one
-/// worked out whole as it lays them out, so the same liveness comes in other
-/// numbers (27 of the 71 vsgcc programs at -O2, the first four segments of a
-/// home six instructions apart). What the colors read of a position is where it
-/// lies among the others, so the order of all the ends, the homes' and the
-/// values' in one order, is compared.
-fn _same_liveness(
-    one: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
-    other: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
-) -> bool {
-    let shape = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| {
-        let homes: Vec<(i64, u32, Vec<(u32, usize)>)> = colors
-            .iter()
-            .map(|(home, color, intervals)| {
-                (*home, *color, intervals.iter().map(|one| (one.value, one.segments.len())).collect())
-            })
-            .collect();
-        let values: std::collections::BTreeMap<u32, usize> =
-            lives.iter().map(|(value, interval)| (*value, interval.segments.len())).collect();
-        (homes, values)
-    };
-    // Every end of every segment, the homes' then the values' by value number,
-    // as its rank among the distinct positions.
-    let ranks = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| -> Vec<usize> {
-        let by_value: std::collections::BTreeMap<u32, &Interval> =
-            lives.iter().map(|(value, interval)| (*value, interval)).collect();
-        let ends: Vec<i64> = colors
-            .iter()
-            .flat_map(|c| &c.2)
-            .chain(by_value.values().copied())
-            .flat_map(|i| &i.segments)
-            .flat_map(|s| [s.start, s.end])
-            .collect();
-        let mut distinct = ends.clone();
-        distinct.sort_unstable();
-        distinct.dedup();
-        ends.iter().map(|end| distinct.binary_search(end).expect("an end is among them")).collect()
-    };
-    shape(&one.0, &one.1) == shape(&other.0, &other.1) && ranks(&one.0, &one.1) == ranks(&other.0, &other.1)
-}
-
-// `_existing_colors`, with the intervals of the homes' pseudo-values found
-// among themselves and the body's own remembered, or, `whole`, as the body
-// with the homes in it is worked out at once.
-thread_local! {
-    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// (colourings from the allocator's `LiveStacks`, colourings that worked
-    /// the homes' liveness out of the body) on this thread.
-    static COLOURED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-}
-
-/// How many colourings of homes this thread made from `LiveStacks`, and how
-/// many by working the liveness of the cells out, for a test that a spilling
-/// allocation does not do the second.
-pub fn colourings() -> (usize, usize) {
-    COLOURED.with(std::cell::Cell::get)
-}
-
-/// How many instructions this thread has made again with the homes among their
-/// values, for a test that the usual ask does not.
-pub fn made_for_homes() -> usize {
-    MADE.with(std::cell::Cell::get)
-}
-
-/// The intervals `_existing_colors` reads: the body's own, as remembered and
-/// shared, and the homes' beside them.
-struct Lives {
-    shared: Option<Shared>,
-    own: IndexMap<u32, Interval>,
-}
-
-/// The body's intervals: the allocator's, where it holds them for this body,
-/// else worked out and remembered.
-enum Shared {
-    Held(std::sync::Arc<crate::backend::live::LiveRanges>),
-    Worked(std::sync::Arc<IndexMap<u32, Interval>>),
-}
-
-impl Shared {
-    fn of(
-        body: &LirBody,
-        index: Option<&ranges::Indexes>,
-    ) -> Self {
-        match crate::backend::live::held(body) {
-            Some(live) => Self::Held(live),
-            None => Self::Worked(ranges::intervals_shared(body, index)),
-        }
-    }
-
-    fn get(
-        &self,
-        value: &u32,
-    ) -> Option<&Interval> {
-        match self {
-            Self::Held(live) => live.get(value),
-            Self::Worked(map) => map.get(value),
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            Self::Held(live) => live.len(),
-            Self::Worked(map) => map.len(),
-        }
-    }
-
-    fn iter(&self) -> Box<dyn Iterator<Item = (&u32, &Interval)> + '_> {
-        match self {
-            Self::Held(live) => Box::new(live.iter()),
-            Self::Worked(map) => Box::new(map.iter()),
-        }
-    }
-}
-
-impl Lives {
-    fn get(
-        &self,
-        value: &u32,
-    ) -> Option<&Interval> {
-        self.own.get(value).or_else(|| self.shared.as_ref().and_then(|shared| shared.get(value)))
-    }
-
-    fn len(&self) -> usize {
-        self.own.len() + self.shared.as_ref().map_or(0, |shared| shared.len())
-    }
-
-    fn iter(&self) -> impl Iterator<Item = (&u32, &Interval)> + '_ {
-        self.own.iter().chain(self.shared.iter().flat_map(|shared| shared.iter()))
-    }
-}
-
-/// The intervals of the homes' pseudo-values (`first..`) walked in a body of
-/// the instructions that name them alone (whole parallel copies, which share a
-/// point), at the slots they have in the body.
-fn homes_by_sparse_body(
-    body: &LirBody,
-    index: &ranges::Indexes,
-    changed: &[(usize, usize, Arc<Insn>)],
-    first: u32,
-) -> IndexMap<u32, Interval> {
-    let sparse_blocks: Vec<Block> = body
-        .blocks
-        .iter()
-        .map(|block| LirBlock {
-            at: block.at,
-            insns: Vec::new().into(),
-            succ: block.succ.clone(),
-            phis: block.phis.clone(),
-            cold: block.cold,
-            align: block.align,
-            max_skip: block.max_skip,
-        })
-        .collect();
-    let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
-    let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
-    let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
-    for (block_index, at, made) in changed.iter().cloned() {
-        by_block.entry(block_index).or_default().push((at, made));
-    }
-    for (block_index, mut named) in by_block {
-        let original = &body.blocks[block_index].insns;
-        // The runs of a parallel copy a named instruction is in, as the walk
-        // takes them together.
-        let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
-        for (at, made) in named.drain(..) {
-            if let Some(group) = original[at].group {
-                let (mut low, mut high) = (at, at);
-                while low > 0 && original[low - 1].group == Some(group) {
-                    low -= 1;
-                }
-                while high + 1 < original.len() && original[high + 1].group == Some(group) {
-                    high += 1;
-                }
-                for position in low..=high {
-                    wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
-                }
-            }
-            wanted.insert(at, made);
-        }
-        // An instruction's slot, which the body's numbering gives its original;
-        // `made` stands where that stood.
-        let block = &body.blocks[block_index];
-        let mut counted = 0;
-        let mut before: Option<usize> = None;
-        for (position, one) in wanted {
-            // Two instructions of one parallel copy with others between them
-            // are not one run here either.
-            if let (Some(earlier), Some(group)) = (before, one.group) {
-                if position > earlier + 1
-                    && sparse_insns[block_index].last().is_some_and(|last| last.group == Some(group))
-                {
-                    starts[block_index].push(index.slot(block, counted));
-                    sparse_insns[block_index].push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
-                }
-            }
-            before = Some(position);
-            counted = position;
-            starts[block_index].push(index.slot(block, position));
-            sparse_insns[block_index].push(one);
-        }
-    }
-    let sparse = body.with_blocks(
-        sparse_blocks.into_iter().zip(sparse_insns).map(|(block, insns)| block.with_insns(insns)).collect(),
-    );
-    ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first)
-}
-
-/// The same from where the homes occur: the instructions `changed` name them,
-/// so the walk need not look at the others. What the last bodies the homes were
-/// asked of left: their blocks, numbering, the homes' intervals (by the home's
-/// frame offset) and which instruction names which homes.
-#[derive(Default)]
-struct HomesHeld(Vec<Arc<HomesState>>);
-
-struct HomesState {
-    structure: Arc<HomesStructure>,
-    insns: Vec<crate::model::lir::Insns>,
-    index: Arc<ranges::Indexes>,
-    intervals: IndexMap<i64, Interval>,
-    known: BTreeSet<i64>,
-    count: usize,
-}
-
 /// How many times this body's facts have compared a held state's structure
 /// with the body's, block by block.
 pub fn homes_structures_compared(body: &LirBody) -> usize {
@@ -2125,16 +1497,6 @@ pub fn homes_redone(body: &LirBody) -> usize {
     body.facts.0.counted("homes-redone")
 }
 
-/// An earlier body's homes are shifted only while the instructions that changed
-/// are fewer than those that name a home: past that, looking at them costs more
-/// than finding the homes again (cells N=448: 895 Minstr kept, 316 never kept;
-/// d_faces the other way).
-const FACTOR: usize = 1;
-
-/// The bytes a one-byte displacement reaches below a frame register
-/// (`-128..128`).
-const REACH: u32 = 128;
-
 /// Whether the homes' intervals of a body are worth keeping for the next:
 /// keeping them costs a fixed `FIXED` instructions a call (the state, the
 /// lookups) and `KEEP` for each block of the body, and saves, for each segment
@@ -2143,579 +1505,6 @@ const REACH: u32 = 128;
 /// G (390 each) and shifted 6.1 M in 0.83 G (136 each); x_transpose, 23 calls
 /// of 41 intervals, lost 1.4 M kept (60 000 a call); a block of state is about
 /// 40.
-
-fn worth_keeping(
-    blocks: usize,
-    segments: usize,
-) -> bool {
-    const FIXED: usize = 60_000;
-    const KEEP: usize = 40;
-    const WALK: usize = 390;
-    const SHIFT: usize = 136;
-    FIXED + blocks * KEEP < segments * (WALK - SHIFT)
-}
-
-/// What of a body's shape the homes' intervals depend on besides its
-/// instructions: shared by the states of bodies that keep it.
-#[derive(PartialEq)]
-struct HomesStructure {
-    entry: i64,
-    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>)>,
-    odds: crate::model::lir::BlockOdds,
-    trips: Vec<(i64, i64)>,
-}
-
-impl HomesStructure {
-    fn is_of(
-        &self,
-        body: &LirBody,
-    ) -> bool {
-        body.facts.0.bump("homes-structures-compared");
-        self.entry == body.entry
-            && self.blocks.len() == body.blocks.len()
-            && self
-                .blocks
-                .iter()
-                .zip(&body.blocks)
-                .all(|((at, succ, phis), block)| *at == block.at && *succ == block.succ && *phis == block.phis)
-            && self.odds == body.odds
-            && self.trips == body.loop_trip_counts
-    }
-
-    fn of(body: &LirBody) -> Self {
-        Self {
-            entry: body.entry,
-            blocks: body.blocks.iter().map(|block| (block.at, block.succ.to_vec(), block.phis.to_vec())).collect(),
-            odds: body.odds.clone(),
-            trips: body.loop_trip_counts.clone(),
-        }
-    }
-}
-
-/// The frame cells `one` names: their displacement, width and whether it
-/// writes them.
-fn frame_cells(one: &Insn) -> impl Iterator<Item = (i64, u32, bool)> + '_ {
-    let cell = |operand: &Loc, defines: bool| -> Option<(i64, u32, bool)> {
-        let Loc::Mem(cell) = operand else { return None };
-        let addr = cell.addr?;
-        (addr.space == Space::Frame).then_some((addr.disp, cell.width, defines))
-    };
-    one.what
-        .iter()
-        .flat_map(
-            move |what| what.dests
-                .iter()
-                .filter_map(move |operand| cell(operand, true))
-                .chain(what.sources.iter().filter_map(move |operand| cell(operand, false))),
-        )
-}
-
-/// What names a home: an instruction, by the frame cells it names.
-enum Names<'a> {
-    Insn(&'a Insn),
-}
-
-/// The homes an instruction names, by place among the homes, as many as it
-/// has room for: more, and it is asked of its cells.
-#[derive(Clone, Copy, Default)]
-struct Places {
-    count: u8,
-    place: [u32; Places::ROOM],
-    /// Bit `i` set: it writes the cell of `place[i]`.
-    writes: u8,
-}
-
-impl Places {
-    const ROOM: usize = 4;
-
-    fn push(
-        &mut self,
-        place: usize,
-        writes: bool,
-    ) {
-        if let Some(slot) = self.place.get_mut(usize::from(self.count)) {
-            *slot = place as u32;
-            self.writes |= u8::from(writes) << self.count;
-        }
-        self.count = self.count.saturating_add(1);
-    }
-
-    /// The values it defines and reads among the `asked` homes, ascending and
-    /// once, in lists of the caller's emptied first; none where it names more
-    /// than it has room for (`false`: ask its cells).
-    fn sets_into(
-        &self,
-        first: u32,
-        asked: &[bool],
-        defined: &mut Vec<u32>,
-        used: &mut Vec<u32>,
-    ) -> bool {
-        defined.clear();
-        used.clear();
-        if usize::from(self.count) > Self::ROOM {
-            return false;
-        }
-        for at in 0..usize::from(self.count) {
-            let place = self.place[at] as usize;
-            if asked[place] {
-                if self.writes >> at & 1 == 1 { &mut *defined } else { &mut *used }.push(first + place as u32);
-            }
-        }
-        for list in [defined, used] {
-            list.sort_unstable();
-            list.dedup();
-        }
-        true
-    }
-
-    /// Whether it may name one of the `wanted` homes (by place); true where it
-    /// names more than it has room for.
-    fn may_name(
-        &self,
-        wanted: &[bool],
-    ) -> bool {
-        usize::from(self.count) > Self::ROOM
-            || self.place[..usize::from(self.count)].iter().any(|place| wanted[*place as usize])
-    }
-}
-
-/// An instruction that names a home.
-struct Named<'a> {
-    block: usize,
-    at: usize,
-    names: Names<'a>,
-    places: Places,
-}
-
-impl Named<'_> {
-    /// `sets`, ascending and once, in lists of the caller's that are emptied
-    /// first.
-    fn sets_into(
-        &self,
-        homes: &[i64],
-        first: u32,
-        wanted: &dyn Fn(i64) -> bool,
-        defined: &mut Vec<u32>,
-        used: &mut Vec<u32>,
-    ) {
-        defined.clear();
-        used.clear();
-        match &self.names {
-            Names::Insn(one) => {
-                for (disp, _, defines) in frame_cells(one) {
-                    if !wanted(disp) {
-                        continue;
-                    }
-                    if let Ok(place) = homes.binary_search(&disp) {
-                        if defines { &mut *defined } else { &mut *used }.push(first + place as u32);
-                    }
-                }
-            }
-        }
-        for list in [defined, used] {
-            list.sort_unstable();
-            list.dedup();
-        }
-    }
-
-    /// The values it defines and reads among the homes `wanted` allows (the
-    /// pseudo-value of a home is `first` and its place among `homes`).
-    fn sets(
-        &self,
-        homes: &[i64],
-        first: u32,
-        wanted: &dyn Fn(i64) -> bool,
-    ) -> (BTreeSet<u32>, BTreeSet<u32>) {
-        let (mut defined, mut used) = (BTreeSet::new(), BTreeSet::new());
-        match &self.names {
-            Names::Insn(one) => {
-                for (disp, _, defines) in frame_cells(one) {
-                    if !wanted(disp) {
-                        continue;
-                    }
-                    if let Ok(place) = homes.binary_search(&disp) {
-                        if defines { &mut defined } else { &mut used }.insert(first + place as u32);
-                    }
-                }
-            }
-        }
-        (defined, used)
-    }
-}
-
-/// The homes' intervals: those of the homes the instructions that changed since
-/// an earlier body do not name are that body's, shifted to the new numbering;
-/// the others are found from where they occur. A spill changes a few blocks and
-/// names one home or two; the intervals of the rest, across the whole body,
-/// were found afresh for each (2.0 G of compiling d_faces, 616 times).
-fn homes_kept(
-    body: &LirBody,
-    index: &Arc<ranges::Indexes>,
-    named: &[Named<'_>],
-    homes: &[i64],
-    first: u32,
-) -> IndexMap<u32, Interval> {
-    let pseudo = |home: usize| first + home as u32;
-    let fresh_for = |wanted: &[usize]| -> IndexMap<u32, Interval> {
-        let values: Vec<u32> = wanted.iter().map(|home| pseudo(*home)).collect();
-        // Only the instructions that name a wanted home, and only the wanted
-        // among what they name: the others' intervals are not asked.
-        let mut disps: Vec<i64> = wanted.iter().map(|home| homes[*home]).collect();
-        disps.sort_unstable();
-        let mut asked = vec![false; homes.len()];
-        for home in wanted {
-            asked[*home] = true;
-        }
-        let mut plan = crate::analysis::occurrences::Occurrences::default();
-        let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
-        for one in named.iter().filter(|one| one.places.may_name(&asked)) {
-            if !one.places.sets_into(first, &asked, &mut defined, &mut used) {
-                one.sets_into(homes, first, &|disp| disps.binary_search(&disp).is_ok(), &mut defined, &mut used);
-            }
-            if !defined.is_empty() || !used.is_empty() {
-                plan.plan(one.block, one.at, &defined, &used);
-            }
-        }
-        plan.ranges(body, index, &values)
-    };
-    // The state with the fewest blocks that differ from this body's, of those
-    // whose structure is this body's: the blocks are told apart by identity,
-    // and the structure, which is compared block by block, only for the states
-    // taken in that order until one is.
-    let kept = body
-        .facts
-        .0
-        .stash(
-            |held: &mut HomesHeld| {
-                let mut by_change: Vec<(usize, &Arc<HomesState>)> = held
-                    .0
-                    .iter()
-                    .map(|state| {
-                        let differing = state
-                            .insns
-                            .iter()
-                            .zip(&body.blocks)
-                            .filter(|(insns, block)| !insns.same_insns(&block.insns))
-                            .count();
-                        (differing, state)
-                    })
-                    .collect();
-                by_change.sort_by_key(|(differing, _)| *differing);
-                by_change.into_iter().find(|(_, state)| state.structure.is_of(body)).map(|(_, state)| Arc::clone(state))
-            },
-        );
-    let mut result: Option<IndexMap<u32, Interval>> = None;
-    if let Some(state) = &kept {
-        let blocks: Vec<(i64, &crate::model::lir::Insns)> =
-            state.structure.blocks.iter().zip(&state.insns).map(|((at, _, _), insns)| (*at, insns)).collect();
-        let differing = ranges::differing_blocks(&blocks, body);
-        let mut touched: BTreeSet<i64> = BTreeSet::new();
-        let changed = ranges::changed_runs(
-            &blocks,
-            &state.index,
-            body,
-            index,
-            &differing,
-            ((state.count + 16) / 4).min((named.len() + 16) / FACTOR),
-            &mut |run| {
-                // The homes it named then and the homes it names now.
-                for one in run {
-                    for (disp, _, _) in frame_cells(one) {
-                        if state.known.contains(&disp) || homes.binary_search(&disp).is_ok() {
-                            touched.insert(disp);
-                        }
-                    }
-                }
-            },
-        );
-        if changed * 4 <= state.count + 16 && changed * FACTOR <= named.len() + 16 {
-            let shift = ranges::Shift::between(&blocks, &state.index, body, index, &differing);
-            let redone: Vec<usize> = homes
-                .iter()
-                .enumerate()
-                .filter(|(_, home)| touched.contains(home) || !state.known.contains(home))
-                .map(|(at, _)| at)
-                .collect();
-            for _ in &redone {
-                body.facts.0.bump("homes-redone");
-            }
-            let fresh = fresh_for(&redone);
-            let mut out: IndexMap<u32, Interval> = IndexMap::default();
-            for (at, home) in homes.iter().enumerate() {
-                let value = pseudo(at);
-                if redone.binary_search(&at).is_ok() {
-                    if let Some(found) = fresh.get(&value) {
-                        out.insert(value, found.clone());
-                    }
-                } else if let Some(old) = state.intervals.get(home) {
-                    out.insert(
-                        value,
-                        Interval::new(
-                            value,
-                            old.segments
-                                .iter()
-                                .map(|segment| ranges::Segment {
-                                    start: shift.start(segment.start),
-                                    end: shift.end(segment.end),
-                                })
-                                .collect(),
-                        ),
-                    );
-                }
-            }
-            result = Some(out);
-        }
-    }
-    let result = result.unwrap_or_else(|| fresh_for(&(0..homes.len()).collect::<Vec<_>>()));
-    if kept.is_some() && llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
-        assert!(
-            result == fresh_for(&(0..homes.len()).collect::<Vec<_>>()),
-            "{}: the homes' intervals kept from an earlier body differ from finding them afresh",
-            body.name
-        );
-    }
-    // A state kept is one whose structure is this body's.
-    let structure = match &kept {
-        Some(state) => Arc::clone(&state.structure),
-        None => Arc::new(HomesStructure::of(body)),
-    };
-    if !worth_keeping(body.blocks.len(), result.values().map(|found| found.segments.len()).sum()) {
-        return result;
-    }
-    let state = HomesState {
-        structure,
-        insns: body.blocks.iter().map(|block| block.insns.clone()).collect(),
-        index: Arc::clone(index),
-        intervals: homes
-            .iter()
-            .enumerate()
-            .filter_map(|(at, home)| result.get(&pseudo(at)).map(|found| (*home, found.clone())))
-            .collect(),
-        known: homes.iter().copied().collect(),
-        count: body.blocks.iter().map(|block| block.insns.len()).sum(),
-    };
-    body.facts
-        .0
-        .stash(
-            |held: &mut HomesHeld| {
-                held.0.insert(0, Arc::new(state));
-                held.0.truncate(3);
-            },
-        );
-    result
-}
-
-fn _existing_colors_by(
-    body: &LirBody,
-    frame: &mut Frame,
-    whole: bool,
-) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
-    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
-    homes.sort_unstable();
-    if homes.is_empty() {
-        return (Vec::new(), Lives { shared: Some(Shared::of(body, None)), own: IndexMap::default() });
-    }
-    let first = u32::MAX - homes.len() as u32;
-    let pseudo: IndexMap<i64, u32> =
-        homes.iter().enumerate().map(|(index, home)| (*home, first + index as u32)).collect();
-    let mut capacities: IndexMap<i64, u32> =
-        homes.iter().map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32))).collect();
-    let mut unknown = false;
-    let (floor, hole) = (frame.floor, frame.hole);
-    let frame_spills = |disp: i64| disp < floor || (-hole..0).contains(&disp);
-
-    // Only an instruction that names a home is made again with it among its
-    // values; the others are the body's. Only those with a frame cell among
-    // their operands can, which are carried from the body this one was made
-    // from.
-    let mut flipped = false;
-    // The instructions that name a home: made again with them among their
-    // values only where the whole body is walked.
-    let mut named: Vec<Named<'_>> = Vec::new();
-    postings::following(body, |postings| {
-        for (block_index, block) in body.blocks.iter().enumerate() {
-            for at in postings.frames(block_index) {
-                let one = &block.insns[at as usize];
-                let mut names = false;
-                let mut places = Places::default();
-                for (disp, width, writes) in frame_cells(one) {
-                    if let Some((place, _, had)) = capacities.get_full_mut(&disp) {
-                        *had = (*had).max(width).max(WORD);
-                        places.push(place, writes);
-                        names = true;
-                    } else if frame_spills(disp) {
-                        unknown = true;
-                    }
-                }
-                if !names && !whole {
-                    continue;
-                }
-                // A value changes whether an instruction is a mark, and with it
-                // the slots after it: it is one made of nothing.
-                flipped |= names && one.is_meta();
-                named.push(Named { block: block_index, at: at as usize, names: Names::Insn(one), places });
-            }
-        }
-    });
-    if llrm_support::env_flag!("LLRM_CHECK_NAMED") {
-        // The body read whole, instruction by instruction.
-        let mut walked: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
-        let (mut walked_capacities, mut walked_unknown, mut walked_flipped) = (
-            homes
-                .iter()
-                .map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32)))
-                .collect::<IndexMap<i64, u32>>(),
-            false,
-            false,
-        );
-        for (block_index, block) in body.blocks.iter().enumerate() {
-            for (at, one) in block.insns.iter().enumerate() {
-                let Some(what) = &one.what else { continue };
-                let mut slot_of = |operand: &Loc| -> Option<u32> {
-                    let Loc::Mem(cell) = operand else { return None };
-                    let addr = cell.addr?;
-                    if addr.space != Space::Frame {
-                        return None;
-                    }
-                    if let Some(found) = pseudo.get(&addr.disp) {
-                        let had = walked_capacities[&addr.disp];
-                        walked_capacities.insert(addr.disp, had.max(cell.width).max(WORD));
-                        return Some(*found);
-                    }
-                    if frame_spills(addr.disp) {
-                        walked_unknown = true;
-                    }
-                    None
-                };
-                let framed = what
-                    .dests
-                    .iter()
-                    .chain(&what.sources)
-                    .any(
-                        |operand| matches!(
-                            operand,
-                            Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                        ),
-                    );
-                if !framed {
-                    continue;
-                }
-                let defined: BTreeSet<u32> = what.dests.iter().filter_map(&mut slot_of).collect();
-                let used: BTreeSet<u32> = what.sources.iter().filter_map(&mut slot_of).collect();
-                if defined.is_empty() && used.is_empty() && !whole {
-                    continue;
-                }
-                walked_flipped |= (!defined.is_empty() || !used.is_empty()) && one.is_meta();
-                walked.push((block_index, at, defined, used));
-            }
-        }
-        let carried: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = named
-            .iter()
-            .map(|one| {
-                let (defined, used) = one.sets(&homes, first, &|_| true);
-                (one.block, one.at, defined, used)
-            })
-            .collect();
-        assert!(
-            carried == walked
-                && capacities == walked_capacities
-                && unknown == walked_unknown
-                && flipped == walked_flipped,
-            "{}: the instructions that name a home, carried from the body this one was made from, differ from reading the body whole",
-            body.name
-        );
-    }
-    let changed_insns = || -> Vec<(usize, usize, Arc<Insn>)> {
-        MADE.with(|count| count.set(count.get() + named.len()));
-        named
-            .iter()
-            .map(|one| {
-                let (block_index, at) = (&one.block, &one.at);
-                let (defined, used) = one.sets(&homes, first, &|_| true);
-                let one = &body.blocks[*block_index].insns[*at];
-                let made = _with(one, |made| {
-                    made.defines = one
-                        .defines
-                        .iter()
-                        .copied()
-                        .chain(defined.iter().copied())
-                        .collect::<IndexSet<u32>>()
-                        .into_iter()
-                        .collect();
-                    made.uses = one
-                        .uses
-                        .iter()
-                        .copied()
-                        .chain(used.iter().copied())
-                        .collect::<IndexSet<u32>>()
-                        .into_iter()
-                        .collect();
-                });
-                (*block_index, *at, made)
-            })
-            .collect()
-    };
-    let shared;
-    let owned;
-    let index: &ranges::Indexes;
-    let live;
-    if whole || flipped || llrm_support::env_flag!("LLRM_CHECK_RANGES") {
-        let mut tracked = body.clone();
-        for (block_index, at, made) in changed_insns() {
-            let mut insns = tracked.blocks[block_index].insns.to_vec();
-            insns[at] = made;
-            tracked.blocks[block_index].insns = insns.into();
-        }
-        owned = ranges::indexed(&tracked);
-        index = &owned;
-        let busy = crate::analysis::frequency::Frequency::of(&tracked);
-        live = Lives {
-            shared: None,
-            own: if whole || flipped {
-                ranges::intervals_over(&tracked, Some(index), &busy)
-            } else {
-                let mut live = ranges::intervals(body, None);
-                // The homes' pseudo-values are the `first..` ids.
-                live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
-                live
-            },
-        };
-    } else {
-        // The slots are the body's own, remembered; the homes' pseudo-values
-        // are walked in a body of the instructions that name them alone
-        // (whole parallel copies, which share a point), at the slots they have
-        // in the body.
-        // The numbering the allocator's intervals of this body are in, where it
-        // holds them.
-        shared = crate::backend::live::held(body)
-            .map(|held| Arc::clone(held.index()))
-            .unwrap_or_else(|| ranges::indexed_shared(body));
-        index = &*shared;
-        let homes_found =
-            llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
-        if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
-            let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
-            assert!(
-                homes_found == walked,
-                "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions",
-                body.name
-            );
-        }
-        live = Lives { shared: Some(Shared::of(body, None)), own: homes_found };
-    }
-    let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
-    let mut colors = Vec::new();
-    for home in homes {
-        let interval = live.get(&pseudo[&home]);
-        let mut occupants: Vec<Interval> = interval.into_iter().cloned().collect();
-        if unknown {
-            occupants = vec![Interval::new(pseudo[&home], vec![Segment { start: 0, end }])];
-        }
-        frame.capacities.insert(home, i64::from(capacities[&home]));
-        colors.push((home, capacities[&home], occupants));
-    }
-    (colors, live)
-}
 
 /// The instruction that remakes `value` anywhere: its only definition, when
 /// that reads nothing (a constant or an address).
@@ -2761,44 +1550,6 @@ pub fn recomputed(
     alone.then(|| Arc::clone(one))
 }
 
-/// Each of `values` that one plain same-width `mov` copies from another value,
-/// and that value: made once, so the copy is made again as its source is (the
-/// one answer SsaSpill and the allocator both read).
-pub fn _copies(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, u32> {
-    let mut defined: IndexMap<u32, usize> = IndexMap::default();
-    for one in body.insns() {
-        for value in &one.defines {
-            *defined.entry(*value).or_default() += 1;
-        }
-    }
-    let mut out = IndexMap::default();
-    for one in body.insns() {
-        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else {
-            continue;
-        };
-        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
-        if what.op == Operation::Move
-            && one.group.is_none()
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.clobbers.is_empty()
-            && what.name.as_deref() == Some("mov")
-            && dest.value == *value
-            && from.value == *source
-            && dest.width == from.width
-            && values.contains(value)
-            && defined.get(value) == Some(&1)
-            && defined.get(source) == Some(&1)
-        {
-            out.insert(*value, *source);
-        }
-    }
-    out
-}
-
 /// `found` (made for the values and their copies' sources) for `values`: a copy
 /// takes its source's.
 fn _through_copies<T: Clone>(
@@ -2819,12 +1570,6 @@ fn _through_copies<T: Clone>(
 
 thread_local! {
     static FOLDED_READ_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-thread_local! {
-    /// How many values `_stable_loads_from` has been asked about.
-    static STABLE_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many bodies `_folded_reads` has read on this thread.
@@ -2930,793 +1675,6 @@ pub fn _folded_reads(
         })
         .map(|(value, _)| *value)
         .collect()
-}
-
-/// Values loaded from a cell nothing changes before they are used again.
-pub fn _stable_loads(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, Mem> {
-    _stable_loads_through(body, values, &IndexMap::default())
-}
-
-/// `_stable_loads_through` with the postings of the body to hand: where the
-/// values occur is read from them, not found by a scan.
-pub fn _stable_loads_by(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    copies: &IndexMap<u32, u32>,
-    postings: &Postings,
-) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, Some(postings))
-}
-
-/// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made
-/// again as it is: the cell must hold until the last use of any of them, not
-/// only of the load.
-pub fn _stable_loads_through(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    copies: &IndexMap<u32, u32>,
-) -> IndexMap<u32, Mem> {
-    _stable_loads_from(body, values, copies, None)
-}
-
-fn _stable_loads_from(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    copies: &IndexMap<u32, u32>,
-    postings: Option<&Postings>,
-) -> IndexMap<u32, Mem> {
-    #[cfg(test)]
-    STABLE_ASKED.with(|count| count.set(count.get() + values.len()));
-    if values.is_empty() {
-        return IndexMap::default();
-    }
-    let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>, (usize, usize))>> = IndexMap::default();
-    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
-    // Where each use and each load is: (block, position), in step with `uses`
-    // and `definitions`.
-    let mut use_places: IndexMap<u32, Vec<(usize, usize)>> = values.iter().map(|value| (*value, Vec::new())).collect();
-    // The load a copy comes from, through copies of copies.
-    let root = |value: u32| {
-        let mut at = value;
-        while let Some(source) = copies.get(&at) {
-            at = *source;
-        }
-        at
-    };
-    // The values that matter are those asked of and their copies; where they
-    // occur is all that is read of the body.
-    let mut asked: BTreeSet<u32> = values.clone();
-    asked.extend(copies.keys().copied().filter(|copy| {
-        let owner = root(*copy);
-        owner != *copy && values.contains(&owner)
-    }));
-    let occurrences = match postings {
-        Some(postings) => crate::analysis::occurrences::Occurrences::of(postings, &asked),
-        None => crate::analysis::occurrences::Occurrences::scan(body, &|value| asked.contains(&value)),
-    };
-    if postings.is_some() && llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
-        occurrences.check_against_scan(body, &|value| asked.contains(&value));
-    }
-    // Each use of an owner by an instruction, once for every distinct value of
-    // it the instruction reads (the owner and its copies).
-    let mut reads: std::collections::BTreeMap<(u32, (usize, usize)), usize> = std::collections::BTreeMap::new();
-    for value in &asked {
-        for made in occurrences.named(*value) {
-            let (block_at, position) = made.place;
-            let one = &body.blocks[block_at].insns[position];
-            if made.used {
-                let owner = root(*value);
-                if owner != *value && values.contains(&owner) {
-                    *reads.entry((owner, made.place)).or_default() += 1;
-                }
-                if values.contains(value) {
-                    *reads.entry((*value, made.place)).or_default() += 1;
-                }
-            }
-            if made.defined && values.contains(value) {
-                let mut cell = None;
-                if let Some(what) = &one.what {
-                    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-                        if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
-                            (what.dests.as_slice(), what.sources.as_slice())
-                        {
-                            if dest.value == *value
-                                && dest.width == source.width
-                                && source.addr.is_some()
-                                && one.defines == [*value]
-                                && one.uses.is_empty()
-                                && one.clobbers.is_empty()
-                                && one.group.is_none()
-                                && one.spread.is_empty()
-                                && !one.volatile
-                                && one.symbol != Some(true)
-                            {
-                                cell = Some(source.clone());
-                            }
-                        }
-                    }
-                    // An x87 load of a fixed cell (a frame cell, a global):
-                    // made again where it is read, as the
-                    // integer load above.
-                    if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
-                        if let ([Loc::Held(dest)], [Loc::Mem(source)]) =
-                            (what.dests.as_slice(), what.sources.as_slice())
-                        {
-                            if dest.value == *value
-                                && (_fixed_data(source).is_some() || _incoming_frame(source))
-                                && one.uses.is_empty()
-                                && one.defines == [*value]
-                                && one.clobbers.is_empty()
-                                && one.group.is_none()
-                                && one.spread.is_empty()
-                                && !one.volatile
-                                && one.symbol != Some(true)
-                            {
-                                cell = Some(source.clone());
-                            }
-                        }
-                    }
-                }
-                definitions.entry(*value).or_default().push((Arc::clone(one), cell, made.place));
-            }
-        }
-    }
-    for ((owner, place), times) in reads {
-        for _ in 0..times {
-            uses[&owner].push(Arc::clone(&body.blocks[place.0].insns[place.1]));
-            use_places[&owner].push(place);
-        }
-    }
-
-    let mut result: IndexMap<u32, Mem> = IndexMap::default();
-    // What every value asks of the body's blocks alike, found for the first
-    // that asks.
-    let flow = std::cell::OnceCell::new();
-    let writers = std::cell::OnceCell::new();
-    for value in values {
-        let Some(found) = definitions.get(value) else {
-            continue;
-        };
-        if found.len() != 1 || uses[value].is_empty() {
-            continue;
-        }
-        let (define, cell, define_at) = &found[0];
-        let Some(cell) = cell else {
-            continue;
-        };
-        if uses[value].iter().any(|one| one.group.is_some()) {
-            continue;
-        }
-        let held = if _exact_frame(cell) || _fixed_data(cell).is_some() {
-            let flow = flow.get_or_init(|| Flow::of(body));
-            // Only what may write the cell is asked of, and the blocks between
-            // the load and its uses are gone over.
-            let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events = Events::default();
-            let near = if _exact_frame(cell) {
-                writers.near(cell)
-            } else {
-                let (explicit, background) = writers.near_fixed(cell, body.spares.is_empty());
-                events.background = background;
-                explicit
-            };
-            for (block, position) in near {
-                if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
-                    events.own.entry(block).or_default().push((position, false));
-                }
-            }
-            events.own.entry(define_at.0).or_default().push((define_at.1, true));
-            for list in events.own.values_mut() {
-                list.sort_unstable();
-            }
-            _holds_at(flow, &events, &use_places[value])
-        } else {
-            let flow = flow.get_or_init(|| Flow::of(body));
-            _unchanged(body, flow, define, cell, &uses[value])
-        };
-        if llrm_support::env_flag!("LLRM_CHECK_UNCHANGED") {
-            assert!(
-                held == _unchanged_reference(body, define, cell, &uses[value]),
-                "{}: whether the cell holds differs from working it out as before",
-                body.name
-            );
-        }
-        if held {
-            result.insert(*value, cell.clone());
-        }
-    }
-    result
-}
-
-// (On one line: tests/target_facts.rs reads what comes before a line that is
-// only the attribute as the code.)
-#[cfg(test)]
-thread_local! { static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-
-/// The blocks of a body by address, and each one's predecessors.
-struct Flow<'a> {
-    predecessors: IndexMap<i64, Vec<i64>>,
-    blocks: IndexMap<i64, &'a Block>,
-    /// The same by position in `body.blocks`.
-    parents: Vec<Vec<usize>>,
-    entry: usize,
-}
-
-impl<'a> Flow<'a> {
-    fn of(body: &'a LirBody) -> Self {
-        let predecessors = _predecessors(body);
-        let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-        let parents = body
-            .blocks
-            .iter()
-            .map(|block| predecessors[&block.at].iter().filter_map(|at| blocks.get_index_of(at)).collect())
-            .collect();
-        let entry = blocks.get_index_of(&body.entry).unwrap_or(0);
-        Self { predecessors, blocks, parents, entry }
-    }
-}
-
-/// Where the instructions that may write a frame cell are, found once for a
-/// body: the loads asked about are many and an instruction that writes none of
-/// their cells is nearly every instruction.
-struct Writers {
-    /// (block, position) of what may write memory no exact frame cell names and
-    /// no fixed data cell: a call, an unmodeled write, a store to a based,
-    /// indexed or unplaced cell. (A store to a fixed data cell never meets a
-    /// frame cell: other regions in `overlap::may_overlap`.)
-    wild: Vec<(usize, usize)>,
-    /// The stores to an exact frame cell, by its first byte.
-    exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
-    /// The widest of those cells.
-    widest: i64,
-    /// What may write memory no fixed cell of a frame or a data segment names:
-    /// a call, an unmodeled write, a store through a register or to an
-    /// unplaced cell.
-    hard_wild: Vec<(usize, usize)>,
-    /// The stores to a fixed data cell, by its space and symbol.
-    fixed: crate::support::hash::HashMap<(u8, i64), Group>,
-    widest_fixed: i64,
-    /// What writes fixed data cells of more than one space and symbol: asked of
-    /// every fixed cell one by one.
-    mixed: Vec<(usize, usize)>,
-    /// The same by block, in position order, of what writes the cells of one
-    /// symbol: of every symbol, and of the external symbols alone.
-    stores: Lists,
-    externals: Lists,
-}
-
-/// The stores to the fixed data cells of one space and symbol.
-#[derive(Default)]
-struct Group {
-    /// (first byte, (block, position)) in program order.
-    places: Vec<(i64, (usize, usize))>,
-    /// The same by first byte, made when asked.
-    by_byte: std::cell::OnceCell<Vec<(i64, (usize, usize))>>,
-    /// What writes cells of this symbol alone, in program order.
-    only: Vec<(usize, usize)>,
-}
-
-/// Positions in a block, in order.
-type Lists = Vec<Vec<usize>>;
-
-/// What kills a fixed data cell without being named for it (LLVM's
-/// `AliasSetTracker` keeps an unknown-alias set for the same reason): a store
-/// to another external symbol meets an external symbol's cell, a store to any
-/// symbol meets a segment's cell, and a store to another segment's cell meets
-/// nothing of it. The answer is the regions' (`overlap::may_overlap`), whatever
-/// the displacements.
-struct Background<'a> {
-    lists: &'a Lists,
-    /// What writes the cell's own symbol: asked of by bytes, not here.
-    excluded: &'a [(usize, usize)],
-}
-
-/// What may change a cell and where it is made to hold.
-#[derive(Default)]
-struct Events<'a> {
-    /// Per block, (position, true for the load, false for a write), in order.
-    own: crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
-    /// The writes every block's list of positions stands for.
-    background: Option<Background<'a>>,
-}
-
-impl Events<'_> {
-    /// The last event of `block` before `position` (the last of all when
-    /// `None`): its position and whether it is the load.
-    fn before(
-        &self,
-        block: usize,
-        position: Option<usize>,
-    ) -> Option<(usize, bool)> {
-        let own = self.own.get(&block).and_then(|list| {
-            list.iter().rev().find(|(at, _)| position.is_none_or(|bound| *at < bound)).map(|(at, load)| (*at, *load))
-        });
-        let background = self
-            .background
-            .as_ref()
-            .and_then(
-                |background| {
-                    let list = background.lists.get(block)?;
-                    let mut end = position.map_or(list.len(), |bound| list.partition_point(|at| *at < bound));
-                    while end > 0 && background.excluded.binary_search(&(block, list[end - 1])).is_ok() {
-                        end -= 1;
-                    }
-                    end.checked_sub(1).map(|last| (list[last], false))
-                },
-            );
-        match (own, background) {
-            (Some(own), Some(background)) => Some(if background.0 > own.0 { background } else { own }),
-            (one, other) => one.or(other),
-        }
-    }
-}
-
-impl Writers {
-    fn of(body: &LirBody) -> Self {
-        let mut found = Self {
-            wild: Vec::new(),
-            exact: Default::default(),
-            widest: 1,
-            hard_wild: Vec::new(),
-            fixed: Default::default(),
-            widest_fixed: 1,
-            mixed: Vec::new(),
-            stores: vec![Vec::new(); body.blocks.len()],
-            externals: vec![Vec::new(); body.blocks.len()],
-        };
-        for (block, one_block) in body.blocks.iter().enumerate() {
-            for (position, one) in one_block.insns.iter().enumerate() {
-                let dests = one
-                    .what
-                    .iter()
-                    .flat_map(|what| &what.dests)
-                    .filter_map(
-                        |dest| match dest {
-                            Loc::Mem(cell) => Some(cell),
-                            _ => None,
-                        },
-                    );
-                let mut wild = one.call.is_some() || one.unmodeled_write();
-                let mut hard = wild;
-                let mut key: Option<(u8, i64)> = None;
-                let mut several = false;
-                for cell in dests {
-                    if _exact_frame(cell) {
-                        let addr = cell.addr.expect("an exact frame cell has an address");
-                        found.exact.entry(addr.disp).or_default().push((block, position));
-                        found.widest = found.widest.max(i64::from(cell.width));
-                    } else if let Some(one_key) = _fixed_data(cell) {
-                        let addr = cell.addr.expect("a fixed data cell has an address");
-                        found.fixed.entry(one_key).or_default().places.push((addr.disp, (block, position)));
-                        found.widest_fixed = found.widest_fixed.max(i64::from(cell.width));
-                        if key.is_some_and(|had| had != one_key) {
-                            several = true;
-                        }
-                        key = Some(one_key);
-                    } else {
-                        wild = true;
-                        hard = true;
-                    }
-                }
-                if wild {
-                    found.wild.push((block, position));
-                }
-                if hard {
-                    found.hard_wild.push((block, position));
-                }
-                if let Some(key) = key {
-                    if several {
-                        found.mixed.push((block, position));
-                    } else {
-                        let group = found.fixed.get_mut(&key).expect("its group is made");
-                        if group.only.last() != Some(&(block, position)) {
-                            group.only.push((block, position));
-                            found.stores[block].push(position);
-                            if key.0 == 1 {
-                                found.externals[block].push(position);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        found
-    }
-
-    /// The instructions that can fail to keep `cell` (an exact frame cell): any
-    /// other writes nothing but exact frame cells that do not meet it, and
-    /// keeps it, as `_keeps` finds.
-    fn near(
-        &self,
-        cell: &Mem,
-    ) -> Vec<(usize, usize)> {
-        let low = cell.addr.expect("an exact frame cell has an address").disp;
-        let high = low + i64::from(cell.width);
-        let mut found = self.wild.clone();
-        for places in self.exact.range(low - self.widest + 1..high).map(|(_, places)| places) {
-            found.extend(places.iter().copied());
-        }
-        found.sort_unstable();
-        found.dedup();
-        found
-    }
-
-    /// `near` for a fixed data cell: what the cell's own symbol is written by
-    /// meets it by bytes; what writes another symbol meets it as the regions
-    /// say (`Background`) where the body has no `spares` pair (`by_regions`),
-    /// else is named one by one.
-    fn near_fixed(
-        &self,
-        cell: &Mem,
-        by_regions: bool,
-    ) -> (Vec<(usize, usize)>, Option<Background<'_>>) {
-        let key = _fixed_data(cell).expect("a fixed data cell");
-        let low = cell.addr.expect("a fixed data cell has an address").disp;
-        let high = low + i64::from(cell.width.max(1));
-        let mut found = self.hard_wild.clone();
-        found.extend(self.mixed.iter().copied());
-        let group = self.fixed.get(&key);
-        if let Some(group) = group {
-            let by_byte = group
-                .by_byte
-                .get_or_init(
-                    || {
-                        let mut sorted = group.places.clone();
-                        sorted.sort_unstable();
-                        sorted
-                    },
-                );
-            let first = by_byte.partition_point(|(byte, _)| *byte < low - self.widest_fixed + 1);
-            found.extend(by_byte[first..].iter().take_while(|(byte, _)| *byte < high).map(|(_, place)| *place));
-        }
-        // A `spares` pair (the optimizer's proof that a write is apart from a
-        // load) lets a store to another space than the cell's keep it: those
-        // are then named one by one. The stores to an external symbol meet an
-        // external symbol's cell whatever a pair says.
-        let (lists, named) = match (key.0, by_regions) {
-            (1, true) => (Some(&self.stores), None),
-            (1, false) => (Some(&self.externals), Some(0)),
-            (_, true) => (Some(&self.externals), None),
-            (_, false) => (None, Some(1)),
-        };
-        let excluded = group.map_or(&[][..], |group| &group.only);
-        let background = lists.map(|lists| Background { lists, excluded });
-        if let Some(space) = named {
-            for (other, group) in &self.fixed {
-                if other.0 == space {
-                    found.extend(group.only.iter().copied());
-                }
-            }
-        }
-        found.sort_unstable();
-        found.dedup();
-        (found, background)
-    }
-}
-
-/// A cell of a data segment or an external symbol at a fixed offset: no
-/// register in its address. Its space and symbol.
-fn _fixed_data(cell: &Mem) -> Option<(u8, i64)> {
-    let addr = cell.addr?;
-    let space = match addr.space {
-        Space::Segment => 0,
-        Space::External => 1,
-        _ => return None,
-    };
-    (addr.base == (RegId::None).iced() && cell.base.is_none() && cell.index.is_none()).then_some((space, addr.index))
-}
-
-/// Whether the cell holds at every one of `uses` (block, position), given where
-/// it is made to hold and where it is written: `events` per block are
-/// (position, true for the load, false for a write) in order. The same answer
-/// as `_unchanged`, found over the blocks that lie between the load and the
-/// uses and not over the whole body.
-fn _holds_at(
-    flow: &Flow,
-    events: &Events,
-    uses: &[(usize, usize)],
-) -> bool {
-    use crate::support::hash::{HashMap, HashSet};
-    // Whether the cell holds out of a block that has an event: after its last.
-    let decided = |block: usize| events.before(block, None).map(|(_, load)| load);
-    let mut needed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::default();
-    for &(block, position) in uses {
-        if events.before(block, Some(position)).is_none() && seen.insert(block) {
-            needed.push(block);
-        }
-    }
-    // The blocks whose entry state the uses depend on, through blocks that have
-    // no event of their own.
-    let mut region = needed.clone();
-    let mut next = 0;
-    while next < region.len() {
-        let block = region[next];
-        next += 1;
-        for &parent in &flow.parents[block] {
-            if decided(parent).is_none() && seen.insert(parent) {
-                region.push(parent);
-            }
-        }
-    }
-    // Held coming in: not at the entry, and the most held that the blocks
-    // leading in allow.
-    let mut held: HashMap<usize, bool> = region.iter().map(|&block| (block, block != flow.entry)).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for &block in &region {
-            if block == flow.entry || flow.parents[block].is_empty() {
-                continue;
-            }
-            let met = flow.parents[block].iter().all(|&parent| decided(parent).unwrap_or_else(|| held[&parent]));
-            if met != held[&block] {
-                held.insert(block, met);
-                changing = true;
-            }
-        }
-    }
-    uses.iter().all(|&(block, position)| match events.before(block, Some(position)) {
-        Some((_, load)) => load,
-        None => held[&block],
-    })
-}
-
-/// Whether `cell` still holds what it held at `define` after `one`.
-/// Whether `cell`, as the load `define` read it, still holds after `one`, given
-/// it held before.
-pub(crate) fn _keeps(
-    one: &Arc<Insn>,
-    define: &Insn,
-    cell: &Mem,
-    holds: bool,
-    body: &LirBody,
-) -> bool {
-    #[cfg(test)]
-    KEEPS.with(|asked| asked.set(asked.get() + 1));
-    if std::ptr::eq(Arc::as_ptr(one), define) {
-        return true;
-    }
-    let (sealed, apart) = (body.sealed_arguments, body.spares.contains(&(define.at, one.at)));
-    let written = _written(one, cell);
-    // Sealed, an incoming argument cell is reached by the frame's own stores
-    // alone.
-    let meets = |dest: &Mem| {
-        if sealed && _incoming_frame(cell) {
-            _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
-        } else {
-            // The optimizer's proof of the pair answers a write whose address
-            // LIR cannot place.
-            let overlaps = crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width);
-            match (apart, cell.addr, dest.addr) {
-                (false, _, _) => dest.addr.is_none() || overlaps,
-                // What it proved is the MIR write's own: a far or unplaced
-                // address is its to answer, a place of the cell's own space is
-                // not.
-                (true, Some(own), Some(there)) => own.space == there.space && overlaps,
-                (true, _, _) => false,
-            }
-        }
-    };
-    holds && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
-}
-
-/// Whether allocated LIR names one fixed BP-relative frame range.
-fn _exact_frame(cell: &Mem) -> bool {
-    cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-        && cell.through == RegId::BP
-        && cell.base.is_none()
-        && cell.index.is_none()
-}
-
-/// Whether `cell` is a fixed incoming BP-relative word, not a local.
-fn _incoming_frame(cell: &Mem) -> bool {
-    _exact_frame(cell) && cell.addr.is_some_and(|addr| addr.disp >= 0)
-}
-
-/// Whether the MIR operation may change `cell`; in a `sealed` body an
-/// incoming argument changes only where a frame store names it.
-pub(crate) fn _may_write(
-    one: &Insn,
-    cell: &Mem,
-    sealed: bool,
-) -> bool {
-    let call = one.call.as_deref();
-    let written = _written(one, cell);
-    if sealed && _incoming_frame(cell) {
-        return written.clone().any(|dest| {
-            _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
-        });
-    }
-    if _exact_frame(cell) && written.clone().next().is_some() && written.clone().all(|dest| _exact_frame(dest)) {
-        if written
-            .clone()
-            .any(|dest| crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width))
-        {
-            return true;
-        }
-        if call.is_none_or(|call| written.count() >= usize::from(call.writes())) {
-            return false;
-        }
-    }
-    if one.unmodeled_write() {
-        return true;
-    }
-    call.is_some_and(|call| call.writes() && !(_in_frame(cell) && call.spares(_frame_disp(cell), cell.width)))
-}
-
-/// A fixed frame cell's displacement; none for one indexed or based.
-pub(crate) fn _frame_disp(cell: &Mem) -> Option<i64> {
-    _exact_frame(cell).then(|| cell.addr.expect("a frame cell").disp)
-}
-
-fn _in_frame(cell: &Mem) -> bool {
-    cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-}
-
-/// The memory this instruction names as written that could be `cell`.
-fn _written<'a>(
-    one: &'a Insn,
-    cell: &Mem,
-) -> impl Iterator<Item = &'a Mem> + Clone {
-    let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
-    one.what
-        .iter()
-        .flat_map(|what| &what.dests)
-        .filter_map(
-            move |dest| match dest {
-                Loc::Mem(dest) if !(spared && dest.addr.is_some_and(|addr| addr.space != Space::Frame)) => Some(dest),
-                _ => None,
-            },
-        )
-}
-
-/// The predecessors of every block, `at`s outside the body ignored.
-fn _predecessors(body: &LirBody) -> IndexMap<i64, Vec<i64>> {
-    let mut predecessors: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
-    for block in &body.blocks {
-        for at in &block.succ {
-            if let Some(found) = predecessors.get_mut(at) {
-                found.push(block.at);
-            }
-        }
-    }
-    predecessors
-}
-
-/// Whether every use of the loaded value sees the cell the load saw.
-///
-/// A block takes the cell in as it leaves its predecessors alike and, one
-/// instruction after another, keeps it unless that instruction may write it:
-/// `_keeps(one, ..., holds) = holds && K(one)` for every instruction but the
-/// load, which makes it hold. So a block's answer is that of its instructions
-/// after its last load, or of all of them: asked of each instruction once, not
-/// once for each time the blocks are gone over until they settle.
-fn _unchanged(
-    body: &LirBody,
-    flow: &Flow,
-    define: &Arc<Insn>,
-    cell: &Mem,
-    uses: &[Arc<Insn>],
-) -> bool {
-    let (predecessors, blocks) = (&flow.predecessors, &flow.blocks);
-    // Per block: whether the cell holds out of it whatever came in, and where
-    // it is made to hold from.
-    let mut gives: IndexMap<i64, (bool, bool)> = IndexMap::default();
-    let mut kept: IndexMap<i64, Vec<bool>> = IndexMap::default();
-    let wanted: BTreeSet<usize> = uses.iter().map(key).collect();
-    for (at, block) in blocks {
-        let mut after_load = None;
-        let mut every = true;
-        let mut sure = true;
-        let mut per_insn: Vec<bool> = Vec::with_capacity(block.insns.len());
-        for one in &block.insns {
-            // Whether the instruction leaves a held cell held.
-            let keeps = std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) || _keeps(one, define, cell, true, body);
-            per_insn.push(keeps);
-            if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) {
-                after_load = Some(true);
-                sure = true;
-            } else if !keeps {
-                every = false;
-                sure = false;
-            }
-        }
-        // (holds out when nothing held coming in, holds out when it did)
-        gives.insert(*at, (after_load.is_some() && sure, if after_load.is_some() { sure } else { every }));
-        if block.insns.iter().any(|one| wanted.contains(&key(one))) {
-            kept.insert(*at, per_insn);
-        }
-    }
-    let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for at in blocks.keys() {
-            let (empty, full) = gives[at];
-            let holds = if into[at] { full } else { empty };
-            if outof.get(at) != Some(&holds) {
-                outof.insert(*at, holds);
-                changing = true;
-            }
-        }
-        for at in blocks.keys() {
-            if *at == body.entry || predecessors[at].is_empty() {
-                continue;
-            }
-            let met = predecessors[at].iter().all(|parent| outof.get(parent).copied().unwrap_or(true));
-            if met != into[at] {
-                into.insert(*at, met);
-                changing = true;
-            }
-        }
-    }
-    for block in &body.blocks {
-        let Some(per_insn) = kept.get(&block.at) else { continue };
-        let mut holds = into[&block.at];
-        for (position, one) in block.insns.iter().enumerate() {
-            if wanted.contains(&key(one)) && !holds {
-                return false;
-            }
-            holds =
-                if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) { true } else { holds && per_insn[position] };
-        }
-    }
-    true
-}
-
-/// `_unchanged` as it was written: the blocks gone over, each instruction asked
-/// of again, until they settle.
-fn _unchanged_reference(
-    body: &LirBody,
-    define: &Arc<Insn>,
-    cell: &Mem,
-    uses: &[Arc<Insn>],
-) -> bool {
-    let predecessors = _predecessors(body);
-    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for (at, block) in &blocks {
-            let mut holds = into[at];
-            for one in &block.insns {
-                holds = _keeps(one, define, cell, holds, body);
-            }
-            if outof.get(at) != Some(&holds) {
-                outof.insert(*at, holds);
-                changing = true;
-            }
-        }
-        for at in blocks.keys() {
-            if *at == body.entry || predecessors[at].is_empty() {
-                continue;
-            }
-            let met = predecessors[at].iter().all(|parent| outof.get(parent).copied().unwrap_or(true));
-            if met != into[at] {
-                into.insert(*at, met);
-                changing = true;
-            }
-        }
-    }
-
-    let wanted: BTreeSet<usize> = uses.iter().map(key).collect();
-    for block in &body.blocks {
-        let mut holds = into[&block.at];
-        for one in &block.insns {
-            if wanted.contains(&key(one)) && !holds {
-                return false;
-            }
-            holds = _keeps(one, define, cell, holds, body);
-        }
-    }
-    true
 }
 
 /// Stable native arguments that may be loaded again at each use.
@@ -4143,7 +2101,7 @@ fn _unfolded_index(
     let add = _inserted(
         one,
         Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![Loc::Held(base)],
             sources: vec![Loc::Held(base), Loc::Held(index)],
             ..Semantics::new(Operation::Binary)
@@ -4185,76 +2143,6 @@ pub fn folded_source(
     values: &BTreeSet<u32>,
 ) -> Option<Held> {
     folded_source_in(one, values, true)
-}
-
-/// `folded_source`, for an instruction that `tied` writes the register of its
-/// first source (after two-address lowering) or, not tied, names its result
-/// apart (SSA).
-pub fn folded_source_in(
-    one: &Insn,
-    values: &BTreeSet<u32>,
-    tied: bool,
-) -> Option<Held> {
-    folded_source_among(one, &|value| values.contains(&value), tied)
-}
-
-/// `folded_source_in` for the values `among` says are spilled, so that a caller
-/// that asks of one value at a time builds no set to ask with.
-pub fn folded_source_among(
-    one: &Insn,
-    among: &dyn Fn(u32) -> bool,
-    tied: bool,
-) -> Option<Held> {
-    let (left, right) = folded_pair(one, tied)?;
-    if !among(right.value)
-        || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value)
-    {
-        return None;
-    }
-    Some(right)
-}
-
-/// The two values `one` could fold the second of into the first's operation,
-/// whichever are spilled: what `folded_source_among` finds before it asks which
-/// are. The second is the only value that can fold.
-pub fn folded_pair(
-    one: &Insn,
-    tied: bool,
-) -> Option<(Held, Held)> {
-    if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
-        return None;
-    }
-    let what = one.what.as_ref()?;
-    let mut widths: &[u32] = &[2, 4];
-    let (left, right) = match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
-        (Operation::Binary, name, [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || (tied && dest != left) {
-                return None;
-            }
-            (*left, *right)
-        }
-        (Operation::Compare, Some("cmp"), [], [Loc::Held(left), Loc::Held(right)]) => (*left, *right),
-        (Operation::Multiply, Some("imul"), [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if tied && dest != left {
-                return None;
-            }
-            (*left, *right)
-        }
-        (Operation::Move, Some("mov"), [Loc::Held(left)], [Loc::Held(right)]) => {
-            // A copy is the most useful direct reload.
-            widths = &[1, 2, 4];
-            (*left, *right)
-        }
-        _ => return None,
-    };
-    if !widths.contains(&left.width)
-        || right.width != left.width
-        || left.value == right.value
-        || one.defines.contains(&right.value)
-    {
-        return None;
-    }
-    Some((left, right))
 }
 
 /// Fold one untied spill source into arithmetic or a comparison.
@@ -4350,43 +2238,6 @@ fn _address_source(
     }))
 }
 
-/// The definition every one of `defining` repeats, if they all do the same.
-/// A split remakes a value where each piece ends, so a remakeable value can
-/// have several definitions that are one.
-pub fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
-    let first = defining.first()?;
-    let alike = |one: &Insn| {
-        one.what == first.what
-            && one.defines == first.defines
-            && one.uses == first.uses
-            && one.clobbers == first.clobbers
-            && one.requires == first.requires
-            && one.delivers == first.delivers
-            && one.group == first.group
-    };
-    defining.iter().all(|one| alike(one)).then_some(first)
-}
-
-/// Literal values, including full-width copies with one unambiguous definition.
-pub fn _constants(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, Imm> {
-    _literals(body, values, false)
-}
-
-fn check_postings() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_POSTINGS"))
-}
-
-fn _at<'b>(
-    body: &'b LirBody,
-    at: At,
-) -> &'b Arc<Insn> {
-    &body.blocks[at.0 as usize].insns[at.1 as usize]
-}
-
 /// `_copies`, from the occurrences of `values` and of their sources alone.
 fn _copies_by(
     body: &LirBody,
@@ -4423,40 +2274,6 @@ fn _copies_by(
         assert!(out.iter().eq(_copies(body, values).iter()), "{}: the copies from the postings differ", body.name);
     }
     out
-}
-
-/// `_addresses`, from the definitions of `values` alone.
-fn _addresses_by(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    postings: &Postings,
-) -> IndexMap<u32, AddressRef> {
-    let mut order: Vec<(At, usize, u32)> = Vec::new();
-    for &value in values {
-        let Some(&first) = postings.defs(value).first() else { continue };
-        let at = body.blocks[first.0 as usize].insns[first.1 as usize]
-            .defines
-            .iter()
-            .position(|one| *one == value)
-            .unwrap_or(0);
-        order.push((first, at, value));
-    }
-    order.sort_unstable();
-    let mut result = IndexMap::default();
-    for (_, _, value) in order {
-        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
-        if let Some(source) = _address_of(value, &defining) {
-            result.insert(value, source);
-        }
-    }
-    if check_postings() {
-        assert!(
-            result.iter().eq(_addresses(body, values).iter()),
-            "{}: the addresses from the postings differ",
-            body.name
-        );
-    }
-    result
 }
 
 /// `_extensions`, from the occurrences of `values` and of their sources alone.
@@ -4523,236 +2340,6 @@ fn _widest_by(
         assert!(out.iter().eq(_widest(body, values).iter()), "{}: the widths from the postings differ", body.name);
     }
     out
-}
-
-/// `_literals` of the values in `values`, from their definitions and those of
-/// what they are copies of: the answer for a value reads its own definition
-/// and, for a copy, its source's, and so down the chain.
-fn _literals_by(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    any_width: bool,
-    postings: &Postings,
-) -> IndexMap<u32, Imm> {
-    enum Step {
-        Visiting,
-        Is(Option<Imm>),
-    }
-    // What a value is made from, where it is one single plain move of a
-    // constant or of another value.
-    let source_of = |value: u32| -> Option<Loc> {
-        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
-        if defining.is_empty() || defining.iter().any(|one| one.group.is_some() && (one.defines.contains(&value))) {
-            return None;
-        }
-        if postings.uses(value).iter().any(|at| {
-            let one = _at(body, *at);
-            one.group.is_some() && group_source(one).is_none()
-        }) {
-            return None;
-        }
-        let one = _one_definition(&defining)?;
-        let what = one.what.as_ref()?;
-        if what.op != Operation::Move
-            || what.dests.len() != 1
-            || what.sources.len() != 1
-            || one.defines != [value]
-            || !one.clobbers.is_empty()
-        {
-            return None;
-        }
-        let (into, source) = (&what.dests[0], &what.sources[0]);
-        let Loc::Held(into) = into else { return None };
-        let (source_width, source_uses) = match source {
-            Loc::Imm(imm) => (imm.width, Vec::new()),
-            Loc::Held(held) => (held.width, vec![held.value]),
-            _ => return None,
-        };
-        let widest = postings.uses(value).iter().map(|at| _width(_at(body, *at), value)).max().unwrap_or(0);
-        (into.width == source_width && one.uses == source_uses && (any_width || widest <= source_width))
-            .then(|| source.clone())
-    };
-    let mut steps: IndexMap<u32, Step> = IndexMap::default();
-    fn resolve(
-        value: u32,
-        source_of: &dyn Fn(u32) -> Option<Loc>,
-        steps: &mut IndexMap<u32, Step>,
-    ) -> Option<Imm> {
-        match steps.get(&value) {
-            Some(Step::Is(known)) => return known.clone(),
-            Some(Step::Visiting) => return None,
-            None => {}
-        }
-        steps.insert(value, Step::Visiting);
-        let found = match source_of(value) {
-            Some(Loc::Imm(imm)) => Some(imm),
-            Some(Loc::Held(held)) => resolve(held.value, source_of, steps),
-            _ => None,
-        };
-        steps.insert(value, Step::Is(found.clone()));
-        found
-    }
-    let mut result: IndexMap<u32, Imm> = IndexMap::default();
-    for &value in values {
-        if let Some(constant) = resolve(value, &source_of, &mut steps) {
-            result.insert(value, constant);
-        }
-    }
-    if check_postings() {
-        let reference = _literals(body, values, any_width);
-        assert!(
-            result.len() == reference.len() && result.iter().all(|(value, one)| reference.get(value) == Some(one)),
-            "{}: the literals from the postings differ",
-            body.name
-        );
-    }
-    result
-}
-
-/// `_constants`, and also those some instruction reads wider than the literal:
-/// those are remade only where read at its width.
-fn _literals(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    any_width: bool,
-) -> IndexMap<u32, Imm> {
-    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut excluded: BTreeSet<u32> = BTreeSet::new();
-    let mut widths: IndexMap<u32, u32> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in &one.defines {
-            definitions.entry(*value).or_default().push(Arc::clone(one));
-        }
-        for value in &one.uses {
-            let had = widths.get(value).copied().unwrap_or(0);
-            widths.insert(*value, had.max(_width(one, *value)));
-        }
-        if one.group.is_some() {
-            excluded.extend(one.defines.iter().copied());
-            if group_source(one).is_none() {
-                excluded.extend(one.uses.iter().copied());
-            }
-        }
-    }
-    // Python iterates `definitions.keys() - excluded`, a set; the fixed
-    // point below reaches the same answer in any order.
-    let mut sources: IndexMap<u32, Loc> = IndexMap::default();
-    for (value, defining) in &definitions {
-        if excluded.contains(value) {
-            continue;
-        }
-        let Some(one) = _one_definition(defining) else {
-            continue;
-        };
-        let Some(what) = &one.what else {
-            continue;
-        };
-        if what.op != Operation::Move
-            || what.dests.len() != 1
-            || what.sources.len() != 1
-            || one.defines != [*value]
-            || !one.clobbers.is_empty()
-        {
-            continue;
-        }
-        let (into, source) = (&what.dests[0], &what.sources[0]);
-        let Loc::Held(into) = into else {
-            continue;
-        };
-        let (source_width, source_uses) = match source {
-            Loc::Imm(imm) => (imm.width, Vec::new()),
-            Loc::Held(held) => (held.width, vec![held.value]),
-            _ => continue,
-        };
-        if into.width == source_width
-            && one.uses == source_uses
-            && (any_width || widths.get(value).copied().unwrap_or(0) <= source_width)
-        {
-            sources.insert(*value, source.clone());
-        }
-    }
-    let mut result: IndexMap<u32, Imm> = IndexMap::default();
-    loop {
-        let before = result.len();
-        for (value, source) in &sources {
-            let constant = match source {
-                Loc::Held(held) => result.get(&held.value).cloned(),
-                Loc::Imm(imm) => Some(imm.clone()),
-                _ => None,
-            };
-            if let Some(constant) = constant {
-                result.insert(*value, constant);
-            }
-        }
-        if result.len() == before {
-            return result.into_iter().filter(|(value, _constant)| values.contains(value)).collect();
-        }
-    }
-}
-
-/// Pure addresses cheap enough to recreate at every use.
-pub fn _addresses(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, AddressRef> {
-    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in &one.defines {
-            if values.contains(value) {
-                definitions.entry(*value).or_default().push(Arc::clone(one));
-            }
-        }
-    }
-
-    let mut result = IndexMap::default();
-    for (value, defining) in &definitions {
-        if let Some(source) = _address_of(*value, defining) {
-            result.insert(*value, source);
-        }
-    }
-    result
-}
-
-/// The address `value` is made again from, where its definitions are one `lea`
-/// of a frame cell or a symbol.
-fn _address_of(
-    value: u32,
-    defining: &[Arc<Insn>],
-) -> Option<AddressRef> {
-    let one = _one_definition(defining)?;
-    let what = one.what.as_ref()?;
-    if what.op != Operation::Address || what.name.as_deref() != Some("lea") {
-        return None;
-    }
-    // A cell's address is an address like any other once nothing held is in it.
-    let source = match what.sources.as_slice() {
-        [Loc::Address(source)] => source.clone(),
-        [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => AddressRef {
-            addr: cell.addr,
-            through: cell.through,
-            index_through: RegId::None,
-            scale: 1,
-            offset: cell.offset,
-            disp_width: cell.disp_width,
-        },
-        _ => return None,
-    };
-    let [Loc::Held(destination)] = what.dests.as_slice() else { return None };
-    (destination.value == value
-        && matches!(destination.width, 2 | 4)
-        && one.defines == [value]
-        && one.uses.is_empty()
-        && one.requires.is_empty()
-        && one.delivers.is_empty()
-        && one.clobbers.is_empty()
-        && one.group.is_none()
-        && one.symbol != Some(true)
-        && source.addr.is_some_and(|addr| {
-            addr.space == Space::Frame && source.through == RegId::BP
-                || matches!(addr.space, Space::Segment | Space::External) && source.through == RegId::None
-        })
-        && source.index_through == RegId::None)
-        .then_some(source)
 }
 
 fn _extensions(
@@ -4834,29 +2421,6 @@ fn _extension_of(
         }
     }
     None
-}
-
-pub fn _widest(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-) -> IndexMap<u32, u32> {
-    let mut widths: IndexMap<u32, u32> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
-        for value in values.intersection(&named) {
-            let had = widths.get(value).copied().unwrap_or(0);
-            widths.insert(*value, had.max(_width(one, *value)));
-        }
-    }
-    widths
-}
-
-/// The instruction reading and writing the reload's value instead.
-pub fn _renamed(
-    one: &Arc<Insn>,
-    rename: &IndexMap<u32, u32>,
-) -> Arc<Insn> {
-    one.renamed(&|value| rename.get(&value).copied().unwrap_or(value))
 }
 
 /// The load, and the instruction reading the loaded value instead.
@@ -5002,7 +2566,8 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{_color_slots, _constants, planned, spilled, spilled_from};
+    use super::{_color_slots, planned, spilled, spilled_from};
+    use crate::backend::bodyfacts::_constants;
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::{objbuild, select};
     use crate::model::ir::{Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -5015,7 +2580,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -5394,11 +2959,8 @@ mod tests {
     fn test_repeated_tied_operand_does_not_become_memory_to_memory() {
         for op_name in ["xor", "add", "and", "sub"] {
             let op = _add(1, 1, 0x100);
-            let op = Insn {
-                what: Some(Semantics { name: Some(op_name.to_owned()), ..what(&op).clone() }),
-                uses: vec![1],
-                ..op
-            };
+            let op =
+                Insn { what: Some(Semantics { name: Some(op_name.into()), ..what(&op).clone() }), uses: vec![1], ..op };
             let result = _out(&_body(vec![op]), &[1]);
             let [reload, arithmetic, store] = result.as_slice() else { panic!("{result:?}") };
             assert!(is_mem(&what(reload).sources[0]));
@@ -5982,13 +3544,21 @@ mod tests {
             |runs: &[(i64, i64)]| runs.iter().map(|&(start, end)| Segment { start, end }).collect::<Vec<_>>();
         let found = |home: (i64, i64), value: (i64, i64)| {
             let colors = vec![(-52, 4, vec![Interval::new(7, segments(&[home]))])];
-            let lives =
-                super::Lives { shared: None, own: [(9, Interval::new(9, segments(&[value])))].into_iter().collect() };
+            let lives = crate::backend::slots::Lives {
+                shared: None,
+                own: [(9, Interval::new(9, segments(&[value])))].into_iter().collect(),
+            };
             (colors, lives)
         };
         let before = found((36, 72), (80, 90));
-        assert!(super::_same_liveness(&before, &found((42, 78), (86, 96))), "the same order of ends in other numbers");
-        assert!(!super::_same_liveness(&before, &found((42, 88), (86, 96))), "a home that now reaches the value");
+        assert!(
+            crate::backend::slots::_same_liveness(&before, &found((42, 78), (86, 96))),
+            "the same order of ends in other numbers"
+        );
+        assert!(
+            !crate::backend::slots::_same_liveness(&before, &found((42, 88), (86, 96))),
+            "a home that now reaches the value"
+        );
     }
 
     /// Every spill made a body of every instruction with the slots in it as
@@ -6011,10 +3581,10 @@ mod tests {
                 .expect("spills");
         assert!(!frame.slots.is_empty(), "the body has homes to find");
         let (among, whole) = (
-            super::_existing_colors_by(&spilt, &mut frame, false),
-            super::_existing_colors_by(&spilt, &mut frame, true),
+            crate::backend::slots::_existing_colors_by(&spilt, &mut frame, false),
+            crate::backend::slots::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
+        assert!(crate::backend::slots::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
         assert!(
             among.1.len() == whole.1.len()
                 && among
@@ -6045,10 +3615,10 @@ mod tests {
                 .expect("spills");
         assert!(!frame.slots.is_empty(), "the body has homes to find");
         let (among, whole) = (
-            super::_existing_colors_by(&spilt, &mut frame, false),
-            super::_existing_colors_by(&spilt, &mut frame, true),
+            crate::backend::slots::_existing_colors_by(&spilt, &mut frame, false),
+            crate::backend::slots::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
+        assert!(crate::backend::slots::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
     }
 
     #[test]
@@ -6101,7 +3671,7 @@ mod tests {
         let store =
             insn(1, (1, 1), semantics(Operation::Move, "mov", vec![element(11)], vec![held(1, 4)]), &[], &[1, 11]);
         let body = _body(vec![load, store]);
-        assert_eq!(super::_identities_dropped(&body).insns().len(), 2);
+        assert_eq!(crate::backend::slots::_identities_dropped(&body).insns().len(), 2);
     }
 
     #[test]
@@ -6347,7 +3917,7 @@ mod tests {
     #[test]
     fn test_an_unhandled_arithmetic_form_keeps_its_reload() {
         let add = _add(1, 2, 0x100);
-        let adc = Insn { what: Some(Semantics { name: Some("adc".to_owned()), ..what(&add).clone() }), ..add };
+        let adc = Insn { what: Some(Semantics { name: Some("adc".into()), ..what(&add).clone() }), ..add };
         let got = _out(&_body(vec![adc]), &[2]);
         assert_eq!(got.len(), 2, "{got:?}");
         assert!(name(&got[0]) == Some("mov") && is_mem(&what(&got[0]).sources[0]));
@@ -6460,9 +4030,9 @@ mod tests {
         last.insns.edit(|insns| insns.push(Arc::new(used)));
         let body =
             LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
-        let before = super::KEEPS.with(std::cell::Cell::get);
-        let stable = super::_stable_loads(&body, &set(&[1]));
-        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        let before = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get);
+        let stable = crate::backend::bodyfacts::_stable_loads(&body, &set(&[1]));
+        let asked = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len(), 1, "the load of a cell nothing writes is stable");
         assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
     }
@@ -6486,9 +4056,9 @@ mod tests {
         let body =
             LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let values: BTreeSet<u32> = std::iter::once(1).chain(100..=140).collect();
-        let before = super::STABLE_ASKED.with(std::cell::Cell::get);
+        let before = crate::backend::bodyfacts::STABLE_ASKED.with(std::cell::Cell::get);
         let folded = super::_folded_reads(&body, &values);
-        let asked = super::STABLE_ASKED.with(std::cell::Cell::get) - before;
+        let asked = crate::backend::bodyfacts::STABLE_ASKED.with(std::cell::Cell::get) - before;
         assert_eq!(folded, set(&[1]), "premise: the pushed load folds");
         assert_eq!(asked, 1, "the stable-load search was asked about {asked} values");
     }
@@ -6554,9 +4124,9 @@ mod tests {
         let total = insns.len() as i64;
         let body = _body(insns);
         let values: Vec<u32> = (1..=n as u32).collect();
-        let before = super::KEEPS.with(std::cell::Cell::get);
-        let stable = super::_stable_loads(&body, &set(&values));
-        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        let before = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get);
+        let stable = crate::backend::bodyfacts::_stable_loads(&body, &set(&values));
+        let asked = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len() as i64, n - 1, "every load but the one whose cell is stored to");
         assert!(!stable.contains_key(&8), "value 8 was loaded from [bp-16], which a store overwrites");
         assert!(asked as i64 <= 2 * n, "{asked} questions of `_keeps` for {n} loads in a body of {total} instructions");
@@ -6623,9 +4193,9 @@ mod tests {
         let total = insns.len() as i64;
         let body = _body(insns);
         let values: Vec<u32> = (1..=n as u32).collect();
-        let before = super::KEEPS.with(std::cell::Cell::get);
-        let stable = super::_stable_loads(&body, &set(&values));
-        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        let before = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get);
+        let stable = crate::backend::bodyfacts::_stable_loads(&body, &set(&values));
+        let asked = crate::backend::bodyfacts::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len() as i64, n - 1, "every load but the one whose cell is stored to");
         assert!(!stable.contains_key(&8), "value 8 was loaded from [table+16], which a store overwrites");
         assert!(asked as i64 <= 2 * n, "{asked} questions of `_keeps` for {n} loads in a body of {total} instructions");
@@ -6728,7 +4298,7 @@ mod tests {
         {
             let mut frame = Frame::new(0);
             let op = _add(1, 2, 0x100);
-            let op = Insn { what: Some(Semantics { name: Some(name.to_owned()), ..what(&op).clone() }), ..op };
+            let op = Insn { what: Some(Semantics { name: Some(name.into()), ..what(&op).clone() }), ..op };
             let (body, _) = spilled(
                 &_body(vec![op]),
                 &set(&[1, 2]),
@@ -6960,9 +4530,13 @@ mod tests {
         let (again, _) =
             spilled(&spilt, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::m16())
                 .expect("spills");
-        let before = super::made_for_homes();
+        let before = crate::backend::slots::made_for_homes();
         _color_slots(&again, &set(&[3]), &IndexMap::from_iter([(3, 2)]), &mut frame).expect("colours");
-        assert_eq!(super::made_for_homes() - before, 0, "an instruction was made again for each that names a home");
+        assert_eq!(
+            crate::backend::slots::made_for_homes() - before,
+            0,
+            "an instruction was made again for each that names a home"
+        );
     }
 
     #[test]
@@ -6988,7 +4562,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 vec![],
                 vec![],
             ))
@@ -7060,18 +4634,18 @@ mod tests {
         fn named_in(
             body: &LirBody,
             plan: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)>,
-        ) -> Vec<super::Named<'_>> {
+        ) -> Vec<crate::backend::slots::Named<'_>> {
             plan.into_iter()
-                .map(|(block, at, _, _)| super::Named {
+                .map(|(block, at, _, _)| crate::backend::slots::Named {
                     block,
                     at,
-                    names: super::Names::Insn(&body.blocks[block].insns[at]),
-                    places: super::Places { count: u8::MAX, ..Default::default() },
+                    names: crate::backend::slots::Names::Insn(&body.blocks[block].insns[at]),
+                    places: crate::backend::slots::Places { count: u8::MAX, ..Default::default() },
                 })
                 .collect()
         }
         let before = chain(false);
-        let first_found = super::homes_kept(
+        let first_found = crate::backend::slots::homes_kept(
             &before,
             &ranges::indexed_shared(&before),
             &named_in(&before, sorted(names(false))),
@@ -7091,7 +4665,7 @@ mod tests {
         );
         let redone = super::homes_redone(&after);
         let compared = super::homes_structures_compared(&after);
-        let kept = super::homes_kept(
+        let kept = crate::backend::slots::homes_kept(
             &after,
             &ranges::indexed_shared(&after),
             &named_in(&after, sorted(names(true))),
@@ -7131,7 +4705,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 defines,
                 uses,
             ))
@@ -7180,7 +4754,7 @@ mod tests {
             Arc::new(Insn::new(
                 at,
                 Some((at, at)),
-                Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }),
+                Some(Semantics { name: Some("nop".into()), ..Semantics::new(Operation::Nothing) }),
                 vec![],
                 vec![],
             ))
@@ -7503,9 +5077,9 @@ mod tests {
     /// allocation colours its homes from those ranges and works nothing out.
     #[test]
     fn test_a_spilling_allocation_colours_its_homes_from_the_live_stacks() {
-        let (stacked, recomputed) = super::colourings();
+        let (stacked, recomputed) = crate::backend::slots::colourings();
         crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
-        let (stacked_now, recomputed_now) = super::colourings();
+        let (stacked_now, recomputed_now) = crate::backend::slots::colourings();
         assert!(stacked_now > stacked, "premise: some body spilled to a home and was coloured");
         assert_eq!(recomputed_now - recomputed, 0, "colourings that worked the homes' liveness out");
     }

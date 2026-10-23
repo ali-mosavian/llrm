@@ -196,7 +196,7 @@ fn shared_run(
     let destination = Loc::Reg(register);
     let zero = value == 0 && flags_dead.contains(&id(&run[0]));
     let load = Semantics {
-        name: Some(if zero { "xor" } else { "mov" }.to_owned()),
+        name: Some(if zero { "xor" } else { "mov" }.into()),
         dests: vec![destination.clone()],
         sources: if zero {
             vec![destination.clone(), destination.clone()]

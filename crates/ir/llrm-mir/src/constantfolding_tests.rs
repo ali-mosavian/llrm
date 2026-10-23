@@ -200,9 +200,10 @@ fn answers_of(text: &str) -> Vec<String> {
     dump(text).expect("parses").lines().map(|line| answer(line).to_owned()).collect()
 }
 
-/// An FP binary fold is exact or refused (docs/working/fp-constant-fold-plan.md):
-/// `0.1 + 0.2` rounds, and x87 evaluates it wider than f32 or f64 do, so a fold
-/// in the format could print a different number than the target computes.
+/// An FP binary fold is exact or refused
+/// (docs/working/fp-constant-fold-plan.md): `0.1 + 0.2` rounds, and x87
+/// evaluates it wider than f32 or f64 do, so a fold in the format could print a
+/// different number than the target computes.
 #[test]
 fn an_fp_binary_op_folds_only_when_its_result_is_exact_in_the_format() {
     let got = answers_of(

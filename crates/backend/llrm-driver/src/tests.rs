@@ -156,7 +156,7 @@ fn a_targets_pins_come_from_its_own_forms() {
     // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
     // the value, the pointer, the selector.
     let store = Semantics {
-        name: Some("stosd".to_owned()),
+        name: Some("stosd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), held(5)],
         sources: vec![held(1), held(2), held(3)],
         ..Semantics::new(Operation::Fill)

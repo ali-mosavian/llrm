@@ -2668,7 +2668,7 @@ impl RegAlloc {
         pins.extend(constrain::required(&body, &self.classes));
         let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
-        // allocation (`spiller::slots_colored`).
+        // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
         let allocated = greedy_rewritten(
             &body,
@@ -2691,8 +2691,9 @@ impl RegAlloc {
             spilled.len(),
             last_resorts() - before
         );
-        let colored =
-            llrm_support::debug::timed("spill slots shared", || spiller::slots_colored(&out, &mut frame.borrow_mut()));
+        let colored = llrm_support::debug::timed("spill slots shared", || {
+            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+        });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)
             .map(|placed| datagroup::restored(&placed, data_free, &segments))
@@ -2741,7 +2742,7 @@ fn _min(
 
 /// The values an instruction makes impure.
 fn _impure_names(one: &Insn) -> Vec<u32> {
-    if spiller::_plain_move(one).is_some() {
+    if crate::backend::bodyfacts::_plain_move(one).is_some() {
         return Vec::new();
     }
     let in_place = one
@@ -2896,7 +2897,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -3300,7 +3301,7 @@ mod tests {
     #[test]
     fn test_an_operand_read_as_undef_is_placed_in_any_register() {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value: 2, width: 2 })],
             sources: vec![Loc::Held(Held { value: 9, width: 2 })],
             ..Semantics::new(Operation::Move)
@@ -3816,7 +3817,7 @@ mod tests {
         let mut call = Insn::new(
             2,
             Some((2, 2)),
-            Some(Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) }),
+            Some(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) }),
             vec![],
             vec![],
         );

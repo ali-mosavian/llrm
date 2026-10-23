@@ -1136,18 +1136,11 @@ impl Queue {
     }
 }
 
-/// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: register numbers at or
-/// above [`FIRST_VIRTUAL`] are virtual.
+/// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: a `Register` node
+/// holds a virtual register, a `PhysReg` node a physical one.
 fn virtual_register(
     graph: &Graph<'_>,
     reg: SDValue,
 ) -> bool {
-    matches!(
-        graph.dag.node(reg).data,
-        NodeData::Register(r) if r >= FIRST_VIRTUAL
-    )
+    matches!(graph.dag.node(reg).data, NodeData::Register(_))
 }
-
-/// The first virtual register number a `Register` node holds; below it the
-/// numbers are the target's physical registers.
-pub const FIRST_VIRTUAL: u32 = 1 << 16;

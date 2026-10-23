@@ -164,7 +164,7 @@ pub fn shared(body: &LirBody) -> LirBody {
                         at,
                         Some(edge),
                         Some(Semantics {
-                            name: Some("mov".to_owned()),
+                            name: Some("mov".into()),
                             dests: vec![Loc::Held(*held)],
                             sources: vec![imm.clone()],
                             ..Semantics::new(Operation::Move)

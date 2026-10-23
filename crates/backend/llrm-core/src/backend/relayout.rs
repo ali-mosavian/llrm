@@ -405,7 +405,7 @@ mod tests {
     fn load(addr: Addr) -> Semantics {
         let cell = Mem { through: RegId::EBP, ..Mem::new(Some(addr), 4) };
         Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::EAX, width: 4 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
