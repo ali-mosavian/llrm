@@ -1139,6 +1139,10 @@ pub struct LirBody {
     /// distance from the caller's frame (`FrameBase::Cfa`), whichever register
     /// the code addresses it by.
     pub cfa_variables: bool,
+    /// The callee-saved registers are pushed before the locals' space is
+    /// allocated (the pin's order), so every local lies that much lower
+    /// (`masm::saved_first`).
+    pub saved_first: bool,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1316,6 +1320,7 @@ impl LirBody {
             registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,
+            saved_first: false,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
@@ -1380,6 +1385,7 @@ impl LirBody {
             registers: self.registers,
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
+            saved_first: self.saved_first,
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
