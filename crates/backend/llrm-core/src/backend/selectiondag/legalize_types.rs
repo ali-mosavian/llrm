@@ -1133,11 +1133,16 @@ impl<'a> TypeLegalizer<'a> {
         node: SDValue,
         half: EVT,
     ) -> Result<(SDValue, SDValue), LegalizeError> {
-        let shift = self.target.and_then(|target| target.machine().huge_shift()).ok_or(LegalizeError::Unsupported {
-            op: x86isd::LLRM_WINDOW,
-            ty: self.dag.value_type(node),
-            what: "expand result: no selector stride",
-        })?;
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_WINDOW,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
         let below = half.size_in_bits() - shift;
         let (offset, selector) = self.expanded_integer(self.dag.operand(node, 0));
         let by = self.dag.get_constant(u128::from(below), EVT::I8);

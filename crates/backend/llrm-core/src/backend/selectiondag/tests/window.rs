@@ -41,9 +41,12 @@ fn a_window_moves_whole_paragraphs_of_the_offset_into_the_selector() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::BuildPair);
     let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
-    for (off, sel, want_off, want_sel) in
-        [(0x1234u128, 0x1000u128, 0x0004u128, 0x1123u128), (0xFFFF, 0x2000, 0x000F, 0x2FFF), (0x000F, 5, 0xF, 5), (0x0010, 0, 0, 1)]
-    {
+    for (off, sel, want_off, want_sel) in [
+        (0x1234u128, 0x1000u128, 0x0004u128, 0x1123u128),
+        (0xFFFF, 0x2000, 0x000F, 0x2FFF),
+        (0x000F, 5, 0xF, 5),
+        (0x0010, 0, 0, 1),
+    ] {
         let (got_off, got_sel) = (eval(&dag, low, (off, sel)), eval(&dag, high, (off, sel)));
         assert_eq!((got_off, got_sel), (want_off, want_sel), "window of {sel:#x}:{off:#x}");
         assert_eq!(got_sel * 16 + got_off, sel * 16 + off, "the address is kept");
