@@ -110,6 +110,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        caller_saved: &Default::default(),
+        stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &HashMap::new(),
         frame: &frame,
