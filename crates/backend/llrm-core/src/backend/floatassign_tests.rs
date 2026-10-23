@@ -56,7 +56,6 @@ fn before(
         false,
         ProfileOrName::Profile(cpu),
         &target::BUILT_IN,
-        false,
     )
     .unwrap()
     {

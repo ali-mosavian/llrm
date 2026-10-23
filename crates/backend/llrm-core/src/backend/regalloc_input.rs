@@ -157,7 +157,6 @@ pub fn before_phase_skipping<'a>(
         false,
         ProfileOrName::Profile(cpu),
         &target::BUILT_IN,
-        true,
     )
     .unwrap();
     let mut phases = phases.into_iter();

@@ -15,7 +15,6 @@ use crate::backend::coalesce::Coalescer;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::parcopy::ParallelCopy;
 use crate::backend::phielim::PhiElimination;
-use crate::backend::ssaspill::SsaSpill;
 use crate::backend::twoaddr::TwoAddress;
 use crate::backend::{target, verify};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -874,8 +873,8 @@ fn allocated(
     if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
 }
 
-/// The generated body in SSA through the production phases from the spiller on,
-/// and the result must store what the generated body stores.
+/// The generated body in SSA through the production phases from phi elimination
+/// on, and the result must store what the generated body stores.
 fn spilled_and_allocated(
     seed: u64,
     shape: &Shape,
@@ -886,13 +885,6 @@ fn spilled_and_allocated(
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill {
-            frame: frame.clone(),
-            segments: segments.clone(),
-            classes: crate::backend::classes::RegisterClasses::m16(),
-            prices: crate::backend::ssaspill::Prices::clocks(),
-            run: Default::default(),
-        }),
         Box::new(PhiElimination::default()),
         Box::new(TwoAddress::default()),
         Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
@@ -909,9 +901,6 @@ fn spilled_and_allocated(
         phases.pop();
     }
     let mut now = in_ssa(&body);
-    if std::env::var_os("FUZZ_NO_SPILL").is_some() {
-        phases.remove(0);
-    }
     for phase in &mut phases {
         if std::env::var_os("FUZZ_SHOW").is_some() {
             eprintln!(
@@ -1482,51 +1471,6 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
     let walked = _walked(&body, &index, &|_| true);
     assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
     assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
-}
-
-/// The last reads of a body were found from the sets of every block's entry and
-/// exit, of which only the exits are read (5.7% of compiling `d_faces`, #559).
-/// The exits as rows give the same reads.
-#[test]
-fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
-    use std::collections::BTreeSet;
-
-    use crate::analysis::intervals::key;
-    for seed in 0..150 {
-        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
-        let (plain, _) = body(seed, &shape);
-        for body in [in_ssa(&plain), plain] {
-            let (_, live_out) = crate::backend::allocate::live_reference(&body);
-            let mut expected: BTreeSet<(usize, u32)> = BTreeSet::new();
-            for block in &body.blocks {
-                let mut alive: BTreeSet<u32> = live_out[&block.at].iter().collect();
-                let mut index = block.insns.len() as i64 - 1;
-                while index >= 0 {
-                    let one = &block.insns[index as usize];
-                    let mut first = index as usize;
-                    if one.group.is_some() {
-                        while first > 0 && block.insns[first - 1].group == one.group {
-                            first -= 1;
-                        }
-                    }
-                    let group = &block.insns[first..=index as usize];
-                    for item in group {
-                        for value in &item.defines {
-                            alive.remove(value);
-                        }
-                    }
-                    for item in group {
-                        expected.extend(
-                            item.uses.iter().filter(|value| !alive.contains(value)).map(|value| (key(item), *value)),
-                        );
-                    }
-                    alive.extend(group.iter().flat_map(|item| item.uses.iter().copied()));
-                    index = first as i64 - 1;
-                }
-            }
-            assert_eq!(crate::backend::spiller::_final_uses(&body), expected, "seed {seed}");
-        }
-    }
 }
 
 /// Splitting a value asked of the liveness of every value in every block as

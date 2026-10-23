@@ -28,6 +28,59 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qcport-vs-main](qcport-vs-main.md) | QCport -Os and -O2, parity against main, per module, with the owner of each module above main |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
+| [above-main-rows](above-main-rows.md) | Rows above main |
+| [accesses-basicaa-plan](accesses-basicaa-plan.md) | MemorySSA Accesses: BasicAA per query (exit of DEVIATE AN1) |
+| [backend-rows-plan](backend-rows-plan.md) | Backend rows to translate: 82, 34/83, 90, 84, 42 — w-3, plan note 2026-10-22 |
+| [bpi-plan](bpi-plan.md) | BranchProbabilityInfo, MachineBranchProbabilityInfo, MBFI: plan (2026-10-22) |
+| [callframe-translation-plan](callframe-translation-plan.md) | Translating X86CallFrameOptimization (slot 50) |
+| [codegen-ablation](codegen-ablation.md) | Codegen ablation |
+| [codegen-rows-freeze-dynalloca-latecleanup](codegen-rows-freeze-dynalloca-latecleanup.md) | Plan: three codegen rows (funcattrs-port) |
+| [codegen-rows-machinecse-combiner](codegen-rows-machinecse-combiner.md) | Plan: Machine CSE and Machine InstCombiner rows (funcattrs-port) |
+| [codegenprepare](codegenprepare.md) | CodeGenPrepare: the pin's transforms against ours |
+| [commute-load-clock-rows](commute-load-clock-rows.md) | commute-load clock rows (#3874) |
+| [count-to-zero-xbubble-trial](count-to-zero-xbubble-trial.md) | x_bubble zero-end counter generator: trial (2026-10-22) |
+| [early-machinelicm](early-machinelicm.md) | Early MachineLICM, pressure-gated (codegen row 42) — w-3, plan note 2026-11-06 |
+| [fold-retirement](fold-retirement.md) | Retiring `fold` slot by slot |
+| [forged-sel-2](forged-sel-2.md) | FORGED-SEL-2: what a forged selector reaches |
+| [fp-constant-fold-plan](fp-constant-fold-plan.md) | FP binary constant fold: plan (2026-10-22) |
+| [fpround-pricing](fpround-pricing.md) | FPRound is priced as one instruction |
+| [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
+| [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
+| [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
+| [ivusers-order](ivusers-order.md) | IVUsers user order (IU1) |
+| [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
+| [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
+| [ledger-command](ledger-command.md) | The ledger command |
+| [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
+| [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
+| [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
+| [llrm-only-passes](llrm-only-passes.md) | llrm-only MIR passes bucket (d_faces -O2 m32, tip 3b5ac93b68) |
+| [lsr-address-registers](lsr-address-registers.md) | LSR address-register term (LU2): tried, not landed |
+| [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |
+| [machine-scheduler-plan](machine-scheduler-plan.md) | Machine Instruction Scheduler (codegen row 65) |
+| [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
+| [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
+| [pei-plan](pei-plan.md) | Prologue/Epilogue Insertion and Frame Finalization (row 80): plan |
+| [phielimination-completion-plan](phielimination-completion-plan.md) | PHIElimination: completing the translation (row 61) |
+| [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
+| [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
+| [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
+| [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
+| [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
+| [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
+| [scev-s3-stubs](scev-s3-stubs.md) | SCEV stubs (S3), ranked |
+| [segment-cast-audit](segment-cast-audit.md) | Casts through the selector space: audit |
+| [selectiondag-c2-plan](selectiondag-c2-plan.md) | C2: m16 patterns for the DAG selector |
+| [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
+| [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
+| [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
+| [shared-se](shared-se.md) | One ScalarEvolution across the loop passes — w-3, plan note 2026-10-28 |
+| [simplifycfg-jt-cvp-cost](simplifycfg-jt-cvp-cost.md) | SimplifyCFG + JumpThreading + CVP compile cost: ranked callees |
+| [struct-copy-rows](struct-copy-rows.md) | Struct-copy rows R2 and R3 (#3621): cause |
+| [tail-dup-placement](tail-dup-placement.md) | Tail duplication and block placement: premise tests — w-3, 2026-10-22 |
+| [twoaddress-reschedule-plan](twoaddress-reschedule-plan.md) | TwoAddress: rescheduleMIBelowKill and rescheduleKillAboveMI |
+| [x86-fixup-passes-plan](x86-fixup-passes-plan.md) | X86 Fixup SetCC (48), EFLAGS copy lowering (54), Byte/Word Instruction Fixup (98): plan (2026-10-22) |
 
 ## Docs with the change
 

@@ -1353,18 +1353,3 @@ thread_local! {
     /// the homes' liveness out of the body) on this thread.
     pub(crate) static COLOURED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
-
-/// How many colourings of homes this thread made from `LiveStacks`, and how
-/// many by working the liveness of the cells out, for a test that a spilling
-/// allocation does not do the second.
-#[cfg(test)]
-pub(crate) fn colourings() -> (usize, usize) {
-    COLOURED.with(std::cell::Cell::get)
-}
-
-/// How many instructions this thread has made again with the homes among their
-/// values, for a test that the usual ask does not.
-#[cfg(test)]
-pub(crate) fn made_for_homes() -> usize {
-    MADE.with(std::cell::Cell::get)
-}

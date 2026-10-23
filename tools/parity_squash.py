@@ -662,6 +662,43 @@ def new_lib_failures(
     return failed - also
 
 
+def new_scanner_failures(
+    files: list[str],
+    on_merged=None,
+    on_head=None,
+) -> set[str]:
+    """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
+    passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
+    `on_head(targets)` -> the failing names."""
+    smoke = parity_smoke_module()
+    own = {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
+    targets = sorted((set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
+    failed = (on_merged or smoke.integration_failures)(targets)
+    print(scanner_tests_line(targets, failed))
+    if not failed:
+        return set()
+    return failed - (on_head or _scanners_failing_on_head)(targets)
+
+
+def scanner_tests_line(
+    targets: list[str],
+    failed: set[str],
+) -> str:
+    """What the scanner layer did, printed on every batch it sees: a gate silent on a pass cannot be told from one that never ran."""
+    return f"scanners: {len(targets)} targets, {len(failed)} red"
+
+
+def _scanners_failing_on_head(targets: list[str]) -> set[str]:
+    """The scanners red on the head itself, once per head sha and target set: several are (docs naming a path, a link), and only a batch's new reds refuse it."""
+
+    def compute() -> set[str]:
+        clean_checkout(BASE)
+        return parity_smoke_module().integration_failures(targets)
+
+    key = hashlib.sha1(",".join(targets).encode()).hexdigest()[:10]
+    return head_failures(git("rev-parse", BASE).strip(), compute, cache=HEAD_FAILURES / "scanners" / key)
+
+
 def lib_tests_line(
     touched,
     stats: dict,
@@ -759,6 +796,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
                 failed_units.update(new)
                 return False
+            if new := sorted(new_scanner_failures(changed)):
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                failed_units.update(new)
+                return False
         return True
 
     def merge_alone(number: str) -> bool:
@@ -776,6 +817,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT))
             named.update({number: f"alone on the head it does not build: {failed_build[-1][:160]}" for number in culprits})
             return culprits
+        integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
+        if integration:
+            return [number for number in group if merge_alone(number) and {f"integration {t}" for t in integration} & {n.split("::", 1)[0] for n in parity_smoke_module().integration_failures(sorted(integration))}]
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
