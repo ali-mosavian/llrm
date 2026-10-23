@@ -6,6 +6,11 @@ use qbfront::generated_parser::lex;
 
 const DIALECTS: [Dialect; 3] = [Dialect::QuickBasic45, Dialect::VbDos, Dialect::Quickr];
 
+/// `QB_GENERATED=1` runs the grammar generated from the recovered one.
+fn parse(tokens: &[qbfront::generated_parser::Token]) -> Result<lalrspike::qb_tree::Tree, String> {
+    if std::env::var_os("QB_GENERATED").is_some() { lalrspike::parse_qb(tokens) } else { lalrspike::parse_qb_by_hand(tokens) }
+}
+
 fn main() {
     let (mut both, mut neither) = (0, 0);
     let (mut only_hand, mut only_lalr) = (Vec::new(), Vec::new());
@@ -15,7 +20,7 @@ fn main() {
         let lalr = DIALECTS
             .into_iter()
             .filter(|&d| dialect.is_none_or(|accepted| accepted == d))
-            .find_map(|d| lex(&source, d).ok().map(|tokens| lalrspike::parse_qb(&tokens)));
+            .find_map(|d| lex(&source, d).ok().map(|tokens| parse(&tokens)));
         match (dialect, lalr) {
             (Some(_), Some(Ok(_))) => both += 1,
             (None, Some(Err(_)) | None) => neither += 1,
