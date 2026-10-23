@@ -527,6 +527,17 @@ impl Emitter<'_, '_> {
             return self.jump(n, name == "JCC_1");
         }
         if name == "RET" {
+            // A floating result is the stack's top at the return: the
+            // unnamed store the stackifier reads as `handleReturn`.
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            for &op in &node.ops {
+                if self.dag.value_type(op).is_floating_point() {
+                    let Loc::Held(value) = self.operand(op)? else {
+                        return Err(EmitError::Unsupported("a floating result that is no register".to_owned()));
+                    };
+                    self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]);
+                }
+            }
             // The value is already in its register (`CopyToReg`); the frame
             // pass adds the epilogue before it.
             // Unnamed: the printer says `retf` in a far procedure and `ret` in

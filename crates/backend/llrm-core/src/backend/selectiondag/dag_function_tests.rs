@@ -913,3 +913,48 @@ fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
     let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
     assert_eq!(high, [expected.clone(), expected]);
 }
+
+const FLOAT_RESULT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(double %x) {
+entry:
+  %m = fmul double %x, 2.5
+  %r = fadd double %m, 1.0
+  ret double %r
+}
+";
+
+/// A floating result is the x87 stack's top at the return, which the stackifier
+/// reads as an unnamed store of the value: it was popped and dropped
+/// (`fstp st(0)`) once loads and arithmetic were emitted. The constant 2.5 is a
+/// pool cell, 1.0 is `fld1`.
+#[test]
+fn a_floating_result_is_stored_unnamed_before_the_return() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(FLOAT_RESULT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<(Operation, String)> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| (w.op, w.name.as_deref().unwrap_or("").to_owned()))
+        .collect();
+    let names: Vec<&str> = seen.iter().map(|(_, name)| name.as_str()).collect();
+    assert!(
+        names.contains(&"fld") && names.contains(&"fmul") && names.contains(&"fld1") && names.contains(&"fadd"),
+        "{names:?}"
+    );
+    let ret = seen.len() - 1;
+    assert_eq!(seen[ret - 1], (Operation::FloatStore, String::new()), "{names:?}");
+    let pooled = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .any(
+            |l| matches!(
+                l,
+                crate::model::ir::Loc::Mem(m) if m.width == 8 && m.addr.is_some()
+            ),
+        );
+    assert!(pooled, "the 2.5 is a cell of the pool: {names:?}");
+}
