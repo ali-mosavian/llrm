@@ -69,6 +69,9 @@ pub struct TypeLegalizer<'a> {
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
+    /// The target's custom lowerings, asked before a node with an illegal type
+    /// is promoted or expanded (`CustomLowerNode`).
+    hooks: Option<&'a mut dyn super::legalize_dag::Hooks>,
 }
 
 impl<'a> TypeLegalizer<'a> {
@@ -85,7 +88,18 @@ impl<'a> TypeLegalizer<'a> {
             promoted: HashMap::new(),
             expanded: HashMap::new(),
             target: None,
+            hooks: None,
         }
+    }
+
+    /// The target's custom lowerings for the types it cannot hold
+    /// (`CustomLowerNode`).
+    pub fn with_hooks(
+        mut self,
+        hooks: &'a mut dyn super::legalize_dag::Hooks,
+    ) -> TypeLegalizer<'a> {
+        self.hooks = Some(hooks);
+        self
     }
 
     /// The target whose inline routines `i64` division calls (SD19).
@@ -173,11 +187,15 @@ impl<'a> TypeLegalizer<'a> {
             match self.action(vt) {
                 TypeAction::Legal => {}
                 TypeAction::PromoteInteger => {
-                    self.promote_integer_result(value)?;
+                    if !self.custom_lower_node(n, vt) {
+                        self.promote_integer_result(value)?;
+                    }
                     return Ok(true);
                 }
                 TypeAction::ExpandInteger => {
-                    self.expand_integer_result(value)?;
+                    if !self.custom_lower_node(n, vt) {
+                        self.expand_integer_result(value)?;
+                    }
                     return Ok(true);
                 }
             }
@@ -196,8 +214,10 @@ impl<'a> TypeLegalizer<'a> {
             if self.ignores_results(op.node) {
                 continue;
             }
-            let reanalyze = match self.action(self.dag.value_type(op)) {
+            let operand_vt = self.dag.value_type(op);
+            let reanalyze = match self.action(operand_vt) {
                 TypeAction::Legal => continue,
+                _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
             };
@@ -608,6 +628,7 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: selector.node, res: 1 });
                 (les, selector)
             }
+            ISD::Load => self.expand_load(value, half),
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             ISD::CtPop => self.expand_ctpop(value, half),
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
@@ -966,6 +987,88 @@ impl<'a> TypeLegalizer<'a> {
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
+    /// `CustomLowerNode`: ask the target to lower `n` when its action for the
+    /// illegal type `vt` is Custom; its result replaces the node's.
+    fn custom_lower_node(
+        &mut self,
+        n: u32,
+        vt: EVT,
+    ) -> bool {
+        let node = SDValue { node: n, res: 0 };
+        if self.tli.operation_action(self.dag.opcode(node), vt) != super::actions::Action::Custom {
+            return false;
+        }
+        let Some(hooks) = self.hooks.as_mut() else { return false };
+        let Some(result) = hooks.lower_operation(self.dag, node) else { return false };
+        if result == node {
+            return false;
+        }
+        let results = self.dag.node(node).values.len();
+        for res in 0..results as u8 {
+            let new = if results == 1 { result } else { SDValue { node: result.node, res } };
+            self.replace_value_with(SDValue { node: n, res }, new);
+        }
+        true
+    }
+
+    /// `ExpandIntRes_LOAD`, a plain load: the low dword at the address, the
+    /// high at +4 (little endian), both on the load's chain, the chains joined.
+    fn expand_load(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        let info = super::dag::MemInfo { mem_vt: half, ..info };
+        let step = u128::from(half.size_in_bits() / 8);
+        let pointer = self.dag.value_type(ptr);
+        let offset = self.dag.get_constant(step, pointer);
+        let high_ptr = self.dag.get_node(ISD::Add, pointer, &[ptr, offset]);
+        let lo = self.dag.get_load(half, chain, ptr, info);
+        let hi = self.dag.get_load(half, chain, high_ptr, info);
+        let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
+        (lo, hi)
+    }
+
+    /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4.
+    fn expand_store(
+        &mut self,
+        store: SDValue,
+    ) -> SDValue {
+        let (chain, value, ptr) = (self.dag.operand(store, 0), self.dag.operand(store, 1), self.dag.operand(store, 2));
+        let NodeData::Mem(info) = self.dag.node(store).data else { unreachable!("a store has a memory operand") };
+        let (lo, hi) = self.expanded_integer(value);
+        let half = self.dag.value_type(lo);
+        let info = super::dag::MemInfo { mem_vt: half, ..info };
+        let step = u128::from(half.size_in_bits() / 8);
+        let pointer = self.dag.value_type(ptr);
+        let offset = self.dag.get_constant(step, pointer);
+        let high_ptr = self.dag.get_node(ISD::Add, pointer, &[ptr, offset]);
+        let low_store = self.dag.get_store(chain, lo, ptr, info);
+        let high_store = self.dag.get_store(chain, hi, high_ptr, info);
+        self.dag.get_token_factor(&[low_store, high_store])
+    }
+
+    fn setcc_code(
+        &self,
+        setcc: SDValue,
+    ) -> Option<CondCode> {
+        match self.dag.node(self.dag.operand(setcc, 2)).data {
+            NodeData::CondCode(code) => Some(code),
+            _ => None,
+        }
+    }
+
+    /// An `i64` constant zero (an opaque one too).
+    fn is_null_wide(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        self.dag.constant(value) == Some(0)
+    }
+
     /// `ExpandIntegerOperand`.
     fn expand_integer_operand(
         &mut self,
@@ -978,6 +1081,18 @@ impl<'a> TypeLegalizer<'a> {
                 let (lo, _) = self.expanded_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[lo])
+            }
+            ISD::Store if at == 1 => self.expand_store(node),
+            ISD::SetCC
+                if matches!(self.setcc_code(node), Some(CondCode::SetLt | CondCode::SetGe))
+                    && self.is_null_wide(self.dag.operand(node, 1)) =>
+            {
+                // `x < 0` and `x >= 0` on a wide value are the sign of its high
+                // half (`ExpandIntegerSetCCOperands`).
+                let (_, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                let zero = self.dag.get_constant(0, self.dag.value_type(hi));
+                let code = self.dag.operand(node, 2);
+                self.dag.get_node(ISD::SetCC, self.dag.value_type(node), &[hi, zero, code])
             }
             op => {
                 return Err(LegalizeError::Unsupported {

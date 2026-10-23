@@ -143,6 +143,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
+            ISD::SIntToFp | ISD::UIntToFp => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SetCC | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
@@ -416,6 +417,37 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Ok(())
     }
 
+    /// `PromoteNode` for a conversion between an integer and a float: the
+    /// integer side is widened (sign or zero extended going in, truncated
+    /// coming out).
+    fn promote_conversion(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let op = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        let result = match op {
+            ISD::SIntToFp | ISD::UIntToFp => {
+                let src = self.dag.operand(node, 0);
+                let EVT::Simple(from) = self.dag.value_type(src) else {
+                    unreachable!("promotion applies to simple types")
+                };
+                let to: EVT = self.tli.type_to_promote_to(op, from).into();
+                let widened =
+                    self.dag.get_node(if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend }, to, &[src]);
+                self.dag.get_node(op, vt, &[widened])
+            }
+            _ => {
+                let EVT::Simple(from) = vt else { unreachable!("promotion applies to simple types") };
+                let to: EVT = self.tli.type_to_promote_to(op, from).into();
+                let wide = self.dag.get_node(op, to, &[self.dag.operand(node, 0)]);
+                self.dag.get_node(ISD::Truncate, vt, &[wide])
+            }
+        };
+        self.replace_node(node, result);
+        Ok(())
+    }
+
     /// `ReplaceNode(Old, New)` for a node with one value result.
     fn replace_node(
         &mut self,
@@ -432,6 +464,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         node: SDValue,
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
+        if matches!(
+            op,
+            ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt
+        ) {
+            return self.promote_conversion(node);
+        }
         let EVT::Simple(from) = self.dag.value_type(node) else { unreachable!("promotion applies to simple types") };
         let to: EVT = self.tli.type_to_promote_to(op, from).into();
         let result = match op {
