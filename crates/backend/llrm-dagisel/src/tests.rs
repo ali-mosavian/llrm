@@ -739,6 +739,20 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), "LDS16rm");
     }
 
+    /// The pin's `lea32addr` is typed i32 and `LEA16r` has no pattern: a frame
+    /// object's address at m16 was `CannotSelect` (sieve's three
+    /// `FrameIndex` nodes).
+    #[test]
+    fn the_address_of_a_frame_object_is_lea16r() {
+        let mut dag = TestDag::new();
+        let frame = dag.frame_index(0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, frame.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, frame.node), "LEA16r");
+    }
+
     #[test]
     fn the_pins_own_table_has_no_pattern_for_a_far_load() {
         let (mut dag, node, _) = far_load(x86isd::LES);

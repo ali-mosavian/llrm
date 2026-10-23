@@ -57,3 +57,10 @@ def : Pat<(X86rep_stos i8), (REP_STOSB_16)>;
 def : Pat<(X86rep_stos i16), (REP_STOSW_16)>;
 def : Pat<(X86rep_stos i32), (REP_STOSD_16)>;
 }
+
+// `lea` of a frame object or an address sum: the pin's `lea32addr` is typed i32 and the
+// 16-bit `LEA16r` has no pattern, but real mode makes both i16.
+def lea16addr : ComplexPattern<i16, 5, "selectLEAAddr",
+                               [add, sub, mul, X86mul_imm, shl, or, xor, frameindex], []>;
+let Predicates = [Not64BitMode] in
+def : Pat<(i16 lea16addr:$src), (LEA16r lea16addr:$src)>;
