@@ -6,7 +6,9 @@
 use llrm_mir::intrinsics::{BitCount, FloatFunction, Intrinsic};
 use llrm_mir::module::{Instruction, Operand};
 
+use super::super::dag::SDValue;
 use super::super::isd::ISD;
+use super::super::mvt::EVT;
 use super::{Builder, Refused, flags_of};
 
 impl Builder<'_> {
@@ -19,6 +21,28 @@ impl Builder<'_> {
         let flags = flags_of(instruction.flags);
         let first = self.get_value(instruction.operands[0])?;
         let node = match intrinsic {
+            Intrinsic::Compare { signed } => {
+                let second = self.get_value(instruction.operands[1])?;
+                self.dag.get_node(if *signed { ISD::SCmp } else { ISD::UCmp }, dest, &[first, second])
+            }
+            // `visitIntrinsicCall`: x86 has no fused multiply-add before FMA3
+            // (`isFMAFasterThanFMulAndFAdd`), so a multiply and an add
+            Intrinsic::FMulAdd => {
+                let second = self.get_value(instruction.operands[1])?;
+                let third = self.get_value(instruction.operands[2])?;
+                let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
+                self.dag.get_node_flags(ISD::FAdd, dest, &[product, third], flags)
+            }
+            Intrinsic::Fixed { divide: false } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let scale = self.get_value(instruction.operands[2])?;
+                self.dag.get_node(ISD::SMulFix, dest, &[first, second, scale])
+            }
+            Intrinsic::Fixed { divide: true } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let scale = self.get_value(instruction.operands[2])?;
+                self.expand_div_fix(first, second, scale)
+            }
             Intrinsic::MinMax { signed, max } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let code = match (signed, max) {
@@ -72,6 +96,26 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.ok_or(Refused("an arithmetic intrinsic without a result"))?, node);
         Ok(())
+    }
+
+    /// `expandDivFix` for `sdiv.fix`: x86 has no fixed-point divide, so the
+    /// operands are widened by one bit and the node is promoted early (a scale
+    /// of 0 stays at the type).
+    fn expand_div_fix(
+        &mut self,
+        lhs: SDValue,
+        rhs: SDValue,
+        scale: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(lhs);
+        if self.dag.constant(scale).unwrap_or(0) == 0 {
+            return self.dag.get_node(ISD::SDivFix, vt, &[lhs, rhs, scale]);
+        }
+        let wide = EVT::integer(vt.size_in_bits() + 1);
+        let lhs = self.dag.get_sext_or_trunc(lhs, wide);
+        let rhs = self.dag.get_sext_or_trunc(rhs, wide);
+        let result = self.dag.get_node(ISD::SDivFix, wide, &[lhs, rhs, scale]);
+        self.dag.get_zext_or_trunc(result, vt)
     }
 
     /// Whether the constant is the integer zero.
