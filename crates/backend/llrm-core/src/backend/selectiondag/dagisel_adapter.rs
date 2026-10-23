@@ -503,9 +503,15 @@ impl Dag for DagisAdapter<'_> {
     }
     fn is_truncating_store(
         &self,
-        _: u32,
+        node: u32,
     ) -> bool {
-        false
+        let n = &self.dag.nodes()[node as usize];
+        match n.data {
+            NodeData::Mem(info) if n.opcode == ISD::Store => {
+                self.dag.value_type(n.ops[1]).size_in_bits() > info.mem_vt.size_in_bits()
+            }
+            _ => false,
+        }
     }
     fn memory_vt(
         &self,
