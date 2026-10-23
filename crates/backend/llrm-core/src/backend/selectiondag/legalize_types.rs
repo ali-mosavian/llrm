@@ -24,6 +24,11 @@
 //! (`sbb`) form the X86 target prefers. Exit: x86 `SETCCCARRY` lowering.
 //! Owner sdag-b. Review 2026-11-27.
 //!
+//! DEVIATE SD209: a load or store through a far pointer sets `ES` with a
+//! `CopyToReg` before it, ordered by the chain only: the access has no glue
+//! operand, so two far accesses unordered by the chain could interleave their
+//! `ES` writes. Exit: a glued far-access node. Owner sdag-b. Review 2026-12-10.
+//!
 //! DEVIATE SD33: no `NodeUpdateListener`:
 //! [`SelectionDAG::replace_all_uses_with`] returns what it did to each user
 //! ([`Rauw`]). Nodes replaced stay in the arena with no users (no
@@ -1225,6 +1230,26 @@ impl<'a> TypeLegalizer<'a> {
         Ok(self.dag.get_node(ISD::Add, vt, &[within, high]))
     }
 
+    /// A load or store through a far pointer: the access is at the offset
+    /// word, and `ES` is set to the selector before it (`MemInfo::space` 259
+    /// makes the access `es:`-relative). Ordered by the chain only (SD209).
+    fn expand_far_address(
+        &mut self,
+        access: SDValue,
+        at: usize,
+    ) -> SDValue {
+        let (offset, selector) = self.expanded_integer(self.dag.operand(access, at));
+        let chain = self.dag.get_copy_to_reg(self.dag.operand(access, 0), ES, selector);
+        let mut ops = self.dag.node(access).ops.clone();
+        ops[0] = chain;
+        ops[at] = offset;
+        // The unindexed access's offset operand is a poison of the pointer type.
+        let last = ops.len() - 1;
+        ops[last] = self.dag.get_poison(self.dag.value_type(offset));
+        let updated = self.dag.update_node_operands(access.node, &ops);
+        SDValue { node: updated, res: 0 }
+    }
+
     /// A call through a far pointer: offset then selector stored to a 4-byte
     /// stack cell, and the call reads the cell (`LLRM_FARCALL`, SD208).
     fn expand_far_call(
@@ -1329,6 +1354,8 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
             }
             ISD::Store if at == 1 => self.expand_store(node),
+            ISD::Load if at == 1 => self.expand_far_address(node, at),
+            ISD::Store if at == 2 => self.expand_far_address(node, at),
             super::x86isd::CALL if at == 1 => self.expand_far_call(node),
             x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
             ISD::BitCast => {
