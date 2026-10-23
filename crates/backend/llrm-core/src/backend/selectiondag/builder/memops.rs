@@ -50,7 +50,8 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
                 Ok(())
             }
-            Intrinsic::MinMax { .. }
+            Intrinsic::WithOverflow { .. }
+            | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
             | Intrinsic::Abs

@@ -5,8 +5,10 @@
 
 use llrm_mir::intrinsics::{BitCount, FloatFunction, Intrinsic};
 use llrm_mir::module::{Instruction, Operand};
+use llrm_mir::opcode::BinaryOp;
 
 use super::super::isd::ISD;
+use super::super::mvt::EVT;
 use super::{Builder, Refused, flags_of};
 
 impl Builder<'_> {
@@ -15,9 +17,26 @@ impl Builder<'_> {
         instruction: &Instruction,
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
-        let dest = self.type_of(instruction.ty)?;
         let flags = flags_of(instruction.flags);
         let first = self.get_value(instruction.operands[0])?;
+        // `{iN, i1}`: the node's two results, which `extractvalue` picks from
+        if let Intrinsic::WithOverflow { op, signed } = intrinsic {
+            let second = self.get_value(instruction.operands[1])?;
+            let code = match (op, signed) {
+                (BinaryOp::Add, false) => ISD::UAddO,
+                (BinaryOp::Add, true) => ISD::SAddO,
+                (BinaryOp::Sub, false) => ISD::USubO,
+                (BinaryOp::Sub, true) => ISD::SSubO,
+                (BinaryOp::Mul, false) => ISD::UMulO,
+                (BinaryOp::Mul, true) => ISD::SMulO,
+                _ => return Err(Refused("overflow of an operation with no overflow node")),
+            };
+            let vt = self.dag.value_type(first);
+            let node = self.dag.get_node_multi(code, &[vt, EVT::I1], &[first, second]);
+            self.set_value(instruction.result.ok_or(Refused("an overflow intrinsic without a result"))?, node);
+            return Ok(());
+        }
+        let dest = self.type_of(instruction.ty)?;
         let node = match intrinsic {
             Intrinsic::MinMax { signed, max } => {
                 let second = self.get_value(instruction.operands[1])?;
