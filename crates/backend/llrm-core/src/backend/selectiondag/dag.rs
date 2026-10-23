@@ -188,6 +188,9 @@ pub struct SelectionDAG {
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
+    /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
+    /// set by the builder where the function takes `...`.
+    pub var_args_frame_index: Option<i32>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
 }
@@ -207,6 +210,7 @@ impl SelectionDAG {
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
+            var_args_frame_index: None,
             temporaries: Vec::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);

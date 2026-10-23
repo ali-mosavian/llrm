@@ -135,6 +135,8 @@ mod emit_tests;
 #[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
+mod fpret_tests;
+#[cfg(test)]
 mod fpround_tests;
 #[cfg(test)]
 mod mathops_tests;
