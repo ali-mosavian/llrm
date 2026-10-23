@@ -82,6 +82,27 @@ pub trait GlobalMap {
     ) -> Addr;
 }
 
+/// The readonly cell that holds a constant's bytes (`constpool`), one for each
+/// distinct datum of the module.
+pub trait ConstantCells {
+    fn cell(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Mem;
+}
+
+/// No pool: the DAG makes no constant cell here.
+pub struct NoConstants;
+
+impl ConstantCells for NoConstants {
+    fn cell(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Mem {
+        Mem::new(None, bytes.len() as u32)
+    }
+}
+
 /// What a call destroys, from the convention of what it calls.
 pub trait Conventions {
     /// The registers a call of `callee` destroys beside the ones it passes
@@ -132,6 +153,7 @@ pub struct EmitContext<'a> {
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
     pub stack_pointer: llrm_lir::registers::RegId,
     pub conventions: &'a dyn Conventions,
+    pub constants: &'a dyn ConstantCells,
     pub globals: &'a dyn GlobalMap,
     /// The LIR address of each MIR block, by `BlockId`: what a branch names.
     pub block_at: &'a HashMap<u32, i64>,
@@ -382,6 +404,8 @@ fn width(vt: EVT) -> u32 {
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
         EVT::Int(bits) => bits.div_ceil(8),
+        // A floating value is one 10-byte register value of the x87 stack.
+        EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
         _ => 4,
     }
 }
@@ -659,6 +683,21 @@ impl Emitter<'_, '_> {
             NodeData::Symbol(id) => Some(Callee::Named(self.dag.symbol_names[id as usize].clone())),
             _ => None,
         }
+    }
+
+    /// The readonly cell of constant pool entry `entry`.
+    fn pool_cell(
+        &self,
+        entry: u32,
+    ) -> Result<Mem, EmitError> {
+        let (bits, vt) = self.dag.constant_pool[entry as usize];
+        let size = match vt {
+            EVT::Simple(MVT::F32) => 4,
+            EVT::Simple(MVT::F64) => 8,
+            EVT::Simple(MVT::F80) => 10,
+            _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
+        };
+        Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
     }
 
     /// `value` as a held value, copied into one if it is a constant or a cell.
@@ -1053,8 +1092,109 @@ impl Emitter<'_, '_> {
                 );
                 Ok(Some(()))
             }
-            _ => Ok(None),
+            _ => self.x87(n, name),
         }
+    }
+
+    /// The pin's x87 pseudos (`LD_Fp64m`, `ST_Fp64m32`, `ADD_Fp80m64`,
+    /// `ILD_Fp32m64`, `CHS_Fp32` ...) as the forms the stackifier reads:
+    /// `FloatLoad` `fld` of a cell, `fldz`, `fld1`, `fild`; `FloatStore`
+    /// `fst`, `fist`; `FloatArith` `fadd` ... on two values or a value and
+    /// a cell (`fiadd` for an integer cell); `FloatUnary` `fchs`, `fabs`,
+    /// `fsqrt`. A floating value is one 10-byte `Held` whatever its
+    /// register class; the cell says the memory size. `None`: not one of
+    /// them.
+    fn x87(
+        &mut self,
+        n: u32,
+        name: &str,
+    ) -> Result<Option<()>, EmitError> {
+        let Some((prefix, rest)) = name.split_once("_Fp") else { return Ok(None) };
+        let digits = |text: &str| -> (u32, String) {
+            let end = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+            (text[..end].parse().unwrap_or(0), text[end..].to_owned())
+        };
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let result = SDValue { node: n, res: 0 };
+        let group = |from: usize| -> Result<Vec<SDValue>, EmitError> {
+            node.ops
+                .get(from..from + 5)
+                .map(<[SDValue]>::to_vec)
+                .ok_or_else(|| EmitError::Unsupported(format!("a short {name}")))
+        };
+        match prefix {
+            "LD" if rest.len() == 3 && rest.starts_with(['0', '1']) => {
+                let held = self.fresh(10);
+                self.values.insert(result, held.value);
+                let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
+                self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], Vec::new());
+            }
+            "LD" | "ILD" => {
+                let (first, _) = digits(rest);
+                let cell = self.cell(&group(0)?, first / 8)?;
+                let held = self.fresh(10);
+                self.values.insert(result, held.value);
+                let mnemonic = if prefix == "LD" { "fld" } else { "fild" };
+                self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], vec![Loc::Mem(cell)]);
+            }
+            "ST" | "IST" => {
+                let rest = rest.strip_prefix('P').unwrap_or(rest);
+                let (first, after) = digits(rest);
+                let size = match prefix {
+                    "IST" => first,
+                    _ => after
+                        .strip_prefix('m')
+                        .map(digits)
+                        .filter(|(second, _)| *second != 0)
+                        .map_or(first, |(second, _)| second),
+                };
+                let cell = self.cell(&group(0)?, size / 8)?;
+                let Loc::Held(source) = self.operand(node.ops[5])? else {
+                    return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
+                };
+                let mnemonic = if prefix == "ST" { "fst" } else { "fist" };
+                self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
+            }
+            "CHS" | "ABS" | "SQRT" => {
+                let Loc::Held(source) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
+                };
+                let held = self.fresh(10);
+                self.values.insert(result, held.value);
+                let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
+                self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
+            }
+            "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {
+                let Loc::Held(left) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
+                };
+                let held = self.fresh(10);
+                self.values.insert(result, held.value);
+                let op = prefix.to_ascii_lowercase();
+                let (mnemonic, right) = if let Some(integer) = rest.strip_prefix('I') {
+                    let (bits, _) = digits(integer);
+                    (format!("fi{op}"), Loc::Mem(self.cell(&group(1)?, bits / 8)?))
+                } else {
+                    let (first, after) = digits(rest);
+                    match after.strip_prefix('m') {
+                        Some(tail) => {
+                            let (second, _) = digits(tail);
+                            let size = if second == 0 { first } else { second };
+                            (format!("f{op}"), Loc::Mem(self.cell(&group(1)?, size / 8)?))
+                        }
+                        None => {
+                            let Loc::Held(right) = self.operand(node.ops[1])? else {
+                                return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
+                            };
+                            (format!("f{op}"), Loc::Held(right))
+                        }
+                    }
+                };
+                self.push(Operation::FloatArith, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(left), right]);
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
     }
 
     /// `JMP_1 dest` and `JCC_1 dest, cc`: a jump or a conditional branch to a
@@ -1156,6 +1296,13 @@ impl Emitter<'_, '_> {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
             return Ok(Mem { base, index, scale, ..Mem::new(Some(addr), cell_width) });
+        }
+        if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
+            if self.address_register(group[4], Role::Segment)?.is_some() {
+                return Err(EmitError::Unsupported("a segment override".to_owned()));
+            }
+            let pooled = self.pool_cell(entry)?;
+            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
         }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
@@ -1300,6 +1447,11 @@ impl Emitter<'_, '_> {
         if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
             let addr = self.ctx.globals.address(symbol, offset);
             return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(addr) }));
+        }
+        // The address of a pool constant.
+        if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
+            let addr = self.pool_cell(entry)?.addr;
+            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: addr }));
         }
         match self.values.get(&value) {
             Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.dag, value) })),

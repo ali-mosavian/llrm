@@ -837,16 +837,24 @@ fn staged(
         // selector for the rest -- to bisect a wrong result to a function
         Selector::Dag | Selector::Shadow if !shadow::only(name) => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu, target.libcalls)
+            crate::backend::selectiondag::dag_function::selected_in_pool(
+                module,
+                name,
+                target.arch,
+                target.cpu,
+                target.libcalls,
+                &mut pool.borrow_mut(),
+            )
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected(
+                crate::backend::selectiondag::dag_function::selected_in_pool(
                     module,
                     name,
                     target.arch,
                     target.cpu,
                     target.libcalls,
+                    &mut pool.borrow_mut(),
                 )
             }) {
                 Ok(done) => Some(Ok(done)),
