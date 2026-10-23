@@ -19,6 +19,7 @@ mod builder;
 mod combiner;
 mod expand_node;
 mod extract_element;
+mod wide_compare;
 mod far_load;
 mod float_constants;
 mod fp_to_int;

@@ -217,6 +217,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
+| SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
