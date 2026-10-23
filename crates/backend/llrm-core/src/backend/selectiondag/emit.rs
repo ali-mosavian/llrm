@@ -601,7 +601,10 @@ impl Emitter<'_, '_> {
             let mut users: Vec<u32> = self.dag.users(glue).collect();
             // a machine node the matcher made does not always reach the use
             // lists: a copy to a physical register looks for its user itself
-            if users.is_empty() && matches!(self.dag.node(self.dag.node(glue).ops[1]).data, NodeData::PhysReg(_)) {
+            if users.is_empty() && matches!(
+                self.dag.node(self.dag.node(glue).ops[1]).data,
+                NodeData::PhysReg(_)
+            ) {
                 let all = self.dag.nodes();
                 users = (0..all.len() as u32).filter(|&one| all[one as usize].ops.contains(&glue)).collect();
             }
