@@ -203,6 +203,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Simple(_) => self.tli.operation_action(self.dag.opcode(node), vt),
             EVT::Int(_) => Action::Expand,
         };
+        // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
+        // expanded.
+        if self.dag.opcode(node) == ISD::ExtractElement && action == Action::Legal {
+            action = Action::Expand;
+        }
         if self.dag.opcode(node) == ISD::SetCC
             && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
             && self.tli.cond_code_action(cc, operand) == Action::Expand
@@ -408,6 +413,19 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
+            ISD::ExtractElement => {
+                // 0 is the low half, 1 the high: a truncate, of a shift for the
+                // high.
+                let (wide, which) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let from = self.dag.value_type(wide);
+                let low = if self.dag.constant(which) == Some(0) {
+                    wide
+                } else {
+                    let by = self.dag.get_constant(u128::from(from.size_in_bits() / 2), EVT::I8);
+                    self.dag.get_node(ISD::Srl, from, &[wide, by])
+                };
+                Some(vec![self.dag.get_node(ISD::Truncate, vt, &[low])])
+            }
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
