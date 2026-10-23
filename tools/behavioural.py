@@ -25,8 +25,10 @@ STATE = Path(os.environ.get("BEHAVIOURAL_STATE") or Path.home() / "scratch/coord
 WORKTREE = Path(os.environ.get("BEHAVIOURAL_WORKTREE") or Path.home() / "scratch/wt-behavioural")
 TARGET = Path(os.environ.get("BEHAVIOURAL_TARGET") or Path.home() / "scratch/tgt-behavioural")
 
-# What turns a value across a call wrong: the coalescer, the allocator and its live ranges, the selector, the peephole, the frame, the two-address pass.
-PATHS = re.compile(r"(coalesc|liveness|liveinterval|liverange|regalloc|allocate|greedy|splitkit|spill|isel|selectiondag|peep|frame|twoaddr|rematerial|callerspill)", re.I)
+# What turns a value across a call wrong: any backend source (the coalescer, the allocator, the machine scheduler, liveness, the selector, the peephole, the frame, the
+# two-address pass), and the target's selection rules. Not the DAG path under selectiondag/ (the default compile does not use it), and not tests. The first rule here
+# named fixed paths and missed machinesched.rs and flow.rs: #4146 landed red with a tier that read "no merge touched the paths".
+TARGET_RULES = re.compile(r"^crates/target/[^/]+/src/isel/")
 
 # tests/run/c programs (a stem without a .out is skipped by discovery): the matrix family and the ones that keep a value, a frame or a register across a call
 PROGRAMS = (
@@ -37,8 +39,10 @@ PROGRAMS = (
 
 
 def touches(files: list[str]) -> bool:
-    """Whether a merge changes code of the tier's paths: a crate source under `crates/`, not a doc or a test."""
-    return any(f.startswith("crates/") and f.endswith(".rs") and PATHS.search(f) and "_tests" not in f and "/tests/" not in f for f in files)
+    """Whether a merge changes code the call-shaped programs depend on: backend source or a target's selection rule, not a doc, a test, or the DAG path."""
+    backend = lambda f: f.startswith("crates/backend/") and f.endswith(".rs") and "/selectiondag" not in f  # noqa: E731
+    rule = lambda f: bool(TARGET_RULES.match(f)) and f.endswith((".rs", ".peep"))  # noqa: E731
+    return any((backend(f) or rule(f)) and "_tests" not in f and "/tests/" not in f for f in files)
 
 
 def merges(old: str, new: str, cwd: Path = ROOT) -> list[tuple[str, str, bool]]:

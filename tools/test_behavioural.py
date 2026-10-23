@@ -34,10 +34,33 @@ def test_a_range_of_merges_that_touch_no_tier_path_runs_nothing(monkeypatch):
 def test_the_paths_are_code_of_the_allocator_coalescer_liveness_selector_peephole_and_frame():
     assert b.touches(["crates/backend/llrm-core/src/backend/coalesce.rs"])
     assert b.touches(["crates/backend/llrm-core/src/liveness/liverangecalc.rs", "docs/x.md"])
-    assert b.touches(["crates/target/llrm-x86/src/isel/peephole.peep"]) is False, "a .peep file is not Rust source; its generated Rust is"
+    assert b.touches(["crates/target/llrm-x86/src/isel/peephole.peep"]), "a peephole rule changes the code"
+    # #4146 changed these and no earlier path rule named either: the tier skipped it
+    assert b.touches(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"])
     assert not b.touches(["docs/working/regalloc-plan.md", "crates/backend/llrm-core/src/backend/coalesce_tests.rs", "tools/parity_squash.py"])
+    assert not b.touches(["crates/backend/llrm-core/src/backend/selectiondag/emit.rs"]), "the DAG path is not the default compile"
 
 
 def test_the_red_programs_are_read_from_run_tests_output():
     assert b.red_programs(RED) == ["regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"]
     assert b.red_programs(GREEN) == []
+
+
+def test_a_batch_with_4146s_files_is_refused_and_a_docs_batch_builds_nothing():
+    """#4146 changed machinesched.rs and flow.rs and landed red on regparm3_matrix_22/_31/_4; a batch of only docs or DAG-shadow files must not pay a build."""
+    import parity_squash as ps
+
+    built = []
+    red = ps.pre_merge_behavioural(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"], build=lambda: built.append(1), run=lambda: RED)
+    assert red == ["regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"] and built
+    built.clear()
+    assert ps.pre_merge_behavioural(["docs/working/x.md", "crates/backend/llrm-core/src/backend/selectiondag/emit.rs"], build=lambda: built.append(1), run=lambda: RED) == [] and not built
+
+
+def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
+    import parity_squash as ps
+
+    files = {"4146": ["crates/backend/llrm-core/src/backend/machinesched.rs"], "4170": ["docs/a.md"], "4171": ["crates/backend/llrm-core/src/backend/coalesce.rs"]}
+    probed = []
+    assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and not probed, "one backend PR: it is the offender, no build"
+    assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
