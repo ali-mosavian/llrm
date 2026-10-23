@@ -598,7 +598,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             space: 0,
         };
         let chain = self.dag.entry_node();
-        let loaded = self.dag.get_load(vt, chain, index, info);
+        // a narrower entry is read by an extending load (`ExpandConstantFP`'s
+        // `getExtLoad`)
+        let loaded = if pool_vt == vt {
+            self.dag.get_load(vt, chain, index, info)
+        } else {
+            self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, index, info)
+        };
         self.replace_node(node, loaded);
         Ok(())
     }
