@@ -129,6 +129,17 @@ fn zero_move(one: &Insn) -> bool {
         )
 }
 
+/// An x87 compare, whose answer the stackifier moves into EFLAGS.
+fn float_compare(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::Compare
+            && what
+                .name
+                .as_deref()
+                .is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom") || name.starts_with("fucom"))
+    })
+}
+
 /// The edges of a region, by position in it.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Graph {
@@ -148,10 +159,11 @@ pub fn graph(
     let mut effects: Vec<_> = insns.iter().map(|one| liveness::effect(regs, bits, one)).collect();
     // `MOV32r0` writes EFLAGS (it becomes `xor`): a zero made between a flag
     // writer and its reader would break `add; adc` (the pin's scheduler
-    // sees the def).
+    // sees the def). An `fcom` writes them too: the stackifier follows it
+    // with `fnstsw ax; sahf`, and a `seta` hoisted above it read stale flags.
     for (one, effect) in insns.iter().zip(&mut effects) {
         if let Some(effect) = effect {
-            if zero_move(one) {
+            if zero_move(one) || float_compare(one) {
                 effect.writes = effect.writes.or(&crate::backend::peephole::Lanes::flags(ARITHMETIC_FLAGS));
             }
         }
@@ -544,5 +556,20 @@ mod tests {
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the zero stays before the add");
+    }
+
+    /// A `seta` was scheduled above the `fcom` whose flags it reads
+    /// (`a*100 + (x > 2.5 ? 30 : 20) + b` added 20 for x > 2.5): the x87
+    /// compare writes the flags, as the `sahf` the stackifier adds does.
+    #[test]
+    fn test_a_set_stays_after_the_float_compare_it_reads() {
+        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let byte = Loc::Held(Held { value: 3, width: 1 });
+        let insns = vec![
+            insn(0, semantics(Operation::Compare, "fcom", vec![], vec![float(1), float(2)]), vec![], vec![1, 2]),
+            insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
+        assert_eq!(graph(&insns, regs, 32).preds[1], [0], "the set stays after the fcom");
     }
 }
