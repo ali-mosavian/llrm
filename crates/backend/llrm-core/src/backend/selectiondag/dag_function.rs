@@ -435,6 +435,8 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    // the call sites whose callee is far code (address space 1): a far call
+    let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
@@ -485,7 +487,11 @@ fn selected_in(
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
-                    module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned()
+                    let global = module.global(llrm_mir::context::GlobalId(*symbol));
+                    if crate::backend::isel::far(global).unwrap_or(false) {
+                        far.insert(*at);
+                    }
+                    global.name.as_deref().unwrap_or_default().to_owned()
                 }
                 Callee::Named(name) => name.clone(),
             };
@@ -564,7 +570,7 @@ fn selected_in(
         inline,
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),
-        far: Default::default(),
+        far,
         pops: IndexMap::default(),
         depth: frame.depth.get(),
         extents: frame.locals.borrow().clone(),
