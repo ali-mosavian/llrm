@@ -3055,12 +3055,25 @@ mod tests {
         fixture: &str,
         flags: &[&str],
     ) -> Vec<String> {
+        flat_listing_libcalls(fixture, flags, true)
+    }
+
+    /// The listing of a flat fixture where the runtime names `memcpy`
+    /// (`libcalls`, as c.toml does) or does not.
+    fn flat_listing_libcalls(
+        fixture: &str,
+        flags: &[&str],
+        libcalls: bool,
+    ) -> Vec<String> {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs")))
                 .unwrap();
         let argv: Vec<String> =
             ["-m32"].into_iter().chain(flags.iter().copied()).chain(["x.c"]).map(str::to_owned).collect();
-        let args = super::parse_args(&argv).unwrap();
+        let mut args = super::parse_args(&argv).unwrap();
+        if !libcalls {
+            args.codegen.libcalls.clear();
+        }
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }
@@ -3425,7 +3438,10 @@ mod tests {
                 .unwrap();
         let argv: Vec<String> =
             ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
-        let args = super::parse_args(&argv).unwrap();
+        let mut args = super::parse_args(&argv).unwrap();
+        // The objects asserted here are the selector's own copies, `rep movs`
+        // among them; the flip's are `flat_listing`'s.
+        args.codegen.libcalls.clear();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         let bytes = llrm_core::backend::objbuild::written(&built, "x.c").unwrap();
         let (mut at, mut out) = (0, Vec::new());
@@ -3478,7 +3494,9 @@ mod tests {
     /// dead.
     #[test]
     fn test_m32_lists_a_string_copy_through_esi_edi_ecx() {
-        let lines = flat_listing("strcopy");
+        // Where the runtime names no `memcpy`: the copy stays the string
+        // operation.
+        let lines = flat_listing_libcalls("strcopy", &["-O2"], false);
         let at = lines.iter().position(|line| line == "rep movsd").unwrap_or_else(|| panic!("a rep movsd: {lines:#?}"));
         let before = &lines[..at];
         assert!(
@@ -3494,6 +3512,16 @@ mod tests {
         let object = flat_object("strcopy");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
+    }
+
+    /// The same copy where the m32 runtime names `memcpy` (c.toml `libcalls`):
+    /// a call of `memcpy_`, the pointers' alignment being unknown, and no `rep
+    /// movs`.
+    #[test]
+    fn test_m32_calls_memcpy_for_a_string_copy_the_runtime_has_a_memcpy_for() {
+        let lines = flat_listing("strcopy");
+        assert!(lines.iter().any(|line| line == "call memcpy_"), "a call of memcpy_: {lines:#?}");
+        assert!(!lines.iter().any(|line| line.starts_with("rep movs")), "no rep movs: {lines:#?}");
     }
 
     /// `-fsanitize=stack` compares ESP with a dword limit and enters a near
