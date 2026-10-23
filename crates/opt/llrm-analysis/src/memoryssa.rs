@@ -1222,6 +1222,27 @@ impl MemorySSA<'_> {
         found
     }
 
+    /// `changes` for the def at `site`: a call with a pointer-bearing cell is
+    /// the AA stack's to rule out, even where its footprint says anything;
+    /// the writes of the footprint decide the rest.
+    fn site_changes(
+        &self,
+        cell: &MemRef,
+        invariant: bool,
+        site: InstId,
+        slot: usize,
+        access: usize,
+    ) -> bool {
+        if cell.pointer.is_some()
+            && !invariant
+            && !cell.unwritable()
+            && matches!(self.unit.function.instruction(site).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+        {
+            return self.clobbered(slot, cell, access, site);
+        }
+        changes(cell, invariant, self.written[&site].as_deref(), |_| self.clobbered(slot, cell, access, site))
+    }
+
     /// Whether the call `site` may write `cell`, as the pin's AA stack answers
     /// `getModRefInfo(Call, Loc)` (TBAA, BasicAA, GlobalsAA; MemorySSA.cpp
     /// `instructionClobbersQuery` L320); none for another instruction or a
@@ -1552,9 +1573,8 @@ impl MemorySSA<'_> {
                 {
                     continue;
                 }
-                let written = &self.written[&at];
                 let slot = self.slot(memory);
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                if self.site_changes(memory, invariant, at, slot, candidate) {
                     hit = Some(candidate);
                     break;
                 }
@@ -1566,9 +1586,7 @@ impl MemorySSA<'_> {
                 || nearest.is_none_or(|found| {
                     let at = self.access(found).site.expect("a def has a site");
                     let slot = self.slot(memory);
-                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
-                        self.clobbered(slot, memory, found, at)
-                    })
+                    self.site_changes(memory, invariant, at, slot, found)
                 });
             if confirmed {
                 if let Some(found) = hit.or(nearest) {
@@ -1671,7 +1689,6 @@ impl MemorySSA<'_> {
                         (Some(edge_memory), Some(edge_slot)) if access.block != block => (edge_memory, edge_slot),
                         _ => (memory, slot),
                     };
-                    let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
                     let fixed_apart = match (
                         self.fixed.get(&site),
@@ -1701,9 +1718,7 @@ impl MemorySSA<'_> {
                             _ => false,
                         };
                     if !apart
-                        && changes(queried, invariant, written.as_deref(), |_| {
-                            self.clobbered(queried_slot, queried, current, site)
-                        })
+                        && self.site_changes(queried, invariant, site, queried_slot, current)
                     {
                         ended(table, &mut chain, current);
                         found.insert(current);
