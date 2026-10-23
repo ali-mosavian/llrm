@@ -65,3 +65,15 @@ The "cause" of FR-2 A (and FR-3 A) is the *first* normalised stage where the two
 pin's L1403, L1464 and L1499) clean exactly that form, and with them QCport's FR-2 objects (savegame, weapons, ls, d_alias, ...) do not
 change (`lateic` pair, base 1586dd80c1): the growth comes from a later divergence the first difference only precedes. The per-object
 cause stays open (w-6, 2026-11-06); `foldNot` is not shown to matter for it either.
+
+## FR-2 and FR-3 redone by size bisection (w-6)
+
+`tools/sizebisect/firstdiff.py` over the `LLRM_MIR_STAGES` dumps of the two builds of each changed QCport object (new-only steps
+counted). The first differing step is `simplifycfg@1438` in 14 of the 34 FR-2 objects and 13 of the 33 FR-3 ones, `walk` (the IPO
+snapshot) in 14 and 19, `loop-load-elim@1400` in 5 and 1, `tailrec@1677` in 1. In the `simplifycfg@1438` and `loop-load-elim@1400`
+cases the stage before is textually equal in the two builds (value numbers normalised): the same input gives another output. What
+differs is not in the text: the value and block numbering, and so the order the late SimplifyCFG walks blocks, predecessors and phis
+in. So the growth is not a rewrite `combine` lacks, and not one `fold` did: removing a slot upstream renumbers the body and SimplifyCFG
+then decides differently on the same text (the `xor i1 %c, true` before a branch is one of its outputs). The three late InstCombines
+(#3929) clean that form and change none of these objects, which fits. Open (w-6, 2026-11-13): which order SimplifyCFG reads (predecessor
+order from the use list, a phi order) and what the pin's reads there; until then the rows stay numbered as order sensitivity of SimplifyCFG@1438.

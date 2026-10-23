@@ -173,7 +173,11 @@ impl FunctionPass for CgpAddr {
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
         let extended = match analyses.outer().target().lowering() {
-            Some(lowering) => ext_uses(unit, analyses, &*lowering),
+            Some(lowering) => {
+                let mut state = crate::extpromotion::State::default();
+                let promoted = exts_optimized(unit, &*lowering, &mut state);
+                ext_uses(unit, analyses, &*lowering, &mut state) | promoted
+            }
             None => false,
         };
         let addresses = match analyses.outer().target().tti() {
@@ -198,6 +202,40 @@ impl FunctionPass for CgpAddr {
         }
     }
 }
+/// `optimizeExt` for each `zext` and `sext` of the function whose type is a
+/// register of the target (the others are `SinkCast`'s); whether any moved.
+fn exts_optimized(
+    unit: &mut passes::Unit,
+    lowering: &dyn llrm_mir::lowering::Lowering,
+    state: &mut crate::extpromotion::State,
+) -> bool {
+    let exts: Vec<InstId> = unit
+        .function
+        .walk()
+        .filter(|&(_, inst)| {
+            matches!(
+                unit.function.instruction(inst).opcode,
+                Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+            )
+        })
+        .map(|(_, inst)| inst)
+        .collect();
+    let mut changed = false;
+    for ext in exts {
+        if unit.function.is_erased(ext) {
+            continue;
+        }
+        let one = unit.function.instruction(ext);
+        if matches!(one.operands[0], Operand::Constant(_))
+            || !unit.context.types.int_bits(one.ty).is_some_and(|bits| lowering.is_type_legal(bits))
+        {
+            continue;
+        }
+        changed |= crate::extpromotion::optimize_ext(unit.context, lowering, unit.function, state, ext);
+    }
+    changed
+}
+
 /// `optimizeExtUses`
 /// ([CodeGenPrepare.cpp#L7361](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7361)):
 /// where a `zext` or `sext` and its source are both live out of the source's
@@ -212,6 +250,7 @@ fn ext_uses(
     unit: &mut passes::Unit,
     analyses: &mut Analyses,
     lowering: &dyn llrm_mir::lowering::Lowering,
+    state: &mut crate::extpromotion::State,
 ) -> bool {
     let exts: Vec<(BlockId, InstId)> = unit
         .function
@@ -290,6 +329,7 @@ fn ext_uses(
                     unit.function
                         .insert(made, Position::Before(first))
                         .expect("a position before the first instruction");
+                    state.inserted.insert(made);
                     let trunc = Operand::Value(unit.function.instruction(made).result.expect("a value"));
                     truncs.push((block, trunc));
                     trunc

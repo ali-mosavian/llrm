@@ -454,6 +454,13 @@ mod tests {
             // keeps no instruction's promise and grants none.
             "loopinterchange.rs",
             "loopinterchange_transform.rs",
+            // CodeGenPrepare.cpp's `canGetThrough` reads the `nsw`/`nuw` of
+            // the operand a sign or zero extension is moved up through: the
+            // flag says the narrow operation did not wrap, so the same
+            // operation on the extended operands computes the extension. The
+            // promoted instruction keeps its flags (the pin's `mutateType`
+            // does not touch them) and none is granted.
+            "extpromotion.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

@@ -134,6 +134,10 @@ struct Emitter<'a, 'd> {
     classes: Vec<(u32, &'static str)>,
     /// `CopyFromReg` of the stack pointer: addresses through `SP`.
     sp_values: std::collections::HashSet<SDValue>,
+    /// The value each of EAX/EDX (AX/DX) holds for the division or multiply
+    /// that reads it, set by the `CopyToReg` the matcher glues to it or by the
+    /// instruction before.
+    accumulator: HashMap<llrm_lir::registers::RegId, Held>,
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, u32)>,
     /// The call whose result registers have not been named yet: (block, insn).
@@ -214,6 +218,7 @@ pub fn emit_in(
         blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
         sp_values: Default::default(),
+        accumulator: HashMap::new(),
         calls: Vec::new(),
         last_call: None,
     };
@@ -248,6 +253,20 @@ impl Emitter<'_, '_> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
             ISD::CopyToReg if self.writes_flags(node.ops[1]) || self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg if self.feeds_implicit_operand(n) => {
+                let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("a virtual register in a division sequence".to_owned()));
+                };
+                let Loc::Held(value) = self.operand(node.ops[2])? else {
+                    let source = self.operand(node.ops[2])?;
+                    let held = self.fresh(width_of(self.dag, node.ops[2]));
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
+                    self.accumulator.insert(register, held);
+                    return Ok(());
+                };
+                self.accumulator.insert(register, value);
+                Ok(())
+            }
             ISD::CopyToReg => {
                 let dst = self.register(node.ops[1])?;
                 let src = self.operand(node.ops[2])?;
@@ -266,6 +285,13 @@ impl Emitter<'_, '_> {
                         self.sp_values.insert(result);
                     }
                     NodeData::PhysReg(register) => {
+                        // A quotient, remainder or product is the value the
+                        // instruction made.
+                        if self.reads_implicit_result(node.ops.get(2).copied()) {
+                            let made = self.accumulated(register)?;
+                            self.values.insert(result, made.value);
+                            return Ok(());
+                        }
                         let phys = Reg { register, width: width_of(self.dag, result) };
                         let held = self.fresh(width_of(self.dag, result));
                         // The result of a call is what the call delivers in
@@ -456,6 +482,66 @@ impl Emitter<'_, '_> {
         true
     }
 
+    /// The value the accumulator register `register` holds: what a glued
+    /// `CopyToReg` set, or an earlier division left.
+    fn accumulated(
+        &self,
+        register: llrm_lir::registers::RegId,
+    ) -> Result<Held, EmitError> {
+        self.accumulator
+            .get(&register)
+            .copied()
+            .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
+    }
+
+    /// Whether the `CopyToReg` node `n` sets an implicit operand of the
+    /// division, multiply or sign extension that its glue leads to.
+    fn feeds_implicit_operand(
+        &self,
+        n: u32,
+    ) -> bool {
+        let mut work = vec![SDValue { node: n, res: 1 }];
+        while let Some(glue) = work.pop() {
+            if usize::from(glue.res) >= self.dag.node(glue).values.len() {
+                continue;
+            }
+            for user in self.dag.users(glue) {
+                match self.dag.opcode(SDValue { node: user, res: 0 }) {
+                    ISD::CopyToReg => work.push(SDValue { node: user, res: 1 }),
+                    ISD::Machine(op) => {
+                        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+                        if matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a
+    /// division, multiply or sign extension.
+    fn reads_implicit_result(
+        &self,
+        glue: Option<SDValue>,
+    ) -> bool {
+        let Some(glue) = glue else { return false };
+        let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
+        let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
+        matches!(name, "CDQ" | "CWD") || is_div_or_mul(name)
+    }
+
+    /// (low, high, bytes): AX and DX, or EAX and EDX.
+    fn accumulator_pair(
+        &self,
+        dword: bool,
+    ) -> Result<(llrm_lir::registers::RegId, llrm_lir::registers::RegId, u32), EmitError> {
+        use llrm_lir::registers::RegId;
+        Ok(if dword { (RegId::EAX, RegId::EDX, 4) } else { (RegId::AX, RegId::DX, 2) })
+    }
+
     /// Whether `value` is an `IMPLICIT_DEF` machine node.
     fn is_implicit_def(
         &self,
@@ -513,6 +599,65 @@ impl Emitter<'_, '_> {
                     ..Semantics::new(Operation::Call)
                 };
                 self.push_call(what);
+                return Ok(Some(()));
+            }
+            // Division and the one-operand multiply work in AX:DX or EAX:EDX,
+            // which the matcher names with `CopyToReg`/`CopyFromReg` around
+            // them: the LIR form says the pair in its operands.
+            "CDQ" | "CWD" => {
+                let (low, high, bytes) = self.accumulator_pair(name == "CDQ")?;
+                let source = self.accumulated(low)?;
+                let sign = self.fresh(bytes);
+                self.accumulator.insert(high, sign);
+                self.push(
+                    Operation::Extend,
+                    if name == "CDQ" { "cdq" } else { "cwd" },
+                    vec![Loc::Held(sign)],
+                    vec![Loc::Held(source)],
+                );
+                return Ok(Some(()));
+            }
+            _ if is_div_or_mul(name) => {
+                let (signed, divide, bytes, memory) = div_or_mul(name);
+                if bytes == 1 {
+                    return Err(EmitError::Unsupported(format!("{name}: the byte forms work in AH:AL")));
+                }
+                let (low, high, wide) = self.accumulator_pair(bytes == 4)?;
+                let divisor = if memory {
+                    let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
+                    Loc::Mem(self.cell(group, bytes)?)
+                } else {
+                    self.operand(node.ops[0])?
+                };
+                let mnemonic = match (divide, signed) {
+                    (true, true) => "idiv",
+                    (true, false) => "div",
+                    (false, true) => "imul",
+                    (false, false) => "mul",
+                };
+                // The form pins the quotient and the low product to AX, the
+                // remainder and the high product to DX (`x86.instr`'s fixed
+                // column), so the operands are values, not registers.
+                let (first, second) = (self.fresh(wide), self.fresh(wide));
+                if divide {
+                    let (hi, lo) = (self.accumulated(high)?, self.accumulated(low)?);
+                    self.push(
+                        Operation::Divide,
+                        mnemonic,
+                        vec![Loc::Held(first), Loc::Held(second)],
+                        vec![Loc::Held(hi), Loc::Held(lo), divisor],
+                    );
+                } else {
+                    let lo = self.accumulated(low)?;
+                    self.push(
+                        Operation::Multiply,
+                        mnemonic,
+                        vec![Loc::Held(first), Loc::Held(second)],
+                        vec![Loc::Held(lo), divisor],
+                    );
+                }
+                self.accumulator.insert(low, first);
+                self.accumulator.insert(high, second);
                 return Ok(Some(()));
             }
             // The low byte, word or dword of a register is the same value
@@ -877,6 +1022,23 @@ impl Emitter<'_, '_> {
         let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses));
         self.blocks.last_mut().expect("a block").insns.push(insn);
     }
+}
+
+/// `DIV32r`, `IDIV16m`, `MUL32r`, `IMUL32m`: the one-operand forms.
+fn is_div_or_mul(name: &str) -> bool {
+    let rest = name.strip_prefix('I').unwrap_or(name);
+    (rest.starts_with("DIV") || rest.starts_with("MUL"))
+        && rest[3..].len() >= 2
+        && rest[3..rest.len() - 1].chars().all(|c| c.is_ascii_digit())
+        && matches!(rest.chars().last(), Some('r' | 'm'))
+}
+
+/// (signed, divide, bytes, memory) of a name `is_div_or_mul` accepts.
+fn div_or_mul(name: &str) -> (bool, bool, u32, bool) {
+    let signed = name.starts_with('I');
+    let rest = name.strip_prefix('I').unwrap_or(name);
+    let bytes = rest[3..rest.len() - 1].parse::<u32>().unwrap_or(32) / 8;
+    (signed, rest.starts_with("DIV"), bytes, rest.ends_with('m'))
 }
 
 fn width_of(
