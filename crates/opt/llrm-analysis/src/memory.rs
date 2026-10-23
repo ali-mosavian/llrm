@@ -1089,6 +1089,9 @@ pub struct Unit<'a> {
     /// the manager's `GlobalsModRefAnalysis`; without it a call says nothing
     /// of a global.
     pub globals_mr: Option<&'a crate::globalsmodref::GlobalsModRef>,
+    /// The proxy `within` made the unit under, whose memo holds what depends on
+    /// its module analyses alone.
+    pub outer: Option<&'a llrm_mir::passes::Outer>,
     /// Dominance and loops, the manager's; without them each ask finds them.
     pub shape: Option<&'a Shape>,
     /// What consts knows without memory, the manager's `Registers`.
@@ -1188,6 +1191,7 @@ impl<'a> Unit<'a> {
             function,
             globals_aa: None,
             globals_mr: None,
+            outer: None,
             references: None,
             shape: None,
             registers: None,

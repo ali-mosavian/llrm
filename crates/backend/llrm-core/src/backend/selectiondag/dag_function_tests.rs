@@ -1562,3 +1562,78 @@ fn an_unsigned_64_bit_integer_converts_to_a_double() {
     selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const CALL_RETURNING_I64: &str =
+    "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define internal cc 1002 i64 @t_(double noundef %0) {
+b1:
+  %1 = fptosi double %0 to i64
+  ret i64 %1
+}
+define i64 @f(double noundef %d) {
+b1:
+  %r = call cc 1002 i64 @t_(double noundef %d)
+  ret i64 %r
+}
+";
+
+/// A call returning an i64 delivers both halves. The EDX read took the call's
+/// glue only when the convention's clobber list or the target's named EDX; a
+/// callee that returns in EDX without clobbering it made `mov v, EDX` read a
+/// register nothing defined (`floatalloc: _main reads edx before every path
+/// writes it`, double_to_int64.c -O0 under `--isel=dag`).
+#[test]
+fn a_call_delivers_both_halves_of_an_i64_result() {
+    let module = llrm_mir::parse::module(CALL_RETURNING_I64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Call)).expect("a call");
+    let mut registers: Vec<_> = call.delivers.iter().map(|(_, register)| *register).collect();
+    registers.sort_by_key(|r| r.index());
+    assert_eq!(registers, [llrm_lir::registers::RegId::EAX, llrm_lir::registers::RegId::EDX], "{call:?}");
+}
+
+/// A load marked `!invariant.load` selected by the DAG selector carried no
+/// flag to LIR (`MemInfo` had none), so MachineCSE and the sinker took it for a
+/// load that a store may change: the pin's `visitLoad` marks it and
+/// `isCSECandidate` takes it.
+#[test]
+fn a_load_marked_invariant_is_an_invariant_load_in_lir() {
+    let flags = |mark: &str| {
+        let text = format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@tab = global [4 x i32] [i32 1, i32 2, i32 3, i32 4]
+define i32 @f(i32 %n) {{
+entry:
+  %p = getelementptr [4 x i32], ptr @tab, i32 0, i32 %n
+  %a = load i32, ptr %p{mark}
+  ret i32 %a
+}}
+!0 = !{{}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| {
+                one.what
+                    .as_ref()
+                    .is_some_and(
+                        |what| what.op == Operation::Move
+                            && matches!(
+                                what.sources.as_slice(),
+                                [crate::model::ir::Loc::Mem(cell)] if cell.addr.as_ref().is_some_and(|a| a.space == crate::model::ir::Space::Segment)
+                            ),
+                    )
+            })
+            .map(|one| one.invariant())
+            .collect::<Vec<bool>>()
+    };
+    assert_eq!(flags(""), [false], "the premise: one load of the cell, not invariant");
+    assert_eq!(flags(", !invariant.load !0"), [true]);
+}

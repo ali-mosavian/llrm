@@ -20,13 +20,16 @@ fn qb() -> HirAbi {
     }
 }
 
-/// A load through a far pointer: the DAG path still refuses an address in
-/// another space.
-const FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
-define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+/// A double live across a call: refused until the x87 stack can spill
+/// (w-2's RFP-class allocation).
+const FLOAT_ACROSS_CALL: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+declare double @g(double)
+define double @f(double %x) addrspace(1) {
 entry:
-  %v = load i16, ptr addrspace(1) %p
-  ret i16 %v
+  %a = call double @g(double %x)
+  %r = fadd double %a, %x
+  ret double %r
 }
 ";
 
@@ -52,8 +55,8 @@ fn assembled_text(
 /// is refused when a function is one the DAG cannot select.
 #[test]
 fn test_the_dag_selector_refuses_a_function_it_cannot_select() {
-    assert!(assembled_text(FAR_LOAD, Selector::Old).is_ok());
-    let error = assembled_text(FAR_LOAD, Selector::Dag).err().expect("refused");
+    assert!(assembled_text(FLOAT_ACROSS_CALL, Selector::Old).is_ok());
+    let error = assembled_text(FLOAT_ACROSS_CALL, Selector::Dag).err().expect("refused");
     assert!(error.contains("@f: --isel=dag"), "{error}");
 }
 

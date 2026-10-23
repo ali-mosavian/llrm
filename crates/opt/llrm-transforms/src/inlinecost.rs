@@ -83,9 +83,10 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
-//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+//!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+//!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
 //!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
 //!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
 //!   10%; none at -Os; calls of a function that reads and writes nothing with
@@ -175,6 +176,9 @@ pub struct InlineParams {
     /// `ComputeFullInlineCost`: the whole cost, past the threshold too (an
     /// optimisation remark asks for it).
     pub compute_full_inline_cost: bool,
+    /// `AllowRecursiveCall`: a callee that calls itself is priced, not
+    /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
+    pub allow_recursive_call: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -203,6 +207,7 @@ impl InlineParams {
             opt_min_size_threshold: OPT_MIN_SIZE_THRESHOLD,
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
+            allow_recursive_call: false,
             tti: Tti::Generic,
         }
     }
@@ -439,6 +444,7 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
+    is_recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -483,6 +489,7 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
+            is_recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -1423,6 +1430,12 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         };
+        // `F == Call.getCalledFunction()`: "This flag will fully abort the
+        // analysis" unless the params allow a recursive call (:2481).
+        if target == self.site.callee_id && !self.params.allow_recursive_call {
+            self.is_recursive_call = true;
+            return false;
+        }
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
         // A declaration flagged `frame_bound` (the QB error-handler
@@ -1471,10 +1484,6 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
-        // an ordinary call here, not the refusal "recursive": a recursive
-        // callee is inlined into another caller as gcc does, and into itself
-        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1676,7 +1685,9 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.exposes_returns_twice {
+            if self.is_recursive_call {
+                return Err("recursive".into());
+            } else if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());

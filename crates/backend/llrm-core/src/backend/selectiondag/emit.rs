@@ -350,7 +350,11 @@ pub fn emit_in(
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
+            let before = emitter.blocks.last().map_or(0, |block| block.insns.len());
             emitter.node(node)?;
+            if dag.invariant_loads.contains(&node) {
+                emitter.mark_invariant_loads(before);
+            }
         }
     }
     let mut blocks = emitter.blocks;
@@ -496,6 +500,27 @@ pub enum Callee {
 }
 
 impl Emitter<'_, '_> {
+    /// The loads of memory the node's operand says never changes, among the
+    /// instructions made since `before` in the last block.
+    fn mark_invariant_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let plain = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
+                        && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
+                );
+            if plain && !one.volatile() {
+                *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
+            }
+        }
+    }
+
     fn node(
         &mut self,
         n: u32,
@@ -592,7 +617,8 @@ impl Emitter<'_, '_> {
                         let held = self.fresh(width_of(self.dag, result));
                         // The result of a call is what the call delivers in
                         // that register.
-                        if self.deliver(held, register) {
+                        let glued = self.reads_call_result(node.ops.get(2).copied());
+                        if self.deliver(held, register, glued) {
                             self.values.insert(result, held.value);
                             return Ok(());
                         }
@@ -661,22 +687,16 @@ impl Emitter<'_, '_> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
-            // The global rides in the node's own data.
+            // The global rides as the operand (morph clears the node's data).
             let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
             let symbol = match (operand_data, node.data) {
                 (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
                 _ => None,
             };
-            // Naming no global it is DGROUP's, which the builder also writes
-            // for the start of a huge array (`addrspacecast (@big ...)`):
-            // tests/run/c/huge_array crashed. Refused until the builder says
-            // which segment it means.
-            let Some(symbol) = symbol else {
-                return Err(EmitError::Unsupported("SEGMENT_OF no global: DGROUP or a global's segment".to_owned()));
-            };
+            // Naming no global it is DGROUP's.
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(Some(symbol))) };
+            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
             return Ok(());
         }
@@ -896,10 +916,14 @@ impl Emitter<'_, '_> {
         &mut self,
         held: Held,
         register: llrm_lir::registers::RegId,
+        glued: bool,
     ) -> bool {
         let Some((block, at)) = self.last_call else { return false };
         let call = Arc::make_mut(&mut self.blocks[block].insns[at]);
-        if !call.clobbers.contains(&register) && !self.ctx.caller_saved.contains(&register) {
+        // A result the node reads through the call's glue is delivered whatever
+        // the convention's lists say: a callee may return in a register
+        // (EDX of an i64) that its clobber list and the target's do not name.
+        if !glued && !call.clobbers.contains(&register) && !self.ctx.caller_saved.contains(&register) {
             return false;
         }
         call.clobbers.insert(register);
@@ -1022,6 +1046,30 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> bool {
         self.glue_reaches(n, |name| name.starts_with("CALL"))
+    }
+
+    /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a call,
+    /// through the glue of the reads of its other results.
+    fn reads_call_result(
+        &self,
+        glue: Option<SDValue>,
+    ) -> bool {
+        let Some(mut glue) = glue else { return false };
+        while self.dag.opcode(glue) == ISD::CopyFromReg {
+            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+            glue = next;
+        }
+        let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
+        // The results are read after the call sequence ends.
+        self.ctx
+            .names
+            .get(&(op as u16))
+            .is_some_and(
+                |name| {
+                    let name = name.split('|').next().unwrap_or(name);
+                    name.starts_with("CALL") || name.starts_with("ADJCALLSTACKUP")
+                },
+            )
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a

@@ -193,6 +193,7 @@ impl<'a> Unit<'a> {
             function,
             globals_aa,
             globals_mr,
+            outer: Some(outer),
             references: None,
             shape: None,
             registers: None,

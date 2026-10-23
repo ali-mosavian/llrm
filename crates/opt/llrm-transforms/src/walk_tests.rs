@@ -222,7 +222,9 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = true;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
     .and_then(|done| done)
@@ -677,6 +679,60 @@ b0:
     assert!(!marked_with(tree, "fib", false), "by default nothing waits: the copies are `-finline-recursive`'s");
 }
 
+/// The pin refuses a callee that calls itself (`IsRecursiveCall`, no
+/// `AllowRecursiveCall`): `report(fib(30))` keeps its one call of `fib`. The
+/// walk inlined it by default, and the unrolled loop it brought left 15 calls
+/// of `fib` in `main`.
+#[test]
+fn test_a_callee_that_calls_itself_is_not_inlined_unless_recursion_is_on() {
+    use llrm_mir::program::ProgramPass;
+    let calls_of_fib_in_main = |recursive: bool| {
+        let mut module = parsed(
+            "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+        );
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        let text = llrm_mir::print::module(&module);
+        let main = text.split("define").find(|one| one.contains("@main(")).expect("main").to_owned();
+        main.matches("call i32 @fib(").count()
+    };
+    assert_eq!(calls_of_fib_in_main(false), 1, "the pin leaves the call");
+    assert_ne!(calls_of_fib_in_main(true), 1, "-finline-recursive inlines it");
+}
+
 /// ipa-cp prices the callee whole: copies made in the walk first left
 /// recchop -O3 with no clone (4 defines after the interprocedural step against
 /// the base's 12) and 6368 clocks against 6209.
@@ -762,14 +818,14 @@ fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
 }
 
-/// The default is the pin's inliner: a recursive callee is copied once into its
-/// caller and the copy's own calls are left (hanoi's nine copies and its lookup
+/// The default is the pin's inliner: a callee that calls itself is not copied
+/// into its caller (`IsRecursiveCall`; hanoi's nine copies and its lookup
 /// table, 40 instructions where gcc runs 35,764 and clang 249,852, are
 /// `-finline-recursive`, a DEVIATE (recursion) the pin has no counterpart of).
 #[test]
-fn test_the_default_does_not_peel_a_recursive_callee() {
+fn test_the_default_does_not_copy_a_recursive_callee() {
     let copies = walked_top_with(LINEAR, false).matches("mul i32 %").count();
-    assert_eq!(copies, 1, "{copies} copies of down in top by default");
+    assert_eq!(copies, 0, "{copies} copies of down in top by default");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
