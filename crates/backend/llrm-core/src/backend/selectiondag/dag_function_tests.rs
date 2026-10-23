@@ -364,3 +364,27 @@ fn a_comparison_stored_to_a_byte_is_a_setcc_on_memory() {
     let set = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("setl")).expect("a setl");
     assert!(matches!(set.dests[0], crate::model::ir::Loc::Mem(_)), "{set:?}");
 }
+
+const COPY_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define void @f(ptr %d, ptr %s, i32 %n) {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)
+  ret void
+}
+";
+
+/// A call that takes its arguments in registers must name them: the copies
+/// into EAX, EDX and EBX were plain moves to physical registers, so the
+/// allocator saw no use of the third, left EBX unset and the program hung
+/// (`es_across_copy`).
+#[test]
+fn a_call_names_the_registers_it_takes_arguments_in() {
+    let module = llrm_mir::parse::module(COPY_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    assert!(call.requires.len() >= 3, "{:?} {:?} {:?}", call.requires, call.clobbers, call.what);
+    assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
+}

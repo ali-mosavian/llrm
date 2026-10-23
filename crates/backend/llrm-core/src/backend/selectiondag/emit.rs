@@ -138,8 +138,10 @@ struct Emitter<'a, 'd> {
     /// that reads it, set by the `CopyToReg` the matcher glues to it or by the
     /// instruction before.
     accumulator: HashMap<llrm_lir::registers::RegId, Held>,
+    /// The arguments passed in registers to the call being built.
+    arguments: Vec<(Held, llrm_lir::registers::RegId)>,
     /// (call address, callee symbol) of each direct call.
-    calls: Vec<(i64, u32)>,
+    calls: Vec<(i64, Callee)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
 }
@@ -188,7 +190,7 @@ pub struct Emitted {
     pub blocks: Vec<EmitBlock>,
     pub classes: Vec<(u32, &'static str)>,
     /// (address, global) of each direct call.
-    pub calls: Vec<(i64, u32)>,
+    pub calls: Vec<(i64, Callee)>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -219,6 +221,7 @@ pub fn emit_in(
         classes: Vec::new(),
         sp_values: Default::default(),
         accumulator: HashMap::new(),
+        arguments: Vec::new(),
         calls: Vec::new(),
         last_call: None,
     };
@@ -245,6 +248,13 @@ fn width(vt: EVT) -> u32 {
     }
 }
 
+/// What a direct call names.
+#[derive(Clone, Debug)]
+pub enum Callee {
+    Global(u32),
+    Named(String),
+}
+
 impl Emitter<'_, '_> {
     fn node(
         &mut self,
@@ -253,17 +263,19 @@ impl Emitter<'_, '_> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
             ISD::CopyToReg if self.writes_flags(node.ops[1]) || self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg if self.feeds_call(n) => {
+                let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
+                    return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
+                };
+                let held = self.held_operand(node.ops[2])?;
+                self.arguments.push((held, register));
+                Ok(())
+            }
             ISD::CopyToReg if self.feeds_implicit_operand(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register in a division sequence".to_owned()));
                 };
-                let Loc::Held(value) = self.operand(node.ops[2])? else {
-                    let source = self.operand(node.ops[2])?;
-                    let held = self.fresh(width_of(self.dag, node.ops[2]));
-                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
-                    self.accumulator.insert(register, held);
-                    return Ok(());
-                };
+                let value = self.held_operand(node.ops[2])?;
                 self.accumulator.insert(register, value);
                 Ok(())
             }
@@ -457,8 +469,11 @@ impl Emitter<'_, '_> {
             private: Vec::new(),
             disturbs: clobbers.clone(),
         });
-        let uses = _read(&what);
-        let insn = Insn { call: Some(memory), clobbers, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        let mut uses = _read(&what);
+        let requires = std::mem::take(&mut self.arguments);
+        uses.extend(requires.iter().map(|(held, _)| held.value));
+        let insn =
+            Insn { call: Some(memory), clobbers, requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
         let block = self.blocks.last_mut().expect("a block");
         block.insns.push(Arc::new(insn));
         self.last_call = Some((self.blocks.len() - 1, self.blocks.last().expect("a block").insns.len() - 1));
@@ -482,6 +497,21 @@ impl Emitter<'_, '_> {
         true
     }
 
+    /// `value` as a held value, copied into one if it is a constant or a cell.
+    fn held_operand(
+        &mut self,
+        value: SDValue,
+    ) -> Result<Held, EmitError> {
+        match self.operand(value)? {
+            Loc::Held(held) => Ok(held),
+            source => {
+                let held = self.fresh(width_of(self.dag, value));
+                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
+                Ok(held)
+            }
+        }
+    }
+
     /// The value the accumulator register `register` holds: what a glued
     /// `CopyToReg` set, or an earlier division left.
     fn accumulated(
@@ -494,11 +524,12 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported("a division operand not set by a glued CopyToReg".to_owned()))
     }
 
-    /// Whether the `CopyToReg` node `n` sets an implicit operand of the
-    /// division, multiply or sign extension that its glue leads to.
-    fn feeds_implicit_operand(
+    /// What the instruction at the end of the glue chain from the `CopyToReg`
+    /// node `n` is, if `wanted` accepts its name.
+    fn glue_reaches(
         &self,
         n: u32,
+        wanted: impl Fn(&str) -> bool,
     ) -> bool {
         let mut work = vec![SDValue { node: n, res: 1 }];
         while let Some(glue) = work.pop() {
@@ -510,7 +541,7 @@ impl Emitter<'_, '_> {
                     ISD::CopyToReg => work.push(SDValue { node: user, res: 1 }),
                     ISD::Machine(op) => {
                         let name = self.ctx.names.get(&(op as u16)).copied().unwrap_or("");
-                        if matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) {
+                        if wanted(name) {
                             return true;
                         }
                     }
@@ -519,6 +550,24 @@ impl Emitter<'_, '_> {
             }
         }
         false
+    }
+
+    /// Whether the `CopyToReg` node `n` sets an implicit operand of the
+    /// division, multiply or sign extension that its glue leads to.
+    fn feeds_implicit_operand(
+        &self,
+        n: u32,
+    ) -> bool {
+        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name))
+    }
+
+    /// Whether the `CopyToReg` node `n` passes an argument in a register to
+    /// the call its glue leads to.
+    fn feeds_call(
+        &self,
+        n: u32,
+    ) -> bool {
+        self.glue_reaches(n, |name| name.starts_with("CALL"))
     }
 
     /// Whether `glue` (the third operand of a `CopyFromReg`) comes from a
@@ -577,11 +626,14 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "CALLpcrel32" => {
-                let NodeData::Global { symbol, .. } = self.dag.node(node.ops[0]).data else {
-                    return Err(EmitError::Unsupported("a call of a non-global".to_owned()));
+                let callee = match self.dag.node(node.ops[0]).data {
+                    NodeData::Global { symbol, .. } => Callee::Global(symbol),
+                    // A runtime routine the lowering named (`memcpy_`).
+                    NodeData::Symbol(id) => Callee::Named(self.dag.symbol_names[id as usize].clone()),
+                    _ => return Err(EmitError::Unsupported("a call of a non-global".to_owned())),
                 };
                 let at = self.push_call(Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) });
-                self.calls.push((at, symbol));
+                self.calls.push((at, callee));
                 return Ok(Some(()));
             }
             // A call through a register or a cell of memory.
