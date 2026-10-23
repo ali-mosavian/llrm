@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferspace.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:50a6643a37cf7193a08b726669dc58924f1cd0ef44dd3f55f88b1f35541ecba0 -->
+<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:d92daa9c9e794ca9d76c976c41dfe5e791299d74fecd85c2c8522bb769615b9b -->
 
 # inferspace
 
@@ -26,8 +26,9 @@ reach unless SS were DS. No such assumption is made. Phis and selects
 narrow only where every value they join narrows to one space; a join of two
 spaces stays far.
 
-DEVIATE LP-5 (no pin pass on x86: infer-address-spaces is a target pass (none for x86); the near pointer under a
-far cast matters at m16 only; exit: deleted if the m16 rows do not lose without it, else folded into LP-4; owner
+DEVIATE LP-5 (no pin pass on x86: infer-address-spaces is a target pass
+(none for x86); the near pointer under a far cast matters at m16 only; exit:
+deleted if the m16 rows do not lose without it, else folded into LP-4; owner
 w-6; review 2026-11-13).
 
 ## Example

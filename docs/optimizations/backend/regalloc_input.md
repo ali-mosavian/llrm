@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regalloc_input.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regalloc_input.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:2f0b70627aa0c027bee2d0aaa5a74f16b9045c67d916329779c87983cb78b448 -->
+<!-- src: crates/backend/llrm-core/src/backend/regalloc_input.rs sha256:119e1c130516f98dd7fc62835f73933bab627613f83a44ddefe23281fa539b51 -->
 
 # regalloc_input
 
@@ -45,6 +45,6 @@ None: a test-support module with no transformation of its own. Its callers
 show the LIR it hands over; read `lirtext.rs` for the text format.
 
 ## Used by
-Tests of [`crate::backend::allocate`](allocate.md), [`crate::backend::ssaspill`](ssaspill.md),
+Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`,
 [`crate::backend::loopslots`](loopslots.md) and the jumps and total-allocation test files.
 Compiled only under `cfg(test)`.

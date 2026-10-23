@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:56a2c48b5d68dd81e6697f710da45d9929e72f75cba0dfba60b6b3d749175f47 -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:7c5999872cbbe7b0c17c83df9b77074abd2adf2c4fd5076c932f3c5204cdec39 -->
 
 # postrasink
 
@@ -92,8 +92,7 @@ From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
 0x0009).
 
 ## Runs
-A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload
-on the other path is gone by then, so the store need not run there. Once per
+A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per
 peephole run. `latched` follows it.
 
 ## Keeps
