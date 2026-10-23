@@ -558,7 +558,14 @@ fn selected_in(
                     }
                     global.name.as_deref().unwrap_or_default().to_owned()
                 }
-                Callee::Named(name) => name.clone(),
+                // the runtime's routines are far procedures where code is in
+                // segments
+                Callee::Named(name) => {
+                    if arch.object().bitness == 16 {
+                        far.insert(*at);
+                    }
+                    name.clone()
+                }
             };
             (*at, name)
         }));
