@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:e6c0c7f4455909daf0ce8d6e2d6fad8183ba5ea1ab1e4bb4dcc3c62d457bc9ca -->
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:538e0533f406c3c7647c7c3e690b71aef632471c591a2cb77a8717aecc4421d6 -->
 
 # fixednarrow
 
@@ -37,8 +37,9 @@ dropped).
  (x and y small enough that x*y fits)
 ```
 
-DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix` (`TargetLowering::expandFixedPointMul`); exit: isel
-does it and this is deleted; owner w-6; review 2026-11-20).
+DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`
+(`TargetLowering::expandFixedPointMul`); exit: isel does it and this is
+deleted; owner w-6; review 2026-11-20).
 
 ## Example
 Before:

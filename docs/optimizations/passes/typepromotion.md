@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/typepromotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/typepromotion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/typepromotion.rs sha256:3af87ff761de7b1b6a38a3d86f4b542dd64fdff01d4c29debab7f39d09ef2c57 -->
+<!-- src: crates/opt/llrm-transforms/src/typepromotion.rs sha256:b8e503b64ae15bd34f7dba111853429e75fbf2538bec6d1c32a60b9ff356a5a1 -->
 
 # typepromotion
 
@@ -31,8 +31,9 @@ stays in its block, unread, until `commit` (the pin keeps it unlinked: MIR
 cannot unlink without erasing).
 
 ## Example
-The tests in `typepromotion_tests.rs`: `test_a_created_extension_is_erased_by_a_rollback` is the sketch above.
+The tests in `typepromotion_tests.rs`:
+`test_a_created_extension_is_erased_by_a_rollback` is the sketch above.
 
 ## Runs
-Under `cgpaddr`'s `optimizeExt`, which makes a transaction for each extension
-it considers.
+Under `cgpaddr`'s `optimizeExt`, which makes a transaction for each
+extension it considers.

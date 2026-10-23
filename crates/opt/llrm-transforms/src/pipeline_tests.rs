@@ -1391,7 +1391,7 @@ entry:
 }
 ";
     let o1 = pipeline::Options::basic();
-    assert!(!o1.searches() && !o1.compares_routes());
+    assert!(!o1.searches());
     let o2 = pipeline::Options::standard();
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);

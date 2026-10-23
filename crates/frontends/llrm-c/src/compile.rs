@@ -1866,7 +1866,6 @@ mod tests {
         let options = llrm_core::driver::Options {
             pipeline: llrm_transforms::pipeline::Options {
                 search: true,
-                routes: true,
                 ..llrm_transforms::pipeline::Options::standard()
             },
             ..llrm_driver::m16_options(machine)

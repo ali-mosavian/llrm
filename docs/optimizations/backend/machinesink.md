@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:094d7c3d4a586368d3fbb089fc473cc544fa50d9d7a83328695eb33664ceccf0 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:d31ead3b1b5a49c5359735c096c1e4bb2bdbad931a9fb4d0bc3b04af7e18a9e4 -->
 
 # machinesink
 
@@ -33,10 +33,10 @@ block, which is its successor's only predecessor.
  b4: r = phi [b1: v] [b2: x]
 ```
 
-DEVIATE M1 (#2903): a load is sunk only into a successor with no other
-predecessor, or a block made for the edge. LLVM also sinks it along a
-critical edge when `hasStoreBetween` finds no store on any path between.
-Exit: that function translated.
+DEVIATE M7 (row 44): `hasStoreBetween` counts every store, call and
+ordered access as one that may alias the load: no alias analysis reaches
+LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
+along a critical edge. Exit: memory operands with an alias query on LIR.
 
 DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
 pressure of the target (`registerPressureSetExceedsLimit`) for an

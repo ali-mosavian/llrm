@@ -115,8 +115,8 @@
 //! `-m16 -O2`.
 //!
 //! # Runs
-//! `assemble::assembled_by` runs it once per module. The gating of the two
-//! allocation routes (`-fallocation-routes`, `-fallocation-search`,
+//! `assemble::assembled_by` runs it once per module. The gating of the
+//! allocation search (`-fallocation-search`,
 //! `-fallocation-search-all`, at -Os candidates priced in bytes) is described
 //! in `assemble` and `allocate`. `ISEL_DUMP=1` prints the LIR after each
 //! machine phase (`lirtext`).
