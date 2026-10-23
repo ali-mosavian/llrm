@@ -148,6 +148,7 @@ impl Hooks for X86Lowering {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
@@ -471,6 +472,17 @@ fn lower_constant_pool(
     let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+}
+
+/// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
     Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
 }
 

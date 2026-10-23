@@ -17,3 +17,28 @@ def test_the_variable_selects_the_selector_for_llrm_c_only(monkeypatch):
 def test_without_the_variable_nothing_changes(monkeypatch):
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     assert dosbatch.with_isel(["/b/llrm-c", "a.c"]) == ["/b/llrm-c", "a.c"]
+
+
+def test_a_c_program_itself_is_compiled_by_the_selected_selector(monkeypatch, tmp_path):
+    """Only the `link:` helpers went through LLRM_ISEL: a run with LLRM_ISEL=dag passed 445 of 449 programs on the old selector."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    program = run_tests.Program(source=source, flags=["-m32"], known=None)
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    command = run_tests.compile_command(program, tmp_path / "p.obj")
+    assert command[1] == "--isel=dag" and Path(command[0]).name == "llrm-c", command
+
+
+def test_real_mode_c_keeps_the_old_selector(monkeypatch, tmp_path):
+    """The DAG path selects 32-bit code only: under LLRM_ISEL=dag every real-mode program failed to build and the launch lost jobs."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
+    assert not any(one.startswith("--isel") for one in command), command
