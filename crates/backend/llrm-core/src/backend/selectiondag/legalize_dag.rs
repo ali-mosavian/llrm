@@ -151,11 +151,46 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
     }
 
+    /// `LegalizeOp`'s adjustment of a shift or rotate amount to the target's
+    /// shift amount type ([L1298][pin]; X86 has `i8` for scalars):
+    /// `getShiftAmountOperand` on the amount, which is operand 1, or
+    /// operand 2 of a funnel shift or a double-width shift.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1298
+    fn fix_shift_amount(
+        &mut self,
+        n: u32,
+    ) -> u32 {
+        let at = SDValue { node: n, res: 0 };
+        let amount_at = match self.dag.opcode(at) {
+            ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotl | ISD::Rotr => 1,
+            ISD::FShl | ISD::FShr | ISD::ShlParts | ISD::SrlParts | ISD::SraParts => 2,
+            _ => return n,
+        };
+        let amount = self.dag.operand(at, amount_at);
+        let want = EVT::I8;
+        if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
+            return n;
+        }
+        let mut ops: Vec<SDValue> = (0..=amount_at).map(|i| self.dag.operand(at, i)).collect();
+        ops[amount_at] = self.dag.get_zext_or_trunc(amount, want);
+        let new = self.dag.update_node_operands(n, &ops);
+        if new != n {
+            let results = self.dag.node(at).values.len() as u8;
+            for res in 0..results {
+                self.replace_node(SDValue { node: n, res }, SDValue { node: new, res });
+            }
+        }
+        new
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
         n: u32,
     ) -> Result<(), LegalizeError> {
+        let n = self.fix_shift_amount(n);
         let node = SDValue { node: n, res: 0 };
         if matches!(self.dag.opcode(node), ISD::TargetConstant | ISD::Register) {
             return Ok(());
