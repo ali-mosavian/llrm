@@ -343,9 +343,14 @@ def ask_at(
             return None
     env = os.environ | {"LLRM_BIN": str(binaries), "QB45_DEMOS_DIR": str(DEMOS)}
     script = ROOT / "tools" / red.probe[0]
-    done = subprocess.run([sys.executable, str(script), *red.probe[1:]], cwd=ROOT, env=env, capture_output=True, text=True)
+    arguments = red.probe[1:]
+    if script.name == "qbrt_run.py":  # its first argument is the work directory: without one every probe is a usage error, and a usage error read as red
+        work = SCRATCH / f"qbrt-probe-{sha[:9]}"
+        work.mkdir(parents=True, exist_ok=True)
+        arguments = [str(work), *arguments]
+    done = subprocess.run([sys.executable, str(script), *arguments], cwd=ROOT, env=env, capture_output=True, text=True)
     text = done.stdout + done.stderr
-    if done.returncode == 3:  # the probe has no such job at that commit
+    if done.returncode in (2, 3):  # a usage error, or the probe has no such job at that commit: not asked
         return None
     return "FAIL" in text or "NOTPASS" in text or done.returncode != 0
 

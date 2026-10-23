@@ -157,3 +157,22 @@ def test_a_program_that_did_not_link_is_a_build_failure_not_wrong_output():
     report = s.line("t" * 40, "t" * 40, "", {}, reds, reds, {})
     assert "BUILD FAILURE qbrt:arena_type:x86-m32" in report and "WRONG OUTPUT qbrt:bc_draw:x86-m16" in report
     assert "WRONG OUTPUT qbrt:arena_type" not in report
+
+
+def test_a_qbrt_probe_is_given_its_work_directory_and_a_usage_error_is_not_red(tmp_path, monkeypatch):
+    """The 15:00 sweep blamed a docs-only PR (#4021) for 35 wrong outputs: the qbrt probe ran `qbrt_run.py --only NAME` with no work directory, which is a usage
+    error (exit 2), every probe read red, and the bisect named the oldest merge of the range."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return type("Done", (), {"returncode": 2 if argv[2].startswith("--") else 0, "stdout": "RESULT 1 of 1 pass", "stderr": ""})()
+
+    binaries = tmp_path / "sbp-abcdefghi" / "release"
+    binaries.mkdir(parents=True)
+    (binaries / "llrm-c").write_text("")
+    monkeypatch.setattr(s, "SCRATCH", tmp_path)
+    monkeypatch.setattr(s.subprocess, "run", run)
+    red = s.Red("qbrt:arena_type:x86-m32", s.WRONG, ["dosbatch/qbrt_run.py", "--only", "arena_type"])
+    assert s.ask_at(red, "abcdefghi" + "0" * 31) is False, "a passing probe is green"
+    assert not calls[0][2].startswith("--") and calls[0][3:] == ["--only", "arena_type"]
