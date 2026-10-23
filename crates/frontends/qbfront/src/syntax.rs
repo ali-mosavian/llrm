@@ -453,6 +453,10 @@ pub enum Statement {
         local: bool,
         span: Span,
     },
+    /// `object.Method args` where the object is an element or has a subscript on the way: `frm.list(i).Print "x"`.
+    MethodCall { object: Expr, method: String, arguments: Vec<Expr>, span: Span },
+    /// VBDOS's `'$FORM name` metacommand: the form's name is a variable.
+    FormDeclaration(String, Span),
     /// PDS and VBDOS's `REDIM PRESERVE a(n)`: the array keeps its contents.
     RedimPreserve(Vec<Declaration>),
     /// `COMMON [SHARED] [/block/] a, b AS INTEGER`.
@@ -515,6 +519,8 @@ impl Statement {
             | Self::Resume { span, .. }
             | Self::Open { span, .. }
             | Self::OpenIsam { span, .. }
+            | Self::FormDeclaration(_, span)
+            | Self::MethodCall { span, .. }
             | Self::Close { span, .. }
             | Self::LineInput { span, .. }
             | Self::FileTransfer { span, .. }

@@ -3552,6 +3552,8 @@ impl Compiler {
                         self.tag_last(Tag::SetSegment);
                     }
                 }
+                Statement::MethodCall { .. } => return self.fail("object methods are not supported"),
+                Statement::FormDeclaration(..) => return self.fail("'$FORM is not supported"),
                 Statement::RedimPreserve(_) => return self.fail("REDIM PRESERVE is not supported"),
                 Statement::OpenIsam { .. } => return self.fail("OPEN FOR ISAM is not supported"),
                 Statement::OpenClassic { .. } => return self.fail("the classic OPEN mode$, #file, path$ form is not supported"),

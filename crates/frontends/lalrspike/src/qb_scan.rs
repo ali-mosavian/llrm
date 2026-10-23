@@ -118,6 +118,9 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
                 match directive.as_str() {
                     "$DYNAMIC" => TokenKind::ArrayDynamic,
                     "$STATIC" => TokenKind::ArrayStatic,
+                    other if matches!(dialect, Dialect::VbDos | Dialect::Quickr) && other.starts_with("$FORM") && other.len() > 5 && other.as_bytes()[5].is_ascii_whitespace() => {
+                        TokenKind::FormDeclaration(other[5..].trim().to_owned())
+                    }
                     _ => continue,
                 }
             }

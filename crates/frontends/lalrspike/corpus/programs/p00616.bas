@@ -1,4 +1,4 @@
 DIM x%
-SUB q ()
+SUB q
 OPTION BASE 1
 END SUB

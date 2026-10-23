@@ -3004,6 +3004,8 @@ fn statement_end(statement: &Statement) -> usize {
         | Statement::Open { span, .. }
         | Statement::OpenClassic { span, .. }
         | Statement::OpenIsam { span, .. }
+        | Statement::FormDeclaration(_, span)
+        | Statement::MethodCall { span, .. }
         | Statement::Close { span, .. }
         | Statement::LineInput { span, .. }
         | Statement::FileTransfer { span, .. }

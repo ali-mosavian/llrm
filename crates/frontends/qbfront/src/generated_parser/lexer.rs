@@ -23,6 +23,8 @@ pub enum TokenKind {
     Period,
     ArrayDynamic,
     ArrayStatic,
+    /// VBDOS's `'$FORM name` metacommand.
+    FormDeclaration(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]

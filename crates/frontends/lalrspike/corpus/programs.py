@@ -99,8 +99,8 @@ for header in ["SUB p", "SUB p ()", "SUB p (a)", "SUB p (a%, b%)", "SUB p (a%, a
 for header in ["FUNCTION f", "FUNCTION f ()", "FUNCTION f%", "FUNCTION f$ ()", "FUNCTION f! ()", "FUNCTION f# ()", "FUNCTION f& ()", "FUNCTION f () AS INTEGER", "FUNCTION f% () AS INTEGER", "FUNCTION f$ () AS INTEGER", "FUNCTION f () AS STRING", "FUNCTION f () AS RecT", "FUNCTION f (a%) AS LONG", "FUNCTION f () STATIC", "FUNCTION f (BYVAL a%) AS INTEGER", "FUNCTION p ()", "FUNCTION fn ()", "FUNCTION fna ()"]:
     add("procs", f"function header {header!r}", "TYPE RecT", "a AS INTEGER", "END TYPE", header, "END FUNCTION")
 for body in [["f% = 1"], ["f = 1"], ["f$ = \"a\""], ["x% = f%"], ["f% = f% + 1"], ["EXIT FUNCTION"], ["EXIT SUB"], ["RETURN"], ["DIM y%", "y% = 1"], ["SHARED x%"], ["STATIC y%"], ["DIM SHARED y%"], ["CONST k = 1"], ["TYPE T2", "a AS INTEGER", "END TYPE"], ["DECLARE SUB q"], ["COMMON x%"], ["OPTION BASE 1"], ["DEF FNa% = 1"], ["DEFINT A-Z"], ["GOSUB l1", "EXIT FUNCTION", "l1:", "RETURN"], ["ON ERROR GOTO h", "h:", "RESUME NEXT"], ["f% = 1", "END"], ["SUB q", "END SUB"], ["DIM x%(5)", "REDIM x%(10)"], ["DATA 1", "READ x%"], ["x% = 1"]]:
-    add("procs", f"function body {body!r}", "DIM x%", "FUNCTION f% ()", *body, "f% = 1", "END FUNCTION")
-    add("procs", f"sub body {body!r}", "DIM x%", "SUB q ()", *body, "END SUB")
+    add("procs", f"function body {body!r}", "DIM x%", "FUNCTION f%", *body, "f% = 1", "END FUNCTION")
+    add("procs", f"sub body {body!r}", "DIM x%", "SUB q", *body, "END SUB")
 for first, second in [("SUB p", "SUB p"), ("SUB p", "FUNCTION p"), ("FUNCTION p%", "FUNCTION p%"), ("FUNCTION p%", "FUNCTION p&"), ("FUNCTION p%", "SUB p"), ("SUB p", "SUB P"), ("SUB p", "SUB p2")]:
     end1 = "END SUB" if first.startswith("SUB") else "END FUNCTION"
     end2 = "END SUB" if second.startswith("SUB") else "END FUNCTION"

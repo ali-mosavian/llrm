@@ -836,6 +836,11 @@ impl Ast<'_> {
                 }
                 return Ok(());
             }
+            TokenKind::FormDeclaration(name) => {
+                self.out.push(Statement::FormDeclaration(name.clone(), self.span(at)));
+                self.i += 1;
+                return Ok(());
+            }
             TokenKind::ArrayDynamic | TokenKind::ArrayStatic => {
                 self.dynamic_arrays = matches!(self.tokens[at].kind, TokenKind::ArrayDynamic);
                 self.out.push(Statement::Comment(self.span(at)));
@@ -904,6 +909,14 @@ impl Ast<'_> {
                 let span = span_of(start_span, value.span());
                 self.out.push(Statement::Assign { target, value, span });
                 return Ok(());
+            }
+            // `list(i).Print "x"`: a method of an element
+            if let Expr::Field { base, name, .. } = &target {
+                if dotted_name(base).is_none() {
+                    let arguments = self.call_arguments()?;
+                    self.out.push(Statement::MethodCall { object: (**base).clone(), method: name.clone(), arguments, span: start_span });
+                    return Ok(());
+                }
             }
             // `Graphics.Init` and `obj.Method a, b`: a call by a dotted name
             if let Some(name) = dotted_name(&target) {
@@ -984,6 +997,12 @@ impl Ast<'_> {
         match name.as_str() {
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => {}
             "ROLLBACK" => {
+                // ROLLBACK ALL undoes every open transaction
+                if matches!(self.tokens.get(self.i).map(|t| &t.kind), Some(TokenKind::Identifier(word)) if word == "ALL") {
+                    self.i += 1;
+                    self.runtime("ROLLBACK_ALL", Vec::new(), span);
+                    return Ok(Some(()));
+                }
                 if self.starts_exp() {
                     arguments.push(self.exp()?);
                 }
@@ -1107,7 +1126,8 @@ impl Ast<'_> {
                 self.i += 1;
                 return self.procedure(false, None, true);
             }
-            Kw::DECLARE => return self.declare(),
+            Kw::DECLARE if self.open_procedure.is_none() => return self.declare(),
+            Kw::DECLARE | Kw::COMMON | Kw::OPTION if self.open_procedure.is_some() => return self.fail(),
             Kw::DEF => return self.def(),
             Kw::TYPE => return self.type_statement(),
             Kw::END => return self.end(),
@@ -1985,10 +2005,11 @@ impl Ast<'_> {
                 self.i += 1;
             }
         }
+        let mut fixed_length = None;
         let type_name = if self.eat(Kw::AS) {
             let type_name = self.declaration_type()?;
             if type_name == TypeName::String && self.eat(Kw::Mult) {
-                self.exp()?;
+                fixed_length = Some(self.exp()?);
             }
             Some(type_name)
         } else {
@@ -2000,7 +2021,7 @@ impl Ast<'_> {
                 type_name,
                 array,
                 bounds: Vec::new(),
-                fixed_length: None,
+                fixed_length,
                 shared: false,
                 dynamic: false,
                 volatile: self.volatile_at.contains(&(token.line, token.start)),
@@ -2123,7 +2144,7 @@ impl Ast<'_> {
         } else {
             self.identifier()?
         };
-        if !name.starts_with("FN") {
+        if !name.starts_with("FN") || self.open_procedure.is_some() {
             return self.fail();
         }
         let mut result = name_of_suffix(&name);

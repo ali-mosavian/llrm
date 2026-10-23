@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 f% = 1
 END
 END SUB
