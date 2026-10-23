@@ -144,3 +144,26 @@ fn a_far_pointer_leaves_its_block_in_two_word_registers() {
     let words = copies.iter().filter(|copy| dag.value_type(copy.ops[2]) == super::mvt::EVT::I16).count();
     assert!(words >= 2, "the offset and the selector:\n{}", dag.dump());
 }
+
+/// An inline copy between far pointers steps the offset word and reads and
+/// writes through `ES` (space 259). It panicked making `Constant: Far` for
+/// the step (bitfield_long_long, 2 m16 programs) and, past that, would have
+/// addressed the far data through `DS`.
+#[test]
+fn an_inline_copy_between_far_pointers_moves_the_offset_word() {
+    let dag = built(
+        "declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)\n\
+         define void @f(ptr addrspace(1) %d, ptr addrspace(1) %s) {\n  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %d, ptr addrspace(1) %s, i16 8, i1 false)\n  ret void\n}\n",
+    );
+    let spaces: Vec<u32> = dag
+        .nodes()
+        .iter()
+        .filter(|node| matches!(node.opcode, ISD::Load | ISD::Store))
+        .filter_map(|node| match node.data {
+            super::dag::NodeData::Mem(info) if info.mem_vt == super::mvt::EVT::I16 => Some(info.space),
+            _ => None,
+        })
+        .collect();
+    assert!(spaces.len() >= 8, "four word loads and four stores: {}", dag.dump());
+    assert!(spaces.iter().all(|space| *space == 259), "{spaces:?}\n{}", dag.dump());
+}

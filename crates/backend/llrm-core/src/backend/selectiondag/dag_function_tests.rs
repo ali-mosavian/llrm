@@ -620,6 +620,29 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
 
+const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+";
+
+/// An `i64` divide is a call to the target's inline routine; the DAG path left
+/// the call without the routine's bytes, so the object had an undefined
+/// `divN_s` (link failures in c/int64_division.c, c/data_int64.c of the m32
+/// run). The routine's code must travel with the selected function, at the
+/// call.
+#[test]
+fn an_i64_divide_carries_the_routines_code_at_its_call() {
+    let module = llrm_mir::parse::module(DIV64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let routine = llrm_target::Target::divide_routine(&llrm_x86_m32::M32, true, true).expect("a routine");
+    let at = done.calls.iter().find(|(_, name)| name.as_str() == routine.name).map(|(at, _)| *at).expect("a call");
+    assert_eq!(done.inline.get(&at), Some(&routine.code));
+}
+
 const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define float @f(i32 %a) {
 entry:
