@@ -94,7 +94,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::{regclass, spiller, target};
+use crate::backend::{regclass, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -161,7 +161,7 @@ pub fn constrained(
 
     let defined: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let constants = spiller::_constants(body, &defined);
+    let constants = crate::backend::bodyfacts::_constants(body, &defined);
 
     let source = |value: u32, width: u32| -> Loc {
         match constants.get(&value) {
@@ -662,7 +662,7 @@ fn _move(
         beside.at,
         Some((beside.at, beside.at)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(into)],
             sources: vec![out_of],
             ..Semantics::new(Operation::Move)
@@ -819,7 +819,6 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::{constrained, hoisted, required};
-    use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
     use crate::backend::{allocate, select, spiller, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -832,7 +831,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -868,21 +867,28 @@ mod tests {
         Insn::new(at, Some((at, at + 2)), Some(what), defines.to_vec(), uses.to_vec())
     }
 
+    /// The assignment the pins give, and a register of its own for every other
+    /// value: nothing here needs an allocator.
     fn allocated(
         body: &LirBody,
         pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
-        allocate::allocate(
-            body,
-            Some(pins),
-            None,
-            None,
-            None,
-            ProfileOrName::Name("386"),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("allocates")
+        let mut values = pins.clone();
+        let mut spare = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI, RegId::DI].into_iter();
+        for one in body.insns() {
+            for value in one.defines.iter().chain(&one.uses) {
+                if !values.contains_key(value) {
+                    values.insert(*value, spare.next().expect("a register is left"));
+                }
+            }
+        }
+        allocate::Assignment {
+            r#where: values,
+            spilled: Default::default(),
+            cost: 0.0,
+            optimal: false,
+            why: "pins".to_owned(),
+        }
     }
 
     fn merged(

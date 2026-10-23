@@ -220,6 +220,9 @@ pub mod machinelicm;
 pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
@@ -318,6 +321,7 @@ pub mod select {
         emit_in(BITNESS, what, at, r#where, short, relocated, held)
     }
 }
+pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
 pub mod rewriter;
@@ -325,7 +329,6 @@ pub mod sharedstores;
 pub mod spiller;
 pub mod spillforward;
 pub mod spillplacement;
-pub mod splitkit;
 pub mod ssarepair;
 pub mod ssaspill;
 pub mod storecombine;

@@ -642,7 +642,7 @@ mod tests {
 
     use super::{_interference, _merged};
     use crate::analysis::intervals;
-    use crate::backend::{allocate, cpu::ProfileOrName, select, target};
+    use crate::backend::{allocate, select};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -653,7 +653,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -697,7 +697,7 @@ mod tests {
         at: i64,
         to: i64,
     ) -> Insn {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) };
         Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![])
     }
 
@@ -722,21 +722,20 @@ mod tests {
         Insn { group: Some(group), ..one }
     }
 
+    /// The assignment the pins give: nothing here needs an allocator.
     fn allocated(
-        body: &LirBody,
+        _body: &LirBody,
         pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
-        allocate::allocate(
-            body,
-            Some(pins),
-            None,
-            None,
-            None,
-            ProfileOrName::Name("386"),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("allocates")
+        let mut values = pins.clone();
+        values.insert(3, RegId::ES);
+        allocate::Assignment {
+            r#where: values,
+            spilled: Default::default(),
+            cost: 0.0,
+            optimal: false,
+            why: "pins".to_owned(),
+        }
     }
 
     /// HARR's hoisted selector copy became unencodable mov es,es across a

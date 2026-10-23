@@ -38,7 +38,7 @@ fn _insn(
     sources: Vec<Loc>,
     target: Option<i64>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
 }
 
@@ -224,7 +224,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|one| (one.op, one.name.clone(), one.target))
+        .map(|one| (one.op, one.name.as_deref().map(str::to_owned), one.target))
         .collect();
     assert_eq!(
         real,
@@ -300,7 +300,7 @@ fn nothing(
     at: i64,
     covers: Option<(i64, i64)>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+    let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
     Arc::new(Insn::new(at, covers, Some(what), Vec::new(), Vec::new()))
 }
 
@@ -1433,7 +1433,7 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         .insns
         .iter()
         .map(|one| one.what.as_ref().unwrap())
-        .map(|what| (what.name.clone().unwrap(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap(), what.target))
         .collect();
     assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
 }
@@ -1579,7 +1579,7 @@ fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
 }
@@ -1604,7 +1604,7 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
 }
@@ -1631,7 +1631,7 @@ fn test_for_size_a_two_way_branch_keeps_its_condition() {
         let result = inverted(&source, size);
         let what =
             result.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()).find(|what| what.op == Operation::Branch);
-        what.map(|what| (what.name.clone().unwrap_or_default(), what.target)).unwrap()
+        what.map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target)).unwrap()
     };
     assert_eq!(branch(false), ("je".to_owned(), Some(20)), "the likelier way is the jump");
     assert_eq!(branch(true), ("jne".to_owned(), Some(30)), "size keeps the condition");
@@ -1672,7 +1672,7 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
 #[test]
 fn test_a_table_entry_for_a_block_that_only_jumps_goes_to_its_target() {
     let table = Semantics {
-        name: Some("jmp".to_owned()),
+        name: Some("jmp".into()),
         sources: vec![bx()],
         indirect: true,
         table: vec![2, 3, 2],
@@ -1903,7 +1903,7 @@ fn test_a_one_block_loop_is_folded_into_a_branch_back() {
     let tail: Vec<(String, Option<i64>)> = physical(&folded)
         .into_iter()
         .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
 }

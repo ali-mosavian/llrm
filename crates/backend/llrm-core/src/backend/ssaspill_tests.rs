@@ -88,7 +88,7 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
     let links = 40;
     let wide = |value: u32, width: u32| {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Held(Held { value, width })],
             sources: vec![],
             ..Semantics::new(Operation::Move)
@@ -374,7 +374,7 @@ fn test_a_folded_operand_is_as_wide_as_the_instruction_reads_it() {
     use crate::model::lir::Insn;
     let held = |value: u32| Loc::Held(Held { value, width: 2 });
     let what = Semantics {
-        name: Some("add".to_owned()),
+        name: Some("add".into()),
         dests: vec![held(3)],
         sources: vec![held(1), held(2)],
         ..Semantics::new(Operation::Binary)
@@ -405,7 +405,7 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
     let number = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
     let make = |name: &str, dest: u32, sources: Vec<Loc>, uses: Vec<u32>| {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![held(dest)],
             sources,
             ..Semantics::new(if name == "mov" { Operation::Move } else { Operation::Binary })

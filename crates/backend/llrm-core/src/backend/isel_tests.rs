@@ -1924,7 +1924,7 @@ define double @f(double %x) addrspace(1) {
         .flat_map(|block| &block.insns)
         .filter_map(|one| one.what.as_ref())
         .filter(|what| what.op == crate::model::ir::Operation::FloatUnary)
-        .filter_map(|what| what.name.clone())
+        .filter_map(|what| what.name.as_deref().map(str::to_owned))
         .collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }
@@ -2470,10 +2470,9 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
     assert_eq!(
         inner(text),
         [
-            "mov ax, word ptr [bp+8]",
-            "add ax, ax",
-            "mov bx, word ptr [bp+6]",
-            "add bx, ax",
+            "mov bx, word ptr [bp+8]",
+            "add bx, bx",
+            "add bx, word ptr [bp+6]",
             "mov word ptr [bx], 0",
             "push bx",
             "call take",
@@ -4655,10 +4654,10 @@ fn test_far_pointers_compare_by_words() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+10]",
-            "xor ax, word ptr [bp+6]",
-            "mov cx, word ptr [bp+12]",
-            "xor cx, word ptr [bp+8]",
+            "mov ax, word ptr [bp+6]",
+            "xor ax, word ptr [bp+10]",
+            "mov cx, word ptr [bp+8]",
+            "xor cx, word ptr [bp+12]",
             "or cx, ax",
             "sete al",
             "movzx ax, al",
@@ -4672,8 +4671,8 @@ fn test_far_pointers_compare_by_words() {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+8]",
-            "or ax, word ptr [bp+6]",
+            "mov ax, word ptr [bp+6]",
+            "or ax, word ptr [bp+8]",
             "setne al",
             "movzx ax, al",
             "pop bp",
@@ -4776,18 +4775,17 @@ fn test_a_huge_pointer_displacement_carries_into_its_selector() {
             "L0_0:",
             "movzx ebx, word ptr [bp+6]",
             "add ebx, 80000",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "mov ax, word ptr [bp+8]",
-            "add ax, cx",
+            "mov eax, ebx",
+            "sar eax, 16",
+            "shl eax, 12",
+            "add ax, word ptr [bp+8]",
             "mov es, ax",
             "mov ax, word ptr es:[bx]",
             "pop bp",
             "retf"
         ]
     );
-    assert_eq!(counts(&got), (13, 3));
+    assert_eq!(counts(&got), (12, 3));
     let far = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
   %q = getelementptr i32, ptr addrspace(1) %p, i16 5000
   %v = load i16, ptr addrspace(1) %q
@@ -4821,18 +4819,17 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
             "mov ebx, dword ptr [bp+10]",
             "add ebx, ebx",
             "add ebx, eax",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "mov ax, word ptr [bp+8]",
-            "add ax, cx",
+            "mov eax, ebx",
+            "sar eax, 16",
+            "shl eax, 12",
+            "add ax, word ptr [bp+8]",
             "mov es, ax",
             "mov ax, word ptr es:[bx]",
             "pop bp",
             "retf"
         ]
     );
-    assert_eq!(counts(&got), (15, 4));
+    assert_eq!(counts(&got), (14, 4));
 }
 
 /// Huge pointers are canonical, so an order is the selector's then the
@@ -4910,7 +4907,7 @@ define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ecx, 16".to_owned()), "{got:?}");
+    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar edx, 16".to_owned()), "{got:?}");
     assert_eq!(
         listing(text, "g"),
         ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]
@@ -4987,7 +4984,7 @@ entry:
 }
 ";
     let got = listing(text, "f").join("\n");
-    let normal = regex::Regex::new(r"shr (\w+), 4\n(?:.*\n)*?add \w+, (\w+)\n(?:.*\n)*?and \w+, 15").unwrap();
+    let normal = regex::Regex::new(r"shr (\w+), 4\n(?:.*\n)*?add (\w+), .*\n(?:.*\n)*?and \w+, 15").unwrap();
     assert!(normal.captures(&got).is_some_and(|one| one[1] == one[2]) && got.contains("+300]"), "{got}");
 }
 

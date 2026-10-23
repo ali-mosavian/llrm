@@ -107,6 +107,41 @@ impl EdgeProbabilities for Graph<'_> {
     }
 }
 
+/// `MachineBranchProbabilityInfo` of one body: a block's edge probabilities by
+/// its index in `body.blocks` and the position of the successor among the
+/// block's distinct successors (`succ` without repeats, as a
+/// `MachineBasicBlock`'s are). An edge isel gave no odds shares what the
+/// block's stated edges leave.
+pub struct MachineBranchProbabilityInfo<'a> {
+    graph: Graph<'a>,
+}
+
+impl<'a> MachineBranchProbabilityInfo<'a> {
+    pub fn of(body: &'a LirBody) -> Self {
+        Self { graph: Graph::of(body) }
+    }
+
+    /// `getEdgeProbability(Src, SuccIdx)`: numerator over 2^31.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBranchProbabilityInfo.cpp#L75>
+    pub fn get_edge_probability(
+        &self,
+        block: usize,
+        succ_index: usize,
+    ) -> BranchProbability {
+        self.graph.get_edge_probability(BlockId(block as u32), succ_index)
+    }
+
+    /// `isEdgeHot`: more than 4/5 (`StaticLikelyProb` is 80).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBranchProbabilityInfo.cpp#L87>
+    pub fn is_edge_hot(
+        &self,
+        block: usize,
+        succ_index: usize,
+    ) -> bool {
+        self.get_edge_probability(block, succ_index) > BranchProbability::new(80, 100)
+    }
+}
+
 /// `MachineBlockFrequencyInfo` of one body: each block's frequency by its
 /// index in `body.blocks`.
 pub struct MachineBlockFrequencyInfo {

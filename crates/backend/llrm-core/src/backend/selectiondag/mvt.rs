@@ -69,7 +69,10 @@ impl EVT {
     pub fn is_integer(self) -> bool {
         match self {
             EVT::Int(_) => true,
-            EVT::Simple(vt) => matches!(vt, MVT::I1 | MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::I128),
+            EVT::Simple(vt) => matches!(
+                vt,
+                MVT::I1 | MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::I128
+            ),
         }
     }
 
@@ -94,15 +97,24 @@ impl EVT {
         }
     }
 
-    pub fn bits_lt(self, other: EVT) -> bool {
+    pub fn bits_lt(
+        self,
+        other: EVT,
+    ) -> bool {
         self.size_in_bits() < other.size_in_bits()
     }
 
-    pub fn bits_le(self, other: EVT) -> bool {
+    pub fn bits_le(
+        self,
+        other: EVT,
+    ) -> bool {
         self.size_in_bits() <= other.size_in_bits()
     }
 
-    pub fn bits_gt(self, other: EVT) -> bool {
+    pub fn bits_gt(
+        self,
+        other: EVT,
+    ) -> bool {
         self.size_in_bits() > other.size_in_bits()
     }
 }

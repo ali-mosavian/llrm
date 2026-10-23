@@ -111,7 +111,7 @@ impl Builder {
         uses: &[u32],
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), defines.to_vec(), uses.to_vec())
     }
 
@@ -122,7 +122,7 @@ impl Builder {
         to: i64,
     ) -> Insn {
         self.at += 4;
-        let what = Semantics { name: Some(name.to_owned()), target: Some(to), ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), target: Some(to), ..Semantics::new(op) };
         Insn::new(self.at, Some((self.at, self.at + 2)), Some(what), vec![], vec![])
     }
 
@@ -1467,7 +1467,7 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(into)],
                 sources: vec![held(from)],
                 ..Semantics::new(Operation::Move)
@@ -1482,57 +1482,6 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
     let walked = _walked(&body, &index, &|_| true);
     assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
     assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
-}
-
-/// A spilled read's saving was looked up in the profile by form name, four
-/// times, for every instruction, at every rebuild of the allocator's facts, and
-/// each use asked the instruction's pattern afresh (5.6 s of
-/// compiling `d_faces`, #559). The saving is found once per form and the
-/// pattern once per instruction: the same weights.
-#[test]
-fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
-    use crate::analysis::frequency::Frequency;
-    use crate::analysis::intervals::intervals;
-    use crate::backend::allocate::{_fold_discount, _fold_priced};
-    use crate::backend::cpu::ProfileOrName;
-    use crate::backend::spiller::folded_source;
-    for cpu in ["386", "486", "Core", "P5"] {
-        let profile = crate::backend::cpu::profile(ProfileOrName::from(cpu)).expect("a profile");
-        for seed in 0..150 {
-            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
-            let (plain, _) = body(seed, &shape);
-            for body in [in_ssa(&plain), plain] {
-                let busy = Frequency::of(&body);
-                let live = intervals(&body, None);
-                let mut free: crate::support::hash::IndexMap<u32, f64> = Default::default();
-                for block in &body.blocks {
-                    let each = busy.block(block.at);
-                    for one in &block.insns {
-                        let discount = _fold_discount(one, profile);
-                        if discount == 0.0 {
-                            continue;
-                        }
-                        for value in &one.uses {
-                            if folded_source(one, &std::collections::BTreeSet::from([*value])).is_some() {
-                                *free.entry(*value).or_insert(0.0) += each * discount;
-                            }
-                        }
-                    }
-                }
-                let numbered = crate::analysis::intervals::indexed(&body);
-                let mut expected = live.clone();
-                for (value, found) in &free {
-                    if let Some(one) = expected.get_mut(value).filter(|one| one.weight != f64::INFINITY) {
-                        one.weight = (one.weight
-                            - found / (one.size(&numbered) + crate::analysis::intervals::GRACE) as f64)
-                            .max(0.0);
-                    }
-                }
-                let priced = _fold_priced(&body, live, profile, &busy, &numbered);
-                assert!(priced.iter().eq(expected.iter()), "seed {seed} on {cpu}");
-            }
-        }
-    }
 }
 
 /// The last reads of a body were found from the sets of every block's entry and
@@ -1685,7 +1634,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
         3,
         Some((3, 1)),
         Some(Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(3)],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
@@ -1698,7 +1647,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
             at,
             Some((at, 1)),
             Some(Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(value)],
                 sources: vec![imm(0)],
                 ..Semantics::new(Operation::Move)

@@ -32,7 +32,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -73,8 +73,8 @@
 //! passes; `hoist`
 //! runs again to lift what a rotated loop (run at least once) may now leave;
 //! `gepoffset` follows it because it would move a constant `gep` out of its
-//! loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
-//! `sink` follows `addresssink`, once the passes that move work up have run.
+//! loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
+//! `sink` follows `cgpaddr`, once the passes that move work up have run.
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
@@ -102,7 +102,7 @@
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
-//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
+//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
@@ -141,11 +141,10 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, addresssink, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload,
-    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa,
-    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
-    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, window,
+    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
+    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
+    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -468,7 +467,7 @@ impl Options {
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" | "addresssink" | "cgpaddr" => self.strength,
+            "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -849,7 +848,6 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
                 combine("combine@768"),
-                fold("fold@768"),
                 dead("dead@768"),
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
@@ -884,7 +882,6 @@ pub(crate) fn llvm_order(
                 slot("sccp@792", Box::new(sccp::Sccp)),
                 slot("bdce@797", Box::new(bdce::Bdce)),
                 combine("combine@801"),
-                fold("fold@801"),
                 dead("dead@801"),
                 // DFAJumpThreadingPass, PassBuilderPipelines.cpp#L806.
                 slot(
@@ -916,7 +913,6 @@ pub(crate) fn llvm_order(
                     },
                 ),
                 combine("combine@837"),
-                fold("fold@837"),
                 dead("dead@837"),
             ]);
             list
@@ -1168,15 +1164,12 @@ pub fn recorded(
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
-    if applied.options.wanted("addresssink") {
-        manager.add(addresssink::AddressSink);
-    }
-    // After addresssink: the address arithmetic of a block's accesses, made in
-    // that block (CodeGenPrepare's optimizeMemoryInst).
+    // CodeGenPrepare's sinking: compares, masks, address phis and the address
+    // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
         manager.add(cgpaddr::CgpAddr);
     }
-    // After addresssink, with the other passes that make the forms isel sees:
+    // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     if applied.options.wanted("extload") {

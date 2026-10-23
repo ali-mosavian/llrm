@@ -25,6 +25,15 @@
 //! DEVIATE W4 (no number): an x87 value placed in the stack registers loses
 //! its value names; the stackifier numbers it again (`fpregs`).
 //!
+//! # Example
+//! The allocator placed `v1` in AX and `v2` in BX; before and after:
+//! ```text
+//! v1 := mov 5          AX := mov 5
+//! v2 := mov v1         BX := mov AX
+//! v1 := mov v1         (an identity move: dropped, its bytes kept)
+//! ret v2               ret BX
+//! ```
+//!
 //! # Used by
 //! `allocate::RegAlloc`.
 
@@ -249,7 +258,7 @@ pub(crate) fn _placed(
     if target::far_load(regs, what) {
         if let Loc::Reg(selector) = &dests[1] {
             if let Some(spelt) = regs.load_form(selector.register) {
-                name = Some(spelt.to_owned());
+                name = Some(spelt.into());
             }
         }
     }

@@ -114,6 +114,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check_backend(
         &[
             "cmpsub@1",
+            "processimpdefs@2",
             "optimizephis@1",
             "fixupsetcc@5",
             "machinelicm@4",
@@ -299,7 +300,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
     };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
-    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
 }
 
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
