@@ -10,7 +10,8 @@ use qbfront::Dialect;
 fn tracked() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let output = Command::new("git").arg("-C").arg(&root).args(["ls-files", "*.bas", "*.BAS", "*.bi", "*.BI"]).output().unwrap();
-    String::from_utf8(output.stdout).unwrap().lines().map(|line| root.join(line)).collect()
+    // corpus/ holds generated oracle programs, many of them deliberately malformed
+    String::from_utf8(output.stdout).unwrap().lines().filter(|line| !line.contains("lalrspike/corpus/")).map(|line| root.join(line)).collect()
 }
 
 /// Programs whose trees differ on purpose: the table-driven parser reads `-(a + 3) * .5` as
@@ -57,7 +58,12 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
                     out.push_str(&rest[..at]);
                     rest = &rest[rest[at..].find('}').map_or(rest.len(), |end| at + end + 1)..];
                 }
-                let out = out + rest;
+                let mut out = out + rest;
+                // the typed parser records the variable a NEXT names; the old one never did
+                while let Some(at) = out.find("next_variable: Some((") {
+                    let close = out[at..].find("))").map_or(out.len(), |end| at + end + 2);
+                    out.replace_range(at..close, "next_variable: None");
+                }
                 out.replace("\", Single)", "\", _)").replace("\", Double)", "\", _)")
             };
             assert!(strip(&old) == strip(&new), "{} under {dialect:?}: the modules differ", path.display());

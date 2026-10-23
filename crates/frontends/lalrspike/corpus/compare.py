@@ -37,6 +37,10 @@ for sid, item in catalog.items():
     if args.group and item["group"] != args.group:
         continue
     refused = bc[str(sid)][args.family]
+    if refused and set(refused) <= {"Statement Ignored"}:
+        refused = None  # a warning (TRON/TROFF without /D)
+    if refused == ["CRASH"]:
+        continue  # the oracle died: no verdict
     cls, message = ours[sid]
     if refused is None:
         kind = "agree-ok" if cls == "ok" else ("unsupported" if cls == "unsupported" else "gap")

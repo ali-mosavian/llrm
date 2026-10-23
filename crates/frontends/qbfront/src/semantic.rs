@@ -4028,6 +4028,9 @@ impl Compiler {
                         let commands = self.string_descriptor(commands)?;
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
                     }
+                    "PALETTE_USING" => {
+                        return self.fail("PALETTE USING is not supported yet");
+                    }
                     "PALETTE" => {
                         let [attribute, color] = arguments.as_slice() else {
                             return self.fail("PALETTE expects an attribute and color");
