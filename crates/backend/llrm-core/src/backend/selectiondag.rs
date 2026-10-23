@@ -115,6 +115,7 @@ pub mod opcodes;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_lowering;
+pub mod x86_preprocess;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
