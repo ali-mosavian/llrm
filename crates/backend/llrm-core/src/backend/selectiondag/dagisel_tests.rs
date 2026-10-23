@@ -195,3 +195,22 @@ fn a_store_narrower_than_its_value_is_truncating() {
     assert!(!adapter.is_truncating_store(wide.node));
     assert!(adapter.is_truncating_store(narrow.node));
 }
+
+/// The adapter said no memory node had a segment override, so a load through
+/// `fs:` selected as a plain `mov` (the segment operand left at `$noreg`).
+#[test]
+fn a_load_in_the_fs_space_addresses_through_fs() {
+    use llrm_lir::registers::RegId;
+
+    use super::dag::NodeData;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let ptr = input(&mut dag, 1);
+    let load = dag.get_load(EVT::I32, entry, ptr, MemInfo { space: 257, ..mem_info() });
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), load.node), Outcome::Selected);
+
+    let segment = dag.nodes()[load.node as usize].ops[4];
+    assert!(matches!(dag.node(segment).data, NodeData::PhysReg(r) if r == RegId::FS));
+}
