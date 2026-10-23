@@ -21,8 +21,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
 
-FORK = Path.home() / "dosbox-x-fork" / "src" / "dosbox-x"
-DOSBOX = os.environ.get("DOSBOX_BIN") or str(FORK if FORK.exists() else dosbatch.DOSBOX)
+# DOSBOX_BIN, else a dosbox-x-fork checkout beside the repository or in $HOME, else the cargo build's
+FORKS = [Path(__file__).resolve().parents[3].parent / "dosbox-x-fork" / "src" / "dosbox-x", Path.home() / "dosbox-x-fork" / "src" / "dosbox-x"]
+DOSBOX = os.environ.get("DOSBOX_BIN") or str(next((f for f in FORKS if f.exists()), dosbatch.DOSBOX))
 INCLUDES = (".bi", ".inc")
 
 
