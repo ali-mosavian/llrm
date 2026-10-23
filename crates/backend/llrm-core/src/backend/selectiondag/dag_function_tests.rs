@@ -745,3 +745,25 @@ fn an_m16_call_pushes_its_stack_arguments() {
         );
     assert!(!through_sp, "no store through SP");
 }
+
+const BYTE_MULTIPLY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i8 @f(i8 zeroext %a, i8 zeroext %b) {
+entry:
+  %r = mul i8 %a, %b
+  ret i8 %r
+}
+";
+
+/// A byte multiply is `mul r8`: AL times the operand into AX. The copy of AL
+/// the matcher makes was invisible to the emitter (its glue users came from
+/// the DAG's use lists, which the matcher's nodes are not in, and its register
+/// was a pin number), so idiom_edges and byte_multiply's `main` were refused.
+#[test]
+fn a_byte_multiply_is_mul_on_al() {
+    let module = llrm_mir::parse::module(BYTE_MULTIPLY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let mul = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("mul")).expect("a mul");
+    assert!(mul.dests.iter().chain(&mul.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "{mul:?}");
+}

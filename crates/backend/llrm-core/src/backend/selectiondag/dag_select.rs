@@ -92,15 +92,25 @@ pub fn legalized(
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
     DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).with_tli(tli).run();
-    TypeLegalizer::new(dag, tli)
-        .with_target(arch)
-        .with_hooks(lowering)
-        .run()
-        .map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    let types = TypeLegalizer::new(dag, tli).with_target(arch).with_hooks(lowering).run();
+    types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).with_tli(tli).run();
-    DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    let legal = DagLegalizer::new(dag, tli, lowering).run();
+    legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
     Ok(())
+}
+
+/// A legalizer refusal; with `LLRM_DAGDUMP` set, the DAG it stopped on is
+/// printed to stderr first.
+fn refused_legalize(
+    dag: &SelectionDAG,
+    why: &str,
+) -> Refusal {
+    if std::env::var_os("LLRM_DAGDUMP").is_some() {
+        eprintln!("legalize refused: {why}\n{}", dag.dump());
+    }
+    Refusal::Legalize(why.to_owned())
 }
 
 /// `DoInstructionSelection`: the nodes the root reaches, users before the nodes
