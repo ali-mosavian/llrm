@@ -98,6 +98,8 @@ def machine(bc_dir, sources, root, progress):
         for at in range(len(sources)):
             end = ends[at] if at < len(ends) else {}
             out_file = work / (f"O{at}.TXT" if root else f"D{at}/O.TXT")
+            if os.environ.get("BCTIME"):
+                print(f"{sources[at].name}: reason={end.get('reason')} emulated_ms={end.get('ms')} cpu_ms={end.get('cpu_ms')}", file=sys.stderr)
             if end.get("reason") != "exit" or not out_file.exists():
                 result.append("timeout" if end else "no result")
             else:
