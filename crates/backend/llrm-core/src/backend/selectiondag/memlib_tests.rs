@@ -65,6 +65,23 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
+/// The call is the fact's: its symbol (`memset_`) and calling convention
+/// (watcom registers, not the stack) as `options.libcalls` states them. A
+/// call in the default convention under the routine's own name would have
+/// linked to nothing: before, 9 m32 programs stopped at the builder's refusal
+/// to make it.
+#[test]
+fn the_call_uses_the_facts_symbol_and_convention() {
+    let calls = [("memset".to_owned(), llrm_mir::opcode::WATCALL, "memset_".to_owned())];
+    let on = built("fill", &BuilderTarget::m32().with_runtime_calls(&calls)).expect("builds");
+    assert!(on.contains("TargetExternalSymbol:i32'memset_'") && !on.contains("'memset'"), "{on}");
+    assert!(on.contains("$eax") && on.contains("$edx") && on.contains("$ebx"), "register arguments:\n{on}");
+    assert!(!on.contains("store"), "no stack arguments:\n{on}");
+    // the `i8` fill value is widened to the register it goes in; it was copied
+    // to `$edx` as an `i8`
+    assert!(on.contains("any_extend") && on.contains("Register:i32 $edx") && !on.contains("Register:i8 $edx"), "{on}");
+}
+
 /// The libcalls the m32 runtime's `c.toml` names, read from the file.
 fn real_m32_fact() -> Vec<String> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c/x86-m32/c.toml");

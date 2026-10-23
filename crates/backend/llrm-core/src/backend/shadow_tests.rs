@@ -43,6 +43,7 @@ fn assembled_text(
         crate::backend::isel::m16(),
         selector,
         &llrm_x86_m16::M16,
+        &[],
     )
 }
 
