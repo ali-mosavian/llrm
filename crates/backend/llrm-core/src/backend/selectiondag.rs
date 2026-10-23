@@ -135,6 +135,8 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod alloca_tests;
+#[cfg(test)]
 mod asmcall_tests;
 #[cfg(test)]
 mod bundle_tests;
@@ -182,7 +184,5 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
-#[cfg(test)]
-mod alloca_tests;
 #[cfg(test)]
 mod vararg_tests;
