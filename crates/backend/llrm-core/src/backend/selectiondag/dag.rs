@@ -695,7 +695,7 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(info.mem_vt.bits_lt(vt), "an extending load widens");
         let offset = self.get_poison(self.value_type(ptr));
-        let info = MemInfo { ext: Some(ext), space: 0, ..info };
+        let info = MemInfo { ext: Some(ext), ..info };
         self.intern(ISD::Load, &[vt, EVT::OTHER], &[chain, ptr, offset], SDNodeFlags::default(), NodeData::Mem(info))
     }
 
@@ -1012,6 +1012,18 @@ impl SelectionDAG {
     ) -> SDValue {
         let cc = self.get_cond_code(cond);
         self.get_node(ISD::SetCC, vt, &[lhs, rhs, cc])
+    }
+
+    /// `doesNodeExist(SETCC, {vt}, {lhs, rhs, cc})`.
+    pub fn does_setcc_exist(
+        &mut self,
+        vt: EVT,
+        lhs: SDValue,
+        rhs: SDValue,
+        cc: CondCode,
+    ) -> bool {
+        let code = self.get_cond_code(cc);
+        self.cse.contains_key(&(ISD::SetCC, vec![vt], vec![lhs, rhs, code], NodeData::None))
     }
 
     pub fn get_select(

@@ -177,7 +177,7 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
-        Box::new(phielim::PhiElimination { prices: phielim::EdgePrices::of(target) }),
+        Box::new(phielim::PhiElimination),
         // Before any value is placed: a load made where its reader is.
         Box::new(crate::backend::pressuresink::PressureSink {
             segments: segments.clone(),
@@ -205,16 +205,12 @@ pub fn machine_with<'a>(
         // load's cell (the pin: X86CallFrameOptimization's push folding).
         Box::new(crate::backend::pushfold::PushFold),
         // After phi elimination: a phi's copies are where the stack shuffles.
-        if crate::backend::allocate::rfp_on() {
-            Box::new(floatassign::FloatPrep {
-                frame: frame.clone(),
-                pool,
-                basic_semantics,
-                status_word: classes.status_word(),
-            }) as Box<dyn LIRTransform + 'a>
-        } else {
-            Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target })
-        },
+        Box::new(floatassign::FloatPrep {
+            frame: frame.clone(),
+            pool,
+            basic_semantics,
+            status_word: classes.status_word(),
+        }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
@@ -267,9 +263,7 @@ pub fn machine_with<'a>(
     }
     // Under RFP the stackifier runs after allocation, on the FP
     // registers greedy assigned, as X86FloatingPoint does.
-    if crate::backend::allocate::rfp_on()
-        && let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc")
-    {
+    if let Some(fps) = phases.iter().position(|phase| phase.class_name() == "FloatAlloc") {
         let moved = phases.remove(fps);
         let after = phases.iter().position(|phase| phase.class_name() == "RegAlloc").map_or(phases.len(), |at| at + 1);
         phases.insert(after, moved);
@@ -488,7 +482,7 @@ mod tests {
     /// and the stackifier runs after allocation, on the FP registers greedy
     /// assigned (X86FloatingPoint's place); without it the order is as ever.
     #[test]
-    fn test_the_stackifier_runs_after_allocation_under_rfp() {
+    fn test_the_stackifier_runs_after_allocation() {
         let names = || -> Vec<&'static str> {
             machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
                 .expect("phases")
@@ -497,13 +491,9 @@ mod tests {
                 .collect()
         };
         let at = |names: &[&str], one: &str| names.iter().position(|name| *name == one);
-        let old = crate::backend::allocate::RfpOn::off();
-        let before = names();
-        assert!(at(&before, "FloatAlloc") < at(&before, "RegAlloc") && at(&before, "FloatAssign").is_some());
-        drop(old);
         let after = names();
         assert_eq!(at(&after, "FloatAssign"), None);
-        assert_eq!(at(&after, "FloatPrep"), at(&before, "FloatAssign"));
+        assert!(at(&after, "FloatPrep") < at(&after, "RegAlloc"), "{after:?}");
         assert_eq!(at(&after, "FloatAlloc"), at(&after, "RegAlloc").map(|one| one + 1), "{after:?}");
     }
 

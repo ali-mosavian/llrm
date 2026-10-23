@@ -73,3 +73,59 @@ fn the_chain_of_the_old_load_moves_to_the_extending_load() {
     assert_eq!((dag.opcode(ordering), ordering.res), (ISD::Load, 1));
     assert_eq!(ext_of(&dag, SDValue { node: ordering.node, res: 0 }).2, Some(LoadExt::ZExtLoad));
 }
+
+/// A word load read by a sign extension and by a compare against a constant
+/// (`if (x < 0) ... (int)x`): the pin makes one `movsx` load and compares it
+/// (`pin only MOVSX32rm16`, R_PFLAG_CLEAR of the m32 shadow); ours kept the
+/// word load, a `movsx` of it and a word compare.
+fn shared(
+    op: ISD,
+    cc: CondCode,
+    space: u32,
+) -> (SelectionDAG, SDValue, SDValue) {
+    use super::super::dag_combiner::DagCombiner;
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
+    let info = MemInfo { mem_vt: EVT::I16, align: 2, volatile: false, base: MemBase::Stack(1), ext: None, space };
+    let word = dag.get_load(EVT::I16, chain, ptr, info);
+    let wide = dag.get_node(op, EVT::I32, &[word]);
+    let five = dag.get_constant(5, EVT::I16);
+    let test = dag.get_setcc(EVT::I8, word, five, cc);
+    let test_wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
+    let both = dag.get_node(ISD::Add, EVT::I32, &[wide, test_wide]);
+    dag.set_root(both);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let root = dag.get_root();
+    (dag, root, word)
+}
+
+#[test]
+fn a_compare_of_the_loaded_value_follows_the_extending_load() {
+    let (dag, root, _) = shared(ISD::SignExtend, CondCode::SetLt, 0);
+    // add (sextload), (zext (setcc (sextload), 5))
+    let (extended, wide_test) = (dag.operand(root, 0), dag.operand(root, 1));
+    assert_eq!(ext_of(&dag, extended), (EVT::I32, EVT::I16, Some(LoadExt::SExtLoad)));
+    let test = dag.operand(wide_test, 0);
+    assert_eq!(dag.opcode(test), ISD::SetCC);
+    assert_eq!(dag.operand(test, 0), extended, "the compare reads the extending load");
+    assert_eq!((dag.value_type(dag.operand(test, 1)), dag.constant(dag.operand(test, 1))), (EVT::I32, Some(5)));
+}
+
+/// A zero extension cannot serve a signed compare: the sign bit is gone.
+#[test]
+fn a_signed_compare_keeps_the_word_load_under_a_zero_extension() {
+    let (dag, root, word) = shared(ISD::ZeroExtend, CondCode::SetLt, 0);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::ZeroExtend);
+    assert_eq!(dag.operand(dag.operand(root, 0), 0), word);
+}
+
+/// An address space (a segment override) is the load's own: the extending
+/// load keeps it.
+#[test]
+fn the_extending_load_keeps_the_address_space() {
+    let (dag, root, _) = shared(ISD::SignExtend, CondCode::SetLt, 257);
+    let extended = dag.operand(root, 0);
+    let NodeData::Mem(info) = dag.node(extended).data else { panic!("a load") };
+    assert_eq!(info.space, 257);
+}

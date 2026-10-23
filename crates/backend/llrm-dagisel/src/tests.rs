@@ -1458,7 +1458,7 @@ mod llrm_intrinsics {
     use super::*;
     use crate::testing::TestDag;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
-    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES};
+    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES, SEGMENT_OF, SEGMENT_OF_OPCODE};
     use crate::x86_select::select_node;
 
     /// No pattern covers `X86ISD::LLRM_ASM`: it was `CannotSelect` and stopped
@@ -1486,6 +1486,31 @@ mod llrm_intrinsics {
                 (n.machine, n.ops.clone(), n.vts.clone()),
                 (Some(LLRM_ASM_OPCODE), vec![chain, reg], vec![mvt::Other, mvt::Glue])
             );
+        }
+    }
+
+    /// `SEGMENT_OF` (id 24580 collided with `LLRM_CODE` in the first version)
+    /// is a segment value: it becomes its own pseudo, with the global as
+    /// operand or none for `DGROUP`.
+    #[test]
+    fn a_segment_of_a_global_and_of_dgroup_are_the_segment_pseudo() {
+        for with_global in [true, false] {
+            let mut dag = TestDag::new();
+            let ops: Vec<SDValue> = if with_global { vec![dag.wrapped_global(1, 0, mvt::i16)] } else { vec![] };
+            let node = dag.node(SEGMENT_OF, &[mvt::i16], &ops);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::M16,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                address_mode: crate::x86_addr::AddrMode::Real16,
+            });
+
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+            let n = &dag.nodes[node as usize];
+            assert_eq!((n.machine, n.ops.clone(), n.vts.clone()), (Some(SEGMENT_OF_OPCODE), ops, vec![mvt::i16]));
         }
     }
 }
