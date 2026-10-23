@@ -71,6 +71,9 @@ impl OpcodeMap {
         name: &str,
     ) -> Result<usize, Unmapped> {
         let name = name.split('|').next().unwrap_or(name);
+        // `ADD32ri_DB`: an add whose bits are disjoint, which two-address
+        // conversion may make an `or` or an `lea`; as an instruction it adds
+        let name = name.strip_suffix("_DB").unwrap_or(name);
         if matches!(
             name,
             "COPY"

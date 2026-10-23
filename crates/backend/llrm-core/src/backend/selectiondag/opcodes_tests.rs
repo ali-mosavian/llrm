@@ -42,6 +42,16 @@ fn common_integer_opcodes_are_their_forms() {
 
 /// `IMUL32rri` (two untied sources) is the three-operand form, not the tied
 /// two-operand one: the tie is in the form, so the letters count differently.
+/// `ADD32ri_DB` (an add of disjoint bits) is the form of `add`. It was
+/// unmapped, and 5 m32 programs stopped at `Unmapped("ADD32ri_DB")`.
+#[test]
+fn an_add_of_disjoint_bits_is_an_add() {
+    let map = map();
+    for opcode in ["ADD32ri_DB", "ADD32rr_DB", "ADD16ri_DB", "ADD8rr_DB"] {
+        assert_eq!(form_name(&map, opcode), "add", "{opcode}");
+    }
+}
+
 #[test]
 fn a_tied_source_has_no_letter() {
     let map = map();

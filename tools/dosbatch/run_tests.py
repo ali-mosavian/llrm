@@ -165,8 +165,9 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     if program.source.suffix == ".c":
         dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
     command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)]
-    # the DAG path selects 32-bit code only; real mode keeps the old selector
-    return command if program.source.suffix == ".c" and target == dosbatch.REAL_MODE else dosbatch.with_isel(command)
+    # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
+    real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
+    return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
 
 
 def compile_one(program: Program, obj: Path) -> str | None:

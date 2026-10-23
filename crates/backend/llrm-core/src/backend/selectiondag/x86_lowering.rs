@@ -488,13 +488,15 @@ fn lower_brcond(
     node: SDValue,
 ) -> Option<SDValue> {
     let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_floating_point() {
+        if let Some(branches) = lower_float_brcond(dag, node, cond) {
+            return Some(branches);
+        }
+    }
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
         let cc = cond_of(dag, dag.operand(cond, 2));
         let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc);
-        (code, flags)
-    } else if dag.opcode(cond) == ISD::SetCC {
-        let (flags, code) = float_flags(dag, cond)?;
         (code, flags)
     } else {
         // Anything else is tested: `and cond, 1`, then `!= 0`.
@@ -510,6 +512,48 @@ fn lower_brcond(
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `LowerBRCOND` of a float compare. `une` is two branches to the target
+/// (not equal, or unordered); `oeq` followed by a `br` is two branches to the
+/// other successor and the `br` to this one. Other codes are one branch on
+/// the compare's flags; `oeq` with no `br` after it is left to the generic
+/// path (the compare expands to two).
+fn lower_float_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    cond: SDValue,
+) -> Option<SDValue> {
+    let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 2));
+    let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
+    let branch = |dag: &mut SelectionDAG, chain, dest, code, flags| {
+        let code = cond_code(dag, code);
+        dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
+    };
+    match cond_of(dag, dag.operand(cond, 2)) {
+        CondCode::SetUNe => {
+            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+            let first = branch(dag, chain, dest, cond::NE, flags);
+            Some(branch(dag, first, dest, cond::P, flags))
+        }
+        CondCode::SetOEq => {
+            let users: Vec<u32> = dag.users(node).collect();
+            let [user] = users[..] else { return None };
+            let user = SDValue { node: user, res: 0 };
+            if dag.opcode(user) != ISD::Br {
+                return None;
+            }
+            let false_block = dag.operand(user, 1);
+            dag.update_node_operands(user.node, &[dag.operand(user, 0), dest]);
+            let flags = dag.get_node(x86isd::FCMP, EVT::I32, &[lhs, rhs]);
+            let first = branch(dag, chain, false_block, cond::NE, flags);
+            Some(branch(dag, first, false_block, cond::P, flags))
+        }
+        _ => {
+            let (flags, code) = float_flags(dag, cond)?;
+            Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+        }
+    }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
