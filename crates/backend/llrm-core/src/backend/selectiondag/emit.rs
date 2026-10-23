@@ -875,6 +875,10 @@ impl Emitter<'_, '_> {
             EVT::Simple(MVT::F32) => 4,
             EVT::Simple(MVT::F64) => 8,
             EVT::Simple(MVT::F80) => 10,
+            // The bits of an integer the lowering keeps in the pool (the
+            // fudge of an unsigned conversion).
+            EVT::Simple(MVT::I64) => 8,
+            EVT::Simple(MVT::I32) => 4,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
@@ -1343,11 +1347,33 @@ impl Emitter<'_, '_> {
         n: u32,
         name: &str,
     ) -> Result<Option<()>, EmitError> {
-        // The 80-bit forms (long double) are refused until their moves, spills
-        // and arguments are proved: long_double_arguments and
-        // long_double_constant_store printed wrong values.
-        if (name.contains("_Fp") || name.starts_with("FP")) && name.contains("80") {
-            return Err(EmitError::Unsupported(format!("{name}: long double")));
+        // A cell of 80 bits (a long double in memory) is refused until its
+        // arguments and moves are proved: long_double_arguments and
+        // long_double_constant_store printed wrong values (the front end's
+        // 12-byte slots against a 10-byte store). The 80-bit register class
+        // alone (a 64-bit integer loaded for a conversion) is the stack's own.
+        if let Some((prefix, rest)) = name.split_once("_Fp")
+            && matches!(prefix, "LD" | "ST" | "IST" | "ILD")
+        {
+            let rest = rest.strip_prefix('P').unwrap_or(rest);
+            let digits = |text: &str| text.chars().take_while(char::is_ascii_digit).collect::<String>();
+            let first = digits(rest);
+            let after = rest[first.len()..].strip_prefix('m').map(digits).unwrap_or_default();
+            let memory = match prefix {
+                "LD" => first.as_str(),
+                "ST" => {
+                    if after.is_empty() {
+                        first.as_str()
+                    } else {
+                        after.as_str()
+                    }
+                }
+                // The integer cell of `ILD`/`IST` is the first number.
+                _ => "",
+            };
+            if memory == "80" {
+                return Err(EmitError::Unsupported(format!("{name}: long double")));
+            }
         }
         // `FP64_TO_INT32_IN_MEM`: the truncating store of a float as an
         // integer. It is `fistt` (the pin's custom inserter writes the
@@ -1558,7 +1584,7 @@ impl Emitter<'_, '_> {
             && let NodeData::PoolIndex(entry) = self.dag.node(self.dag.node(group[0]).ops[0]).data
         {
             let size = self.pool_cell(entry)?.width;
-            if size != cell_width {
+            if cell_width > size {
                 return Err(EmitError::Unsupported(format!("a pool entry of {size} bytes read as {cell_width}")));
             }
         }
@@ -1579,10 +1605,12 @@ impl Emitter<'_, '_> {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
             let pooled = self.pool_cell(entry)?;
-            // The entry is as wide as its constant; read at another width it
-            // is the neighbouring data (a double that is exactly a float is a
-            // float entry the legalizer loads without saying it extends).
-            if pooled.width != cell_width {
+            // The entry is as wide as its constant; read wider it is the
+            // neighbouring data (a read inside it, the fudge's float at +0 or
+            // +4, is the lowering's choice) (a double that is exactly a float
+            // is a float entry the legalizer loads without saying
+            // it extends).
+            if cell_width > pooled.width {
                 return Err(EmitError::Unsupported(format!(
                     "a pool entry of {} bytes read as {cell_width}",
                     pooled.width
