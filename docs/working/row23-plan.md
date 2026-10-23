@@ -2,7 +2,7 @@
 
 Owner w-4. Row 23 is last in the order and follows the `--isel=dag` switch (earliest 2027-02-04), because CodeGenPrepare is tuned for the DAG's legality hooks. Pin `d1106deb71cc`, `llvm/lib/CodeGen/CodeGenPrepare.cpp`. Function by function in the order `_run` ([L585](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L585)) and `optimizeInst` ([L8947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8947)) run them.
 
-States: done; partial (what is missing is in the blocker column); missing; N/A (evidence). Today's code is `cgpaddr.rs` (address sinking, select combiner, compare and mask sinks, address phis) and `extload.rs`. The dates are land dates of a PR each, in pin order inside a week, only the entries blocked on the switch wait for it (4, 26, 28, 29, 31's type widening, 36, 39); the others are dated in pin order from 2026-11-27.
+States: done; partial (what is missing is in the blocker column); missing; N/A (evidence). Today's code is `cgpaddr.rs` (address sinking, select combiner, compare and mask sinks, address phis) and `extload.rs`. The dates are land dates of a PR each. Only the entries blocked on the `--isel=dag` switch (earliest 2027-02-04: 4, 26, 28, 29, 31's type widening, 36, 39) wait for it; the others are dated in pin order from 2026-11-27, one every two or three working days.
 
 | # | function | pin | status | blocker | land |
 |--:|---|---|---|---|---|
