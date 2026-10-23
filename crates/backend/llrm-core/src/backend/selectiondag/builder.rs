@@ -45,7 +45,8 @@ impl BuilderTarget {
         BuilderTarget { dag: DagConfig::default(), shift_amount: EVT::I8, legal_ints: vec![8, 16, 32] }
     }
 
-    /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the pin's `In16BitMode` has `GR32` legal).
+    /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
+    /// pin's `In16BitMode` has `GR32` legal).
     pub fn m16() -> BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, ..DagConfig::default() },

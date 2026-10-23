@@ -237,7 +237,8 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let dump_of = |name: &str| {
         let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap();
-        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         build_block(
             &module,
@@ -256,5 +257,8 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
     let narrow = dump_of("narrow");
     assert!(narrow.contains("i32 = add") && !narrow.contains("extract_element"), "{narrow}");
     let wide = dump_of("wide");
-    assert!(wide.contains("i64 = build_pair") && wide.contains("i32,ch = load") && !wide.contains("i16,ch = load"), "{wide}");
+    assert!(
+        wide.contains("i64 = build_pair") && wide.contains("i32,ch = load") && !wide.contains("i16,ch = load"),
+        "{wide}"
+    );
 }
