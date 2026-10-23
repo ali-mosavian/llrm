@@ -64,8 +64,12 @@ pub fn select_block(
     ctx: &EmitContext<'_>,
     state: &mut EmitState,
     first_at: i64,
+    arch: &dyn llrm_target::Target,
+    temporaries: &mut dyn super::x86_preprocess::FrameObjects,
 ) -> Result<Emitted, Refusal> {
-    legalized(dag, tli, lowering)?;
+    legalized(dag, tli, lowering, arch)?;
+    // `PreprocessISelDAG`: the rewrites that need no matcher.
+    super::x86_preprocess::preprocess(dag, temporaries);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
@@ -78,9 +82,10 @@ pub fn legalized(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
     lowering: &mut X86Lowering,
+    arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
     DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).run();
-    TypeLegalizer::new(dag, tli).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    TypeLegalizer::new(dag, tli).with_target(arch).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).run();
     DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).run();
