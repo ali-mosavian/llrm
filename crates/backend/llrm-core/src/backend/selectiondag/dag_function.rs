@@ -45,7 +45,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{EmitBlock, EmitContext, EmitState, FrameMap};
+use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -392,8 +392,14 @@ pub fn selected(
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }
         let from = emitted.len();
-        calls.extend(done.calls.iter().map(|(at, symbol)| {
-            (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())
+        calls.extend(done.calls.iter().map(|(at, callee)| {
+            let name = match callee {
+                Callee::Global(symbol) => {
+                    module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned()
+                }
+                Callee::Named(name) => name.clone(),
+            };
+            (*at, name)
         }));
         emitted.extend(done.blocks);
         made.insert(block.0, from..emitted.len());
