@@ -68,3 +68,26 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
     assert_eq!(slot, EVT::I64);
     assert_eq!(dag.opcode(value), ISD::FSub, "the offset is taken off first");
 }
+
+/// An `i64` result is asked of the target before the type legalizer splits it
+/// (the target's action for `i64` is Custom): the `fist` slot is `i64`, and
+/// the result is read back as two dwords.
+#[test]
+fn an_i64_result_is_lowered_by_the_target_then_split() {
+    use super::super::legalize_types::TypeLegalizer;
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let x = dag.get_register(EVT::Simple(MVT::F64), 5);
+    let converted = dag.get_node(ISD::FpToSInt, EVT::I64, &[x]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[converted]);
+    dag.set_root(low);
+    let mut hooks = X86Lowering { cmov: false };
+    let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);
+    legalizer.run().unwrap();
+    assert!(legalizer.all_legal());
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, EVT::I32), "the low dword of the slot");
+    let fist = SDValue { node: dag.operand(root, 0).node, res: 0 };
+    assert_eq!(dag.opcode(fist), x86isd::FP_TO_INT_IN_MEM);
+    assert_eq!(stored(&dag, root).0, EVT::I64);
+}

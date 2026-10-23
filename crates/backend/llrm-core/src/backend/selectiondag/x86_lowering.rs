@@ -67,6 +67,8 @@ pub mod x86isd {
     pub const WRAPPER: ISD = ISD::Target(953);
     /// `X86ISD::FP_TO_INT_IN_MEM`: `fist` of an x87 value to a stack slot.
     pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
+    /// `X86ISD::FILD`: `fild` of an integer in memory to an x87 value.
+    pub const FILD: ISD = ISD::Target(586);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -130,6 +132,7 @@ impl Hooks for X86Lowering {
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
@@ -485,6 +488,93 @@ fn lower_fp_to_int(
         result = dag.get_node(ISD::Xor, EVT::I64, &[result, adjust]);
     }
     Some(result)
+}
+
+/// `BuildFILD` without SSE: `fild` of the `src_vt` integer at `slot`.
+fn build_fild(
+    dag: &mut SelectionDAG,
+    dst: EVT,
+    src_vt: EVT,
+    chain: SDValue,
+    slot: SDValue,
+    info: MemInfo,
+) -> SDValue {
+    let info = MemInfo { mem_vt: src_vt, ..info };
+    dag.intern(x86isd::FILD, &[dst, EVT::OTHER], &[chain, slot], SDNodeFlags::default(), NodeData::Mem(info))
+}
+
+/// `LowerSINT_TO_FP` and `LowerUINT_TO_FP` for the x87: the integer stored to
+/// a stack slot and `fild`ed. An unsigned `i32` is stored with a zero high
+/// dword and `fild`ed as an `i64`; an unsigned `i64` is `fild`ed signed and
+/// 2^64 is added when the sign was set (the constant pool's fudge).
+fn lower_int_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let signed = dag.opcode(node) == ISD::SIntToFp;
+    let dst = dag.value_type(node);
+    let src = dag.operand(node, 0);
+    let src_vt = dag.value_type(src);
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
+        return None;
+    }
+    let pointer = dag.config().pointer;
+    let chain = dag.entry_node();
+    let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
+        mem_vt: vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+    };
+    if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
+        let size = src_vt.size_in_bits() / 8;
+        let index = dag.create_stack_temporary(size, size);
+        let slot = dag.get_frame_index(pointer, index);
+        let info = store_info(index, src_vt, size);
+        let stored = dag.get_store(chain, src, slot, info);
+        return Some(build_fild(dag, dst, src_vt, stored, slot, info));
+    }
+    let index = dag.create_stack_temporary(8, 8);
+    let slot = dag.get_frame_index(pointer, index);
+    let info = store_info(index, EVT::I32, 8);
+    if src_vt == EVT::I32 {
+        let high_slot = {
+            let four = dag.get_constant(4, pointer);
+            dag.get_node(ISD::Add, pointer, &[slot, four])
+        };
+        let low = dag.get_store(chain, src, slot, info);
+        let zero = dag.get_constant(0, EVT::I32);
+        let high = dag.get_store(low, zero, high_slot, info);
+        return Some(build_fild(dag, dst, EVT::I64, high, slot, info));
+    }
+    let info = store_info(index, EVT::I64, 8);
+    let stored = dag.get_store(chain, src, slot, info);
+    let fild = build_fild(dag, EVT::Simple(MVT::F80), EVT::I64, stored, slot, info);
+    let zero = dag.get_constant(0, EVT::I64);
+    let sign_set = dag.get_setcc(EVT::I8, src, zero, CondCode::SetLt);
+    // The fudge: 0.0f at +0 and 2^64 as a float at +4 of one pool entry.
+    let fudge = dag.get_constant_pool(pointer, 0x5F80_0000_0000_0000, EVT::I64, false);
+    let (zero_offset, four_offset) = (dag.get_constant(0, pointer), dag.get_constant(4, pointer));
+    let offset = dag.get_select(pointer, sign_set, four_offset, zero_offset);
+    let fudge_ptr = dag.get_node(ISD::Add, pointer, &[fudge, offset]);
+    let NodeData::PoolIndex(entry) = dag.node(fudge).data else { return None };
+    let fudge_info = MemInfo {
+        mem_vt: EVT::Simple(MVT::F32),
+        align: 8,
+        volatile: false,
+        base: MemBase::ConstantPool(entry),
+        ext: Some(super::actions::LoadExt::ExtLoad),
+    };
+    let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
+    let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
+    let rounded = if dst == EVT::Simple(MVT::F80) {
+        sum
+    } else {
+        let flag = dag.get_constant_with(0, pointer, true, false);
+        dag.get_node(ISD::FpRound, dst, &[sum, flag])
+    };
+    Some(rounded)
 }
 
 fn is_pow2(value: u128) -> bool {
