@@ -92,3 +92,24 @@ fn huge_add_steps_the_selector_by_the_carry() {
     assert_eq!((dag.opcode(shl), dag.constant(dag.operand(shl, 1))), (ISD::Shl, Some(12)));
     assert_eq!(dag.opcode(dag.operand(shl, 0)), ISD::Sra);
 }
+
+/// A `poison` or `undef` far pointer (a null-ish default of a far argument)
+/// stopped the type legalizer: "Poison: expand result" (c/fsgs_call.c of the
+/// m32 run). It is a poison of each half.
+#[test]
+fn an_undef_or_poison_wide_value_expands_to_undef_halves() {
+    for (make, op) in [(SelectionDAG::get_undef as fn(&mut SelectionDAG, EVT) -> SDValue, ISD::Undef), (SelectionDAG::get_poison, ISD::Poison)] {
+        for (tli, wide, half) in [
+            (TargetLowering::empty(TargetLoweringInfo::x86_16()), EVT::from(MVT::Far), EVT::I16),
+            (TargetLowering::x86_32(Features::default(), MVT::I32), EVT::I64, EVT::I32),
+        ] {
+            let mut dag = dag();
+            let value = make(&mut dag, wide);
+            let low = dag.get_node(ISD::Truncate, half, &[value]);
+            dag.set_root(low);
+            let mut legalizer = TypeLegalizer::new(&mut dag, &tli);
+            legalizer.run().unwrap();
+            assert!(legalizer.all_legal(), "{op:?} {wide:?}");
+        }
+    }
+}
