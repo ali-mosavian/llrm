@@ -1310,9 +1310,11 @@ impl<'a> TypeLegalizer<'a> {
         ops[0] = chain;
         ops[at] = offset;
         // The unindexed access's offset operand is a poison of the pointer
-        // type.
-        let last = ops.len() - 1;
-        ops[last] = self.dag.get_poison(self.dag.value_type(offset));
+        // type (`les` and `lds` have no such operand).
+        if matches!(self.dag.opcode(access), ISD::Load | ISD::Store) {
+            let last = ops.len() - 1;
+            ops[last] = self.dag.get_poison(self.dag.value_type(offset));
+        }
         let updated = self.dag.update_node_operands(access.node, &ops);
         SDValue { node: updated, res: 0 }
     }
@@ -1422,6 +1424,7 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::Store if at == 1 => self.expand_store(node),
             ISD::Load if at == 1 => self.expand_far_address(node, at),
+            x86isd::LES | x86isd::LDS if at == 1 => self.expand_far_address(node, at),
             ISD::Store if at == 2 => self.expand_far_address(node, at),
             super::x86isd::CALL if at == 1 => self.expand_far_call(node),
             x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
