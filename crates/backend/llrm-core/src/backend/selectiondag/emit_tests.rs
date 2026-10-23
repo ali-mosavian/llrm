@@ -282,6 +282,9 @@ fn a_shift_by_cl_reads_cl() {
         let shl =
             blocks[0].insns.iter().find(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shl")));
         let shl = shl.unwrap_or_else(|| panic!("{lines:?}")).what.as_ref().unwrap();
-        assert!(matches!(shl.sources.last(), Some(Loc::Reg(Reg { register: RegId::CL, .. }))), "{lines:?}");
+        // the amount is a value the form pins to `cx`, not a physical register
+        // nobody defines (the LIR verifier: "value defined N times")
+        assert!(matches!(shl.sources.last(), Some(Loc::Held(_))), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("CL")), "{lines:?}");
     });
 }

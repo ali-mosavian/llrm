@@ -620,6 +620,40 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
 
+const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ]
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+";
+
+/// A `switch` lowers to compare-and-branch blocks the builder makes after the
+/// switch's own; they were refused ("a switch lowering", 5 programs of the
+/// m32 execution run). Each is emitted after the block that made it and every
+/// branch names one.
+#[test]
+fn a_switch_is_a_chain_of_compare_and_branch_blocks() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = done.body.blocks.len();
+    assert!(blocks > 5, "the switch's blocks and its four targets: {blocks}");
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in done.body.blocks.iter() {
+        assert!(block.succ.iter().all(|s| at.contains(s)), "{:?} leaves for a block that is not there", block.succ);
+    }
+}
+
 const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i64 @f(i64 %a, i64 %b) {
 entry:
@@ -710,6 +744,29 @@ fn an_m16_call_of_a_symbol_is_a_direct_call() {
     assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
 }
 
+const VARIABLE_SHIFT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %n) {
+entry:
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+";
+
+/// The matcher copies the shift amount to `CL` with a glued `CopyToReg`, which
+/// the adapter turned into a copy to a virtual register (`CL` had no physical
+/// id): the shift read a `CL` nothing defined, and the LIR verifier said
+/// "value defined N times" (about 20 m32 programs once #4074 let them past
+/// "missing source").
+#[test]
+fn a_variable_shift_reads_the_amount_the_matcher_copied_to_cl() {
+    let module = llrm_mir::parse::module(VARIABLE_SHIFT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let shl = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("shl")).expect("a shl");
+    assert!(shl.sources.iter().all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "held values: {shl:?}");
+}
+
 const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare i16 @g(i16, i16)
 define i16 @f(i16 %a) {
@@ -744,4 +801,115 @@ fn an_m16_call_pushes_its_stack_arguments() {
                 ),
         );
     assert!(!through_sp, "no store through SP");
+}
+
+const BYTE_MULTIPLY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i8 @f(i8 zeroext %a, i8 zeroext %b) {
+entry:
+  %r = mul i8 %a, %b
+  ret i8 %r
+}
+";
+
+/// A byte multiply is `mul r8`: AL times the operand into AX. The copy of AL
+/// the matcher makes was invisible to the emitter (its glue users came from
+/// the DAG's use lists, which the matcher's nodes are not in, and its register
+/// was a pin number), so idiom_edges and byte_multiply's `main` were refused.
+#[test]
+fn a_byte_multiply_is_mul_on_al() {
+    let module = llrm_mir::parse::module(BYTE_MULTIPLY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let mul = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("mul")).expect("a mul");
+    assert!(mul.dests.iter().chain(&mul.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "{mul:?}");
+}
+
+const SHIFT_PARTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %2 = alloca i64
+  %3 = alloca i32
+  %4 = alloca i64
+  store i64 %0, ptr %2
+  store i32 %1, ptr %3
+  %5 = load i64, ptr %2
+  %6 = load i32, ptr %3
+  %7 = zext i32 %6 to i64
+  %8 = lshr i64 %5, %7
+  store i64 %8, ptr %4
+  %9 = load i64, ptr %4
+  ret i64 %9
+}
+";
+
+/// The pin's scheduler keeps a unit that defines a physical register from
+/// going between that register's definition and the unit that reads it
+/// (`DelayForLiveRegsBottomUp`). The `shrd` of a 64-bit shift went between the
+/// `test` and the second `jne`, which read the `shrd`'s flags
+/// (shift_int64_variable printed wrong values).
+#[test]
+fn nothing_that_sets_flags_goes_between_a_test_and_the_branches_that_read_it() {
+    let module = llrm_mir::parse::module(SHIFT_PARTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let test = names.iter().position(|n| n == "test").expect("a test");
+    let last_branch = names.iter().rposition(|n| n == "jne" || n == "je").expect("a branch");
+    for name in &names[test + 1..last_branch] {
+        assert!(
+            matches!(name.as_str(), "mov" | "jne" | "je" | "jmp"),
+            "{name} between the test and the branches: {names:?}"
+        );
+    }
+}
+
+const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare void @far() addrspace(1)
+declare void @near()
+define void @f() {
+entry:
+  call addrspace(1) void @far()
+  call void @near()
+  ret void
+}
+";
+
+/// A call of far code is a far call: the call sites are marked in `far`, as
+/// the old selector marks them. The DAG path left the set empty, so every
+/// call was a near `call` of a far routine and the program crashed at once
+/// (99 real-mode programs under `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_far_code_is_marked_far() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let sites: Vec<(i64, String)> = done.calls.iter().map(|(at, name)| (*at, name.clone())).collect();
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let far: Vec<&str> = sites.iter().filter(|(at, _)| done.far.contains(at)).map(|(_, name)| name.as_str()).collect();
+    assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
+}
+
+/// A call of a 16-bit callee destroys the upper half of `esi` and `edi` (it
+/// pushes only `si` and `di`). The DAG path left `clobbers_high` empty, so a
+/// 32-bit value kept in `esi` across a call came back with a stale upper half
+/// (call_keeps, frameless, div_constants_*, phi_slot_unknown_arm under
+/// `LLRM_ISEL_REAL`).
+#[test]
+fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
+    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let high: Vec<_> = done
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.call.is_some())
+        .map(|one| one.clobbers_high.clone())
+        .collect();
+    let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
+    assert_eq!(high, [expected.clone(), expected]);
 }
