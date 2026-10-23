@@ -178,7 +178,8 @@ fn a_local_is_a_frame_cell_below_bp() {
             _ => None,
         })
         .collect();
-    assert!(cells.len() >= 2 && cells.iter().all(|d| *d == -4), "{cells:?}");
+    let locals: Vec<i64> = cells.iter().copied().filter(|d| *d < 0).collect();
+    assert_eq!(locals, [-4, -4], "the store and the load: {cells:?}");
     assert_eq!(done.depth, 4);
     assert_eq!(done.extents, [(-4, 4)]);
 }
