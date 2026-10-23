@@ -86,7 +86,8 @@ pub fn joined(
     env: &dyn CoalescerEnv,
     depth: &[u32],
 ) -> LirBody {
-    let mut lis = LiveIntervals::new(body);
+    // The intervals TwoAddress edited, where it ran just before.
+    let mut lis = crate::liveness::liveintervals::take_handed_over(body).unwrap_or_else(|| LiveIntervals::new(body));
     let stats = driver::run(&mut lis, env, depth);
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {

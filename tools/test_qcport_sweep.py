@@ -210,3 +210,20 @@ def test_a_failure_is_keyed_by_its_error_not_by_a_warning_printed_after_it():
     """The 22:00 sweep keyed `Unable to open 'stdio.h'` as `Warning! WN: No prototype found for function 'printf'`: the last line was a warning."""
     text = "wccq failed:\nx.c(3): Error! E1055: Unable to open 'stdio.h'\nx.c(36): Warning! W131: No prototype found for function 'printf'\n"
     assert q.kind(text) == "x.c(...): Error! EN: Unable to open 'stdio.h'"
+
+
+def test_a_module_that_dies_only_at_emit_is_a_failed_compile(tmp_path):
+    """The sweep compiled to /dev/null, where llrm-c writes assembly text and never encodes the object: ui/console.c died in the encoder on m16 -O1..-O3
+    while the sweep read 0 failed of 768. The stand-in compiler dies when its output is an object, as llrm-c's encoder does."""
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text(
+        "#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\n"
+        "if out.endswith(('.o', '.obj')):\n    sys.exit('llrm-c: Semantics(op=BINARY, name=sub)')\n"
+    )
+    compiler.chmod(0o755)
+    qcport = tmp_path / "qcport"
+    for part in q.MODULES:
+        (qcport / part).mkdir(parents=True)
+    (qcport / "ui" / "console.c").write_text("int x;\n")
+    failed = q.sweep(compiler, qcport, tmp_path, levels=("-O1",), jobs=1)
+    assert [(module, level) for module, level, _ in failed] == [("console", "-O1")]
