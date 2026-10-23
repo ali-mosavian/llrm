@@ -4,7 +4,7 @@ Owner: splitkit-port. Pin d1106deb71cc. Permalink base: `https://github.com/llvm
 
 ## Evidence for the DEVIATE exits
 
-The pin's own `-stats` and MIR on our final IR (`--dump`, stage `*-switchlower.ll`, then the assert `llc -O2` for i486 or i386-code16), 272 runs: vsgcc 71 programs at m32 -O2 and -Os, QCport 65 modules at m16 -O2 and -Os. 43 runs failed (llc nonzero or no dump: x_funcptr, x_switch at m32; 20 QCport modules at m16), so the counts are of the rest. The pin's pipeline, not ours: it says where the pin's coalescer meets the construct, not what our output loses. Script `~/scratch/coalstats.py`, rows `~/scratch/coalstats.jsonl`.
+The pin's own `-stats` and MIR on our final IR (`--dump`, stage `*-switchlower.ll`, then the assert `llc -O2` for i486 or i386-code16), 272 runs: vsgcc 71 programs at m32 -O2 and -Os, QCport 65 modules at m16 -O2 and -Os. 43 runs failed (llc nonzero or no dump: x_funcptr, x_switch at m32; 20 QCport modules at m16), so the counts are of the rest. The pin's pipeline, not ours: it says where the pin's coalescer meets the construct, not what our output loses. Script `coalstats.py`, rows `coalstats.jsonl`.
 
 | Construct (DEVIATE) | m32 (142 runs) | m16 (130 runs) | Reading |
 |---|---|---|---|

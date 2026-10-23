@@ -1,7 +1,7 @@
 # llrm-only MIR passes bucket (d_faces -O2 m32, tip 3b5ac93b68)
 
 Owner: w-6. Bucket 201.8 M of 1292.4 M Ir, pin 0 (call-site rule: the pass's `run` inclusive;
-`~/scratch/ledger4/ledger-3b5ac93b68-O2.txt`, command `-m32 -mabi=sysv -march=i486 -O2`).
+`ledger-3b5ac93b68-O2.txt`, command `-m32 -mabi=sysv -march=i486 -O2`).
 Route: parity = `llvm_order` (default; slots in `parity::REGISTRY`), legacy = `LLRM_NO_LLVM_ORDER` rounds. No pass here is legacy-only.
 
 | Pass | M Ir | Parity route | Pin counterpart |

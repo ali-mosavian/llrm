@@ -1,6 +1,6 @@
 # The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`)
 
-Parity 2c850dc22: 186 tests, 15 red after #3812 (the 16th, the interrupt handler, is fixed). Red since 10-18 to 10-20 unseen: the feature was never run by a gate layer (#3817 adds it). First-red merges are by build (`~/scratch/w8-logs/lib-bisect.log`, `bisect-regparm.log`, `bisect-multi.log`).
+Parity 2c850dc22: 186 tests, 15 red after #3812 (the 16th, the interrupt handler, is fixed). Red since 10-18 to 10-20 unseen: the feature was never run by a gate layer (#3817 adds it). First-red merges are by build (`lib-bisect.log`, `bisect-regparm.log`, `bisect-multi.log`).
 
 | test (compile::tests unless named) | first red merge | PR, owner | listing, actual vs expected | class |
 |---|---|---|---|---|

@@ -12,7 +12,7 @@ valgrind --tool=callgrind --callgrind-out-file=OUT.cg DIST/llrm-c -m32 -mabi=sys
 
 `-o` goes to a real file (`/dev/null` skips the object write: emit reads 0). The number is the `summary:` line of OUT.cg, written
 in the body as `d_faces qbq-llrm: BASE -> NEW M Ir`. Other programs (QCport's `render/d_faces.c`, which needs its struct-size
-asserts removed at m32; see `~/scratch/ledger4/qcsrc`) may be added, labelled with the program's name.
+asserts removed at m32; see `qcsrc`) may be added, labelled with the program's name.
 
-The per-bucket table: `~/scratch/ledger4/ledger4.py` on `callgrind_annotate --inclusive=yes --threshold=100 OUT.cg`, and
+The per-bucket table: `ledger4.py` on `callgrind_annotate --inclusive=yes --threshold=100 OUT.cg`, and
 `ledger5.py` for the callee-attributed view. `tools/landing/precheck.sh` refuses a perf PR whose body lacks the command and the number.
