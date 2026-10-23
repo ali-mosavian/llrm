@@ -20,9 +20,22 @@ fn qb() -> HirAbi {
     }
 }
 
-fn assembled(selector: Selector) -> Result<crate::backend::masm::Module, String> {
+/// A load through a far pointer: the DAG path still refuses an address in
+/// another space.
+const FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+entry:
+  %v = load i16, ptr addrspace(1) %p
+  ret i16 %v
+}
+";
+
+fn assembled_text(
+    text: &str,
+    selector: Selector,
+) -> Result<crate::backend::masm::Module, String> {
     assemble::assembled_by(
-        &llrm_mir::parse::module(TEXT).expect("parses"),
+        &llrm_mir::parse::module(text).expect("parses"),
         &qb(),
         "T_TEXT",
         ProfileOrName::Name("486"),
@@ -35,11 +48,11 @@ fn assembled(selector: Selector) -> Result<crate::backend::masm::Module, String>
 
 /// `--isel=dag` produced the old selector's code while the DAG path did not
 /// exist: a shadow report of old against "dag" then read zero differences. It
-/// is refused until a function is selected by the DAG.
+/// is refused when a function is one the DAG cannot select.
 #[test]
 fn test_the_dag_selector_refuses_a_function_it_cannot_select() {
-    assert!(assembled(Selector::Old).is_ok());
-    let error = assembled(Selector::Dag).err().expect("refused");
+    assert!(assembled_text(FAR_LOAD, Selector::Old).is_ok());
+    let error = assembled_text(FAR_LOAD, Selector::Dag).err().expect("refused");
     assert!(error.contains("@f: --isel=dag"), "{error}");
 }
 
