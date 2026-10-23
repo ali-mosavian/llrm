@@ -416,10 +416,13 @@ impl Emitter<'_, '_> {
                 Some(k) if memory_dest => dests.get(k).cloned(),
                 _ => rest.next(),
             };
-            // a shift by `cl` reads `CL` without an operand: the `CopyToReg`
-            // glued to it wrote the register
-            let implicit =
-                || name.ends_with("rCL").then(|| Loc::Reg(Reg { register: llrm_lir::registers::RegId::CL, width: 1 }));
+            // a shift by `cl` has the amount as the value the `CopyToReg` glued
+            // to it wrote to `CL`; the form pins that source to `cx`
+            let implicit = || {
+                name.ends_with("rCL")
+                    .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
+                    .flatten()
+            };
             sources.push(
                 taken.or_else(implicit).ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?,
             );
@@ -595,7 +598,14 @@ impl Emitter<'_, '_> {
             if usize::from(glue.res) >= self.dag.node(glue).values.len() {
                 continue;
             }
-            for user in self.dag.users(glue) {
+            let mut users: Vec<u32> = self.dag.users(glue).collect();
+            // a machine node the matcher made does not always reach the use
+            // lists: a copy to a physical register looks for its user itself
+            if users.is_empty() && matches!(self.dag.node(self.dag.node(glue).ops[1]).data, NodeData::PhysReg(_)) {
+                let all = self.dag.nodes();
+                users = (0..all.len() as u32).filter(|&one| all[one as usize].ops.contains(&glue)).collect();
+            }
+            for user in users {
                 match self.dag.opcode(SDValue { node: user, res: 0 }) {
                     ISD::CopyToReg => work.push(SDValue { node: user, res: 1 }),
                     ISD::Machine(op) => {
@@ -617,7 +627,10 @@ impl Emitter<'_, '_> {
         &self,
         n: u32,
     ) -> bool {
-        self.glue_reaches(n, |name| matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_"))
+        self.glue_reaches(n, |name| {
+            let name = name.split('|').next().unwrap_or(name);
+            matches!(name, "CDQ" | "CWD") || is_div_or_mul(name) || name.starts_with("REP_") || name.ends_with("rCL")
+        })
     }
 
     /// Whether the `CopyToReg` node `n` passes an argument in a register to

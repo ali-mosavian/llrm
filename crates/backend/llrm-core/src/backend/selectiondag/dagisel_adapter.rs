@@ -239,6 +239,8 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     Some(match register {
         x86::AH => RegId::AH,
         x86::AX => RegId::AX,
+        x86::CL => RegId::CL,
+        x86::CX => RegId::CX,
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
         x86::EDX => RegId::EDX,

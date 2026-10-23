@@ -709,3 +709,26 @@ fn an_m16_call_of_a_symbol_is_a_direct_call() {
         insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == crate::model::ir::Operation::Call).unwrap();
     assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
 }
+
+const VARIABLE_SHIFT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %n) {
+entry:
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+";
+
+/// The matcher copies the shift amount to `CL` with a glued `CopyToReg`, which
+/// the adapter turned into a copy to a virtual register (`CL` had no physical
+/// id): the shift read a `CL` nothing defined, and the LIR verifier said
+/// "value defined N times" (about 20 m32 programs once #4074 let them past
+/// "missing source").
+#[test]
+fn a_variable_shift_reads_the_amount_the_matcher_copied_to_cl() {
+    let module = llrm_mir::parse::module(VARIABLE_SHIFT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let shl = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("shl")).expect("a shl");
+    assert!(shl.sources.iter().all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "held values: {shl:?}");
+}
