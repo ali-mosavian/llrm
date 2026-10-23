@@ -4182,7 +4182,7 @@
 4181	syntax	15:4 syntax error
 4182	semantic	15:0 Identifier expected
 4183	semantic	15:0 Identifier expected
-4184	semantic	15:0 Identifier expected
+4184	syntax	15:5 syntax error
 4185	semantic	15:0 Identifier expected
 4186	semantic	15:0 Identifier expected
 4187	semantic	15:0 Identifier expected
@@ -4320,7 +4320,7 @@
 4319	semantic	15:0 Identifier expected
 4320	semantic	15:0 Identifier expected
 4321	syntax	15:7 syntax error
-4322	semantic	15:0 Identifier expected
+4322	syntax	15:7 syntax error
 4323	semantic	15:0 Identifier expected
 4324	syntax	15:0 syntax error
 4325	syntax	15:7 syntax error
@@ -8948,7 +8948,7 @@
 8947	syntax	15:3 syntax error
 8948	syntax	15:4 syntax error
 8949	syntax	15:0 syntax error
-8950	semantic	15:0 Statement unrecognizable
+8950	syntax	15:4 syntax error
 8951	syntax	15:0 syntax error
 8952	syntax	15:0 syntax error
 8953	ok	
@@ -9087,7 +9087,7 @@
 9086	syntax	15:0 syntax error
 9087	syntax	15:0 syntax error
 9088	syntax	15:6 syntax error
-9089	semantic	15:0 Statement unrecognizable
+9089	syntax	15:6 syntax error
 9090	syntax	15:6 syntax error
 9091	syntax	15:0 syntax error
 9092	syntax	15:6 syntax error
