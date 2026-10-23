@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
-use super::isd::ISD;
+use super::isd::{CondCode, ISD};
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 use super::x86_lowering::{ES, x86isd};
@@ -597,6 +597,9 @@ impl<'a> TypeLegalizer<'a> {
                 (les, selector)
             }
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
+            ISD::CtPop => self.expand_ctpop(value, half),
+            op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
+            op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
@@ -854,6 +857,54 @@ impl<'a> TypeLegalizer<'a> {
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_right]);
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_left]);
         Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_CTPOP`: the population count of both halves, added.
+    fn expand_ctpop(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+        let (lo_count, hi_count) =
+            (self.dag.get_node(ISD::CtPop, half, &[lo]), self.dag.get_node(ISD::CtPop, half, &[hi]));
+        (self.dag.get_node(ISD::Add, half, &[lo_count, hi_count]), self.dag.get_constant(0, half))
+    }
+
+    /// `ExpandIntRes_CTLZ`: the high half's count if it is not zero, else the
+    /// low half's plus the width of a half.
+    fn expand_ctlz(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+        let zero = self.dag.get_constant(0, half);
+        let hi_not_zero = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), hi, zero, CondCode::SetNe);
+        let lo_count = self.dag.get_node(op, half, &[lo]);
+        let hi_count = self.dag.get_node(ISD::CtLzZeroPoison, half, &[hi]);
+        let width = self.dag.get_constant(u128::from(half.size_in_bits()), half);
+        let lo_plus = self.dag.get_node(ISD::Add, half, &[lo_count, width]);
+        (self.dag.get_select(half, hi_not_zero, hi_count, lo_plus), zero)
+    }
+
+    /// `ExpandIntRes_CTTZ`: the low half's count if it is not zero, else the
+    /// high half's plus the width of a half.
+    fn expand_cttz(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+        let zero = self.dag.get_constant(0, half);
+        let lo_not_zero = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), lo, zero, CondCode::SetNe);
+        let lo_count = self.dag.get_node(ISD::CtTzZeroPoison, half, &[lo]);
+        let hi_count = self.dag.get_node(op, half, &[hi]);
+        let width = self.dag.get_constant(u128::from(half.size_in_bits()), half);
+        let hi_plus = self.dag.get_node(ISD::Add, half, &[hi_count, width]);
+        (self.dag.get_select(half, lo_not_zero, lo_count, hi_plus), zero)
     }
 
     /// `ExpandIntegerOperand`.
