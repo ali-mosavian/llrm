@@ -129,7 +129,11 @@ fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
                     }
                 }
             }
-            let ends = block.insns.last().and_then(|insn| insn.what.as_ref()).is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
+            let ends = block
+                .insns
+                .last()
+                .and_then(|insn| insn.what.as_ref())
+                .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
             if !ends {
                 if let Some(next) = emitted.get(i + 1) {
                     if !out.contains(&next.at) {
@@ -166,7 +170,11 @@ pub fn selected(
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let tables = tables(arch);
     let frame = Frame(
-        convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None }).collect(),
+        convention
+            .parameters
+            .iter()
+            .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
+            .collect(),
     );
     let mut hooks = X86Hooks::new(Options {
         cpu: Cpu::I486,
@@ -193,17 +201,9 @@ pub fn selected(
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(
-            module,
-            function,
-            &layout,
-            &BuilderTarget::m32(),
-            arch,
-            &convention,
-            &mut info,
-            block,
-        )
-        .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        let mut built =
+            build_block(module, function, &layout, &BuilderTarget::m32(), arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
         if !built.live_ins.is_empty() || !built.extra.is_empty() {
             return refuse("register arguments or a switch lowering");
         }
@@ -236,7 +236,8 @@ pub fn selected(
             let at = block_at[&phi_block.0];
             let Some(reg_out) = info.value_regs.get(phi) else { return refuse("a phi with no register") };
             let (result, incoming) = (state.vreg(*reg_out), state.vreg(*reg_in));
-            let edges: Vec<i64> = made[&pred.0].clone().filter(|i| succ[*i].contains(&at)).map(|i| emitted[i].at).collect();
+            let edges: Vec<i64> =
+                made[&pred.0].clone().filter(|i| succ[*i].contains(&at)).map(|i| emitted[i].at).collect();
             let target = made[&phi_block.0].start;
             for edge in edges {
                 let block = &mut emitted[target];

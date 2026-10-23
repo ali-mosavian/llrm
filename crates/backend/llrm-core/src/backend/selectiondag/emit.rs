@@ -135,7 +135,10 @@ impl Default for EmitState {
 
 impl EmitState {
     /// The LIR value a virtual register of the DAG is, made on first use.
-    pub fn vreg(&mut self, reg: u32) -> u32 {
+    pub fn vreg(
+        &mut self,
+        reg: u32,
+    ) -> u32 {
         if let Some(&v) = self.vregs.get(&reg) {
             return v;
         }
@@ -367,7 +370,8 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> bool {
         let ISD::Machine(op) = self.dag.opcode(value) else { return false };
-        instr::desc(op as u16).is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
+        instr::desc(op as u16)
+            .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
     }
 
     /// Opcodes `x86.instr` has no row for but LIR has a form of: the constant
@@ -390,7 +394,12 @@ impl Emitter<'_, '_> {
         if let Some(value) = constant {
             let held = self.fresh(width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value, width, address: None })]);
+            self.push(
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(held)],
+                vec![Loc::Imm(Imm { value, width, address: None })],
+            );
             return Ok(Some(()));
         }
         match name {
@@ -416,10 +425,16 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self.cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                let cell = self
+                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
-                self.push(Operation::Address, "lea", vec![Loc::Held(held)], vec![if cell.addr.is_some() { Loc::Address(cell.address()) } else { Loc::Mem(cell) }]);
+                self.push(
+                    Operation::Address,
+                    "lea",
+                    vec![Loc::Held(held)],
+                    vec![if cell.addr.is_some() { Loc::Address(cell.address()) } else { Loc::Mem(cell) }],
+                );
                 Ok(Some(()))
             }
             _ => Ok(None),
@@ -450,7 +465,10 @@ impl Emitter<'_, '_> {
                 .find_map(|op| self.dag.constant(*op))
                 .ok_or_else(|| EmitError::Unsupported("a branch without a condition".to_owned()))?
                 as usize;
-            (Operation::Branch, *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?)
+            (
+                Operation::Branch,
+                *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?,
+            )
         } else {
             (Operation::Jump, "jmp")
         };
