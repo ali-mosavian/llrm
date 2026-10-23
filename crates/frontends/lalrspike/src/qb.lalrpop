@@ -316,6 +316,7 @@ LineStart: Tree = {
     <n:Ident> "tkColon" <s:Stmts> => Tree::node("Label", vec![n, s]),
     <n:Ident> => Tree::node("Call", vec![n]),
     <s:SimpleNoBare> <t:Tail> => Tree::List(vec![s, t]),
+    <s:DataStmt> <t:TailColon> => Tree::List(vec![s, t]),
     <h:Head> <s:StmtsAfterHead> => Tree::List(vec![h, s]),
     "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
     "tkColon" <s:Stmts> => s,
@@ -324,6 +325,7 @@ LineStart: Tree = {
 Stmts: Tree = {
     Nil,
     <s:Simple> <t:Tail> => Tree::List(vec![s, t]),
+    <s:DataStmt> <t:TailColon> => Tree::List(vec![s, t]),
     <h:Head> <s:StmtsAfterHead> => Tree::List(vec![h, s]),
     "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
 };
@@ -338,6 +340,13 @@ Tail: Tree = {
     Nil,
     "tkColon" <s:Stmts> => s,
     "tkELSE" <s:StmtsAfterHead> => Tree::node("ELSE", vec![s]),
+};
+
+// DATA runs to a colon or the line end: ELSE is data to it (checked with BC 4.5, PDS 7.1 and VBDOS)
+DataStmt: Tree = "tkDATA" <e:Sep<DataItem>> => Tree::node("DATA", vec![e]);
+TailColon: Tree = {
+    Nil,
+    "tkColon" <s:Stmts> => s,
 };
 
 Head: Tree = {
@@ -357,8 +366,11 @@ SimpleNoBare: Tree = {
     // `data = 1`, `error = 3`: a statement word shadowed by a variable, told by the `=`
     <t:CtxName> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
     <t:ErrName> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
+    <k:Fn0Var> "tkEQ" <e:Exp> => Tree::node("Assign", vec![Tree::tok(k), e]),
     // `Graphics.Init` and `obj.Method a, b`: a dotted name called as a statement
     <r:NameRef> "period" <f:FieldName> => Tree::node("CallField", vec![r, f]),
+    <k:ObjWord> "period" <f:FieldName> => Tree::node("CallField", vec![Tree::tok(k), f]),
+    <k:ObjWord> "period" <f:FieldName> <a:ExpListNP> => Tree::node("CallFieldArgs", vec![Tree::tok(k), f, a]),
     <r:NameRef> "period" <f:FieldName> <a:ExpListNP> => Tree::node("CallFieldArgs", vec![r, f, a]),
     // `foo a, b`: a call without CALL or parentheses
     <n:Ident> <a:ExpListNP> => Tree::node("CallArgs", vec![n, a]),
@@ -408,6 +420,8 @@ Flow: Tree = {
     "tkERROR" <e:Exp> => Tree::node("ERROR", vec![e]),
     "tkON" "tkERROR" "tkGOTO" <l:LabLn> => Tree::node("ONERROR", vec![l]),
     "tkON" "tkLOCAL" "tkERROR" "tkGOTO" <l:LabLn> => Tree::node("ONLOCALERROR", vec![l]),
+    "tkON" "tkLOCAL" "tkERROR" "tkRESUME" "tkNEXT" => Tree::node("ONLOCALERRORRESUME", vec![]),
+    "tkON" "tkERROR" "tkRESUME" "tkNEXT" => Tree::node("ONERRORRESUME", vec![]),
     "tkON" <e:OnEvent> "tkGOSUB" <l:LabLn> => Tree::node("ONEVENT", vec![e, l]),
     // PEN, PLAY(n) and STRIG(n) traps are `ON expr GOSUB` with a function
     // call for expr, read by a pass that knows the trap spellings
@@ -461,6 +475,8 @@ Declaration: Tree = {
     "tkERASE" <l:Sep<ArrayName>> => Tree::node("ERASE", vec![l]),
     "tkDECLARE" <k:ProcKind> <n:ProcName> <c:Opt<CdeclAlias>> <p:Parms> <r:OptReturnAs> => Tree::node("DECLARE", vec![k, n, c, p, r]),
         <p:ProcStmt> => p,
+    // PDS and VBDOS: STATIC before SUB and FUNCTION
+    "tkSTATIC" <p:ProcStmt> => p,
     // PRIVATE (QuickrBASIC) is a name before SUB and FUNCTION, checked later
     <x:Ident> <p:ProcStmt> => p,
     "tkDEF" <n:Ident> <p:Parms> <e:("tkEQ" <Exp>)?> => Tree::node("DEFFN", vec![n, p, Tree::opt(e)]),
@@ -492,7 +508,7 @@ Parms: Tree = {
     "tkLParen" <l:Opt<Sep<Parm>>> "tkRParen" => l,
 };
 Parm: Tree = {
-    <m:Opt<ParmMode>> <i:Ident> <p:Opt<ParmBounds>> <a:OptAs> => Tree::node("Parm", vec![m, i, a]),
+    <m:Opt<ParmMode>> <i:VarWordBase> <p:Opt<ParmBounds>> <a:OptAs> => Tree::node("Parm", vec![m, i, a]),
 };
 ParmMode: Tree = { Kws<"tkBYVAL">, Kws<"tkSEG"> };
 // `Args$()` or `Args$(1)`: an array parameter, its bounds an argument list
@@ -531,7 +547,6 @@ LetterRange: Tree = <a:Ident> <b:("tkMinus" <Ident>)?> => Tree::node("Range", ve
 // ---- data and files -------------------------------------------------------------
 
 Data: Tree = {
-    "tkDATA" <e:Sep<OptExp>> => Tree::node("DATA", vec![e]),
     "tkREAD" <l:Sep<NameRef>> => Tree::node("READ", vec![l]),
     "tkRESTORE" <l:Opt<LabLn>> => Tree::node("RESTORE", vec![l]),
     "tkLET" <t:NameRef> "tkEQ" <e:Exp> => Tree::node("Assign", vec![t, e]),
@@ -638,7 +653,11 @@ OpenTail: Tree = {
     // OPEN "I", #1, "file"[, len]
     "tkComma" <f:Filenum> "tkComma" <n:Exp> <r:("tkComma" <Exp>)?> => Tree::node("Classic", vec![f, n, Tree::opt(r)]),
 };
-OpenMode: Tree = "tkFOR" <m:OpenModeWord> => m;
+OpenMode: Tree = {
+    "tkFOR" <m:OpenModeWord> => m,
+    // PDS ISAM: FOR ISAM table "name"
+    "tkFOR" <i:Ident> <t:Ident> <n:Exp> => Tree::node("ISAM", vec![i, t, n]),
+};
 OpenModeWord: Tree = { Kws<"tkAPPEND">, Kws<"tkINPUT">, Kws<"tkOUTPUT">, Kws<"tkRANDOM">, Kws<"tkBINARY"> };
 OpenAccess: Tree = {
     "tkACCESS" "tkREAD" <w:Opt<Kws<"tkWRITE">>> => Tree::node("Access", vec![w]),
@@ -754,10 +773,13 @@ NameRef: Tree = {
     NameRefApplied,
     <r:NameRef> "period" <i:FieldName> => Tree::node("Field", vec![r, i]),
     "fnword" <i:Ident> => Tree::node("Name", vec![i]),
+    // VBDOS objects named like words: `SCREEN.Mousepointer`, `Screen.HIDE`
+    <k:ObjWord> "period" <f:FieldName> => Tree::node("Field", vec![Tree::tok(k), f]),
     // a function's name used as a variable
     <k:FnKeyword> => Tree::node("Name", vec![k]),
 };
 NameRefApplied: Tree = {
+    <k:ObjWord> "period" <f:FieldName> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("FieldApply", vec![Tree::tok(k), f, a]),
     "fnword" <i:Ident> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("Apply", vec![i, a]),
     <i:Ident> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("Apply", vec![i, a]),
     <r:NameRef> "period" <i:FieldName> "tkLParen" <a:ArgList> "tkRParen" => Tree::node("FieldApply", vec![r, i, a]),
@@ -769,11 +791,13 @@ ArgList: Tree = { Nil, ExpList };
 ExpList: Tree = Sep<ArgItem>;
 ArgItem: Tree = {
     Exp,
+    <m:ParmMode> <e:Exp> => Tree::node("Mode", vec![m, e]),
     <a:Exp> "tkTO" <b:Exp> => Tree::node("To", vec![a, b]),
 };
 ExpListNP: Tree = {
     <e:ExpNP> => Tree::List(vec![e]),
-    <l:ExpListNP> "tkComma" <e:Exp> => Tree::push(l, e),
+    <m:ParmMode> <e:Exp> => Tree::List(vec![Tree::node("Mode", vec![m, e])]),
+    <l:ExpListNP> "tkComma" <e:ArgItem> => Tree::push(l, e),
 };
 OptExp: Tree = Opt<Exp>;
 OptExpList: Tree = Sep<OptExp>;
@@ -861,6 +885,7 @@ Function: Tree = {
     <k:FnBound> "tkLParen" <a:NameRef> <b:("tkComma" <Exp>)?> "tkRParen" => Tree::node("Fn", vec![Tree::tok(k), a, Tree::opt(b)]),
     <k:FnRef> "tkLParen" <a:NameRef> "tkRParen" => Tree::node("Fn", vec![Tree::tok(k), a]),
     "tkPOINT" "tkLParen" <a:Exp> <b:("tkComma" <Exp>)?> "tkRParen" => Tree::node("Fn", vec![a, Tree::opt(b)]),
+    "tkERROR" <a:Paren1> => Tree::node("Fn", vec![a]),
     "tkRND" <a:Opt<Paren1>> => Tree::node("Fn", vec![a]),
     "tkINPUT_" "tkLParen" <a:Exp> <b:("tkComma" <Filenum>)?> "tkRParen" => Tree::node("Fn", vec![a, Tree::opt(b)]),
     "tkIOCTL_" "tkLParen" <a:Filenum> "tkRParen" => Tree::node("Fn", vec![a]),
@@ -884,3 +909,18 @@ AnyWord: Tok = { "tkABS", "tkACCESS", "tkALIAS", "tkAND", "tkANY", "tkAPPEND", "
 // words stay reserved, as in the table-driven parser.
 CtxName: Tree = <t:CtxWord> => Tree::node("Name", vec![Tree::tok(t)]);
 CtxWord: Tok = { "tkACCESS", "tkANY", "tkAPPEND", "tkBASE", "tkBEEP", "tkBINARY", "tkBLOAD", "tkBSAVE", "tkCALLS", "tkCHAIN", "tkCHDIR", "tkCIRCLE", "tkCLEAR", "tkCLOSE", "tkCLS", "tkCOLOR", "tkCOMMON", "tkDATA", "tkDEF", "tkDEFDBL", "tkDEFINT", "tkDEFLNG", "tkDEFSNG", "tkDEFSTR", "tkDOUBLE", "tkDRAW", "tkENDIF", "tkENVIRON", "tkERASE", "tkFIELD", "tkFILES", "tkGET", "tkGOSUB", "tkINPUT", "tkINTEGER", "tkIOCTL", "tkKILL", "tkLINE", "tkLIST", "tkLOCAL", "tkLOCATE", "tkLOCK", "tkLONG", "tkLSET", "tkMKDIR", "tkNAME", "tkOPEN", "tkOUT", "tkOUTPUT", "tkPAINT", "tkPALETTE", "tkPCOPY", "tkPOKE", "tkPRESET", "tkPRINT", "tkPSET", "tkPUT", "tkRANDOM", "tkRANDOMIZE", "tkREAD", "tkREDIM", "tkRESET", "tkRESTORE", "tkRESUME", "tkRETURN", "tkRMDIR", "tkRSET", "tkRUN", "tkSINGLE", "tkSLEEP", "tkSOUND", "tkSPC", "tkSTRING", "tkSWAP", "tkSYSTEM", "tkTAB", "tkTROFF", "tkTRON", "tkUNLOCK", "tkVIEW", "tkWAIT", "tkWIDTH", "tkWINDOW", "tkWRITE" };
+
+// DATA is text to the end of the statement: any tokens between the commas.
+// the first token is not AS: `DATA AS INTEGER` declares a member named DATA
+DataItem: Tree = {
+    => Tree::Empty,
+    DataFirst DataRest* => Tree::Empty,
+};
+DataFirst: Tok = { "tkEtInteger", "tkEtLong", "tkEtSingle", "tkLbs", "tkEtString", "tkDQuote", "tkIdiv", "tkHTab", "tkPwr", "tkUScore", "tkSQuote", "tkLParen", "tkRParen", "tkMult", "tkAdd", "tkMinus", "tkDiv", "tkSColon", "tkLT", "tkGT", "tkQMark", "tkABS", "tkACCESS", "tkALIAS", "tkAND", "tkANY", "tkAPPEND", "tkASC", "tkATN", "tkBASE", "tkBEEP", "tkBINARY", "tkBLOAD", "tkBSAVE", "tkBYVAL", "tkCALL", "tkCALLS", "tkCASE", "tkCDBL", "tkCDECL", "tkCHAIN", "tkCHDIR", "tkCHR_", "tkCINT", "tkCIRCLE", "tkCLEAR", "tkCLNG", "tkCLOSE", "tkCLS", "tkCOLOR", "tkCOM", "tkCOMMAND_", "tkCOMMON", "tkCONST", "tkCOS", "tkCSNG", "tkCSRLIN", "tkCVD", "tkCVDMBF", "tkCVI", "tkCVL", "tkCVS", "tkCVSMBF", "tkDATA", "tkDATE_", "tkDECLARE", "tkDEF", "tkDEFDBL", "tkDEFINT", "tkDEFLNG", "tkDEFSNG", "tkDEFSTR", "tkDIM", "tkDO", "tkDOUBLE", "tkDRAW", "tkELSEIF", "tkEND", "tkENDIF", "tkENVIRON", "tkENVIRON_", "tkEOF", "tkEQV", "tkERASE", "tkERDEV", "tkERDEV_", "tkERL", "tkERR", "tkERROR", "tkEXIT", "tkEXP", "tkFIELD", "tkFILEATTR", "tkFILES", "tkFIX", "tkFOR", "tkFRE", "tkFREEFILE", "tkFUNCTION", "tkGET", "tkGOSUB", "tkGOTO", "tkHEX_", "tkIF", "tkIMP", "tkINKEY_", "tkINP", "tkINPUT", "tkINPUT_", "tkINSTR", "tkINT", "tkINTEGER", "tkIOCTL", "tkIOCTL_", "tkIS", "tkKEY", "tkKILL", "tkLBOUND", "tkLCASE_", "tkLEFT_", "tkLEN", "tkLET", "tkLINE", "tkLIST", "tkLOC", "tkLOCAL", "tkLOCATE", "tkLOCK", "tkLOF", "tkLOG", "tkLONG", "tkLOOP", "tkLPOS", "tkLPRINT", "tkLSET", "tkLTRIM_", "tkMID_", "tkMKD_", "tkMKDIR", "tkMKDMBF_", "tkMKI_", "tkMKL_", "tkMKS_", "tkMKSMBF_", "tkMOD", "tkNAME", "tkNEXT", "tkNOT", "tkOCT_", "tkOFF", "tkON", "tkOPEN", "tkOPTION", "tkOR", "tkOUT", "tkOUTPUT", "tkPAINT", "tkPALETTE", "tkPCOPY", "tkPEEK", "tkPEN", "tkPLAY", "tkPMAP", "tkPOINT", "tkPOKE", "tkPOS", "tkPRESET", "tkPRINT", "tkPSET", "tkPUT", "tkRANDOM", "tkRANDOMIZE", "tkREAD", "tkREDIM", "tkREM", "tkRESET", "tkRESTORE", "tkRESUME", "tkRETURN", "tkRIGHT_", "tkRMDIR", "tkRND", "tkRSET", "tkRTRIM_", "tkRUN", "tkSADD", "tkSCREEN", "tkSEEK", "tkSEG", "tkSELECT", "tkSETMEM", "tkSGN", "tkSHARED", "tkSHELL", "tkSIGNAL", "tkSIN", "tkSINGLE", "tkSLEEP", "tkSOUND", "tkSPACE_", "tkSPC", "tkSQR", "tkSTATIC", "tkSTEP", "tkSTICK", "tkSTOP", "tkSTR_", "tkSTRIG", "tkSTRING_", "tkSTRING", "tkSUB", "tkSWAP", "tkSYSTEM", "tkTAB", "tkTAN", "tkTHEN", "tkTIME_", "tkTIMER", "tkTO", "tkTROFF", "tkTRON", "tkTYPE", "tkUBOUND", "tkUCASE_", "tkUEVENT", "tkUNLOCK", "tkUNTIL", "tkUSING", "tkVAL", "tkVARPTR", "tkVARPTR_", "tkVARSEG", "tkVIEW", "tkWAIT", "tkWEND", "tkWHILE", "tkWIDTH", "tkWINDOW", "tkWRITE", "tkXOR", "ident", "int", "real", "str", "format", "le", "ne", "ge", "ext", "dynamic", "static", "fnword", "tkELSE" };
+DataRest: Tok = { DataFirst, "tkAS", "period", "tkEQ" };
+
+// the words an object may be named, `SCREEN.Mousepointer`, that no name rule already takes
+ObjWord: Tok = { "tkACCESS", "tkANY", "tkAPPEND", "tkBASE", "tkBEEP", "tkBINARY", "tkBLOAD", "tkBSAVE", "tkCALLS", "tkCHAIN", "tkCHDIR", "tkCIRCLE", "tkCLEAR", "tkCLOSE", "tkCLS", "tkCOLOR", "tkCOMMON", "tkDATA", "tkDEF", "tkDEFDBL", "tkDEFINT", "tkDEFLNG", "tkDEFSNG", "tkDEFSTR", "tkDOUBLE", "tkDRAW", "tkENDIF", "tkENVIRON", "tkERASE", "tkFIELD", "tkFILES", "tkGET", "tkGOSUB", "tkINPUT", "tkINTEGER", "tkIOCTL", "tkKILL", "tkLINE", "tkLIST", "tkLOCAL", "tkLOCATE", "tkLOCK", "tkLONG", "tkLSET", "tkMKDIR", "tkNAME", "tkOPEN", "tkOUT", "tkOUTPUT", "tkPAINT", "tkPALETTE", "tkPCOPY", "tkPOKE", "tkPRESET", "tkPRINT", "tkPSET", "tkPUT", "tkRANDOM", "tkRANDOMIZE", "tkREAD", "tkREDIM", "tkRESET", "tkRESTORE", "tkRESUME", "tkRETURN", "tkRMDIR", "tkRSET", "tkRUN", "tkSINGLE", "tkSLEEP", "tkSOUND", "tkSPC", "tkSTRING", "tkSWAP", "tkSYSTEM", "tkTAB", "tkTROFF", "tkTRON", "tkUNLOCK", "tkVIEW", "tkWAIT", "tkWIDTH", "tkWINDOW", "tkWRITE", "tkCOMMAND_", "tkCSRLIN", "tkDATE_", "tkERDEV", "tkERDEV_", "tkERL", "tkERR", "tkFREEFILE", "tkINKEY_", "tkTIME_", "tkTIMER", "tkPEN", "tkPLAY", "tkSEEK", "tkSHELL", "tkSTRIG", "tkMID_", "tkSCREEN", "tkERROR", "tkRND" };
+
+// a function without arguments used as a variable (`ERR = 0`); DATE$ and TIME$ are the statements
+Fn0Var: Tok = { "tkCOMMAND_", "tkCSRLIN", "tkERDEV", "tkERDEV_", "tkERL", "tkERR", "tkFREEFILE", "tkINKEY_", "tkTIMER" };
