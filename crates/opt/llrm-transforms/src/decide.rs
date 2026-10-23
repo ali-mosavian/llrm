@@ -435,7 +435,10 @@ pub fn _executable_successors(
 /// before the header (its one entry), the one latch, or an exit block only the
 /// loop reaches. A pass that takes them out meets `loopsimplify` putting them
 /// back, round after round.
-pub(crate) fn loop_form_blocks(function: &Function, loops: Option<Vec<llrm_analysis::graph::loops::Loop>>) -> BTreeSet<i64> {
+pub(crate) fn loop_form_blocks(
+    function: &Function,
+    loops: Option<Vec<llrm_analysis::graph::loops::Loop>>,
+) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
     // The answer reads the graph alone, and a function met again after passes
     // that left its blocks and edges as they were is asked again (d_faces -O2:

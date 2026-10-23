@@ -956,3 +956,41 @@ x:
     assert!(gone_changed && !gone.contains("\ne:\n"), "{gone}");
     assert!(gone.contains("br i1 %c, label %h, label %a"), "{gone}");
 }
+
+/// The loop-form blocks were derived by `loops_of` at each run though the
+/// manager held the function's loops (d_faces -O2: 36 asks, 4.9 M Ir). With the
+/// CFG as the manager found it they are read from its loops: none is derived.
+#[test]
+fn test_the_loop_form_blocks_come_from_the_managers_loops_while_the_cfg_stands() {
+    let mut module = crate::testing::parsed(
+        "define i16 @f(i16 %n, i1 %c, i1 %d) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b4 ]
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b4
+
+b3:
+  br i1 %d, label %b4, label %b5
+
+b4:
+  %j = add i16 %i, 1
+  %k = icmp slt i16 %j, %n
+  br i1 %k, label %b1, label %b5
+
+b5:
+  ret i16 %j
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::simplifycfg::SimplifyCfg::default());
+    let before = llrm_analysis::cfg::shapes_derived();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    let derived = llrm_analysis::cfg::shapes_derived() - before;
+    assert_eq!(derived, 0, "the pass derived loops the manager held");
+}
