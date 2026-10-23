@@ -1049,3 +1049,29 @@ fn two_selects_on_one_compare_are_one_branch() {
     let phis: Vec<usize> = done.body.blocks.iter().map(|b| b.phis.len()).collect();
     assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
+
+const FLOAT_TO_INT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(double %x) {
+entry:
+  %r = fptosi double %x to i32
+  ret i32 %r
+}
+";
+
+/// A float truncated to an integer is a `fistt` of the value to a cell (the
+/// pin's `FP64_TO_INT32_IN_MEM`, whose control-word dance `floatalloc` makes);
+/// 22 programs stopped at `Unmapped(FP*_TO_INT*_IN_MEM)`.
+#[test]
+fn a_float_to_int_conversion_is_a_truncating_store() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_TO_INT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let store = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::FloatStore && w.name.as_deref() == Some("fistt"))
+        .expect("a fistt");
+    assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.width == 4), "{store:?}");
+}
