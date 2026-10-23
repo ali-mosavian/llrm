@@ -65,6 +65,35 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
+/// A memmove a pass proved to run forward (`!llrm.forward`) is a memcpy, as the
+/// old selector lowers it. The DAG path refused it where the runtime has no
+/// `memmove` (5 m16 programs, idioms and idiom_edges, under `LLRM_ISEL_REAL`).
+#[test]
+fn a_forward_move_is_a_copy() {
+    let forward = BODY.replace(
+        "@llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)",
+        "@llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false), !llrm.forward !0",
+    ) + "!0 = !{}\n";
+    assert_ne!(forward, BODY);
+    let module = llrm_mir::parse::module(&forward).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("move")).unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let built = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m32().with_libcalls(&[]),
+        &llrm_x86_m32::M32,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(built.dag.dump().contains("REP_MOVS"), "{}", built.dag.dump());
+}
+
 /// The libcalls the m32 runtime's `c.toml` names, read from the file.
 fn real_m32_fact() -> Vec<String> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c/x86-m32/c.toml");
@@ -90,5 +119,38 @@ fn the_real_m32_fact_names_memcpy_memmove_and_memset() {
     for function in ["fill", "move", "copy"] {
         let why = built(function, &BuilderTarget::m32()).expect_err(function);
         assert!(why.contains("symbol and convention are the target fact's"), "{function}: {why}");
+    }
+}
+
+/// Every routine a runtime's `c.toml` lists in `libcalls` is defined in the
+/// runtime (its `ext.asm` and the files it includes), under the name its
+/// register ABI gives (`memmove_`) or the stack one (`_memmove`): a call of one
+/// that is not there does not link.
+#[test]
+fn every_libcall_a_c_toml_names_is_in_its_runtime() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c");
+    for entry in std::fs::read_dir(&root).expect("runtime/c") {
+        let directory = entry.expect("entry").path();
+        let Ok(text) = std::fs::read_to_string(directory.join("c.toml")) else { continue };
+        let table: toml::Table = text.parse().expect("parses");
+        let names: Vec<&str> = table
+            .get("libcalls")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        let mut source = std::fs::read_to_string(directory.join("ext.asm")).expect("ext.asm");
+        for line in source.clone().lines().filter_map(|line| line.trim().strip_prefix("include ")) {
+            source += &std::fs::read_to_string(directory.join(line.trim())).expect("an included file");
+        }
+        for name in names {
+            let defined = |symbol: String| source.lines().any(|line| line.trim() == format!("public {symbol}"));
+            assert!(
+                defined(format!("{name}_")) || defined(format!("_{name}")),
+                "{}: libcalls names {name}, which no `public` of ext.asm defines",
+                directory.display()
+            );
+        }
     }
 }
