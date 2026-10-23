@@ -537,8 +537,22 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
     return f"#{number}: REFUSED: {why}"
 
 
-def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool:
-    """Squash PR `number` into feat/parity. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+def waiting(number: str, path: str | None = None) -> bool:
+    """Whether `number` is in waits.txt (an owner's hold) now: read from the file at every call, not once at the batch's start. The queue is built from it before a batch, and a PR
+    held while the batch ran landed anyway (#4057, 2026-10-23). `WAITS` is the live file of the queue runner; the batch's checkout has the committed one."""
+    live = Path(path or os.environ.get("WAITS") or ROOT / "tools/landing/waits.txt")
+    try:
+        text = live.read_text()
+    except OSError:
+        return False
+    return number in re.sub(r"#.*", "", text).split()
+
+
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5) -> bool | None:
+    """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    if waiting(number):
+        print(f"#{number}: HELD: in waits.txt now; not pushed")
+        return None
     if FAST and info["mergeable"] == "CONFLICTING":
         if not (fresh := update(info["headRefOid"], info["headRefName"])):
             return False
@@ -781,7 +795,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
-    landed, refused = [], []
+    landed, refused, held = [], [], []
 
     left_out: dict[str, str] = {}
     failed_units: set[str] = set()
@@ -904,6 +918,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number in left_out:
             refused.append(number)
             return
+        if waiting(number):  # before the formatted head is pushed to the PR's branch
+            print(f"#{number}: HELD: in waits.txt now; not pushed")
+            held.append(number)
+            return
         sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
         if not sha:
             print(f"#{number}: REFUSED: {why}")
@@ -918,6 +936,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                     break
                 time.sleep(5)
         landed_ok = squash(number, infos[number], known_red_line(known))
+        if landed_ok is None:
+            held.append(number)
+            return
         (landed if landed_ok else refused).append(number)
         if landed_ok:
             git("fetch", "-q", "origin", "feat/parity")
@@ -927,7 +948,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         batch(list(numbers), passes, land, refuse, offending if FAST else None)
-    print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}")
+    print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}" + (f"  HELD: {' '.join('#' + n for n in held)}" if held else ""))
     return 1 if refused else 0
 
 

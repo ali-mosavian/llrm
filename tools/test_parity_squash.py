@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity_squash as ps  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 
 def sh(repo: Path, *args: str) -> str:
@@ -1009,3 +1010,23 @@ def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_re
     assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
     assert "scanners: " in capsys.readouterr().out
+
+
+def test_a_pr_added_to_waits_during_the_batch_is_not_pushed_and_is_held(tmp_path, monkeypatch):
+    """#4057 landed through a hold the coordinator added while its batch ran: waits.txt was read once, to build the queue. The squash reads it again."""
+    waits = tmp_path / "waits.txt"
+    waits.write_text("# owner waits\n2697 # parked\n")
+    monkeypatch.setenv("WAITS", str(waits))
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("4057", info, "body", run=run) is True and calls, "not held: squashed"
+    calls.clear()
+    waits.write_text("# owner waits\n2697 # parked\n4057 # held mid-batch\n")
+    assert ps.squash("4057", info, "body", run=run) is None
+    assert not calls, "nothing was pushed or merged"
+    assert ps.waiting("4057") and not ps.waiting("405") and not ps.waiting("2698")
