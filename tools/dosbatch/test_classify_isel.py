@@ -65,3 +65,11 @@ def test_ssa_and_address_verify_failures_have_causes():
     )
     rows, unclassified = classify_isel.classify(log)
     assert unclassified == [] and len(rows) == 2
+
+
+def test_a_value_read_before_it_is_defined_is_an_emit_row_of_sdag_d():
+    """The check lives in the emitter (dag_function.rs), not the builder: 39 programs of run 13 were put in sdag-a's rows."""
+    log = 'FAIL  c/a.c [-O2]: compile: llrm-c: @_f: --isel=dag: --isel=dag: value 59 is read and not defined on every path (Some("mov"))\n'
+    rows, unclassified = classify_isel.classify(log)
+    assert unclassified == []
+    assert list(rows) == [('emit: a value read before it is defined on every path (Some("mov"))', "sdag-d")]
