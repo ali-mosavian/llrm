@@ -1021,6 +1021,11 @@ impl Builder<'_> {
         let vt = self.type_of(constant.ty)?;
         match &constant.kind {
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
+            // MIR holds an `x86_fp80` constant as the double nearest its value;
+            // the DAG's is the 80-bit encoding.
+            ConstantKind::Float(bits) if vt == EVT::Simple(MVT::F80) => {
+                Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
+            }
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
@@ -1862,5 +1867,89 @@ impl Builder<'_> {
         }
         self.constants_out.clear();
         Ok(())
+    }
+}
+
+/// The x87 extended encoding (sign, 15-bit exponent, explicit-integer 64-bit
+/// mantissa) of the IEEE double with these bits.
+pub(super) fn f80_from_double_bits(bits: u64) -> u128 {
+    let sign = u128::from(bits >> 63) << 79;
+    let exponent = ((bits >> 52) & 0x7FF) as i32;
+    let fraction = bits & ((1 << 52) - 1);
+    let (exponent, mantissa) = match (exponent, fraction) {
+        (0, 0) => return sign,
+        // infinity and NaN keep their payload below the integer bit
+        (0x7FF, _) => (0x7FFF, 1u64 << 63 | fraction << 11),
+        // a double denormal is a normal extended number
+        (0, _) => {
+            let top = 63 - fraction.leading_zeros() as i32;
+            (16383 + top - 1074, fraction << (63 - top))
+        }
+        _ => (exponent - 1023 + 16383, 1u64 << 63 | fraction << 11),
+    };
+    sign | (exponent as u128) << 64 | u128::from(mantissa)
+}
+
+#[cfg(test)]
+mod f80_tests {
+    use llrm_mir::datalayout::DataLayout;
+
+    use super::super::function_lowering::FunctionLoweringInfo;
+    use super::super::isd::ISD;
+    use super::super::mvt::MVT;
+    use super::super::dag::NodeData;
+    use super::{BuilderTarget, build_block, f80_from_double_bits};
+
+    /// A long double constant in a block is the x87 encoding in the DAG, for
+    /// the pool and for `fldz`/`fld1`.
+    #[test]
+    fn a_long_double_constant_is_built_in_the_extended_encoding() {
+        let text = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"\ndefine void @f(ptr %p) {\n  store x86_fp80 3.5, ptr %p\n  ret void\n}\n";
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let dag = build_block(
+            &module,
+            function,
+            &layout,
+            &BuilderTarget::m32(),
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0))
+        .dag;
+        let bits: Vec<u128> = dag
+            .nodes()
+            .iter()
+            .filter(|node| node.opcode == ISD::ConstantFP && node.values[0] == MVT::F80.into())
+            .filter_map(|node| match node.data {
+                NodeData::ConstFp { bits } => Some(bits),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bits, [0x4000_E000_0000_0000_0000]);
+    }
+
+    /// `long double a = 1.0l; b = 3.5l; c = -2.25l;` stored the double's bits
+    /// as the extended encoding, so the pool held garbage and the program
+    /// printed 0 for 126 (long_double_constant_store.c).
+    #[test]
+    fn a_double_is_re_encoded_as_x87_extended() {
+        for (value, extended) in [
+            (1.0f64, 0x3FFF_8000_0000_0000_0000u128),
+            (3.5, 0x4000_E000_0000_0000_0000),
+            (-2.25, 0xC000_9000_0000_0000_0000),
+            (0.0, 0),
+            (-0.0, 1 << 79),
+            (0.5, 0x3FFE_8000_0000_0000_0000),
+            (f64::INFINITY, 0x7FFF_8000_0000_0000_0000),
+            (f64::MIN_POSITIVE / 2.0, 0x3C00_8000_0000_0000_0000),
+        ] {
+            assert_eq!(f80_from_double_bits(value.to_bits()), extended, "{value}");
+        }
     }
 }
