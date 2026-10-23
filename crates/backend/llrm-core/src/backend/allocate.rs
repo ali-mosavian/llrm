@@ -2668,7 +2668,7 @@ impl RegAlloc {
         pins.extend(constrain::required(&body, &self.classes));
         let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
-        // allocation (`spiller::slots_colored`).
+        // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
         let allocated = greedy_rewritten(
             &body,
@@ -2691,8 +2691,9 @@ impl RegAlloc {
             spilled.len(),
             last_resorts() - before
         );
-        let colored =
-            llrm_support::debug::timed("spill slots shared", || spiller::slots_colored(&out, &mut frame.borrow_mut()));
+        let colored = llrm_support::debug::timed("spill slots shared", || {
+            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+        });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)
             .map(|placed| datagroup::restored(&placed, data_free, &segments))
