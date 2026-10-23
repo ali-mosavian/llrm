@@ -17,18 +17,20 @@
 | `load`/`store` through a far pointer | ordinary `load`/`store` whose pointer operand has type `far` |
 | `icmp` on far pointers | `setcc` on `far` (SD2 expands to both halves) |
 | `phi`, `select`, arguments, results | `far` virtual registers (SD2 `CopyToReg`/`CopyFromReg`) |
-| `gep` on a far pointer | `build_pair(selector, add(offset, index))`: 16-bit wrap, selector kept |
-| `gep` on a huge pointer | `llrm.ia16.huge.add` open question 3 |
+| `gep` on a far pointer | `build_pair(add(offset, index), selector)`: 16-bit wrap, selector kept |
+| `gep` on a huge pointer | `X86ISD::HUGE_ADD far, i32 delta` -> far (delta: the whole byte displacement, sign-extended and scaled) |
 | `addrspacecast` far to huge, huge to far | no node: same two words |
 | `addrspacecast` far to near | `truncate` (offset) |
 | `addrspacecast` far to bare segment | `extract_element` (selector) |
-| `addrspacecast` near to far | `build_pair(selector, offset)`, selector from open question 1 |
-| `inttoptr`/`ptrtoint` i32 | `build_pair`/`bitcast` of the halves |
+| `addrspacecast` near to far | `build_pair(offset, selector)`, selector `CopyFromReg $ss` for a frame object, else the DGROUP segment of the symbol |
+| `inttoptr`/`ptrtoint` i32 | `build_pair(offset, selector)` / `extract_element` 0, 1 |
 | far null / constants | `Constant` of type `far` (selector << 16 or offset) |
-| `llrm.ia16.window.p1.p3` | node `X86ISD::LLRM_WINDOW`, one operand, result `far` (as the asm shape: symbol = name) |
+| `llrm.ia16.window.p1.p3` | `X86ISD::LLRM_WINDOW far -> far` (a delta-0 `HUGE_ADD`; sdag-b expands it once emitted) |
 
-## Open questions
+## Settled with sdag-b
 
-1. The selector of a near pointer: a global's is the DGROUP segment, a frame object's is `SS`. A node for "the segment of symbol S" (`TargetGlobalAddress` with a `segment` flag, as the asm fixup kinds `segment`/`offset`) and `CopyFromReg $ss`?
-2. A far global (`@_a` in addrspace 1): its address as `build_pair(TargetGlobalAddress segment, TargetGlobalAddress offset)`.
-3. A huge `gep` normalizes by the machine's stride (`Machine::huge_shift`): one node `X86ISD::LLRM_HUGE_ADD sel:off, delta` returning `far`, expanded by sdag-b?
+A far is `build_pair(offset, selector)`: `extract_element` 0 is the offset, 1 the selector (memory: offset at +0). `$ss` by `CopyFromReg`. A far global is a `build_pair` of two target addresses.
+
+## Open (sdag-c)
+
+The DGROUP selector of a global: a segment-of-symbol form needs the global node to carry a part flag; sdag-c owns the fixup and confirms the shape.
