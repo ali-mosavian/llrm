@@ -42,3 +42,4 @@ mod wide_division;
 mod wide_shifts;
 mod x86_conditions;
 mod x86_preprocess;
+mod x87_goldens;
