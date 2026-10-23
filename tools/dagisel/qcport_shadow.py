@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The DAG path over QCport's modules: functions selected, functions refused by kind, modules that do not compile.
+"""The DAG path over a corpus's modules (QCport's by default): functions selected, functions refused by kind, modules that do not compile.
 
     tools/dagisel/qcport_shadow.py LLRM_C [--mode m32|m16] [--level Os] [--jobs N]
 
@@ -45,7 +45,10 @@ def parse(stderr: str) -> tuple[set[str], dict[str, str]]:
 
 
 def compile_module(binary: str, source: Path, mode: str, level: str, work: Path):
-    includes = [one for d in ("host", "render", "model", "game", "sound", "ui", "qgl") for one in ("-I", str(QCPORT / d))] + ["-I", str(QCINC)]
+    if source.is_relative_to(QCPORT):
+        includes = [one for d in ("host", "render", "model", "game", "sound", "ui", "qgl") for one in ("-I", str(QCPORT / d))] + ["-I", str(QCINC)]
+    else:
+        includes = ["-I", str(source.parent)]
     env = {**os.environ, "LLRM_DEBUG": "isel"}
     done = subprocess.run([binary, f"-{level}", *FLAGS[mode], "--isel=shadow", *includes, str(source), "-o", str(work / (source.stem + ".o"))], capture_output=True, text=True, env=env, timeout=900)
     if done.returncode != 0:
@@ -58,9 +61,13 @@ def main() -> int:
     parser.add_argument("binary")
     parser.add_argument("--mode", default="m32")
     parser.add_argument("--level", default="Os")
+    parser.add_argument("--src", action="append", default=[], help="a directory of .c files to use instead of QCport's (repeatable)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     args = parser.parse_args()
-    sources = sorted(p for d in ("host", "render", "model", "game", "sound", "ui") for p in (QCPORT / d).glob("*.c"))
+    if args.src:
+        sources = sorted(p for d in args.src for p in Path(d).glob("*.c"))
+    else:
+        sources = sorted(p for d in ("host", "render", "model", "game", "sound", "ui") for p in (QCPORT / d).glob("*.c"))
     if not sources:
         print(f"no QCport sources under {QCPORT}")
         return 2
@@ -76,7 +83,7 @@ def main() -> int:
             selected += len(functions) - len(refused)
             kinds.update(refused.values())
             per_module[name] = (len(functions), len(refused))
-    print(f"qcport_shadow {args.mode} -{args.level}: {len(sources)} modules, {len(sources) - len(failed)} compiled, {len(failed)} did not")
+    print(f"shadow {args.mode} -{args.level}: {len(sources)} modules, {len(sources) - len(failed)} compiled, {len(failed)} did not")
     print(f"functions: {total} in the compiled modules; selected by the DAG path {selected}; refused {total - selected}")
     for why, count in kinds.most_common():
         print(f"  {count:5d}  {why}")
