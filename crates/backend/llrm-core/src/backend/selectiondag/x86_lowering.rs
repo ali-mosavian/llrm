@@ -35,11 +35,11 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
-use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::dag_combiner::{CombineHooks, CombineLevel};
 use super::isd::{CondCode, ISD};
 use super::legalize_dag::Hooks;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// The pin's `X86ISD` numbers, as the matcher table (`llrm-dagisel`) names
 /// them.
@@ -65,6 +65,8 @@ pub mod x86isd {
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
+    /// `X86ISD::FP_TO_INT_IN_MEM`: `fist` of an x87 value to a stack slot.
+    pub const FP_TO_INT_IN_MEM: ISD = ISD::Target(617);
     pub const XOR: ISD = ISD::Target(955);
 }
 
@@ -127,6 +129,7 @@ impl Hooks for X86Lowering {
             ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
@@ -430,6 +433,58 @@ fn lower_addsub_carry(
     let code = cond_code(dag, cond::B);
     let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
     dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
+}
+
+/// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
+/// result's size, then a load of it. An unsigned `i32` goes through an `i64`
+/// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
+/// flips the sign bit of the result back.
+fn lower_fp_to_int(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let signed = dag.opcode(node) == ISD::FpToSInt;
+    let result_vt = dag.value_type(node);
+    let mut value = dag.operand(node, 0);
+    let value_vt = dag.value_type(value);
+    let EVT::Simple(float @ (MVT::F32 | MVT::F64 | MVT::F80)) = value_vt else { return None };
+    let unsigned_fixup = !signed && result_vt == EVT::I64;
+    let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
+    let size = stored_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let chain = dag.entry_node();
+    let mut adjust = None;
+    if unsigned_fixup {
+        // 2^63, the first value that does not fit a signed `i64`.
+        let threshold = match float {
+            MVT::F32 => 0x5F00_0000u128,
+            MVT::F64 => 0x43E0_0000_0000_0000,
+            _ => (0x403Eu128 << 64) | (1u128 << 63),
+        };
+        let threshold = dag.get_constant_fp(threshold, value_vt);
+        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+        let sixty_three = dag.get_constant(63, EVT::I8);
+        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
+        let zero = dag.get_constant_fp(0, value_vt);
+        let offset = dag.get_select(value_vt, at_least, threshold, zero);
+        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+    }
+    let info = MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+    let fist = dag.intern(
+        x86isd::FP_TO_INT_IN_MEM,
+        &[EVT::OTHER],
+        &[chain, value, slot],
+        SDNodeFlags::default(),
+        NodeData::Mem(info),
+    );
+    let load_info = MemInfo { mem_vt: result_vt, ..info };
+    let mut result = dag.get_load(result_vt, fist, slot, load_info);
+    if let Some(adjust) = adjust {
+        result = dag.get_node(ISD::Xor, EVT::I64, &[result, adjust]);
+    }
+    Some(result)
 }
 
 fn is_pow2(value: u128) -> bool {

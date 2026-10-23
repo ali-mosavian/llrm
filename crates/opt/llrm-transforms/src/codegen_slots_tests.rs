@@ -474,7 +474,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "flagscopy.rs",
         "",
-        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); same-block lowering as the pin (checked against llc -run-pass=x86-flags-copy-lowering). Blockers, landing 2026-11-04: restore in another block, flags live into successors, test-position hoisting, splitBlock for a second jcc. The NF variants are N/A (APX). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
+        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); all of runOnMachineFunction (cross-block copies, live-in flags, test-position hoisting, splitBlock) as the pin, checked against llc -run-pass=x86-flags-copy-lowering on three shapes; NF variants and fcmov N/A (APX / none pre-RA). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
     ),
     row(
         "X86 DynAlloca Expander",
