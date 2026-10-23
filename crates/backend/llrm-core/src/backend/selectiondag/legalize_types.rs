@@ -656,6 +656,7 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::Load => self.expand_load(value, half),
             x86isd::HUGE_ADD if vt == EVT::Simple(MVT::Far) => self.expand_huge_add(value, half)?,
+            x86isd::LLRM_WINDOW if vt == EVT::Simple(MVT::Far) => self.expand_window(value, half)?,
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             ISD::Select => {
                 // `ExpandIntRes_SELECT`: one select per half.
@@ -1125,6 +1126,32 @@ impl<'a> TypeLegalizer<'a> {
         let stride = self.dag.get_node(ISD::Shl, dword, &[carry, stride_shift]);
         let stride = self.dag.get_node(ISD::Truncate, half, &[stride]);
         Ok((self.dag.get_node(ISD::Truncate, half, &[sum]), self.dag.get_node(ISD::Add, half, &[selector, stride])))
+    }
+
+    /// A huge pointer normalized: the offset's whole selector steps move into
+    /// the selector, leaving an offset below one step. A step is
+    /// `2^(bits - huge_shift)` bytes (16 on DOS), the selector counts steps.
+    fn expand_window(
+        &mut self,
+        node: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_WINDOW,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
+        let below = half.size_in_bits() - shift;
+        let (offset, selector) = self.expanded_integer(self.dag.operand(node, 0));
+        let by = self.dag.get_constant(u128::from(below), EVT::I8);
+        let steps = self.dag.get_node(ISD::Srl, half, &[offset, by]);
+        let mask = self.dag.get_constant((1u128 << below) - 1, half);
+        Ok((self.dag.get_node(ISD::And, half, &[offset, mask]), self.dag.get_node(ISD::Add, half, &[selector, steps])))
     }
 
     /// `IntegerExpandSetCCOperands`: equality is the halves' xors or-ed

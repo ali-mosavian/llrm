@@ -46,6 +46,7 @@ mod wide_compare;
 mod wide_counts;
 mod wide_division;
 mod wide_shifts;
+mod window;
 mod x86_conditions;
 mod x86_preprocess;
 mod x87_compare;
