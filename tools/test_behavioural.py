@@ -64,3 +64,26 @@ def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
     probed = []
     assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and not probed, "one backend PR: it is the offender, no build"
     assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
+
+
+# What run_tests.py printed for PROGRAMS on the tree of #4146 (a1d904596), 2026-10-24: 10 of 68 configurations, the 10 the 01:00 sweep counted (1004/1014).
+FOUR_ONE_FOUR_SIX = """FAIL  c/memfuncs_runtime.c [-O2 -march=i486 -m32 -mabi=sysv]: line 1: want '0', got '56'
+FAIL  c/regparm3_matrix_22.c: line 13: want '45840', got '11208'
+FAIL  c/regparm3_matrix_31.c: line 3: want '-49', got '96'
+FAIL  c/regparm3_matrix_4.c: line 7: want '653', got '2552'
+FAIL  qb/bounds.bas: line 1: want 'local 4905  9  6  5', got 'error 9'
+FAIL  qb/range_power.bas [-O1]: line 16: want '-8  .3333333333333333 error 5', got '-8  .3333333333333333 ok'
+FAIL  qb/range_power.bas [-Os]: line 16: want '-8  .3333333333333333 error 5', got '-8  .3333333333333333 ok'
+FAIL  examples/channels.nib: line 2: want 'open b', got 'open a'
+FAIL  examples/level.nib: line 1: want '3 planes 3 nodes 5 faces, 62 bytes', got 'LEVEL.DAT is not a level'
+FAIL  grep/grep.bas: line 1: want '4745', got 'Subscript out of range in line No line number in module GREP
+68 programs: 58 pass, 0 known, 10 fail
+"""
+
+
+def test_the_set_covers_all_ten_wrong_outputs_of_4146_across_frontends():
+    """The 21 C programs saw 3 of the 10; the QB, Nib and memfuncs programs saw the rest."""
+    wrong = b.red_programs(FOUR_ONE_FOUR_SIX)
+    assert wrong == ["bounds", "channels", "grep", "level", "memfuncs_runtime", "range_power", "regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"]
+    assert set(wrong) <= set(b.PROGRAMS)
+    assert FOUR_ONE_FOUR_SIX.count("\nFAIL") + 1 == 10
