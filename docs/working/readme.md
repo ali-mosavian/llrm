@@ -67,6 +67,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
+| [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
 | [scev-s3-stubs](scev-s3-stubs.md) | SCEV stubs (S3), ranked |
