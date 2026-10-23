@@ -190,8 +190,12 @@ and refuses what is not valid. Checked by `astcheck` (`-c` also compiles both mo
 Where the new tree differs from the table-driven parser's, on purpose (the old parser's behaviour is
 wrong or loses something):
 
-* `-a * b` is `(-a) * b` (BASIC's minus binds tighter than `*`); the old parser has `-(a * b)`.
-  Likewise `NOT a = b` is `NOT (a = b)` here; the old reads `(NOT a) = b`. Both follow BC's table.
+* precedence. Run through QB 4.5's own BC and LINK under DOSBox-X (`tools/dosbatch`), these print
+  `2 ^ 3 ^ 2` = 64, `NOT 1 = 2` = -1, `NOT 0 + 1` = -2, `-2 ^ 2` = -4, `-3 * 2 ^ 2` = -12 and
+  `7 MOD 3 * 2` = 1. The table-driven parser reads `^` right to left (512), `NOT` above the
+  relations and sums (`NOT 1 = 2` is 0, `NOT 0 + 1` is 0), and a sign over a whole product
+  (`-a * b` is `-(a * b)`). The first two compile to wrong values there; the third is the same
+  value in a different shape. The new tree has QB's: `tests/qb_ast.rs::precedence_is_the_compilers`.
 * a type suffix on a word that is also reserved is part of the name: `ERROR$`, `COLOR$(n)`, `key%`
   (the old lexer drops the suffix, so `COLOR$` was `COLOR`).
 * `PUT (x, y), a` has no mode argument; the old parser takes one from the nearest earlier PUT/PSET/
