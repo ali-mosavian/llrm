@@ -564,7 +564,7 @@ impl Builder<'_> {
         name: &str,
     ) -> bool {
         if let Some(names) = &self.target.libcalls {
-            return names.iter().any(|one| one == name);
+            return names.iter().any(|(one, ..)| one == name);
         }
         self.arch
             .runtime("c")
@@ -632,25 +632,34 @@ impl Builder<'_> {
         first_two: &[SDValue],
         size: SDValue,
     ) -> Result<SDValue, Refused> {
-        // The routine's symbol and calling convention are the fact's
-        // (`options.libcalls`), which `memcpycall` already applies to a
-        // `memcpy`; the builder does not have them, so a real target's call
-        // is not made here rather than made with the wrong ones.
-        if self.target.libcalls.is_none() {
+        // The routine's symbol and calling convention are the target fact's
+        // (`options.libcalls`), as `memcpycall` applies them to a `memcpy`.
+        let Some((_, convention, routine_symbol)) =
+            self.target.libcalls.as_ref().and_then(|calls| calls.iter().find(|(routine, ..)| routine == name)).cloned()
+        else {
             return Err(Refused("library call whose symbol and convention are the target fact's"));
-        }
+        };
         let types = &self.module.context.types;
         let pointer_type = types.ptr(0);
         let word = types.int(self.target.dag.pointer.size_in_bits());
-        let symbol = self.dag.get_external_symbol(self.target.dag.pointer, name);
+        let symbol = self.dag.get_external_symbol(self.target.dag.pointer, &routine_symbol);
         let value_type =
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
         let first = self.arch.first_argument_offset(false);
-        let plan: Convention =
-            convention_for(self.module, self.layout, self.arch, first, 0, pointer_type, false, &arg_types, &[])
-                .map_err(|_| Refused("libcall the convention does not describe"))?;
-        let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, name);
+        let plan: Convention = convention_for(
+            self.module,
+            self.layout,
+            self.arch,
+            first,
+            convention,
+            pointer_type,
+            false,
+            &arg_types,
+            &[],
+        )
+        .map_err(|_| Refused("libcall the convention does not describe"))?;
+        let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, &routine_symbol);
         let _ = symbol;
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);

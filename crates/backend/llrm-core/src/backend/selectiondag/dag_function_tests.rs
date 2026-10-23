@@ -10,7 +10,7 @@ entry:
 
 fn names(text: &str) -> Result<Vec<String>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .map_err(|e| e.0)?;
     Ok(done
         .body
@@ -53,7 +53,7 @@ done:
 #[test]
 fn a_loop_is_blocks_with_phis_and_branches() {
     let module = llrm_mir::parse::module(LOOP).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let blocks = &done.body.blocks;
     assert_eq!(blocks.len(), 4, "{blocks:#?}");
@@ -90,7 +90,7 @@ entry:
 #[test]
 fn a_load_of_a_global_names_its_symbol() {
     let module = llrm_mir::parse::module(GLOBAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let first = done.body.insns()[0].what.clone().expect("semantics");
     // The symbol is the operand's address: folded into the load's cell, or (as
@@ -140,7 +140,7 @@ entry:
 #[test]
 fn a_subregister_is_the_same_value_viewed_narrower() {
     let module = llrm_mir::parse::module(BYTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let add = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("add"))).expect("an add");
@@ -172,7 +172,7 @@ entry:
 #[test]
 fn a_call_is_a_sequence_around_a_call_instruction() {
     let module = llrm_mir::parse::module(CALL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let call = insns
@@ -210,7 +210,7 @@ entry:
 #[test]
 fn an_indirect_call_names_its_target() {
     let module = llrm_mir::parse::module(INDIRECT).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let call = done
         .body
@@ -236,7 +236,7 @@ entry:
 #[test]
 fn an_absolute_address_has_a_four_byte_displacement() {
     let module = llrm_mir::parse::module(ABSOLUTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let cell =
         done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
@@ -267,7 +267,7 @@ entry:
 #[test]
 fn a_local_is_a_frame_cell_below_bp() {
     let module = llrm_mir::parse::module(LOCAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let cells: Vec<i64> = done
         .body
@@ -301,7 +301,7 @@ entry:
 #[test]
 fn the_type_legalizer_has_the_targets_hooks() {
     let module = llrm_mir::parse::module(FLOAT64).expect("parses");
-    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .err()
         .map_or_else(String::new, |e| e.0);
     assert!(!why.contains("expand operand"), "{why}");
@@ -321,7 +321,7 @@ entry:
 #[test]
 fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
     let module = llrm_mir::parse::module(DIVIDE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> = done
         .body
@@ -358,7 +358,7 @@ entry:
 #[test]
 fn a_comparison_stored_to_a_byte_is_a_setcc_on_memory() {
     let module = llrm_mir::parse::module(SETCC_STORE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let set = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("setl")).expect("a setl");
@@ -381,7 +381,7 @@ entry:
 #[test]
 fn a_call_names_the_registers_it_takes_arguments_in() {
     let module = llrm_mir::parse::module(REGISTER_CALL).expect("parses");
-    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
@@ -403,7 +403,7 @@ entry:
 #[test]
 fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
     let module = llrm_mir::parse::module(M16_SUM).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"))
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let arrival = insns.iter().find(|i| !i.delivers.is_empty()).expect("an arrival instruction");
@@ -431,7 +431,7 @@ entry:
 fn a_call_destroys_what_its_conventions_says() {
     use llrm_target::Target;
     let module = llrm_mir::parse::module(BOTH_CALLS).expect("parses");
-    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let calls: Vec<_> = insns.iter().filter(|i| i.call.is_some()).collect();
@@ -444,4 +444,38 @@ fn a_call_destroys_what_its_conventions_says() {
         "{:?}",
         calls[1].clobbers
     );
+}
+
+const BIG_COPY: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@a = global [200 x i8] zeroinitializer
+@b = global [200 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i32(ptr @a, ptr @b, i32 200, i1 false)
+  call void @llvm.memset.p0.i32(ptr @a, i8 1, i32 200, i1 false)
+  ret void
+}
+";
+
+/// A long copy or fill is `rep movs` / `rep stos` with ECX, ESI and EDI set by
+/// the glued copies: the emitter refused `REP_MOVSB_32` and `REP_STOSB_32` in
+/// 14 programs of the m32 execution run.
+#[test]
+fn a_long_copy_and_fill_are_rep_string_operations() {
+    let module = llrm_mir::parse::module(BIG_COPY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let strings: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(
+            w.op,
+            crate::model::ir::Operation::Copy | crate::model::ir::Operation::Fill
+        ))
+        .collect();
+    assert_eq!(strings.len(), 2, "{strings:?}");
+    assert!(strings.iter().all(|w| w.sources.len() == 3), "count, source and destination are operands: {strings:?}");
 }

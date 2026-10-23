@@ -244,6 +244,7 @@ pub fn compiled(
                 options.selection,
                 options.isel,
                 &*options.arch,
+                &options.libcalls,
             )
         })?;
         // What a frontend asks the linker for though nothing names it.
@@ -325,6 +326,7 @@ pub fn compiled_module(
             options.selection,
             options.isel,
             &*options.arch,
+            &options.libcalls,
         )
     })?;
     stage_files(options, "", &assembled)?;

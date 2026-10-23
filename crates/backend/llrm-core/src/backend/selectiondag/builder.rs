@@ -39,19 +39,29 @@ pub struct BuilderTarget {
     pub shift_amount: EVT,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
-    /// The library routines the target's runtime has, when not the ones its
-    /// `c.toml` names (`libcalls`): tests of the pin's shape say all.
-    pub libcalls: Option<Vec<String>>,
+    /// The library routines the target's runtime has, each with the calling
+    /// convention and the symbol a call of it uses (`options.libcalls`); none
+    /// given, the names its `c.toml` states.
+    pub libcalls: Option<Vec<(String, u32, String)>>,
 }
 
 impl BuilderTarget {
-    /// This target with a runtime that has `names`, whatever its `c.toml`
-    /// says.
+    /// This target with the runtime routines the driver states.
+    pub fn with_runtime_calls(
+        mut self,
+        calls: &[(String, u32, String)],
+    ) -> BuilderTarget {
+        self.libcalls = Some(calls.to_vec());
+        self
+    }
+
+    /// This target with a runtime that has `names`, in the default convention
+    /// under their own names, whatever its `c.toml` says.
     pub fn with_libcalls(
         mut self,
         names: &[&str],
     ) -> BuilderTarget {
-        self.libcalls = Some(names.iter().map(|name| (*name).to_owned()).collect());
+        self.libcalls = Some(names.iter().map(|name| ((*name).to_owned(), 0, (*name).to_owned())).collect());
         self
     }
 
@@ -768,7 +778,19 @@ impl Builder<'_> {
                     stores.push(copy);
                 }
                 Parameter::Registers(regs) if regs.len() == pieces.len() => {
-                    copies.extend(regs.iter().copied().zip(pieces))
+                    for (reg, piece) in regs.iter().copied().zip(pieces) {
+                        // a narrow argument fills its register
+                        // (`CCPromoteToType`)
+                        let width = self.arch.registers().bytes(reg).map_or(0, |bytes| bytes as u32 * 8);
+                        let vt = self.dag.value_type(piece);
+                        let piece = if vt.is_integer() && vt.size_in_bits() < width {
+                            let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
+                            self.dag.get_node(code, EVT::integer(width), &[piece])
+                        } else {
+                            piece
+                        };
+                        copies.push((reg, piece));
+                    }
                 }
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
