@@ -347,7 +347,7 @@
 346	syntax	15:20 syntax error
 347	syntax	15:19 syntax error
 348	syntax	15:18 syntax error
-349	semantic	15:0 Syntax error
+349	semantic	15:14 Array not defined
 350	syntax	15:14 syntax error
 351	syntax	15:20 syntax error
 352	ok	

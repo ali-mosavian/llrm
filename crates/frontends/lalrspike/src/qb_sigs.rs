@@ -37,6 +37,7 @@ pub enum Ret {
     Long,
     Single,
     Double,
+    Currency,
     Str,
     /// the argument's own numeric type
     Same,
@@ -51,6 +52,10 @@ pub struct FnSig {
     pub ret: Ret,
     /// The families that have it: 1 QB 4.5, 2 PDS 7.1, 4 VBDOS.
     pub families: u8,
+    /// DOEVENTS(): the parentheses are part of the call even with no arguments.
+    pub parens: bool,
+    /// Also a statement: `MSGBOX "text", 0, "title"`.
+    pub statement: bool,
 }
 
 impl FnSig {
@@ -142,6 +147,23 @@ ERDEV =>Int
 ERDEV$ =>Str
 LPOS n=>Int
 SETMEM n=>Long
+CCUR n=>Currency:pv
+CURDIR$ |s=>Str:pv
+CVC s=>Currency:pv
+DIR$ |s=>Str:pv
+MKC$ n=>Str:pv
+SSEG t=>Int:pv
+SSEGADD t=>Long:pv
+STACK =>Long:pv
+GETINDEX$ n=>Str:pv
+DATESERIAL n,n,n=>Double:v
+DATEVALUE s=>Double:v
+DOEVENTS =>Int:vP
+INPUTBOX$ s|s,s|s,s,s=>Str:v
+MSGBOX s|s,n|s,n,s=>Int:vS
+TIMESERIAL n,n,n=>Double:v
+TIMEVALUE s=>Double:v
+FORMAT$ n|n,s=>Str:v
 ";
 
 fn class_of(letter: char) -> Class {
@@ -165,6 +187,13 @@ fn table() -> &'static HashMap<&'static str, FnSig> {
         let mut map = HashMap::new();
         for line in TABLE.lines() {
             let (head, ret) = line.split_once("=>").expect("a signature");
+            // `Ret:flags`: p PDS, v VBDOS (neither: all families), P parentheses required, S also a statement
+            let (ret, flags) = ret.split_once(':').unwrap_or((ret, ""));
+            let families = if flags.contains(['p', 'v']) {
+                (if flags.contains('p') { 2 } else { 0 }) | (if flags.contains('v') { 4 } else { 0 })
+            } else {
+                7
+            };
             let (name, arguments) = head.split_once(' ').unwrap_or((head, ""));
             let alternatives = arguments
                 .split('|')
@@ -181,13 +210,14 @@ fn table() -> &'static HashMap<&'static str, FnSig> {
                 "Long" => Ret::Long,
                 "Single" => Ret::Single,
                 "Double" => Ret::Double,
+                "Currency" => Ret::Currency,
                 "Str" => Ret::Str,
                 "Same" => Ret::Same,
                 "Float" => Ret::Float,
                 other => panic!("return {other}"),
             };
             let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
-            map.insert(name, FnSig { name, alternatives, ret, families: 7 });
+            map.insert(name, FnSig { name, alternatives, ret, families, parens: flags.contains('P'), statement: flags.contains('S') });
         }
         map
     })
@@ -198,9 +228,9 @@ pub fn function(name: &str, dialect: Dialect) -> Option<&'static FnSig> {
     let upper = name.to_ascii_uppercase();
     let sig = table().get(upper.as_str())?;
     let family = match dialect {
-        Dialect::QBasic11 | Dialect::QuickBasic45 | Dialect::Quickr => 1,
+        Dialect::QBasic11 | Dialect::QuickBasic45 => 1,
         Dialect::Pds71 => 2,
-        Dialect::VbDos => 4,
+        Dialect::VbDos | Dialect::Quickr => 4,
     };
     (sig.families & family != 0).then_some(sig)
 }
