@@ -192,9 +192,32 @@ impl BodyFacts {
         let mut lis = self.lis.borrow_mut();
         lis.rewrite_instr(block, one.id(), Arc::clone(last));
         let mut changed: BTreeSet<u32> = named(one).symmetric_difference(&named(last)).copied().collect();
+        // The pin's update of a tied pair: the copy `into := source` before
+        // the instruction, which reads `into` where it read `source`.
+        let tied_copy = match rest {
+            [copy] => match (copy.defines.as_slice(), copy.uses.as_slice(), one.defines.as_slice()) {
+                (&[into], &[source], &[defined])
+                    if into == defined
+                        && copy.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move)
+                        && one.uses.contains(&source)
+                        && last.uses.contains(&into) =>
+                {
+                    Some((into, source))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
         for new in rest {
             lis.insert_instr_before(block, Some(last.id()), Arc::clone(new));
-            changed.extend(named(new));
+            if tied_copy.is_none() {
+                changed.extend(named(new));
+            }
+        }
+        if let Some((into, source)) = tied_copy {
+            lis.tied_copy_inserted(rest[0].id(), last.id(), into, source, last.uses.contains(&source));
+            changed.remove(&into);
+            changed.remove(&source);
         }
         // Only an interval already made is redone; the others are made from the
         // body as it is.
