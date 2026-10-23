@@ -350,7 +350,11 @@ pub fn emit_in(
     };
     for unit in units {
         for &node in unit.nodes.iter().rev() {
+            let before = emitter.blocks.last().map_or(0, |block| block.insns.len());
             emitter.node(node)?;
+            if dag.invariant_loads.contains(&node) {
+                emitter.mark_invariant_loads(before);
+            }
         }
     }
     let mut blocks = emitter.blocks;
@@ -496,6 +500,27 @@ pub enum Callee {
 }
 
 impl Emitter<'_, '_> {
+    /// The loads of memory the node's operand says never changes, among the
+    /// instructions made since `before` in the last block.
+    fn mark_invariant_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let plain = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
+                        && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
+                );
+            if plain && !one.volatile() {
+                *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
+            }
+        }
+    }
+
     fn node(
         &mut self,
         n: u32,

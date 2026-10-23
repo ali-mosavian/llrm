@@ -1,6 +1,6 @@
 //! The arena: nodes, values, the CSE map and node construction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
@@ -201,6 +201,11 @@ pub struct SelectionDAG {
     /// Which globals (by symbol) are local to the object: only those fold a
     /// constant offset into their address (`isOffsetFoldingLegal`).
     pub local_symbols: Vec<bool>,
+    /// The loads of memory nothing writes (`MachineMemOperand::isInvariant`,
+    /// which `visitLoad` sets); a node keeps its number when selection morphs
+    /// it, so the set follows it into a machine node. A load a combine or the
+    /// legalizer remakes is not in it.
+    pub invariant_loads: HashSet<u32>,
 }
 
 impl SelectionDAG {
@@ -221,6 +226,7 @@ impl SelectionDAG {
             var_args_frame_index: None,
             temporaries: Vec::new(),
             local_symbols: Vec::new(),
+            invariant_loads: HashSet::new(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
