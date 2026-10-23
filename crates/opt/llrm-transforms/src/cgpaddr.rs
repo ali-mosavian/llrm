@@ -216,7 +216,12 @@ fn ext_uses(
     let exts: Vec<(BlockId, InstId)> = unit
         .function
         .walk()
-        .filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt)))
+        .filter(|&(_, inst)| {
+            matches!(
+                unit.function.instruction(inst).opcode,
+                Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+            )
+        })
         .collect();
     let mut tree = None;
     let mut changed = false;
@@ -249,7 +254,10 @@ fn ext_uses(
         let readers: Vec<(InstId, u32)> = unit.function.users(source).iter().map(|one| (one.user, one.index)).collect();
         let elsewhere = |reader: &InstId| unit.function.parent(*reader).is_some_and(|block| block != home);
         if readers.iter().filter(|(reader, _)| elsewhere(reader)).any(|(reader, _)| {
-            matches!(unit.function.instruction(*reader).opcode, Opcode::Phi | Opcode::Load { .. } | Opcode::Store { .. })
+            matches!(
+                unit.function.instruction(*reader).opcode,
+                Opcode::Phi | Opcode::Load { .. } | Opcode::Store { .. }
+            )
         }) {
             continue;
         }
@@ -270,14 +278,18 @@ fn ext_uses(
                         .iter_block(block)
                         .find(|&one| unit.function.instruction(one).opcode != Opcode::Phi)
                         .expect("a terminated block");
-                    let made = unit.function.create_instruction(
-                        Opcode::Cast(CastOp::Trunc),
-                        unit.function.value(source).ty,
-                        vec![Operand::Value(result)],
-                        Flags::default(),
-                        None,
-                    );
-                    unit.function.insert(made, Position::Before(first)).expect("a position before the first instruction");
+                    let made = unit
+                        .function
+                        .create_instruction(
+                            Opcode::Cast(CastOp::Trunc),
+                            unit.function.value(source).ty,
+                            vec![Operand::Value(result)],
+                            Flags::default(),
+                            None,
+                        );
+                    unit.function
+                        .insert(made, Position::Before(first))
+                        .expect("a position before the first instruction");
                     let trunc = Operand::Value(unit.function.instruction(made).result.expect("a value"));
                     truncs.push((block, trunc));
                     trunc
