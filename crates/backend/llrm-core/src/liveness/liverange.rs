@@ -1737,7 +1737,7 @@ mod tests {
         for slot in [at[7].get_base_index(), at[7].get_reg_slot(true), at[7].get_reg_slot(false), at[7].get_dead_slot()]
         {
             let mut lr = range(&[(3, 6, 0), (9, 11, 1)], &at);
-            let mut reference = lr.clone();
+            let reference = lr.clone();
             let i = reference.segments.partition_point(|x| x.start <= slot.get_prev_slot());
             let want = (i != 0 && reference.segments[i - 1].end > at[0].get_base_index())
                 .then(|| reference.segments[i - 1].valno.clone());
