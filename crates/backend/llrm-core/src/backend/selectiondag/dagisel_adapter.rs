@@ -260,6 +260,12 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     })
 }
 
+/// The pin's register number of the register the builder names `id`
+/// (`phys_reg` inverted); `None` where it has none.
+pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
+    (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
+}
+
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
     /// builder names it so.

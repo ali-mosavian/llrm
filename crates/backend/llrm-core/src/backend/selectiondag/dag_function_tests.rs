@@ -790,3 +790,44 @@ fn a_byte_multiply_is_mul_on_al() {
     let mul = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("mul")).expect("a mul");
     assert!(mul.dests.iter().chain(&mul.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))), "{mul:?}");
 }
+
+const SHIFT_PARTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %2 = alloca i64
+  %3 = alloca i32
+  %4 = alloca i64
+  store i64 %0, ptr %2
+  store i32 %1, ptr %3
+  %5 = load i64, ptr %2
+  %6 = load i32, ptr %3
+  %7 = zext i32 %6 to i64
+  %8 = lshr i64 %5, %7
+  store i64 %8, ptr %4
+  %9 = load i64, ptr %4
+  ret i64 %9
+}
+";
+
+/// The pin's scheduler keeps a unit that defines a physical register from
+/// going between that register's definition and the unit that reads it
+/// (`DelayForLiveRegsBottomUp`). The `shrd` of a 64-bit shift went between the
+/// `test` and the second `jne`, which read the `shrd`'s flags
+/// (shift_int64_variable printed wrong values).
+#[test]
+fn nothing_that_sets_flags_goes_between_a_test_and_the_branches_that_read_it() {
+    let module = llrm_mir::parse::module(SHIFT_PARTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let test = names.iter().position(|n| n == "test").expect("a test");
+    let last_branch = names.iter().rposition(|n| n == "jne" || n == "je").expect("a branch");
+    for name in &names[test + 1..last_branch] {
+        assert!(
+            matches!(name.as_str(), "mov" | "jne" | "je" | "jmp"),
+            "{name} between the test and the branches: {names:?}"
+        );
+    }
+}
