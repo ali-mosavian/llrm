@@ -60,3 +60,37 @@ fn the_cell_is_stored_before_the_call_sequence_starts() {
     let stores = (0..dag.node(before).ops.len()).filter(|i| dag.opcode(dag.operand(before, *i)) == ISD::Store).count();
     assert_eq!(stores, 2);
 }
+
+/// The call sequence of a far call whose arguments are stored to the stack
+/// (`callseq_start`, the stores joined by a `TokenFactor`, the register copies,
+/// the call): the cell's stores are found behind that join too. Missing the
+/// start, they were chained after the copies, the scheduler's graph had a
+/// cycle and the compile ran out of memory (regparm3_matrix_22 `_main`).
+#[test]
+fn the_start_is_found_behind_the_argument_stores() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::x86_16());
+    let mut dag = dag();
+    let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
+    let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
+    let (entry, mask) = (dag.entry_node(), dag.get_register_mask());
+    let start = dag.get_callseq_start(entry, 0);
+    let slot = dag.get_frame_index(EVT::I16, 0);
+    let info = super::super::dag::MemInfo {
+        mem_vt: EVT::I16,
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: None,
+        space: 0,
+    };
+    let argument = dag.get_store(SDValue { node: start.node, res: 0 }, offset, slot, info);
+    let joined = dag.get_token_factor(&[argument]);
+    let copy = dag.get_copy_to_reg(joined, 5, offset);
+    let call = dag.get_node_multi(own::CALL, &[EVT::OTHER, EVT::GLUE], &[copy, far, mask]);
+    dag.set_root(SDValue { node: call.node, res: 0 });
+    TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), own::LLRM_FARCALL);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::CopyToReg, "the call follows the copies directly");
+    assert_eq!(dag.opcode(dag.operand(start, 0)), ISD::TokenFactor, "the cell's stores precede the sequence");
+}

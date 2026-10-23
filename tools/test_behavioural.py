@@ -34,10 +34,56 @@ def test_a_range_of_merges_that_touch_no_tier_path_runs_nothing(monkeypatch):
 def test_the_paths_are_code_of_the_allocator_coalescer_liveness_selector_peephole_and_frame():
     assert b.touches(["crates/backend/llrm-core/src/backend/coalesce.rs"])
     assert b.touches(["crates/backend/llrm-core/src/liveness/liverangecalc.rs", "docs/x.md"])
-    assert b.touches(["crates/target/llrm-x86/src/isel/peephole.peep"]) is False, "a .peep file is not Rust source; its generated Rust is"
+    assert b.touches(["crates/target/llrm-x86/src/isel/peephole.peep"]), "a peephole rule changes the code"
+    # #4146 changed these and no earlier path rule named either: the tier skipped it
+    assert b.touches(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"])
     assert not b.touches(["docs/working/regalloc-plan.md", "crates/backend/llrm-core/src/backend/coalesce_tests.rs", "tools/parity_squash.py"])
+    assert not b.touches(["crates/backend/llrm-core/src/backend/selectiondag/emit.rs"]), "the DAG path is not the default compile"
 
 
 def test_the_red_programs_are_read_from_run_tests_output():
     assert b.red_programs(RED) == ["regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"]
     assert b.red_programs(GREEN) == []
+
+
+def test_a_batch_with_4146s_files_is_refused_and_a_docs_batch_builds_nothing():
+    """#4146 changed machinesched.rs and flow.rs and landed red on regparm3_matrix_22/_31/_4; a batch of only docs or DAG-shadow files must not pay a build."""
+    import parity_squash as ps
+
+    built = []
+    red = ps.pre_merge_behavioural(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"], build=lambda: built.append(1), run=lambda: RED)
+    assert red == ["regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"] and built
+    built.clear()
+    assert ps.pre_merge_behavioural(["docs/working/x.md", "crates/backend/llrm-core/src/backend/selectiondag/emit.rs"], build=lambda: built.append(1), run=lambda: RED) == [] and not built
+
+
+def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
+    import parity_squash as ps
+
+    files = {"4146": ["crates/backend/llrm-core/src/backend/machinesched.rs"], "4170": ["docs/a.md"], "4171": ["crates/backend/llrm-core/src/backend/coalesce.rs"]}
+    probed = []
+    assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and not probed, "one backend PR: it is the offender, no build"
+    assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
+
+
+# What run_tests.py printed for PROGRAMS on the tree of #4146 (a1d904596), 2026-10-24: 10 of 68 configurations, the 10 the 01:00 sweep counted (1004/1014).
+FOUR_ONE_FOUR_SIX = """FAIL  c/memfuncs_runtime.c [-O2 -march=i486 -m32 -mabi=sysv]: line 1: want '0', got '56'
+FAIL  c/regparm3_matrix_22.c: line 13: want '45840', got '11208'
+FAIL  c/regparm3_matrix_31.c: line 3: want '-49', got '96'
+FAIL  c/regparm3_matrix_4.c: line 7: want '653', got '2552'
+FAIL  qb/bounds.bas: line 1: want 'local 4905  9  6  5', got 'error 9'
+FAIL  qb/range_power.bas [-O1]: line 16: want '-8  .3333333333333333 error 5', got '-8  .3333333333333333 ok'
+FAIL  qb/range_power.bas [-Os]: line 16: want '-8  .3333333333333333 error 5', got '-8  .3333333333333333 ok'
+FAIL  examples/channels.nib: line 2: want 'open b', got 'open a'
+FAIL  examples/level.nib: line 1: want '3 planes 3 nodes 5 faces, 62 bytes', got 'LEVEL.DAT is not a level'
+FAIL  grep/grep.bas: line 1: want '4745', got 'Subscript out of range in line No line number in module GREP
+68 programs: 58 pass, 0 known, 10 fail
+"""
+
+
+def test_the_set_covers_all_ten_wrong_outputs_of_4146_across_frontends():
+    """The 21 C programs saw 3 of the 10; the QB, Nib and memfuncs programs saw the rest."""
+    wrong = b.red_programs(FOUR_ONE_FOUR_SIX)
+    assert wrong == ["bounds", "channels", "grep", "level", "memfuncs_runtime", "range_power", "regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"]
+    assert set(wrong) <= set(b.PROGRAMS)
+    assert FOUR_ONE_FOUR_SIX.count("\nFAIL") + 1 == 10
