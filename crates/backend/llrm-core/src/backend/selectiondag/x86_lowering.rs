@@ -211,7 +211,11 @@ fn is_non_ext_load(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> bool {
-    dag.opcode(value) == ISD::Load && matches!(dag.node(value).data, super::dag::NodeData::Mem(info) if info.ext.is_none())
+    dag.opcode(value) == ISD::Load
+        && matches!(
+            dag.node(value).data,
+            super::dag::NodeData::Mem(info) if info.ext.is_none()
+        )
 }
 
 /// `TranslateX86CC` for floats: the code and the operands, swapped where the
@@ -227,7 +231,10 @@ fn translate_fp_cc(
         cc = cc.swapped_operands();
         std::mem::swap(lhs, rhs);
     }
-    if matches!(cc, CondCode::SetOLt | CondCode::SetOLe | CondCode::SetUGt | CondCode::SetUGe) {
+    if matches!(
+        cc,
+        CondCode::SetOLt | CondCode::SetOLe | CondCode::SetUGt | CondCode::SetUGe
+    ) {
         std::mem::swap(lhs, rhs);
     }
     // ZF PF CF: greater 0 0 0, less 0 0 1, equal 1 0 0, unordered 1 1 1.

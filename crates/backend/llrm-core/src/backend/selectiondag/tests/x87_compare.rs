@@ -4,7 +4,9 @@ use super::*;
 
 const F64: EVT = EVT::Simple(MVT::F64);
 
-fn legalized(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue) -> (SelectionDAG, SDValue, [SDValue; 2]) {
+fn legalized(
+    build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue
+) -> (SelectionDAG, SDValue, [SDValue; 2]) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let (a, b) = (dag.get_register(F64, 5), dag.get_register(F64, 6));

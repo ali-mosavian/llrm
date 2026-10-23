@@ -169,8 +169,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Int(_) => Action::Expand,
         };
         if self.dag.opcode(node) == ISD::SetCC
-            && let (EVT::Simple(operand), NodeData::CondCode(cc)) =
-                (vt, self.dag.node(self.dag.operand(node, 2)).data)
+            && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
             && self.tli.cond_code_action(cc, operand) == Action::Expand
         {
             action = Action::Expand;
