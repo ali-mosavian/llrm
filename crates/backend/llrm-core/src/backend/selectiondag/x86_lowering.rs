@@ -479,7 +479,8 @@ fn lower_fp_to_int(
         let offset = dag.get_select(value_vt, at_least, threshold, zero);
         value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
     }
-    let info = MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None };
+    let info =
+        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -531,6 +532,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::Stack(index),
         ext: None,
+        space: 0,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -570,6 +572,7 @@ fn lower_int_to_fp(
         volatile: false,
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
+        space: 0,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -596,7 +599,8 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    let info = MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None };
+    let info =
+        MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
     Some(dag.get_store(chain, first, list, info))
 }
 

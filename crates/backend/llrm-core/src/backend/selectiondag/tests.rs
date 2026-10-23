@@ -31,6 +31,7 @@ mod int_to_fp;
 mod legalize_dag;
 mod legalize_types;
 mod m16_coverage;
+mod mem_space;
 mod pair_arith;
 mod pair_mul;
 mod setcc_result;

@@ -263,6 +263,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     volatile: false,
                     base: MemBase::Unknown,
                     ext: None,
+                    space: 0,
                 };
                 let loaded = self.dag.get_load(pointer, chain, src, info);
                 Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
@@ -427,7 +428,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => 4,
         };
         let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
-        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry), ext: None };
+        let info = MemInfo {
+            mem_vt: pool_vt,
+            align,
+            volatile: false,
+            base: MemBase::ConstantPool(entry),
+            ext: None,
+            space: 0,
+        };
         let chain = self.dag.entry_node();
         let loaded = self.dag.get_load(vt, chain, index, info);
         self.replace_node(node, loaded);
