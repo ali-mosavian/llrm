@@ -685,6 +685,18 @@ impl<'a> TypeLegalizer<'a> {
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
             }
+            ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
+                // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
+                // halves loaded from it.
+                let src = self.dag.operand(value, 0);
+                let (slot, store, cell) = self.store_to_slot(src);
+                let info = super::dag::MemInfo { mem_vt: half, align: 4.min(half.size_in_bits() / 8), ..self.slot_info(src, cell) };
+                let step = u128::from(half.size_in_bits() / 8);
+                let pointer = self.dag.value_type(slot);
+                let offset = self.dag.get_constant(step, pointer);
+                let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, offset]);
+                (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info))
+            }
             ISD::BitCast if self.tli.types.is_type_legal(self.dag.value_type(self.dag.operand(value, 0))) => {
                 // `ExpandIntRes_BITCAST` from a same-size integer: its low
                 // word and the word above it.
@@ -1248,6 +1260,38 @@ impl<'a> TypeLegalizer<'a> {
         Ok(self.dag.get_node(ISD::Add, vt, &[within, high]))
     }
 
+    /// `src` stored to a new stack slot: the slot's address, the store and
+    /// the frame index.
+    fn store_to_slot(
+        &mut self,
+        src: SDValue,
+    ) -> (SDValue, SDValue, i32) {
+        let vt = self.dag.value_type(src);
+        let size = vt.size_in_bits().div_ceil(8);
+        let cell = self.dag.create_stack_temporary(size, 4);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let info = self.slot_info(src, cell);
+        let entry = self.dag.entry_node();
+        let store = self.dag.get_store(entry, src, slot, info);
+        (slot, store, cell)
+    }
+
+    fn slot_info(
+        &self,
+        src: SDValue,
+        cell: i32,
+    ) -> super::dag::MemInfo {
+        super::dag::MemInfo {
+            mem_vt: self.dag.value_type(src),
+            align: 4,
+            volatile: false,
+            base: super::dag::MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+        }
+    }
+
     /// A load or store through a far pointer: the access is at the offset
     /// word, and `ES` is set to the selector before it (`MemInfo::space` 259
     /// makes the access `es:`-relative). Ordered by the chain only (SD209).
@@ -1377,6 +1421,33 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store if at == 2 => self.expand_far_address(node, at),
             super::x86isd::CALL if at == 1 => self.expand_far_call(node),
             x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
+            ISD::BitCast if self.dag.value_type(node).is_floating_point() => {
+                // `ExpandOp_BITCAST` to a float: the halves stored to a stack
+                // slot, the float loaded from it.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                let vt = self.dag.value_type(node);
+                let size = vt.size_in_bits().div_ceil(8);
+                let cell = self.dag.create_stack_temporary(size, 4);
+                let pointer = self.dag.config().pointer;
+                let slot = self.dag.get_frame_index(pointer, cell);
+                let half = self.dag.value_type(lo);
+                let info = super::dag::MemInfo {
+                    mem_vt: half,
+                    align: 4,
+                    volatile: false,
+                    base: super::dag::MemBase::Stack(cell),
+                    ext: None,
+                    space: 0,
+                };
+                let step = self.dag.get_constant(u128::from(half.size_in_bits() / 8), pointer);
+                let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, step]);
+                let entry = self.dag.entry_node();
+                let (low_store, high_store) =
+                    (self.dag.get_store(entry, lo, slot, info), self.dag.get_store(entry, hi, high_slot, info));
+                let stores = self.dag.get_token_factor(&[low_store, high_store]);
+                let load = super::dag::MemInfo { mem_vt: vt, ..info };
+                self.dag.get_load(vt, stores, slot, load)
+            }
             ISD::BitCast => {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
                 // joined.
