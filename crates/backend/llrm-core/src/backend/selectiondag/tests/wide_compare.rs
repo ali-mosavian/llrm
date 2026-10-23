@@ -1,9 +1,7 @@
 use super::super::legalize_types::TypeLegalizer;
 use super::*;
 
-fn legalized(
-    build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue,
-) -> (SelectionDAG, SDValue) {
+fn legalized(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let wide = |dag: &mut SelectionDAG, at| {

@@ -1085,7 +1085,8 @@ impl<'a> TypeLegalizer<'a> {
             (self.expanded_integer(self.dag.operand(setcc, 0)), self.expanded_integer(self.dag.operand(setcc, 1)));
         let half = self.dag.value_type(ll);
         if matches!(code, CondCode::SetEq | CondCode::SetNe) {
-            let (low, high) = (self.dag.get_node(ISD::Xor, half, &[ll, rl]), self.dag.get_node(ISD::Xor, half, &[lh, rh]));
+            let (low, high) =
+                (self.dag.get_node(ISD::Xor, half, &[ll, rl]), self.dag.get_node(ISD::Xor, half, &[lh, rh]));
             let both = self.dag.get_node(ISD::Or, half, &[low, high]);
             let zero = self.dag.get_constant(0, half);
             return self.dag.get_setcc(vt, both, zero, code);
