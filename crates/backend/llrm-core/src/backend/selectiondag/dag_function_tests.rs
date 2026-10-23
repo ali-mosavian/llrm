@@ -267,7 +267,8 @@ entry:
 #[test]
 fn a_local_is_a_frame_cell_below_bp() {
     let module = llrm_mir::parse::module(LOCAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu")).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let cells: Vec<i64> = done
         .body
         .insns()
