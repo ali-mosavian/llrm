@@ -290,6 +290,107 @@ b0:
     assert_eq!(aggregate.get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default()), ModRefInfo::NoModRef);
 }
 
+/// The pin's answers (`opt -aa-pipeline=basic-aa -passes=aa-eval
+/// -print-all-alias-modref-info`, d1106deb71cc) for a call against the slots of
+/// the frame: a slot the call is not given and nothing captured before it is
+/// apart from it, a slot passed to it (or to an earlier call that captured it)
+/// is not; `lifetime.end` of one slot is apart from every other. The walker's
+/// call queries go to this stack, so a "no" here is a "no clobber" in codegen.
+#[test]
+fn a_call_against_the_frames_slots_answers_as_the_pins_basic_aa_does() {
+    use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
+    let ask = |text: &str, call_of: &str, slots: &[(&str, ModRefInfo)]| {
+        let module = parsed(text);
+        let info = compute(&module);
+        let layout = crate::testing::layout(&module);
+        let f = crate::testing::function(&module, "f");
+        let unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+        let call = f
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                matches!(f.instruction(inst).opcode, Opcode::Call(_))
+                    && llrm_mir::memory::callee(unit.context, f, inst)
+                        .and_then(|one| module.globals.get(one.0 as usize))
+                        .is_some_and(|global| global.name.owned().is_some_and(|text| text.contains(call_of)))
+            })
+            .expect("the call");
+        let mut aggregate = crate::aggregate::AggregateAA::new();
+        aggregate.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+        aggregate.add_aa_result(GlobalsAAResult::new(&unit, &info));
+        for (loaded, expected) in slots {
+            let value = crate::testing::value(f, loaded);
+            let load = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+            let location = MemoryLocation::get(&unit, load).expect("a load");
+            let found = aggregate.get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default());
+            assert_eq!(found, *expected, "%{loaded} against @{call_of}");
+        }
+    };
+    let prelude = "declare void @pak_seek(ptr, ptr)
+declare void @load_stream(ptr, ptr, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+
+";
+    let body = |captures_bytes: &str| {
+        format!(
+            "{prelude}define i32 @f(ptr %w) {{
+b0:
+  %path = alloca [24 x i8]
+  %bytes = alloca i32
+  %im = alloca [72 x i8]
+  %other = alloca i32
+  {captures_bytes}
+  call void @load_stream(ptr %w, ptr %im, ptr %path)
+  %v = load i32, ptr %bytes
+  %u = load i32, ptr %im
+  %p = load i8, ptr %path
+  call void @llvm.lifetime.end.p0(i64 4, ptr %other)
+  ret i32 %v
+}}
+"
+        )
+    };
+    let apart = ModRefInfo::NoModRef;
+    let both = ModRefInfo::ModRef;
+    ask(&body("call void @pak_seek(ptr %w, ptr %path)"), "load_stream", &[("v", apart), ("u", both), ("p", both)]);
+    ask(&body("call void @pak_seek(ptr %bytes, ptr %path)"), "load_stream", &[("v", both), ("u", both), ("p", both)]);
+    ask(&body("call void @pak_seek(ptr %w, ptr %path)"), "lifetime.end", &[("v", apart), ("u", apart), ("p", apart)]);
+    // Far pointers: arguments cannot point at a slot made after them, one a
+    // call captured included; `memset` writes its destination alone.
+    let far = |call: &str| {
+        format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @cap(ptr)
+declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define i16 @f(ptr addrspace(1) %far, ptr %near) {{
+b0:
+  %slot = alloca [8 x i8]
+  %slot2 = alloca [8 x i8]
+  call void @cap(ptr %slot2)
+  {call}
+  %a = load i16, ptr %slot
+  %b = load i16, ptr %slot2
+  %c = load i16, ptr %near
+  %d = load i16, ptr addrspace(1) %far
+  ret i16 %a
+}}
+"
+        )
+    };
+    ask(
+        &far("call void @llvm.memcpy.p1.p0.i16(ptr addrspace(1) %far, ptr %near, i16 8, i1 false)"),
+        "memcpy",
+        &[("a", apart), ("b", apart), ("c", both), ("d", both)],
+    );
+    ask(
+        &far("call void @llvm.memset.p0.i16(ptr %slot, i8 0, i16 8, i1 false)"),
+        "memset",
+        &[("a", ModRefInfo::Mod), ("b", apart), ("c", apart), ("d", apart)],
+    );
+}
+
 /// DEVIATE G8 takes the globals the program does not export as local. QB's
 /// `VARPTR`, `VARSEG` and `@` still make one reachable by a far pointer: the
 /// address passed to a call, turned into an integer or stored is taken, so
