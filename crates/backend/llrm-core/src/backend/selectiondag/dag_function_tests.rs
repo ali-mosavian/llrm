@@ -620,6 +620,40 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
 
+const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ]
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+";
+
+/// A `switch` lowers to compare-and-branch blocks the builder makes after the
+/// switch's own; they were refused ("a switch lowering", 5 programs of the
+/// m32 execution run). Each is emitted after the block that made it and every
+/// branch names one.
+#[test]
+fn a_switch_is_a_chain_of_compare_and_branch_blocks() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = done.body.blocks.len();
+    assert!(blocks > 5, "the switch's blocks and its four targets: {blocks}");
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in done.body.blocks.iter() {
+        assert!(block.succ.iter().all(|s| at.contains(s)), "{:?} leaves for a block that is not there", block.succ);
+    }
+}
+
 const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i64 @f(i64 %a, i64 %b) {
 entry:

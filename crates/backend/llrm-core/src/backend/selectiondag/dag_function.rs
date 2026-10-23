@@ -423,7 +423,23 @@ fn selected_in(
     let mut state = EmitState::default();
     // A block's address is fixed before any block is emitted: a branch names
     // the blocks after it.
-    let block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
+    let mut block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
+    // Every block is built before any is emitted: the blocks a `switch`
+    // lowering makes (`CreateMachineBasicBlock`) are named by the branches
+    // before them, so their addresses are fixed here too. Each is emitted
+    // after the block that made it and its LIR blocks belong to that block's
+    // range, where the phis of its successors look for their edges.
+    let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
+    for &block in function.layout() {
+        let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
+            .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        let extras = std::mem::take(&mut built.extra);
+        work.push((block, block, built));
+        for (id, extra) in extras {
+            block_at.insert(id.0, state.next_address());
+            work.push((id, block, extra));
+        }
+    }
     let globals = Globals(module);
     // What a call destroys: the general registers the convention does not
     // keep for the caller.
@@ -460,12 +476,7 @@ fn selected_in(
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
-    for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
-            .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
-        if !built.extra.is_empty() {
-            return refuse("a switch lowering");
-        }
+    for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
@@ -518,8 +529,9 @@ fn selected_in(
             (*at, name)
         }));
         emitted.extend(done.blocks);
-        made.insert(block.0, from..emitted.len());
-        exports.push((block, built.phi_updates));
+        let start = made.get(&parent.0).map_or(from, |range| range.start);
+        made.insert(parent.0, start..emitted.len());
+        exports.push((parent, built.phi_updates));
     }
     let succ = successors(&emitted);
     // Phis: the successor's phi takes, from each LIR block of the predecessor
