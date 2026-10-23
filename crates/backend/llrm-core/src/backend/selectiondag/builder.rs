@@ -340,6 +340,20 @@ impl Builder<'_> {
         }
     }
 
+    /// `getNumRegistersForCallingConv`: an integer a convention returns in
+    /// `registers` registers is that many equal parts, even when it is a
+    /// register type itself (an `i32` in `dx:ax` at real mode).
+    fn parts_in(
+        &self,
+        vt: EVT,
+        registers: usize,
+    ) -> Result<(EVT, usize), Refused> {
+        if registers == 2 && vt.is_integer() && vt.size_in_bits() % 2 == 0 {
+            return Ok((EVT::integer(vt.size_in_bits() / 2), 2));
+        }
+        self.parts(vt)
+    }
+
     /// `getCopyToParts` for two parts: the high half is extracted first.
     fn split_value(
         &mut self,
@@ -741,7 +755,7 @@ impl Builder<'_> {
             self.dag.set_root(SDValue { node: pop.node, res: 1 });
             return Ok(Some(pop));
         }
-        let (part_vt, parts) = self.parts(vt)?;
+        let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         if plan.returns.len() != parts {
             return Err(Refused("result in registers the value does not fill"));
         }
@@ -787,7 +801,7 @@ impl Builder<'_> {
                 // RET_GLUE's operand
                 ops.push(value);
             } else {
-                let (part_vt, parts) = self.parts(vt)?;
+                let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
                 if self.convention.returns.len() != parts || (parts == 1 && part_vt != vt) {
                     return Err(Refused("result in registers the value does not fill"));
                 }

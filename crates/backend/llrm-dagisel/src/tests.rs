@@ -1505,3 +1505,37 @@ mod instruction_names {
         assert_eq!(name(x86::EAX), None, "a register is not an instruction");
     }
 }
+
+mod fcmp_without_fcomi {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `fucom; fnstsw ax; sahf`: the table's `UCOM_FpIr64` needs `fcomi`, so an
+    /// `FCMP` was `CannotSelect` on every CPU here (the qbq corpus: 4
+    /// functions).
+    #[test]
+    fn a_double_compare_is_fucom_fnstsw_sahf() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let cmp = dag.node(x86isd::FCMP, &[mvt::i32], &[a, b]);
+        let user = dag.node(x86isd::SETCC, &[mvt::i8], &[SDValue::new(cmp, 0)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, cmp), Outcome::Selected);
+
+        let flags = dag.nodes[user as usize].ops[0];
+        assert_eq!(dag.nodes[flags.node as usize].machine, Some(x86::SAHF));
+        let machine: Vec<u16> = dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect();
+        assert!(machine.contains(&x86::UCOM_Fpr64) && machine.contains(&x86::FNSTSW16r), "{machine:?}");
+    }
+}

@@ -6943,7 +6943,9 @@ impl Selector<'_, '_, '_> {
     /// mem_length_boundaries 32764 and 32768); `scroll` is a vsgcc row a
     /// libcall would move. Exit: a runtime `_memcpy` in each C target and a
     /// target "has memcpy" fact, then the libcall here, queued after the
-    /// tuning phase.
+    /// tuning phase. Progress: the libcall is `memcpycall.rs`, a MIR rewrite
+    /// run where the target's `c.toml` names `libcalls = ["memcpy"]`; off
+    /// until the m32 runtimes ship the routine (#3977).
     ///
     /// DEVIATE I2 (no number yet): under `minsize` (-Oz) the pin copies by
     /// `rep movsb` of the whole length (#L333-L335), saving the tail moves;

@@ -230,6 +230,7 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
     Some(match register {
+        x86::AH => RegId::AH,
         x86::AX => RegId::AX,
         x86::DX => RegId::DX,
         x86::EAX => RegId::EAX,
