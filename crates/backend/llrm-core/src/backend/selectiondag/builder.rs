@@ -506,7 +506,12 @@ impl Builder<'_> {
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let vt = self.type_of(self.function.value(arg).ty)?;
-            let (part_vt, parts) = self.parts(vt)?;
+            // the registers a convention names split a value as
+            // `getNumRegisters` does
+            let (part_vt, parts) = match self.convention.parameters.get(at) {
+                Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
+                _ => self.parts(vt)?,
+            };
             let entry_node = self.dag.entry_node();
             let mut pieces = Vec::new();
             match self.convention.parameters.get(at) {
@@ -734,7 +739,11 @@ impl Builder<'_> {
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
         for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
-            let (part_vt, parts) = self.parts(self.dag.value_type(*value))?;
+            let vt = self.dag.value_type(*value);
+            let (part_vt, parts) = match parameter {
+                Parameter::Registers(regs) => self.parts_in(vt, regs.len())?,
+                _ => self.parts(vt)?,
+            };
             let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
                 Parameter::Cell(displacement) => {

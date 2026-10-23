@@ -111,3 +111,20 @@ fn a_window_is_one_node_and_a_near_pointer_is_in_dgroup() {
     let segment = dag.nodes().iter().find(|node| node.opcode == own::SEGMENT_OF).expect("a segment");
     assert_eq!(segment.data, super::dag::NodeData::None);
 }
+
+/// A far pointer a register convention passes in two registers (`ax:dx`,
+/// offset then selector) is two parts, as an argument and as a call's
+/// operand. Before, the builder counted it one part against two registers
+/// and refused ("argument passed in several places": `fsgs_call`).
+#[test]
+fn a_far_pointer_in_two_registers_is_two_parts() {
+    let dag = built(
+        "declare watcallcc i16 @w(ptr addrspace(1))\n\
+         define watcallcc i16 @f(ptr addrspace(1) %p) {\n  %r = call watcallcc i16 @w(ptr addrspace(1) %p)\n  ret i16 %r\n}\n",
+    );
+    let dump = dag.dump();
+    assert!(dump.contains("CopyFromReg") && dump.contains("$ax") && dump.contains("$dx"), "{dump}");
+    assert!(dump.contains("build_pair"), "{dump}");
+    let copies: Vec<&str> = dump.lines().filter(|line| line.contains("CopyToReg") && line.contains("$")).collect();
+    assert!(copies.iter().any(|line| line.contains("$ax")) && copies.iter().any(|line| line.contains("$dx")), "{dump}");
+}
