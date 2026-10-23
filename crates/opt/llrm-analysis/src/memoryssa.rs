@@ -1195,7 +1195,10 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| self.may_clobber_cached(cell, store));
+            let found = match self.call_clobbers(site, cell) {
+                Some(asked) => asked,
+                None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+            };
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -1217,6 +1220,29 @@ impl MemorySSA<'_> {
         }
         asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// Whether the call `site` may write `cell`, as the pin's AA stack answers
+    /// `getModRefInfo(Call, Loc)` (TBAA, BasicAA, GlobalsAA; MemorySSA.cpp
+    /// `instructionClobbersQuery` L320); none for another instruction or a
+    /// cell with no pointer, which the footprint answers.
+    fn call_clobbers(
+        &self,
+        site: InstId,
+        cell: &MemRef,
+    ) -> Option<bool> {
+        use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
+        if !matches!(self.unit.function.instruction(site).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+            return None;
+        }
+        let location = MemoryLocation::new(cell.pointer?, LocationSize::Precise(u64::from(cell.width)));
+        let mut aggregate = crate::aggregate::AggregateAA::new();
+        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
+        aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        if let Some(info) = self.unit.globals_mr {
+            aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));
+        }
+        Some(aggregate.get_mod_ref_info(site, Some(&location), &mut AAQueryInfo::default()).is_mod_set())
     }
 
     /// `may_clobber`, with the offsets of the pointers remembered.
