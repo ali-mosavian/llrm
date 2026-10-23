@@ -286,8 +286,27 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
 
-/// `name` of `module` selected by the DAG path.
+/// `name` of `module` selected by the DAG path. A panic in a stage (a builder
+/// meeting a type it does not know) is a refusal of the function, as any other
+/// gap: it stopped 18 QCport modules from compiling in the shadow.
 pub fn selected(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+) -> Result<Selected, Unselected> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| selected_in(module, name, arch, cpu, libcalls)))
+        .unwrap_or_else(|why| {
+            let why = why
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
+            refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
+        })
+}
+
+fn selected_in(
     module: &Module,
     name: &str,
     arch: &dyn Target,
