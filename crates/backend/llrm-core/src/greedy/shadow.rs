@@ -722,6 +722,12 @@ pub fn decide_with_split(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
+    if std::env::var("LLRM_MIR_PRINT").is_ok_and(|n| n == body.name) {
+        match crate::backend::mirprint::mir(body) {
+            Ok(text) => eprintln!("{text}"),
+            Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
+        }
+    }
     if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
         for (b, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
