@@ -264,7 +264,7 @@ fn test_jump_to_the_next_block_is_dropped() {
             block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]).into(),
             block(4, vec![_return(4)], vec![]).into(),
         ]),
-        ["L0_1:", "mov ax, bx", "L0_4:", "ret"]
+        ["L0_1:", "mov ax, bx", "ret"]
     );
 }
 
@@ -277,8 +277,9 @@ fn test_source_owned_jump_to_fallthrough_becomes_an_anchor() {
 
     let result = threaded(&source);
 
+    // The block it fell into is one block with it (L1515): the anchor, then the return.
     let kept = &result.blocks[0].insns;
-    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.len(), 2);
     assert_eq!(kept[0].covers, Some((1, 4)));
     assert!(kept[0].what.as_ref().is_some_and(|what| what.op == Operation::Nothing));
 }
@@ -292,7 +293,7 @@ fn test_jump_over_a_block_nothing_reaches_is_dropped() {
             block(5, vec![], vec![]).into(),
             block(9, vec![_return(9)], vec![]).into(),
         ]),
-        ["L0_1:", "mov ax, bx", "L0_9:", "ret"]
+        ["L0_1:", "mov ax, bx", "ret"]
     );
 }
 
@@ -392,8 +393,10 @@ fn test_reachable_inert_source_ownership_is_a_passage_that_keeps_its_bytes() {
 
     let result = threaded(&source);
 
-    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 5, 9]);
-    assert_eq!(result.blocks[0].succ, [9]);
+    // The passage is bypassed and the return it led to is one block with the
+    // block before it (L1515); the passage stays after, for its bytes.
+    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 5]);
+    assert!(result.blocks[0].succ.is_empty());
     assert_eq!(result.blocks[1].insns, [owned]);
     assert!(result.blocks[1].succ.is_empty());
 }
@@ -853,7 +856,7 @@ fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
         count(&result, Operation::Compare),
         count(&source, Operation::Compare),
         "{:?}",
-        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.iter().map(|i| i.what.as_ref().map(|w| format!("{:?}", w.op))).collect::<Vec<_>>())).collect::<Vec<_>>()
     );
 }
 
@@ -1029,7 +1032,7 @@ fn test_loop_test_is_placed_after_its_latch() {
     );
     assert_eq!(
         inner(listed(threaded(&placed(&source).unwrap()), "_f")),
-        ["L0_1:", "L0_8:", "mov ax, cx", "L0_4:", "cmp ax, bx", "jne L0_8", "L0_23:", "ret"]
+        ["L0_1:", "L0_8:", "mov ax, cx", "cmp ax, bx", "jne L0_8", "L0_23:", "ret"]
     );
 }
 
@@ -1147,7 +1150,6 @@ fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
             "jl L0_8",
             "L0_20:",
             "mov ax, cx",
-            "L0_12:",
             "ret",
         ]
     );
@@ -1896,6 +1898,29 @@ fn test_a_one_block_loop_is_folded_into_a_branch_back() {
     let blocks: Vec<Block> = vec![
         block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
         block(4, vec![_compare(4), _branch(5, "je", 9), _jump(6, 4)], vec![9, 4]).into(),
+        block(7, vec![_move(7, bx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ];
+    let folded = branchfold::folded(&body("f", 1, blocks), &std::collections::BTreeSet::new());
+    let tail: Vec<(String, Option<i64>)> = physical(&folded)
+        .into_iter()
+        .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
+}
+
+/// A block the block before falls into, and nothing else enters, is one block
+/// with it (`OptimizeBlock` L1515). Left apart, the loop `4: mov; 6: cmp; jcc
+/// Out; jmp 4` was two blocks, the jump went to a block that is not the one it
+/// ends, and the loop kept `jcc Out; jmp Loop` instead of `jncc Loop; jmp Out`
+/// (the L1685 reversal needs the one-block loop).
+#[test]
+fn test_a_block_only_the_block_before_falls_into_is_merged_into_it() {
+    let blocks: Vec<Block> = vec![
+        block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+        block(4, vec![_move(4, bx())], vec![6]).into(),
+        block(6, vec![_compare(6), _branch(7, "je", 9), _jump(8, 4)], vec![9, 4]).into(),
         block(7, vec![_move(7, bx()), _return(8)], vec![]).into(),
         block(9, vec![_return(9)], vec![]).into(),
     ];
