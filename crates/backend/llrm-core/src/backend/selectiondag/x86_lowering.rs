@@ -304,7 +304,11 @@ fn is_profitable_to_use_flag_op(
     dag: &SelectionDAG,
     op: SDValue,
 ) -> bool {
-    dag.users(op).all(|user| matches!(dag.opcode(SDValue { node: user, res: 0 }), ISD::CopyToReg | ISD::SetCC | ISD::Store))
+    dag.users(op)
+        .all(|user| matches!(
+            dag.opcode(SDValue { node: user, res: 0 }),
+            ISD::CopyToReg | ISD::SetCC | ISD::Store
+        ))
 }
 
 /// `EmitTest`: the flags of `op` against zero. An arithmetic result that only
@@ -322,7 +326,10 @@ fn emit_test(
     let need_carry = matches!(code, cond::A | cond::AE | cond::B | cond::BE);
     let wraps = !matches!(dag.opcode(op), ISD::Add | ISD::Sub | ISD::Mul | ISD::Shl)
         || dag.node(op).flags.0 & SDNodeFlags::NO_SIGNED_WRAP.0 == 0;
-    let need_overflow = matches!(code, cond::G | cond::GE | cond::L | cond::LE | cond::O | cond::NO) && wraps;
+    let need_overflow = matches!(
+        code,
+        cond::G | cond::GE | cond::L | cond::LE | cond::O | cond::NO
+    ) && wraps;
     if op.res != 0 || need_carry || need_overflow {
         return test(dag);
     }
