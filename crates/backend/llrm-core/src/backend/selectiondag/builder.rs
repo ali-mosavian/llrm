@@ -12,6 +12,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
 mod asmcall;
+mod codecall;
 mod mathops;
 mod memops;
 mod switch;
@@ -577,6 +578,9 @@ impl Builder<'_> {
             let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
             if intrinsic == llrm_mir::intrinsics::Intrinsic::Asm {
                 return self.visit_asm(instruction, &name);
+            }
+            if intrinsic == llrm_mir::intrinsics::Intrinsic::Code {
+                return self.visit_code(instruction, &name);
             }
             // the refusal names the intrinsic; the few that are never built are
             // leaked once each
