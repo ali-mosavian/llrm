@@ -122,7 +122,7 @@ impl CombineHooks for X86Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Mul
+        op == ISD::Mul || op == x86isd::CMOV
     }
 
     fn perform_dag_combine(
@@ -133,6 +133,7 @@ impl CombineHooks for X86Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
+            x86isd::CMOV => combine_cmov(dag, node),
             _ => None,
         }
     }
@@ -629,6 +630,63 @@ fn lower_float_brcond(
             Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
         }
     }
+}
+
+/// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select
+/// between two integer constants becomes the condition, widened, shifted,
+/// added to or scaled: `c ? 8 : 0` is `zext(setcc) << 3`, `c ? k+1 : k` is
+/// `zext(setcc) + k`, and a difference of 2, 3, 4, 5, 8 or 9 (one `lea`) is
+/// `zext(setcc) * d + k`. (`combineSetCCEFLAGS`, the `x == c` register form,
+/// the `adc` form and the double `cmov` are not translated, SD200.)
+fn combine_cmov(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (mut false_op, mut true_op) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut code = dag.constant(dag.operand(node, 2))?;
+    let flags = dag.operand(node, 3);
+    if true_op == false_op {
+        return Some(true_op);
+    }
+    let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
+    if !vt.is_integer() {
+        return None;
+    }
+    // The true value is the larger one.
+    if true_c < false_c {
+        code ^= 1;
+        std::mem::swap(&mut true_c, &mut false_c);
+        std::mem::swap(&mut true_op, &mut false_op);
+    }
+    let mask = super::fold::mask(vt.size_in_bits());
+    let difference = true_c.wrapping_sub(false_c) & mask;
+    let widened = |dag: &mut SelectionDAG| {
+        let code = cond_code(dag, code);
+        let test = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+        if vt == EVT::I8 { test } else { dag.get_node(ISD::ZeroExtend, vt, &[test]) }
+    };
+    if false_c == 0 && true_c.is_power_of_two() {
+        let test = widened(dag);
+        let by = dag.get_constant(u128::from(true_c.trailing_zeros()), EVT::I8);
+        return Some(dag.get_node(ISD::Shl, vt, &[test, by]));
+    }
+    if false_c + 1 == true_c {
+        let test = widened(dag);
+        return Some(dag.get_node(ISD::Add, vt, &[test, false_op]));
+    }
+    if vt == EVT::I32 && matches!(difference, 1 | 2 | 3 | 4 | 5 | 8 | 9) {
+        let mut result = widened(dag);
+        if difference != 1 {
+            let scale = dag.get_constant(difference, vt);
+            result = dag.get_node(ISD::Mul, vt, &[result, scale]);
+        }
+        if false_c != 0 {
+            result = dag.get_node(ISD::Add, vt, &[result, false_op]);
+        }
+        return Some(result);
+    }
+    None
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
