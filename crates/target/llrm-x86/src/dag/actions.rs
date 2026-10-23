@@ -280,9 +280,15 @@ impl TargetLowering {
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`
-    /// pointers and the far pointer's type action. The pin has no 16-bit
-    /// mode, so its 32-bit tables are the oracle for everything but the
-    /// pointer type.
+    /// pointers and the far pointer's type action.
+    ///
+    /// DEVIATE SD307: the pin has no 16-bit model, so this table is the 32-bit
+    /// one, kept to what the old m16 selector covers (`tests/m16_coverage.rs`
+    /// lists the functions that must stay selectable), not derived from the
+    /// pin. Owner sdag-c. Exit: the m16 shadow against the old selector
+    /// matches (11-20); the table is then checked against the old selector's
+    /// output until the old selector is deleted at the switch. Review
+    /// 2026-12-10.
     pub fn x86_16(
         features: Features,
         ptr: MVT,
