@@ -473,7 +473,7 @@ pub fn optimized(
                 .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
         })?;
     }
-    if options.isel == crate::backend::shadow::Selector::Dag {
+    if crate::backend::memsetpattern::expands_for(options.isel) {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
         })?;

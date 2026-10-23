@@ -866,9 +866,9 @@ b3:
     let (_, function) = module.function_mut("f").expect("@f");
     let function = &*function;
     let before = llrm_analysis::cfg::shapes_derived();
-    let first = super::loop_form_blocks(function);
+    let first = super::loop_form_blocks(function, None);
     let once = llrm_analysis::cfg::shapes_derived() - before;
-    let second = super::loop_form_blocks(function);
+    let second = super::loop_form_blocks(function, None);
     assert_eq!(first, second);
     assert_eq!(llrm_analysis::cfg::shapes_derived() - before, once, "the second ask derived the loops again");
 }

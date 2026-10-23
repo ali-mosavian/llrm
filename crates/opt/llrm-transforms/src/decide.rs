@@ -435,7 +435,10 @@ pub fn _executable_successors(
 /// before the header (its one entry), the one latch, or an exit block only the
 /// loop reaches. A pass that takes them out meets `loopsimplify` putting them
 /// back, round after round.
-pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
+pub(crate) fn loop_form_blocks(
+    function: &Function,
+    loops: Option<Vec<llrm_analysis::graph::loops::Loop>>,
+) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
     // The answer reads the graph alone, and a function met again after passes
     // that left its blocks and edges as they were is asked again (d_faces -O2:
@@ -446,7 +449,7 @@ pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     {
         return found;
     }
-    let found = loop_form_blocks_of(function, &graph);
+    let found = loop_form_blocks_of(loops.unwrap_or_else(|| cfg::loops_of(function)), &graph);
     FORMS.with(|kept| {
         let mut kept = kept.borrow_mut();
         if kept.len() >= FORMS_KEPT {
@@ -465,14 +468,14 @@ thread_local! {
 }
 
 fn loop_form_blocks_of(
-    function: &Function,
+    all_loops: Vec<llrm_analysis::graph::loops::Loop>,
     graph: &[cfg::Block],
 ) -> BTreeSet<i64> {
     let predecessors = loops::predecessors(graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
     let none: &[i64] = &[];
     let mut loop_edges = BTreeSet::new();
-    for loop_ in cfg::loops_of(function) {
+    for loop_ in all_loops {
         let outside = predecessors
             .get(&loop_.header)
             .unwrap_or(none)

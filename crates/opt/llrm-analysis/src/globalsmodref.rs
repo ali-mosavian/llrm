@@ -914,7 +914,14 @@ impl crate::aa::AAResults for GlobalsAAResult<'_> {
             (crate::basicaa::underlying_object(self.unit, a.ptr), crate::basicaa::underlying_object(self.unit, b.ptr));
         // The global's address taken: pretend it is not known to be a pointer
         // to it.
-        let tracked = |object| self.global_of(object).filter(|&global| self.info.is_non_address_taken(global));
+        // DEVIATE G10: a global the unit states unaddressed (`-oa`, INIT `sw`)
+        // is reached by its name alone, as one the use scan finds
+        // non-address-taken is.
+        let tracked = |object| {
+            self.global_of(object).filter(|&global| {
+                self.info.is_non_address_taken(global) || self.unit.globals_aa.is_some_and(|aa| aa.tracked(global))
+            })
+        };
         let (one, two) = (tracked(first), tracked(second));
         if one.is_some() && two.is_some() && one != two {
             return crate::aa::AliasResult::NoAlias;

@@ -141,8 +141,3 @@ id = "unit llrm-transforms::promote::tests::an_unplaced_store_of_another_type_le
 issue = 3190
 owner = "basicaa-port-2163"
 date = "2026-10-23"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_a_volatile_far_store_to_video_memory_leaves_the_loop_its_cells"
-issue = 3994
-owner = "licm"
-date = "2026-10-23"
