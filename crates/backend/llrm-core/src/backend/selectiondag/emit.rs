@@ -401,6 +401,20 @@ impl Emitter<'_, '_> {
                 self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
                 Ok(Some(()))
             }
+            "SETCCr" => {
+                let cc = node
+                    .ops
+                    .iter()
+                    .find_map(|op| self.dag.constant(*op))
+                    .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
+                    as usize;
+                let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+                let held = self.fresh(1);
+                self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                let name = format!("set{}", &jump[1..]);
+                self.push(Operation::Unary, &name, vec![Loc::Held(held)], Vec::new());
+                Ok(Some(()))
+            }
             "LEA32r" | "LEA16r" => {
                 let cell = self.cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
                 let held = self.fresh(width);
