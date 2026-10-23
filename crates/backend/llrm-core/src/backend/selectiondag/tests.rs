@@ -21,6 +21,7 @@ mod expand_node;
 mod far_load;
 mod float_constants;
 mod get_node;
+mod fp_to_int;
 mod global_address;
 mod i1_branch;
 mod legalize_dag;
