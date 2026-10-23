@@ -254,9 +254,6 @@ pub struct Options {
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
-    /// Both routes through the machine phases are made and the cheaper kept
-    /// (`-fallocation-routes`; -Omax); else the allocator alone.
-    pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
@@ -318,7 +315,6 @@ impl Default for Options {
             switch_conversion: true,
             jump_tables: true,
             search: false,
-            routes: false,
             exhaustive: false,
         }
     }
@@ -395,7 +391,6 @@ impl Options {
             unswitch: true,
             unroll_and_jam: true,
             search: true,
-            routes: true,
             exhaustive: true,
             rounds: usize::MAX,
             ..Self::default()
@@ -420,11 +415,6 @@ impl Options {
     /// cheapest.
     pub fn searches(&self) -> bool {
         self.search
-    }
-
-    /// Whether both routes are made and the cheaper kept.
-    pub fn compares_routes(&self) -> bool {
-        self.routes
     }
 
     /// Whether the search tries every shape of a body.

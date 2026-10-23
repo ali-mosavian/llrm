@@ -23,7 +23,6 @@ fn pipeline(arguments: &[&str]) -> Options {
 /// LLVM's greedy allocator do: no search of other shapes and no second route
 /// (d_faces compile -34% at -O2, -32% at -O3, -30% at -Os; no vsgcc row newly
 /// below the better of gcc and clang in clocks). `-f[no-]allocation-search` and
-/// `-f[no-]allocation-routes` set each anywhere, and the two are independent.
 #[test]
 fn test_a_function_is_allocated_once_below_omax_and_the_flags_set_each_anywhere() {
     for (level, on) in [
@@ -36,17 +35,9 @@ fn test_a_function_is_allocated_once_below_omax_and_the_flags_set_each_anywhere(
         ("-Omax", true),
     ] {
         assert_eq!(pipeline(&[level]).searches(), on, "{level}");
-        assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
         assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
         assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
-        assert_eq!(
-            pipeline(&[level, "-fno-allocation-search"]).compares_routes(),
-            on,
-            "{level}: the search is not the routes"
-        );
     }
-    assert!(pipeline(&["-O0", "-fallocation-routes"]).compares_routes());
-    assert!(!pipeline(&["-Omax", "-fno-allocation-routes"]).compares_routes());
 }
 
 /// Only -Omax tries every shape of a body; the other levels try the one its
@@ -384,4 +375,17 @@ fn test_isel_names_the_selector() {
     assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Selector::Shadow);
     assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);
     assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
+}
+
+/// `-fallocation-routes` chose between the allocator alone and a second route
+/// through the spiller; the second route is gone, so the flag is refused as
+/// unknown, where it used to be taken and do nothing.
+#[test]
+fn test_the_removed_allocation_routes_flags_are_not_flags() {
+    for flag in ["-fallocation-routes", "-fno-allocation-routes"] {
+        let argv = vec![flag.to_owned()];
+        let mut at = 0;
+        let refused = Flags::default().take(&argv, &mut at).expect_err(&format!("{flag} is still taken"));
+        assert!(refused.contains("unknown option"), "{refused}");
+    }
 }
