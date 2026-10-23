@@ -209,6 +209,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         match self.dag.opcode(node) {
+            ISD::MergeValues => self.visit_merge_values(node),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
             ISD::Or => self.visit_or(node),
@@ -218,6 +219,25 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self.visit_extend(node),
             _ => None,
         }
+    }
+
+    /// `visitMERGE_VALUES` ([L2446][pin]): each result is its operand, so a
+    /// lowering that returns several values as one `MERGE_VALUES` leaves no
+    /// such node for selection. Returns the node itself so it is not looked
+    /// at again.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2446
+    fn visit_merge_values(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let count = self.dag.node(node).values.len();
+        for res in 0..count {
+            let operand = self.dag.operand(node, res);
+            self.replace_value(SDValue { node: node.node, res: res as u8 }, operand);
+        }
+        Some(SDValue { node: node.node, res: 0 })
     }
 
     /// The users of `old` read `new`, and are looked at again.
