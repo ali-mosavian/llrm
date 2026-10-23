@@ -41,6 +41,8 @@ fn the_typed_parser_builds_the_module_the_table_driven_parser_builds() {
                 Ok(new) => new,
                 // programs written to be refused (BC refuses q45n41's 41-character name too)
                 Err(_) if family.contains("/negative/") || BC_REFUSES.iter().any(|name| path.ends_with(name)) => continue,
+                // OPTION EXPLICIT is VBDOS BC's alone ("BASE missing" in the others)
+                Err(_) if dialect != Dialect::VbDos && source.to_ascii_lowercase().contains("option explicit") => continue,
                 // an underscore in a name is VBDOS BC's alone; a dialect-neutral program may use it
                 Err(error) if error.message.contains("underscore") && dialect != Dialect::VbDos => continue,
                 Err(error) => panic!("{} under {dialect:?}: {error:?}", path.display()),
