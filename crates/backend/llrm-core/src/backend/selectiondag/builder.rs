@@ -706,7 +706,14 @@ impl Builder<'_> {
         }
         let vt = self.type_of(result_type)?;
         if vt.is_floating_point() {
-            return Err(Refused("floating-point result of a call"));
+            // X86's `LowerCallResult`: the value is popped from st(0), which
+            // the allocator knows as `FP0`
+            let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
+            let pop = self
+                .dag
+                .get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+            self.dag.set_root(SDValue { node: pop.node, res: 1 });
+            return Ok(Some(pop));
         }
         let (part_vt, parts) = self.parts(vt)?;
         if plan.returns.len() != parts {
