@@ -61,8 +61,8 @@ def errors(out):
         if match and i + 1 < len(rows) and "^" in rows[i + 1]:
             caret = rows[i + 1].index("^")
             found.append((match.group(1), match.group(3).rstrip(), caret, rows[i + 1][caret + 1:].strip()))
-        elif re.match(r"^[A-Z][A-Za-z ]+: ", row) and not row.startswith("Microsoft"):
-            loose.append(row.strip())
+        elif re.match(r"^[A-Z][A-Za-z ]+: ", row.lstrip("\x07")) and not row.startswith("Microsoft"):
+            loose.append(row.replace("\x07", "").strip())
     return found, loose
 
 

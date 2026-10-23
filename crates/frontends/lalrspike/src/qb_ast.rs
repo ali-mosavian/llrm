@@ -1337,7 +1337,9 @@ impl Ast<'_> {
         if self.eat(Kw::NewLine) {
             return self.block_if(condition, keyword_span);
         }
-        let then_branch = self.single_line_branch()?;
+        // `IF c THEN: stmt` and `IF c THEN ELSE stmt`: the THEN branch may start with colons or be empty
+        while self.eat(Kw::Colon) {}
+        let then_branch = if self.is(Kw::ELSE) { Vec::new() } else { self.single_line_branch()? };
         self.finish_if_with(condition, keyword_span, then_branch)
     }
 
@@ -2027,6 +2029,7 @@ impl Ast<'_> {
             }
         }
         let unchecked = declaration && !self.is(Kw::LParen);
+        let empty_list = self.is(Kw::LParen) && self.is_n(1, Kw::RParen);
         let parameters = self.parameters()?;
         if kind == ProcedureKind::Function && self.eat(Kw::AS) {
             result = Some(self.declaration_type()?);
@@ -2046,6 +2049,7 @@ impl Ast<'_> {
             private: false,
             module_scope: false,
             unchecked,
+            empty_list,
             span,
         });
         if !declaration {
@@ -2108,6 +2112,7 @@ impl Ast<'_> {
             private: false,
             module_scope: true,
             unchecked: false,
+            empty_list: false,
             span,
         });
         if !inline {

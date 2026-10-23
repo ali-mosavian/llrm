@@ -1517,7 +1517,7 @@
 1516	ok	
 1517	ok	
 1518	ok	
-1519	ok	
+1519	semantic	15:4 Label not defined
 1520	semantic	15:4 String expression required
 1521	syntax	15:6 syntax error
 1522	semantic	15:4 String expression required
@@ -2390,15 +2390,15 @@
 2389	semantic	15:3 Type mismatch
 2390	semantic	15:3 Type mismatch
 2391	syntax	15:14 syntax error
-2392	ok	
-2393	ok	
-2394	ok	
-2395	ok	
-2396	ok	
-2397	ok	
-2398	ok	
-2399	ok	
-2400	ok	
+2392	semantic	15:11 Label not defined
+2393	semantic	15:10 Label not defined
+2394	semantic	15:11 Label not defined
+2395	semantic	15:11 Label not defined
+2396	semantic	15:11 Label not defined
+2397	semantic	15:17 Label not defined
+2398	semantic	15:16 Label not defined
+2399	semantic	15:11 Label not defined
+2400	semantic	15:12 Label not defined
 2401	semantic	15:3 Type mismatch
 2402	semantic	15:3 Type mismatch
 2403	syntax	15:13 syntax error
@@ -2600,7 +2600,7 @@
 2599	syntax	15:8 syntax error
 2600	ok	
 2601	syntax	15:9 syntax error
-2602	ok	
+2602	semantic	15:0 Label not defined
 2603	syntax	15:7 syntax error
 2604	ok	
 2605	syntax	15:6 syntax error
@@ -2618,7 +2618,7 @@
 2617	ok	
 2618	semantic	15:3 Type mismatch
 2619	semantic	15:3 Type mismatch
-2620	ok	
+2620	semantic	15:0 Label not defined
 2621	ok	
 2622	ok	
 2623	ok	
