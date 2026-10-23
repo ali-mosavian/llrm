@@ -27,6 +27,7 @@ Nib programs and fences pulled out of the tests' string literals and the docs
 | Nib, 248 files | 248 | 0 | 0 | 0 |
 | Nib, test snippets and doc fences | 414 | 93 | 0 | 7 |
 | QB family, 591 files | 572 | 8 | 1 | 10 |
+| QB, `ali-mosavian/mgl` (180 `.bas`, 39 `.bi`) | 194 | 15 | 0 | 10 |
 | QB programs in the tests' sources, 487 | 411 | 20 | 42 | 14 |
 
 LALR only, Nib: what the hand parser checks while parsing and the grammar
@@ -34,6 +35,14 @@ leaves to later passes: constant folding (`const X = f()`, unknown constant),
 `@repr`/`@extern` argument validation, a bodiless `fn` without `@extern`.
 LALR only, QB: `COMMON`, `NAME`, `PCOPY` and `OPEN` options, which parse but
 the table-driven builder has no syntax-tree node for.
+
+mgl: the 15 both refuse are mostly lexer errors (a stray CR, an unterminated
+string, a backtick) or constructs the old builder lacks. The 10 LALR-only
+use dotted names with a reserved word in them (`UGL.Z.OFF%`) or `If(` with no
+space, which the old parser stops at. Found and fixed with mgl: dotted and
+keyword-led `CONST` names (`TFX.MASK%`, `mod.mem`), `ERROR$`, and
+`foo (a) * b` as a call whose first argument goes on past its parenthesis
+(arithmetic continuation only; `foo (a) = b` stays an assignment).
 
 Old only, QB test-source programs: 41 of the 42 are QuickrBASIC (`+=`, `FOR
 i AS INTEGER IN ...`, f-strings, `a IF c ELSE b`); the other is `VOLATILE` as a
