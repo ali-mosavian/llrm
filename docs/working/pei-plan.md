@@ -43,3 +43,14 @@ the spiller writes into the instruction. The pin writes a frame index and
 run. Exit: spill cells carry an index and one pass resolves them with
 `frameobjects::calculate_frame_object_offsets`; then `emitPrologue` and
 `emitEpilogue` (PEI-2) replace `prologue.rs` and `masm::parts`.
+
+## FI-1, how (w-5, 2026-10-23; supersedes "spill cells carry an index")
+
+The cells already carry their object: `Frame::tagged` gives every frame cell `Addr::in_slot(home)` (`home` is the first byte of the slot the selector or the spiller laid out) and marks the body `slotted`. So the frame index exists; what is missing is that the displacement is final only after `calculateFrameObjectOffsets`. The step:
+
+1. **Objects** (`FrameFinalize`, after allocation, before `Prologue`): the fixed ones are the incoming arguments (above BP) and the return address; the others are each `Frame::extents` entry (selector allocas) and each spill slot (`Frame::slots`, size `capacities`), keyed by `home`; the callee-saved registers `parts` pushes are the callee-saved objects.
+2. **Layout** by `frameobjects::calculate_frame_object_offsets` (the pin's order and alignment), giving each `home` a new displacement.
+3. **Resolve** (`replaceFrameIndices`): every cell tagged with `home` moves by `new - old`, its offset inside the object kept; `Frame::size()`/`parts`' reserve are the pin's stack size.
+4. **PEI-2** then replaces `prologue.rs`/`masm::parts` for flat m32 with `emit_prologue`/`emit_epilogue`; m16 and BC runtime frames (`B$ENRA`) stay a named DEVIATE (the runtime lays them).
+
+Dates: oracle (a dry run of 1-2 on the corpus: how many functions' layout and size differ from today's, and by how much) 10-30; 3 behind its pair 11-06; PEI-2 11-13. The SelectionDAG port's frame indices (`TargetFrameIndex`, sdag-d's emitter) replace step 1's `extents` when it lands.
