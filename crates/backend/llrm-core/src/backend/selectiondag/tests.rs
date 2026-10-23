@@ -19,6 +19,7 @@ mod builder;
 mod combiner;
 mod expand_node;
 mod ext_of_load;
+mod br_jt;
 mod extract_element;
 mod far_load;
 mod float_constants;

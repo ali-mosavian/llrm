@@ -117,6 +117,8 @@ pub enum MemBase {
     Stack(i32),
     /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
     ConstantPool(u32),
+    /// A jump table entry (`MachinePointerInfo::getJumpTable`).
+    JumpTable,
 }
 
 #[derive(Clone, Debug)]

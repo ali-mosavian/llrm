@@ -50,6 +50,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetFrameIndex => pin::TargetFrameIndex,
         ConstantPool => pin::ConstantPool,
         TargetConstantPool => pin::TargetConstantPool,
+        TargetJumpTable => pin::TargetJumpTable,
         BasicBlock => pin::BasicBlock,
         ValueType => pin::VALUETYPE,
         CondCodeNode => pin::CONDCODE,
