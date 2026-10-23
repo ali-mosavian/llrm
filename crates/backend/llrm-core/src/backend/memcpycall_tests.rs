@@ -17,7 +17,7 @@ fn expanded(
     length: &str,
 ) -> String {
     let mut module: Module = llrm_mir::parse::module(&text(align, length)).expect("parses");
-    super::memcpycall::expanded(&mut module, 0).expect("expands");
+    super::memcpycall::expanded(&mut module, 0, "memcpy").expect("expands");
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", llrm_mir::print::module(&module));
     llrm_mir::print::module(&module)
 }
@@ -49,4 +49,21 @@ fn test_a_long_or_misaligned_constant_copy_is_a_call() {
     assert!(expanded(4, "129").contains("call ptr @memcpy("), "129 bytes");
     assert!(expanded(4, "128").contains("call void @llvm.memcpy"), "128 bytes stay");
     assert!(expanded(1, "16").contains("call ptr @memcpy("), "alignment 1");
+}
+
+/// A length of another width than the call's `i32` (a copy of 200 bytes the
+/// front end sizes `i16`, a count `i64`) left the call passing `i16` as an
+/// `i32` parameter: "the pipeline left invalid MIR" on every long copy in
+/// tests/run/c/memcpy_libcall.c once the m32 runtime named `memcpy`.
+#[test]
+fn test_a_length_of_another_width_is_made_the_calls_i32() {
+    let text = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\
+                define void @f(ptr %d, ptr %s, i16 %n) {\n\
+                call void @llvm.memcpy.p0.p0.i16(ptr align 4 %d, ptr align 4 %s, i16 %n, i1 false)\n\
+                ret void\n}\n";
+    let mut module: Module = llrm_mir::parse::module(text).expect("parses");
+    super::memcpycall::expanded(&mut module, 0, "memcpy").expect("expands");
+    let after = llrm_mir::print::module(&module);
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{after}");
+    assert!(after.contains("zext i16 %n to i32"), "{after}");
 }

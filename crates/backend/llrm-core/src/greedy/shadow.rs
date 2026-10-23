@@ -757,11 +757,7 @@ pub fn decide_with_split(
     let tables = Rc::new(Tables::default());
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
-    let floats = if crate::backend::allocate::rfp_on() {
-        crate::backend::floatassign::_floating_values(body)
-    } else {
-        Default::default()
-    };
+    let floats = crate::backend::floatassign::_floating_values(body);
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
             crate::backend::allocate::RFP.to_vec()
@@ -979,7 +975,6 @@ mod tests {
     #[test]
     fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
-        let _rfp = crate::backend::allocate::RfpOn::set();
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
@@ -1165,7 +1160,6 @@ mod tests {
     #[test]
     fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-        let _rfp = crate::backend::allocate::RfpOn::set();
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
             dests,

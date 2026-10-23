@@ -11,6 +11,7 @@ use super::function_lowering::FunctionLoweringInfo;
 use super::isd::ISD;
 use super::mvt::MVT;
 use super::x86_lowering::x86isd;
+use super::x86isd as own;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n";
 
@@ -80,4 +81,33 @@ fn casts_take_the_halves_apart_and_put_them_together() {
     );
     let dump = dag.dump();
     assert!(dump.contains("extract_element") && dump.contains("$ss"), "{dump}");
+}
+
+/// A far global is `build_pair(offset, SEGMENT_OF)`: its offset word and the
+/// selector of its segment, each once. A near global cast to far takes the
+/// same selector form (DGROUP). Before, both stopped the builder (4466
+/// corpus blocks).
+#[test]
+fn a_far_global_pairs_its_offset_with_its_segment() {
+    let dag = built(
+        "@far = addrspace(1) global [8 x i16] zeroinitializer\n@near = global i16 0\n\
+         define i16 @f() {\n  %a = load i16, ptr addrspace(1) @far\n  %p = addrspacecast ptr @near to ptr addrspace(1)\n  %b = load i16, ptr addrspace(1) %p\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    );
+    assert_eq!(count(&dag, own::SEGMENT_OF), 2, "{}", dag.dump());
+    assert_eq!(count(&dag, ISD::BuildPair), 2, "{}", dag.dump());
+}
+
+/// `llrm.ia16.window` is one `LLRM_WINDOW far -> far`, and a near pointer of
+/// no known object is into DGROUP (`SEGMENT_OF` with no global). Before,
+/// the window call stopped the builder (34 corpus blocks), and so did the
+/// cast (23).
+#[test]
+fn a_window_is_one_node_and_a_near_pointer_is_in_dgroup() {
+    let dag = built(
+        "declare ptr addrspace(1) @llrm.ia16.window.p1.p3(ptr addrspace(3))\n\
+         define i16 @f(ptr addrspace(3) %h, ptr %n) {\n  %w = call ptr addrspace(1) @llrm.ia16.window.p1.p3(ptr addrspace(3) %h)\n  %p = addrspacecast ptr %n to ptr addrspace(1)\n  %a = load i16, ptr addrspace(1) %w\n  %b = load i16, ptr addrspace(1) %p\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    );
+    assert_eq!(count(&dag, own::LLRM_WINDOW), 1, "{}", dag.dump());
+    let segment = dag.nodes().iter().find(|node| node.opcode == own::SEGMENT_OF).expect("a segment");
+    assert_eq!(segment.data, super::dag::NodeData::None);
 }

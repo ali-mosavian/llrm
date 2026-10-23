@@ -35,6 +35,21 @@ impl Builder<'_> {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
+            Intrinsic::PtrDiff => {
+                let (a, b) = (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(super::super::x86isd::LLRM_PTRDIFF, vt, &[a, b]);
+                self.set_value(instruction.result.ok_or(Refused("a pointer difference without a result"))?, node);
+                Ok(())
+            }
+            Intrinsic::Window => {
+                let pointer = self.get_value(instruction.operands[0])?;
+                let node = self
+                    .dag
+                    .get_node(super::super::x86isd::LLRM_WINDOW, EVT::Simple(super::super::mvt::MVT::Far), &[pointer]);
+                self.set_value(instruction.result.ok_or(Refused("a window without a result"))?, node);
+                Ok(())
+            }
             Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap

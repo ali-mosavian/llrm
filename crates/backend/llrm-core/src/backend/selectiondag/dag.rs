@@ -120,6 +120,8 @@ pub enum MemBase {
     Stack(i32),
     /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
     ConstantPool(u32),
+    /// A jump table entry (`MachinePointerInfo::getJumpTable`).
+    JumpTable,
 }
 
 #[derive(Clone, Debug)]
@@ -894,6 +896,16 @@ impl SelectionDAG {
         self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
+    /// `SEGMENT_OF`: the selector of the segment a global lives in, or of
+    /// DGROUP, where the near data is, when it names none.
+    pub fn get_segment_of(
+        &mut self,
+        symbol: Option<u32>,
+    ) -> SDValue {
+        let data = symbol.map_or(NodeData::None, |symbol| NodeData::Global { symbol, offset: 0 });
+        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &[], SDNodeFlags::default(), data)
+    }
+
     pub fn get_jump_table(
         &mut self,
         vt: EVT,
@@ -1000,6 +1012,18 @@ impl SelectionDAG {
     ) -> SDValue {
         let cc = self.get_cond_code(cond);
         self.get_node(ISD::SetCC, vt, &[lhs, rhs, cc])
+    }
+
+    /// `doesNodeExist(SETCC, {vt}, {lhs, rhs, cc})`.
+    pub fn does_setcc_exist(
+        &mut self,
+        vt: EVT,
+        lhs: SDValue,
+        rhs: SDValue,
+        cc: CondCode,
+    ) -> bool {
+        let code = self.get_cond_code(cc);
+        self.cse.contains_key(&(ISD::SetCC, vec![vt], vec![lhs, rhs, code], NodeData::None))
     }
 
     pub fn get_select(

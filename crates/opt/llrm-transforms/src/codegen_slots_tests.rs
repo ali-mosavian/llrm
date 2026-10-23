@@ -521,17 +521,17 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Eliminate PHI nodes for register allocation",
-        Missing,
-        "phielim.rs, phielimination.rs",
+        Match,
+        "phielimination.rs, phielim.rs (edge splitting)",
         "",
-        "w-1; 2026-11-13: registry phielim@4 is ours-own; a phi from a non-predecessor is an error (verifier rule, #3850). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "translated: `LowerPHINode`, `SplitPHIEdges`, `LoweredPHIs`, plain `findPHICopyInsertPoint`; a phi from a non-predecessor is an error (#3850); the old lowering and the non-RFP route (P1, P4) are deleted; DEVIATEs P2, P3, P6 (phielimination.rs header). Not translated: EH-pad and INLINEASM_BR insert points (w-1, 2026-11-14). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Two-Address instruction pass",
         Missing,
         "twoaddr.rs, twoaddress.rs",
         "",
-        "w-1; 2026-11-20: partial translation of [TwoAddressInstructionPass.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp): `tryInstructionCommute`/`isProfitableToCommute` (#3637), `convertInstTo3Addr` at m32 and m16 (#3680, #3729), kills from one scan (#3803), `rescheduleMIBelowKill` (#3830), `rescheduleKillAboveMI` (#3882, plan #3804); DEVIATEs TA-1 to TA-8 (twoaddress.rs header). Not translated: `scanUses`/`processCopy` maps (TA-1), `processTiedPairs`/`collectTiedOperands` (ours is `_untied`), `eliminateRegSequence`, `processStatepoint`; the update-in-place `_reused` is ours; cost 7.8 M Ir against the pin's 1.1 M (d_faces m32 -O2), a shared `LiveIntervals` with the Coalescer is the fix. Row 62b, `handleMove` translated and unwired (#3916, liveness/liveintervals/handlemove.rs; no bundles, no regmask slots), the other incremental updates MISSING: [`LiveIntervals::handleMove`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp) and the incremental updates a pass makes (w-1; 2026-11-20 with the TwoAddress sharing: translated, not patched around; TwoAddress edits one `LiveIntervals` and hands it to the Coalescer; used by TwoAddress, the coalescer and the greedy allocator). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "w-1; 2026-11-20: partial translation of [TwoAddressInstructionPass.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp): `tryInstructionCommute`/`isProfitableToCommute` (#3637), `convertInstTo3Addr` at m32 and m16 (#3680, #3729), kills as `isPlainlyKilled` on one `LiveIntervals` shared with the Coalescer (TA-6 retired), `rescheduleMIBelowKill` (#3830), `rescheduleKillAboveMI` (#3882, plan #3804); DEVIATEs TA-1 to TA-5, TA-7 and TA-8 (twoaddress.rs header). Not translated: `scanUses`/`processCopy` maps (TA-1), `processTiedPairs`/`collectTiedOperands` (ours is `_untied`), `eliminateRegSequence`, `processStatepoint`; the update-in-place `_reused` is ours; one `LiveIntervals` per function (the pin's), made lazily. Row 62b, `handleMove` translated and used by TwoAddress (#3916, liveness/liveintervals/handlemove.rs; no bundles, no regmask slots), the other incremental updates MISSING: [`LiveIntervals::handleMove`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp) and the incremental updates a pass makes (w-1; 2026-11-20 with the TwoAddress sharing: translated, not patched around; TwoAddress edits one `LiveIntervals` and hands it to the Coalescer; used by TwoAddress, the coalescer and the greedy allocator). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Register Coalescer",
