@@ -689,6 +689,24 @@ impl<'a> TypeLegalizer<'a> {
                 let high = self.dag.get_node(ISD::Srl, svt, &[src, shift]);
                 (self.dag.get_node(ISD::Truncate, half, &[src]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
+            ISD::CopyFromReg if vt == EVT::Simple(MVT::Far) => {
+                // A far pointer a call returns in the register pair (`dx:ax`,
+                // named by the dword register): read it as the dword and take
+                // it apart as a bitcast does.
+                let mut values = self.dag.node(value).values.clone();
+                values[0] = EVT::I32;
+                let mut ops = self.dag.node(value).ops.clone();
+                if let NodeData::PhysReg(reg) = self.dag.node(ops[1]).data {
+                    ops[1] = self.dag.get_phys_register(EVT::I32, reg);
+                }
+                let dword = self.dag.get_node_multi(ISD::CopyFromReg, &values, &ops);
+                for res in 1..values.len() as u8 {
+                    self.replace_value_with(SDValue { node: value.node, res }, SDValue { node: dword.node, res });
+                }
+                let shift = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
+                let high = self.dag.get_node(ISD::Srl, EVT::I32, &[dword, shift]);
+                (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
+            }
             ISD::CtPop => self.expand_ctpop(value, half),
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
