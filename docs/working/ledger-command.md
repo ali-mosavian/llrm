@@ -14,11 +14,14 @@ The pin side is the same file, flags and `-I` set, with `-c -o` to a real file (
 its profile; not `-S`, not `/dev/null`):
 
 ```bash
-valgrind --tool=callgrind --callgrind-out-file=CLANG.cg clang -w -m32 -march=i486 -O2 \
+# tools/pin_clang.py: LLRM_PIN_CLANG or ~/scratch/llvm-build/bin/clang; prints its --version, refuses any build but d1106deb71cc.
+valgrind --tool=callgrind --callgrind-out-file=CLANG.cg "$(tools/pin_clang.py)" -w -m32 -march=i486 -O2 \
   -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near= \
   -I qbq-llrm/src -I qbq-llrm/src/render -I qbq-llrm/src/game -I qbq-llrm/src/host -I qbq-llrm/src/qgl \
   -c -o REAL_FILE.o qbq-llrm/src/render/d_faces.c
 ```
+
+A bare `clang` on PATH is the distro's 20.1.8, a different pass pipeline: its Ir is not the pin's. The pin profile's `Profiled target:` line must name the pin's path.
 
 QCport's pin side adds `-std=gnu89 -DQCPORT_NATIVE_TEST` and QCport's `-I` set. `-w` only silences warnings.
 
