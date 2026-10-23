@@ -176,6 +176,10 @@ struct Checker {
     static_scope: bool,
     /// An OPTION BASE has been read.
     option_base_seen: bool,
+    /// A STATIC statement is being declared.
+    static_statement: bool,
+    /// The names being read are made by their statement (FOR, INPUT, READ), as DIM would.
+    declaring: bool,
     /// The target of an assignment is being read.
     assigning: bool,
     /// The counters of the FOR loops being read.
@@ -185,6 +189,8 @@ struct Checker {
     labels: HashSet<String>,
     /// The module level's labels, kept while a procedure's are the ones in use.
     module_labels: HashSet<String>,
+    /// Every label of the file, module and procedures (RESTORE reaches any).
+    all_labels: HashSet<String>,
     option_base: i64,
     span: Span,
     in_loop: Vec<&'static str>,
@@ -204,11 +210,14 @@ impl Checker {
             procedure: None,
             static_scope: false,
             option_base_seen: false,
+            static_statement: false,
+            declaring: false,
             assigning: false,
             for_counters: Vec::new(),
             pre_done: HashSet::new(),
             labels: HashSet::new(),
             module_labels: HashSet::new(),
+            all_labels: HashSet::new(),
             option_base: 0,
             span: Span { line: 1, start: 0, end: 0 },
             in_loop: Vec::new(),
@@ -271,6 +280,10 @@ impl Checker {
             }
         }
         self.collect_labels(&module.statements);
+        self.all_labels = self.labels.clone();
+        for procedure in &module.procedures {
+            collect_label_names(&procedure.body, &mut self.all_labels);
+        }
         let statements = module.statements.clone();
         for statement in &statements {
             self.statement(statement);
@@ -337,6 +350,9 @@ impl Checker {
     fn declare_procedure(&mut self, procedure: &Procedure) {
         if !procedure.module_scope && self.reserved_name(&procedure.name, procedure.span) {
             return;
+        }
+        if procedure.kind == ProcedureKind::Function && !procedure.module_scope && procedure.name.to_ascii_uppercase().starts_with("FN") {
+            self.err(procedure.span, if procedure.name.eq_ignore_ascii_case("FN") { "Function name illegal" } else { "Name of subprogram illegal" });
         }
         // `SUB p ()` is VBDOS's; QB 4.5 and PDS take `SUB p`
         if procedure.empty_list && !procedure.declaration && !procedure.module_scope && !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) {
@@ -483,7 +499,7 @@ impl Checker {
             self.err(span, "Array not dimensioned");
             return None;
         }
-        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false, suffixed: suffix.is_some(), redimmed: false };
+        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: self.declaring, suffixed: suffix.is_some(), redimmed: false };
         self.scope.vars.entry(key).or_default().push(var.clone());
         Some(var)
     }
@@ -534,6 +550,18 @@ fn parse_real(text: &str) -> Option<f64> {
 /// A name without its type suffix, upper case.
 fn stem(name: &str) -> &str {
     name.trim_end_matches(['%', '&', '!', '#', '$', '@'])
+}
+
+/// The labels a statement list defines, nested bodies included.
+fn collect_label_names(statements: &[Statement], out: &mut HashSet<String>) {
+    for statement in statements {
+        if let Statement::Label(name, _) = statement {
+            out.insert(name.clone());
+        }
+        for body in statement.bodies() {
+            collect_label_names(body, out);
+        }
+    }
 }
 
 // ---- expressions ---------------------------------------------------------------------------------------
@@ -969,7 +997,8 @@ impl Checker {
             Class::Whole => self.expr(argument),
             Class::VarLenString => {
                 let typed = self.argument_of_class(Class::StrVar, argument)?;
-                if matches!(typed.ty, Ty::Str(Some(_))) {
+                // (QB 4.5 takes the address of a fixed-length string; PDS and VBDOS refuse it)
+                if matches!(typed.ty, Ty::Str(Some(_))) && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
                     self.err(argument.span(), "Fixed-length string illegal");
                     return None;
                 }
@@ -1131,7 +1160,7 @@ impl Checker {
             if letter == 'r' {
                 // a label anywhere in the module or in this procedure (RESTORE)
                 if let Expr::Name(label, at) = argument {
-                    if !self.labels.contains(label) && !self.module_labels.contains(label) {
+                    if !self.labels.contains(label) && !self.module_labels.contains(label) && !self.all_labels.contains(label) {
                         self.err(*at, "Label not defined");
                     }
                 } else {
@@ -1202,9 +1231,11 @@ impl Checker {
                 }
                 let keep = self.static_scope;
                 self.static_scope |= matches!(statement, Statement::Static(_));
+                self.static_statement = matches!(statement, Statement::Static(_));
                 for item in items {
                     self.declare(item, false);
                 }
+                self.static_statement = false;
                 self.static_scope = keep;
             }
             Statement::Redim(items) | Statement::RedimPreserve(items) => {
@@ -1275,7 +1306,9 @@ impl Checker {
                         self.err(*span, "NEXT without FOR");
                     }
                 }
+                self.declaring = true;
                 let typed = self.expr(counter);
+                self.declaring = false;
                 if let Some(typed) = &typed {
                     if !typed.variable || !typed.ty.numeric() {
                         self.err(counter.span(), "Type mismatch");
@@ -1448,7 +1481,10 @@ impl Checker {
                     self.string_expr(prompt);
                 }
                 for destination in destinations {
-                    if let Some(typed) = self.expr(destination) {
+                    self.declaring = true;
+                    let typed = self.expr(destination);
+                    self.declaring = false;
+                    if let Some(typed) = typed {
                         if !typed.variable || matches!(typed.ty, Ty::Record(_)) {
                             self.err(destination.span(), "Variable required");
                         }
@@ -1458,7 +1494,10 @@ impl Checker {
             Statement::Data { .. } => {}
             Statement::Read { destinations, .. } => {
                 for destination in destinations {
-                    if let Some(typed) = self.expr(destination) {
+                    self.declaring = true;
+                    let typed = self.expr(destination);
+                    self.declaring = false;
+                    if let Some(typed) = typed {
                         if !typed.variable || matches!(typed.ty, Ty::Record(_)) {
                             self.err(destination.span(), "Variable required");
                         }
@@ -1674,7 +1713,8 @@ impl Checker {
         let Some(typed) = self.constant_expr(value) else { return };
         let key = stem(name).to_owned();
         // arrays have a namespace of their own: a CONST clashes with scalars (and with another CONST)
-        let scalar_in_use = self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none()));
+        let scalar_in_use = self.scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none()))
+            || (self.procedure.is_some() && self.module_scope.vars.get(&key).is_some_and(|vars| vars.iter().any(|v| v.rank.is_none() && v.shared)));
         if self.consts.contains_key(&key) {
             self.err(span, "Duplicate definition");
             return;
@@ -1815,7 +1855,31 @@ impl Checker {
             self.err(span, "Duplicate definition");
             return;
         }
-        let existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
+        let local_existing: Vec<Var> = self.scope.vars.get(&key).cloned().unwrap_or_default();
+        let mut existing = local_existing.clone();
+        // a DIM in a procedure meets what the module shares (a STATIC does not; VBDOS lets a scalar shadow it)
+        if self.procedure.is_some() && !self.static_statement && (d.array || !matches!(self.dialect, Dialect::VbDos | Dialect::Quickr)) {
+            if let Some(shared) = self.module_scope.vars.get(&key) {
+                for var in shared.iter().filter(|v| v.shared) {
+                    if !existing.iter().any(|v| v.rank == var.rank && v.ty.plain() == var.ty.plain() && v.shared) {
+                        existing.push(var.clone());
+                    }
+                }
+            }
+        }
+        // a scalar cannot be named like a procedure
+        if !d.array && self.procs.get(&key).is_some_and(|p| !p.def_fn) {
+            self.err(span, "Name of subprogram illegal");
+            return;
+        }
+        // PDS and VBDOS: AS binds a name only when nothing of that type was named without it
+        if as_declared && !matches!(self.dialect, Dialect::QBasic11 | Dialect::QuickBasic45) {
+            let named = local_existing.iter().any(|v| !v.declared && v.ty.plain() == ty.plain()) || self.consts.get(&key).is_some_and(|c| c.ty.plain() == ty.plain());
+            if named {
+                self.err(span, "AS clause required on first declaration");
+                return;
+            }
+        }
         if d.array {
             // an AS-bound array, a suffixed one and a bare one bind the stem as scalars' names do
             if !existing.iter().any(|v| v.rank.is_some() && v.ty.plain() == ty.plain() && v.declared == as_declared) {

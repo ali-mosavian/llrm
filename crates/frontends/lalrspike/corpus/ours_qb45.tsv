@@ -3571,7 +3571,7 @@
 3570	syntax	15:16 syntax error
 3571	ok	
 3572	ok	
-3573	semantic	15:10 Fixed-length string illegal
+3573	ok	
 3574	semantic	15:10 String expression required
 3575	syntax	15:10 syntax error
 3576	syntax	15:10 syntax error
@@ -4314,8 +4314,8 @@
 4313	ok	
 4314	ok	
 4315	syntax	15:0 syntax error
-4316	semantic	15:0 Identifier expected
-4317	semantic	15:0 Identifier expected
+4316	ok	
+4317	ok	
 4318	syntax	15:5 syntax error
 4319	semantic	15:0 Identifier expected
 4320	semantic	15:0 Identifier expected
