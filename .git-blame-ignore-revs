@@ -1,2 +1,4 @@
 # Commits that only reformat: `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame skip them.
-# The sha of the style(fmt) commit that formats the tree is added here after it lands.
+# One sha per commit, with the commit's subject above it.
+# style(fmt): tools/fmt.sh on the 91 files that were not formatted (#3825)
+92f4582b60fab35a994ce68da8a2acdb035872bc
