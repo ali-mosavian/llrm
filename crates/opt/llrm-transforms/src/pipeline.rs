@@ -111,9 +111,7 @@
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 //! `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
-//! `calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-//! the intervals of counted loops. `limits` are the copy budgets of the
-//! unroller.
+//! `calleepop` in bytes. `limits` are the copy budgets of the unroller.
 //!
 //! # Needs
 //! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
@@ -166,9 +164,6 @@ pub struct Options {
     /// Whether the callers' arguments are stated as ranges on a body's
     /// parameters: gcc's `-fipa-vrp`, -O2 and up.
     pub ipa_ranges: bool,
-    /// Alias and branch decisions use the intervals of counted loops (gcc's
-    /// `-ftree-vrp`, -O2; its -O1 has them for induction variables only).
-    pub loop_intervals: bool,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -287,7 +282,6 @@ impl Default for Options {
             dead: true,
             hoist: true,
             ipa_ranges: true,
-            loop_intervals: true,
             forward: true,
             drop_loads: true,
             pre: true,
@@ -343,7 +337,6 @@ impl Options {
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             rounds: 2,
             ipa_ranges: false,
-            loop_intervals: false,
             pre: false,
             peel: false,
             loop_unrolling: false,
@@ -993,7 +986,6 @@ pub fn recorded(
 ) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
-    manager.without_loop_intervals = !applied.options.loop_intervals;
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
