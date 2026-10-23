@@ -53,6 +53,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
+| [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
 | [loops-compile-plan](loops-compile-plan.md) | Loops compile-time bucket: dated plan to 1.0x of the pin |
@@ -88,6 +89,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |

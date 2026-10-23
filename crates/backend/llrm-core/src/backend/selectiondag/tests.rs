@@ -15,6 +15,7 @@ fn arg(
 mod action_table;
 mod and_fold;
 mod bit_counts;
+mod bit_test;
 mod bitcast_float;
 mod br_jt;
 mod builder;
