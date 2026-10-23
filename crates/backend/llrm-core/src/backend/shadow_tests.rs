@@ -30,10 +30,6 @@ entry:
 }
 ";
 
-fn assembled(selector: Selector) -> Result<crate::backend::masm::Module, String> {
-    assembled_text(TEXT, selector)
-}
-
 fn assembled_text(
     text: &str,
     selector: Selector,
