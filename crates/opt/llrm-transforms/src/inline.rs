@@ -183,8 +183,11 @@ pub struct Threshold {
     /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
     /// callers pass though the unit grows (`ipacp`).
     pub cp_clone: bool,
-    /// `-finline-recursive`: gcc's recursive inlining and peeling (a recursive function copied into itself to depth 3, a recursive callee's own calls inlined in the copy, its
-    /// tail-call elimination deferred until the copies are made). Off: the pin's inliner, which copies a recursive callee once (DEVIATE (recursion), docs/architecture/recursion-rows.md).
+    /// `-finline-recursive`: gcc's recursive inlining and peeling (a recursive
+    /// function copied into itself to depth 3, a recursive callee's own calls
+    /// inlined in the copy, its tail-call elimination deferred until the
+    /// copies are made). Off: the pin's inliner, which copies a recursive
+    /// callee once (DEVIATE (recursion), docs/architecture/recursion-rows.md).
     pub recursive: bool,
 }
 
