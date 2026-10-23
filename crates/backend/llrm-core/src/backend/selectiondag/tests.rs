@@ -20,6 +20,7 @@ mod combiner;
 mod expand_node;
 mod ext_of_load;
 mod extract_element;
+mod legalize_pending;
 mod far_load;
 mod float_constants;
 mod fp_to_int;
