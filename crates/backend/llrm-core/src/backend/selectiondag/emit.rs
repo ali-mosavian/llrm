@@ -532,6 +532,17 @@ impl Emitter<'_, '_> {
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
                     }
+                    // The x87 result of a call: the stack's top (`FP0`), which
+                    // the stackifier reads as an unnamed load of no cell
+                    // (`handleCall`'s `STReturns`).
+                    NodeData::PhysReg(register)
+                        if register == llrm_lir::registers::RegId::MM0
+                            && self.dag.value_type(result).is_floating_point() =>
+                    {
+                        let held = self.fresh(10);
+                        self.values.insert(result, held.value);
+                        self.push(Operation::FloatLoad, "", vec![Loc::Held(held)], Vec::new());
+                    }
                     NodeData::PhysReg(register) => {
                         // A quotient, remainder or product is the value the
                         // instruction made.
@@ -1340,7 +1351,7 @@ impl Emitter<'_, '_> {
             let Loc::Held(source) = self.operand(node.ops[5])? else {
                 return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
             };
-            self.push(Operation::FloatStore, "fistt", vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
+            self.push(Operation::FloatStore, "fisttp", vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             return Ok(Some(()));
         }
         let Some((prefix, rest)) = name.split_once("_Fp") else { return Ok(None) };
@@ -1386,7 +1397,7 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(node.ops[5])? else {
                     return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
                 };
-                let mnemonic = if prefix == "ST" { "fst" } else { "fist" };
+                let mnemonic = if prefix == "ST" { "fst" } else { "fistp" };
                 self.push(Operation::FloatStore, mnemonic, vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
             }
             "CHS" | "ABS" | "SQRT" => {
@@ -1529,7 +1540,9 @@ impl Emitter<'_, '_> {
             if self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
-            return Ok(Mem { base, index, scale, ..Mem::new(Some(addr), cell_width) });
+            // A symbol takes a displacement field to carry its relocation, as
+            // the old selector's global cells do.
+            return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(addr), cell_width) });
         }
         if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
             if self.address_register(group[4], Role::Segment)?.is_some() {
