@@ -210,7 +210,18 @@ impl BodyFacts {
         }
     }
 
-    /// The function as edited.
+    /// The function as edited, and its intervals left for the coalescer.
+    pub fn finish(
+        self,
+        body: &LirBody,
+    ) -> LirBody {
+        let lis = self.lis.into_inner();
+        let done = lis.body_like(body);
+        crate::liveness::liveintervals::hand_over(lis, &done);
+        done
+    }
+
+    /// The function as edited so far.
     pub fn body_like(
         &self,
         body: &LirBody,

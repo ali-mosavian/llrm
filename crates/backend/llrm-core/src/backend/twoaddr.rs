@@ -105,7 +105,6 @@ pub fn tied(
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
-    let mut changed = false;
     let mut counter = body.next_value();
     let mut mint = || {
         counter += 1;
@@ -119,7 +118,6 @@ pub fn tied(
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
-    let mut blocks = Vec::new();
     for (at, block) in body.blocks.iter().enumerate() {
         let mut walk = crate::twoaddress::Commuter::new(&facts, &fixed, at);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -130,7 +128,6 @@ pub fn tied(
             let dist = walk.pass(&one);
             let commuted = walk.try_instruction_commute(&one, dist);
             if let Some(chosen) = &commuted {
-                changed = true;
                 facts.rewrite(at, work[place].id(), Arc::clone(chosen));
                 work[place] = Arc::clone(chosen);
                 one = Arc::clone(chosen);
@@ -138,7 +135,6 @@ pub fn tied(
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
             // a later reader goes below it.
             if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
-                changed = true;
                 continue;
             }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
@@ -149,7 +145,6 @@ pub fn tied(
                     || profitable_to_convert(&fixed, &one, base.value, body.regs()))
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
             {
-                changed = true;
                 if let Some(what) = one.what.as_ref()
                     && what.name.as_deref() == Some("add")
                     && matches!(what.sources.get(1), Some(Loc::Held(_)))
@@ -166,7 +161,6 @@ pub fn tied(
             // `rescheduleKillAboveMI`: the reader that kills the source goes
             // above the tied instruction.
             if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
-                changed = true;
                 continue;
             }
             place += 1;
@@ -176,15 +170,13 @@ pub fn tied(
             };
             facts.replace(at, &one, &fix);
             insns.extend(fix);
-            changed = true;
         }
         debug_assert!(
             insns.iter().map(|one| one.id()).eq(facts.body_like(body).blocks[at].insns.iter().map(|one| one.id())),
             "the intervals' block is not the pass's"
         );
-        blocks.push(block.with_insns(insns));
     }
-    if changed { facts.body_like(body) } else { body.clone() }
+    facts.finish(body)
 }
 
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
