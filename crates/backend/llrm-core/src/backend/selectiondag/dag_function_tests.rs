@@ -205,3 +205,26 @@ fn an_indirect_call_names_its_target() {
     assert!(call.indirect && call.sources.len() == 1, "{call:?}");
     assert!(done.calls.is_empty());
 }
+
+const ABSOLUTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f() {
+entry:
+  %v = load volatile i8, ptr inttoptr (i32 753664 to ptr)
+  ret i8 %v
+}
+";
+
+/// A load from an absolute address needs its four displacement bytes; with
+/// none the encoder refused the function (`os_screen` stopped compiling).
+#[test]
+fn an_absolute_address_has_a_four_byte_displacement() {
+    let module = llrm_mir::parse::module(ABSOLUTE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let cell = done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
+        crate::model::ir::Loc::Mem(cell) => Some(cell),
+        _ => None,
+    });
+    let cell = cell.expect("a memory operand");
+    assert_eq!((cell.offset, cell.disp_width), (753664, 4), "{cell:?}");
+}
