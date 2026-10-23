@@ -676,17 +676,33 @@ def new_lib_failures(
     return failed - also
 
 
+# Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds,
+# and #4039 landed an unlinked page red because no scanner ran at all.
+ALWAYS_SCANNERS = ("docs_links",)
+
+
+def landing_scanner_failures(
+    files: list[str],
+    tests: bool,
+    on_merged=None,
+    on_head=None,
+) -> set[str]:
+    """The new red scanners of a batch: all of them with the lib tests on (LAND_FAST_TESTS=1), else the always-on ones."""
+    return new_scanner_failures(files, on_merged, on_head, only=None if tests else ALWAYS_SCANNERS)
+
+
 def new_scanner_failures(
     files: list[str],
     on_merged=None,
     on_head=None,
+    only: tuple[str, ...] | None = None,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
     `on_head(targets)` -> the failing names."""
     smoke = parity_smoke_module()
     own = {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :]}
-    targets = sorted((set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
+    targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
     print(scanner_tests_line(targets, failed))
     if not failed:
@@ -849,6 +865,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
                 failed_units.update(new)
                 return False
+        if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
+            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+            failed_units.update(new)
+            return False
         if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
             print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
