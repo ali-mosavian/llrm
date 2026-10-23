@@ -28,7 +28,7 @@ Every float value is a vreg of class RFP32/64/80 from selection on; stack positi
 
 ## What the stackifier may rely on (w-2)
 
-- Input: `*_Fp` pseudos on RFP vregs, one def per value, uses by `FpP*` forms; cross-block values are RFP vregs through phis/copies (pin: `LiveBundle`).
+- At selection: `*_Fp` pseudos on RFP vregs, one def per value; cross-block values are RFP vregs through phis/copies. The stackifier itself runs after allocation on the physical FP0..FP6 and does not rely on one def per value (w-2).
 - Float arguments are never in x87 registers; the only x87 values crossing a call boundary are the call result (ST0) and the return value.
 - Calls, returns, block edges and inline asm follow the pin's `X86FloatingPoint` (stack empty at calls/returns except ST0; asm clobbers all of FP0..FP6). The legalizer adds nothing there.
 
