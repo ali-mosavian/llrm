@@ -66,6 +66,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let both = self.dag.get_node_multi(lohi, &[vt, vt], &[x, y]);
             return Some(SDValue { node: both.node, res: 1 });
         }
+        // Neither: "if the type twice as wide is legal, widen and use a mul
+        // plus a shift" (`MulVT = WideVT`, [L6798][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6798
+        let bits = vt.size_in_bits();
+        let wide = EVT::integer(bits * 2);
+        if bits <= 16 && self.can_do(ISD::Mul, wide) {
+            let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
+            let (x, y) = (self.dag.get_node(extend, wide, &[x]), self.dag.get_node(extend, wide, &[y]));
+            let product = self.dag.get_node(ISD::Mul, wide, &[x, y]);
+            let amount = self.shift_amount(bits);
+            let high = self.dag.get_node(ISD::Srl, wide, &[product, amount]);
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[high]));
+        }
         None
     }
 
