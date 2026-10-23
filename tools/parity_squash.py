@@ -537,6 +537,38 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
     return f"#{number}: REFUSED: {why}"
 
 
+HELD_STATE = Path(os.environ.get("LAND_TMP") or "/tmp/landing") / "held.state"  # `<PR> <head sha>` per line: the queue skips a PR at a head that was refused for itself
+
+
+def own_refusal(reason: str) -> bool:
+    """Whether a refusal is the PR's own (its build, a test it fails alone on the head, its docs or format), which the same head will meet again, and not the batch's or the
+    head's (a conflict, a stale merge base, GitHub's "head modified", a rescan after another PR was dropped), which a retry may clear."""
+    return bool(reason) and not any(
+        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "not mergeable", "the batch dropped", "waits.txt")
+    )
+
+
+def hold_own_refusals(refused: list[str], reasons: dict[str, str], heads: dict[str, str], path: Path | None = None) -> list[str]:
+    """Records `<PR> <head>` for each refused PR whose reason is its own, and returns the log lines: a PR refused for its own head cost a batch (1-14 min) every cycle with the
+    same head (#4142 six times, #4145 and #4146 four, 21:47-22:22 on 2026-10-23); it re-enters when its head changes."""
+    path = path or HELD_STATE
+    lines = []
+    for number in refused:
+        if own_refusal(reasons.get(number, "")) and heads.get(number):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            known = path.read_text().splitlines() if path.exists() else []
+            kept = [one for one in known if one.split()[:1] != [number]]
+            path.write_text("\n".join([*kept, f"{number} {heads[number]}"]) + "\n")
+            lines.append(f"#{number}: held until head changes: {heads[number]}")
+    return lines
+
+
+def held_at(number: str, head: str, path: Path | None = None) -> bool:
+    """Whether PR `number` at `head` was held."""
+    path = path or HELD_STATE
+    return path.exists() and f"{number} {head}" in path.read_text().splitlines()
+
+
 def waiting(number: str, path: str | None = None) -> bool:
     """Whether `number` is in waits.txt (an owner's hold) now: read from the file at every call, not once at the batch's start. The queue is built from it before a batch, and a PR
     held while the batch ran landed anyway (#4057, 2026-10-23). `WAITS` is the live file of the queue runner; the batch's checkout has the committed one."""
@@ -1007,6 +1039,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         batch(list(numbers), passes, land, refuse, offending if FAST else None)
+    for line in hold_own_refusals(refused, {**left_out, **named}, {n: infos[n]["headRefOid"] for n in refused if n in infos}):
+        print(line)
     print(f"LANDED: {' '.join('#' + n for n in landed) or '-'}  REFUSED: {' '.join('#' + n for n in refused) or '-'}" + (f"  HELD: {' '.join('#' + n for n in held)}" if held else ""))
     return 1 if refused else 0
 
