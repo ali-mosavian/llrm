@@ -51,7 +51,17 @@ fn qb(paths: &[String]) {
     let old = time(ROUNDS, || both.iter().filter(|s| qbfront::parse(s, dialect).is_ok()).count());
     let tokens: Vec<_> = both.iter().map(|s| qbfront::generated_parser::lex(s, dialect).unwrap()).collect();
     let lalr = time(ROUNDS, || tokens.iter().filter(|t| lalrspike::parse_qb(t).is_ok()).count());
-    report("QB", both.len(), bytes, &[("lexer", lex), ("logos lexer", logos), ("table-driven lex+parse+AST", old), ("lalrpop parser (no lex)", lalr)]);
+    let vector = time(ROUNDS, || both.iter().filter(|s| lalrspike::parse_qb(&qbfront::generated_parser::lex(s, dialect).unwrap()).is_ok()).count());
+    let mut spans = Vec::new();
+    let streamed = time(ROUNDS, || {
+        both.iter().filter(|s| {
+            spans.clear();
+            lalrspike::parse_qb_stream(s, dialect, &mut spans).is_ok()
+        }).count()
+    });
+    report("QB", both.len(), bytes, &[
+        ("old lexer + lalrpop", vector),
+        ("logos streamed + lalrpop", streamed),("lexer", lex), ("logos lexer", logos), ("table-driven lex+parse+AST", old), ("lalrpop parser (no lex)", lalr)]);
 }
 
 fn main() {

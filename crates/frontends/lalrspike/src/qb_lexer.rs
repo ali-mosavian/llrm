@@ -14,10 +14,14 @@ use qbfront::generated_parser::{Token, TokenKind};
 use qbfront::syntax::{Binary, Span};
 use qbfront::{Dialect, LexError};
 
+use crate::qb_kw::Kw;
+use crate::qb_tokens::{terminal, Tok};
 use crate::qb_words::Word;
 
 pub struct Context {
     dialect: Dialect,
+    /// Whether tokens carry their text; the parser needs only their kinds.
+    payload: bool,
     line: usize,
     error: Option<LexError>,
 }
@@ -137,12 +141,22 @@ fn word(lex: &mut Lex) -> TokenKind {
     reserved(name)
         .or_else(|| reserved(bare))
         .map(TokenKind::Reserved)
-        .or_else(|| tables::extension_keyword(&bare.to_ascii_uppercase()).map(TokenKind::ExtensionKeyword))
-        .unwrap_or_else(|| TokenKind::Identifier(name.to_ascii_uppercase()))
+        .or_else(|| extension_keyword(bare).map(TokenKind::ExtensionKeyword))
+        .unwrap_or_else(|| TokenKind::Identifier(if lex.extras.payload { name.to_ascii_uppercase() } else { String::new() }))
+}
+
+/// The extension words are short, so an upper-cased copy fits the stack.
+fn extension_keyword(bare: &str) -> Option<&'static str> {
+    let mut buffer = [0_u8; 16];
+    let upper = buffer.get_mut(..bare.len())?;
+    upper.copy_from_slice(bare.as_bytes());
+    upper.make_ascii_uppercase();
+    tables::extension_keyword(std::str::from_utf8(upper).ok()?)
 }
 
 fn string(lex: &mut Lex) -> Result<TokenKind, ()> {
     let escape = lex.extras.dialect.quote_escape();
+    let payload = lex.extras.payload;
     let rest = lex.remainder();
     let bytes = rest.as_bytes();
     let mut at = 0;
@@ -154,12 +168,16 @@ fn string(lex: &mut Lex) -> Result<TokenKind, ()> {
             Some(offset) => at += offset,
         }
         if escape && bytes.get(at + 1) == Some(&b'"') {
-            value.push_str(&rest[content..=at]);
+            if payload {
+                value.push_str(&rest[content..=at]);
+            }
             at += 2;
             content = at;
             continue;
         }
-        value.push_str(&rest[content..at]);
+        if payload {
+            value.push_str(&rest[content..at]);
+        }
         break;
     }
     lex.bump(at + 1);
@@ -253,7 +271,12 @@ fn number(lex: &mut Lex) -> Result<TokenKind, ()> {
                 None
             }
         });
-        Ok(TokenKind::Real(text.trim_end_matches(['!', '#', '@']).replace(['D', 'd'], "E"), suffix))
+        let text = if lex.extras.payload {
+            text.trim_end_matches(['!', '#', '@']).replace(['D', 'd'], "E")
+        } else {
+            String::new()
+        };
+        Ok(TokenKind::Real(text, suffix))
     } else {
         let Ok(number) = text.trim_end_matches(['%', '&']).parse::<i64>() else {
             return fail(lex, at, "integer literal is out of range");
@@ -349,7 +372,7 @@ pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
     let newline = TokenKind::Reserved(ids().punct[usize::from(b'\n')]);
     let mut out = Vec::with_capacity(source.len() / 4);
     for (line_index, line) in logical_lines(source, dialect) {
-        let mut lexer = Raw::lexer_with_extras(&line, Context { dialect, line: line_index, error: None });
+        let mut lexer = Raw::lexer_with_extras(&line, Context { dialect, payload: true, line: line_index, error: None });
         while let Some(item) = lexer.next() {
             let span = lexer.span();
             match item {
@@ -377,4 +400,144 @@ pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
         out.push(Token { kind: newline, span: Span { line: 1, start: 0, end: 0 } });
     }
     Ok(out)
+}
+
+/// A source's logical lines, to stream tokens from.
+pub struct Lines<'a> {
+    lines: Vec<(usize, Cow<'a, str>)>,
+    dialect: Dialect,
+}
+
+impl<'a> Lines<'a> {
+    /// `None` where this lexer does not read the dialect (QuickrBASIC's `f"…"`).
+    pub fn new(source: &'a str, dialect: Dialect) -> Option<Self> {
+        (!dialect.format_strings()).then(|| Self { lines: logical_lines(source, dialect), dialect })
+    }
+
+    /// The tokens as the parser pulls them, kinds only, with each one's span pushed to `spans`.
+    pub fn stream<'s>(&'s self, spans: &'s mut Vec<Span>) -> Stream<'s> {
+        Stream {
+            lines: &self.lines,
+            dialect: self.dialect,
+            next_line: 0,
+            lexer: None,
+            line_text: "",
+            line_index: 0,
+            ended: false,
+            pending: None,
+            spans,
+        }
+    }
+}
+
+struct Piece {
+    tok: Tok,
+    fn_word: bool,
+    span: Span,
+}
+
+pub struct Stream<'s> {
+    lines: &'s [(usize, Cow<'s, str>)],
+    dialect: Dialect,
+    next_line: usize,
+    lexer: Option<Lexer<'s, Raw>>,
+    line_text: &'s str,
+    line_index: usize,
+    ended: bool,
+    pending: Option<Piece>,
+    spans: &'s mut Vec<Span>,
+}
+
+impl<'s> Stream<'s> {
+    fn piece(&mut self) -> Option<Result<Piece, LexError>> {
+        loop {
+            let Some(lexer) = self.lexer.as_mut() else {
+                let lines: &'s [(usize, Cow<'s, str>)] = self.lines;
+                let Some((index, text)) = lines.get(self.next_line) else {
+                    if self.ended {
+                        return None;
+                    }
+                    self.ended = true;
+                    if self.lines.is_empty() {
+                        let span = Span { line: 1, start: 0, end: 0 };
+                        return Some(Ok(Piece { tok: Tok::Kw(Kw::NewLine), fn_word: false, span }));
+                    }
+                    return None;
+                };
+                self.next_line += 1;
+                self.line_index = *index;
+                self.line_text = text;
+                self.lexer = Some(Raw::lexer_with_extras(
+                    text,
+                    Context { dialect: self.dialect, payload: false, line: *index, error: None },
+                ));
+                continue;
+            };
+            match lexer.next() {
+                Some(Ok(Raw::Kind(kind))) => {
+                    let range = lexer.span();
+                    let span = Span { line: self.line_index, start: range.start, end: range.end };
+                    let fn_word = matches!(kind, TokenKind::Identifier(_))
+                        && self.line_text[range.clone()].eq_ignore_ascii_case("FN");
+                    let tok = match &kind {
+                        TokenKind::Reserved(id) if crate::qb_tokens::suffixed(*id, range.len()) => Tok::Ident,
+                        kind => terminal(kind),
+                    };
+                    return Some(Ok(Piece { tok, fn_word, span }));
+                }
+                Some(Err(())) => {
+                    let range = lexer.span();
+                    let error = lexer.extras.error.take().unwrap_or_else(|| {
+                        let byte = self.line_text.as_bytes()[range.start];
+                        let message = if byte == b'_' {
+                            "identifier cannot begin with underscore".to_owned()
+                        } else {
+                            format!("unknown character {:?}", char::from(byte))
+                        };
+                        LexError { span: Span { line: self.line_index, start: range.start, end: range.start + 1 }, message }
+                    });
+                    self.next_line = self.lines.len();
+                    self.ended = true;
+                    self.lexer = None;
+                    return Some(Err(error));
+                }
+                None => {
+                    self.lexer = None;
+                    let end = self.line_text.len();
+                    let span = Span { line: self.line_index, start: end, end };
+                    return Some(Ok(Piece { tok: Tok::Kw(Kw::NewLine), fn_word: false, span }));
+                }
+            }
+        }
+    }
+}
+
+impl<'s> Iterator for Stream<'s> {
+    type Item = crate::qb_tokens::Spanned;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut piece = match self.pending.take() {
+            Some(piece) => piece,
+            None => match self.piece()? {
+                Ok(piece) => piece,
+                Err(error) => return Some(Err(error)),
+            },
+        };
+        if piece.fn_word {
+            // `FN twice`: apart from the name it prefixes
+            match self.piece() {
+                Some(Ok(next)) => {
+                    if next.tok == Tok::Ident {
+                        piece.tok = Tok::FnWord;
+                    }
+                    self.pending = Some(next);
+                }
+                Some(Err(error)) => return Some(Err(error)),
+                None => {}
+            }
+        }
+        let at = self.spans.len();
+        self.spans.push(piece.span);
+        Some(Ok((at, piece.tok, at + 1)))
+    }
 }

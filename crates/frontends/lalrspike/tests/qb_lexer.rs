@@ -61,3 +61,30 @@ fn the_logos_lexer_matches_on_the_odd_forms() {
         same(source, &format!("{source:?}"));
     }
 }
+
+/// The parser fed straight from the lexer builds the same tree, from the same spans, as from the token vector.
+#[test]
+fn streaming_tokens_to_the_parser_builds_the_same_tree() {
+    let mut parsed = 0;
+    for path in tracked() {
+        let source = lalrspike::dos_source(&std::fs::read(&path).unwrap());
+        for dialect in [Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
+            let old = qbfront::generated_parser::lex(&source, dialect)
+                .map_err(|error| error.message)
+                .and_then(|tokens| lalrspike::parse_qb(&tokens).map(|tree| (tree, tokens)));
+            let mut spans = Vec::new();
+            let new = lalrspike::parse_qb_stream(&source, dialect, &mut spans);
+            let what = format!("{} under {dialect:?}", path.display());
+            match (old, new) {
+                (Ok((tree, tokens)), Ok(streamed)) => {
+                    assert_eq!(tree, streamed, "{what}");
+                    assert_eq!(tokens.iter().map(|token| token.span).collect::<Vec<_>>(), spans, "{what}");
+                    parsed += 1;
+                }
+                (Err(_), Err(_)) => {}
+                (old, new) => panic!("{what}: old {:?}, streamed {:?}", old.map(|_| ()), new.map(|_| ())),
+            }
+        }
+    }
+    assert!(parsed > 500, "parsed {parsed}");
+}
