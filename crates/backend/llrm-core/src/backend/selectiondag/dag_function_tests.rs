@@ -1493,3 +1493,53 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
         "the access goes through the selector"
     );
 }
+
+const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@buf = global [100 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define cc 1005 void @f() addrspace(1) {
+entry:
+  call void @llvm.memset.p0.i16(ptr @buf, i8 7, i16 100, i1 false)
+  ret void
+}
+";
+
+/// At real mode `rep stosb` names the segment its pointer is in (a value: the
+/// group's selector for a global); `REP_STOSB_16` was a refusal in 9 functions.
+#[test]
+fn an_m16_fill_names_its_segment() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(M16_FILL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let fill = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosb"))
+        .expect("a stosb");
+    assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
+}
+
+/// The stack pointer is a word at real mode: the `add sp` after a call named
+/// it a dword and the LIR verifier refused it (far_return -O0).
+#[test]
+fn the_stack_pointer_is_a_word_at_m16() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let adjust = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| {
+            w.op == Operation::Binary
+                && matches!(
+                    &w.dests[..],
+                    [Loc::Reg(r)] if r.register == llrm_lir::registers::RegId::SP
+                )
+        })
+        .expect("an add of the stack pointer");
+    assert!(matches!(&adjust.dests[..], [Loc::Reg(r)] if r.width == 2), "{adjust:?}");
+}

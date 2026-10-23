@@ -225,6 +225,9 @@ struct Emitter<'a, 'd> {
     /// The selector each `LES16rm` loaded beside its offset, by node: a cell
     /// based on that offset takes it as its segment.
     selectors: HashMap<u32, Held>,
+    /// The node each accumulator register's value came from, for the segment
+    /// a string operation's pointer is in.
+    origins: HashMap<llrm_lir::registers::RegId, SDValue>,
     /// The value the last `CopyToReg ES` put there: the selector of the next
     /// cell through ES that is not based on a loaded far pointer.
     es: Option<Held>,
@@ -329,6 +332,7 @@ pub fn emit_in(
         calls: Vec::new(),
         last_call: None,
         flags_now: None,
+        origins: HashMap::new(),
         es: None,
         selectors: HashMap::new(),
         lazy: HashMap::new(),
@@ -538,6 +542,7 @@ impl Emitter<'_, '_> {
                 };
                 let value = self.held_operand(node.ops[2])?;
                 self.accumulator.insert(register, value);
+                self.origins.insert(register, node.ops[2]);
                 Ok(())
             }
             ISD::CopyToReg => {
@@ -656,13 +661,21 @@ impl Emitter<'_, '_> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
-            let symbol = match node.ops.first().map(|op| self.dag.node(*op).data.clone()) {
-                Some(NodeData::Global { symbol, .. }) => Some(symbol),
+            // The global rides in the node's own data.
+            let symbol = match node.data {
+                NodeData::Global { symbol, .. } => Some(symbol),
                 _ => None,
+            };
+            // Naming no global it is DGROUP's, which the builder also writes
+            // for the start of a huge array (`addrspacecast (@big ...)`):
+            // tests/run/c/huge_array crashed. Refused until the builder says
+            // which segment it means.
+            let Some(symbol) = symbol else {
+                return Err(EmitError::Unsupported("SEGMENT_OF no global: DGROUP or a global's segment".to_owned()));
             };
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
+            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(Some(symbol))) };
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
             return Ok(());
         }
@@ -1044,6 +1057,44 @@ impl Emitter<'_, '_> {
         )
     }
 
+    /// The selector of the segment the pointer in `register` is in, as a value:
+    /// DGROUP for the address of a global, SS for one of the frame, the
+    /// selector loaded with a far pointer.
+    fn segment_of_pointer(
+        &mut self,
+        register: llrm_lir::registers::RegId,
+    ) -> Result<Held, EmitError> {
+        let origin = *self
+            .origins
+            .get(&register)
+            .ok_or_else(|| EmitError::Unsupported("a string operation on a pointer of no known origin".to_owned()))?;
+        if let Some(&selector) = self.selectors.get(&origin.node) {
+            return Ok(selector);
+        }
+        let held = self.fresh(2);
+        let source = if let ISD::Machine(op) = self.dag.opcode(origin) {
+            let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
+            let first = self.dag.node(origin).ops.first().copied();
+            match (name, first.map(|op| self.dag.node(op).data.clone())) {
+                ("MOV16ri", Some(NodeData::Global { symbol, .. })) => {
+                    Loc::Imm(Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(Some(symbol))) })
+                }
+                ("LEA16r", Some(NodeData::FrameIndex(_))) => {
+                    Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
+                }
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "a string operation on a pointer of no known segment".to_owned(),
+                    ));
+                }
+            }
+        } else {
+            return Err(EmitError::Unsupported("a string operation on a pointer of no known segment".to_owned()));
+        };
+        self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![source]);
+        Ok(held)
+    }
+
     /// Whether `value` is a machine node of the pin's opcode `name`.
     fn is_machine_named(
         &self,
@@ -1082,8 +1133,10 @@ impl Emitter<'_, '_> {
                 let (verb, count) =
                     if name.starts_with("ADJCALLSTACKDOWN") { ("sub", bytes) } else { ("add", bytes - popped) };
                 if count != 0 {
-                    let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: 4 });
-                    let count = Loc::Imm(Imm { value: count, width: 4, address: None });
+                    // The stack pointer is a word at real mode.
+                    let word = if self.ctx.address_mode == AddrMode::Real16 { 2 } else { 4 };
+                    let sp = Loc::Reg(Reg { register: self.ctx.stack_pointer, width: word });
+                    let count = Loc::Imm(Imm { value: count, width: word, address: None });
                     self.push(Operation::Binary, verb, vec![sp.clone()], vec![sp, count]);
                 }
                 return Ok(Some(()));
@@ -1134,6 +1187,47 @@ impl Emitter<'_, '_> {
             // A string move or fill repeated ECX times: the matcher names ESI,
             // EDI, ECX (and the stored AL, AX or EAX) with `CopyToReg` around
             // it, which the form pins.
+            // The real-mode string operations: ES:DI (and DS:SI) are the
+            // segments the pointers live in, values of their own.
+            "REP_STOSB_16" | "REP_STOSW_16" | "REP_STOSD_16" => {
+                use llrm_lir::registers::RegId;
+                let stored = match name.as_bytes()[8] {
+                    b'B' => RegId::AL,
+                    b'W' => RegId::AX,
+                    _ => RegId::EAX,
+                };
+                let (value, count, destination) =
+                    (self.accumulated(stored)?, self.accumulated(RegId::CX)?, self.accumulated(RegId::DI)?);
+                let segment = self.segment_of_pointer(RegId::DI)?;
+                let (destination_after, emptied) = (self.fresh(2), self.fresh(2));
+                self.push(
+                    Operation::Fill,
+                    &name[4..9].to_ascii_lowercase(),
+                    vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(destination_after), Loc::Held(emptied)],
+                    vec![Loc::Held(value), Loc::Held(count), Loc::Held(destination), Loc::Held(segment)],
+                );
+                self.values.insert(SDValue { node: n, res: 0 }, destination_after.value);
+                return Ok(Some(()));
+            }
+            "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
+                use llrm_lir::registers::RegId;
+                let (count, source, destination) =
+                    (self.accumulated(RegId::CX)?, self.accumulated(RegId::SI)?, self.accumulated(RegId::DI)?);
+                let (from, to) = (self.segment_of_pointer(RegId::SI)?, self.segment_of_pointer(RegId::DI)?);
+                let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
+                self.push(
+                    Operation::Copy,
+                    &name[4..9].to_ascii_lowercase(),
+                    vec![
+                        Loc::Mem(Mem::new(None, 0)),
+                        Loc::Held(source_after),
+                        Loc::Held(destination_after),
+                        Loc::Held(emptied),
+                    ],
+                    vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), Loc::Held(from), Loc::Held(to)],
+                );
+                return Ok(Some(()));
+            }
             "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" => {
                 use llrm_lir::registers::RegId;
                 let (count, source, destination) =
@@ -1386,6 +1480,15 @@ impl Emitter<'_, '_> {
             "LEA32r" | "LEA16r" => {
                 let cell = self
                     .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // The object encoder has no field for the displacement of a
+                // symbol beside a register in a 16-bit address (strlen_idiom
+                // did not assemble).
+                if self.ctx.address_mode == AddrMode::Real16
+                    && cell.addr.is_some()
+                    && (cell.base.is_some() || cell.index.is_some())
+                {
+                    return Err(EmitError::Unsupported("a lea of a symbol and a register at m16".to_owned()));
+                }
                 let held = self.fresh(width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 self.push(
