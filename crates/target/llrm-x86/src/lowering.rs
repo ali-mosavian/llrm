@@ -27,6 +27,9 @@ impl Lowering for X86 {
         true
     }
 
+    // The registers: i8, i16 and i32 (i64 on a 64-bit target). Divide and
+    // remainder are `Expand` (L327: `SDIVREM` does them), every other scalar
+    // operation here is `Legal` or `Custom` (`Select` and `SetCC` L361).
     // The register classes (X86ISelLowering L179-183).
     fn is_type_legal(
         &self,
@@ -40,9 +43,6 @@ impl Lowering for X86 {
         true
     }
 
-    // The registers: i8, i16 and i32 (i64 on a 64-bit target). Divide and
-    // remainder are `Expand` (L327: `SDIVREM` does them), every other scalar
-    // operation here is `Legal` or `Custom` (`Select` and `SetCC` L361).
     fn is_operation_legal_or_custom(
         &self,
         op: Isd,

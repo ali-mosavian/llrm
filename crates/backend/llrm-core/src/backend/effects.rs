@@ -43,7 +43,7 @@
 //! `peephole.rs` (`_effects_by_table`), which adds the instruction's
 //! `requires` and `delivers` and turns the registers into byte lanes. The
 //! lanes feed `machinecp`, `copysink`, `regthrash`, `exactaddress`, `liveness`,
-//! `parcopy`, `spillforward`, `upperzero` and other post-allocation passes.
+//! `parcopy`, `upperzero` and other post-allocation passes.
 
 use llrm_lir::registers::Regs;
 pub use llrm_x86::effects::{Effects, Served};

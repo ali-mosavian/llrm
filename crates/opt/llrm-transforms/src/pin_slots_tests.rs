@@ -307,13 +307,6 @@ const ROWS: &[Disposition] = &[
     row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(
         Late,
-        "instcombine",
-        Why::Missing,
-        "the three late runs; ours has no combine slot in the late list",
-        "w-4, 11-09",
-    ),
-    row(
-        Late,
         "loop-unroll",
         Why::Missing,
         "the late loop-unroll<O2>; ablation 0 of 12 IRs",

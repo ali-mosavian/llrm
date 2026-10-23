@@ -254,9 +254,6 @@ pub struct Options {
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
-    /// Both routes through the machine phases are made and the cheaper kept
-    /// (`-fallocation-routes`; -Omax); else the allocator alone.
-    pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
@@ -318,7 +315,6 @@ impl Default for Options {
             switch_conversion: true,
             jump_tables: true,
             search: false,
-            routes: false,
             exhaustive: false,
         }
     }
@@ -395,7 +391,6 @@ impl Options {
             unswitch: true,
             unroll_and_jam: true,
             search: true,
-            routes: true,
             exhaustive: true,
             rounds: usize::MAX,
             ..Self::default()
@@ -420,11 +415,6 @@ impl Options {
     /// cheapest.
     pub fn searches(&self) -> bool {
         self.search
-    }
-
-    /// Whether both routes are made and the cheaper kept.
-    pub fn compares_routes(&self) -> bool {
-        self.routes
     }
 
     /// Whether the search tries every shape of a body.
@@ -761,9 +751,14 @@ pub(crate) fn llvm_order(
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
             // L1438; llrm's targets have no vector registers.
             slot("loop-load-elim@1400", Box::new(crate::looploadelim::LoopLoadElim::default())),
+            // InstCombinePass (l.1403), l.1464 and l.1499: the three late runs
+            // that clean what SimplifyCFG (l.1438) and the unroll leave, as the
+            // `not` of a condition it makes before a branch.
+            combine("combine@1403"),
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682, L2376}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
             slot(
@@ -779,6 +774,7 @@ pub(crate) fn llvm_order(
             // `AllowSpeculation=true`), in a loop pass manager of its own after
             // the unroll and the combine that follow it: "helps to clean up
             // some loop-invariant code created by the loop unroll pass".
+            combine("combine@1499"),
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             // TailCallElim (l.1677, the module optimization pipeline's

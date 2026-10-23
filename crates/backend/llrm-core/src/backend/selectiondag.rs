@@ -92,7 +92,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub mod actions;
+pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
 pub mod builder;
 mod dag;
 pub mod dag_combiner;
@@ -104,19 +104,15 @@ pub mod emit;
 pub mod fold;
 pub mod function_lowering;
 pub mod inline_asm;
-pub mod isd;
 pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
-pub mod lowering;
-pub mod mvt;
 pub mod opcodes;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_lowering;
 pub mod x86_preprocess;
-pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
@@ -145,6 +141,10 @@ mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
+mod switchbpi_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_ext;
+#[cfg(test)]
+mod vararg_tests;

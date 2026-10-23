@@ -1,11 +1,11 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/pushfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/pushfold.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/pushfold.rs sha256:7b1b31e5326aafff1e5edfa286e053089a205cbcec20f577271070206bcaa6ba -->
+<!-- src: crates/backend/llrm-core/src/backend/pushfold.rs sha256:07bbc61c730210f00046a2b9ca34111870417fb13918d541afcad6efb801b086 -->
 
 # pushfold
 
 A value that a load made and nothing else reads is read from memory where it
-is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1`
-with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a
+is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0,
+v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a
 commutative operation the load is. Translated from
 [X86CallFrameOptimization.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp)
 (`canFoldIntoRegPush`, and the `PUSH32rmm` branch of `adjustCallSequence`).
@@ -63,8 +63,8 @@ g: 6 instructions
 Twice. As `LoadFold` first of the machine phases, after selection: the pin's
 DAG selection folds a once-read load into `ADD32rm` before MachineCombiner
 runs, and a load folded after it let the combiner rebuild a chain as a tree.
-As `PushFold`, a machine phase after `floatfold`, before the register classes
-are decided,
+As `PushFold`, a machine phase after `floatfold`, before the register
+classes are decided,
 once per function, at every -O level but -O0 (the pin's pass is
 `-no-x86-call-frame-opt`-switchable only, and runs at -O0 too; ours does not
 at -O0, where nothing improves after selection).

@@ -155,6 +155,10 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         RegisterMask => pin::RegisterMask,
         LifetimeStart => pin::LIFETIME_START,
         LifetimeEnd => pin::LIFETIME_END,
+        VAStart => pin::VASTART,
+        VAEnd => pin::VAEND,
+        VACopy => pin::VACOPY,
+        SrcValue => pin::SRCVALUE,
         // sdag-a's codes are private and named (`x86isd::name`), the pin's
         // number comes from the name; sdag-b's lowering writes the pin's
         // numbers, which `name` does not know.

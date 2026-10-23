@@ -203,6 +203,54 @@ b0:
     assert_eq!(aa.get_mod_ref_info(call, Some(&load("b")), &mut aaqi), ModRefInfo::Mod, "@h");
 }
 
+/// `GlobalsAAResult::alias` (L836): a pointer that is an argument, a call's
+/// result or loaded from a global cannot be a non-address-taken global, so the
+/// two do not alias. It answered MayAlias for everything: a `memcpy` into a
+/// tracked array was a clobber of a field of a parameter in MemorySSA (22 of
+/// 1796 call queries in qbq's d_faces -O2 where the footprint said apart).
+#[test]
+fn a_tracked_global_does_not_alias_an_argument_or_a_second_tracked_global() {
+    use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryLocation};
+    let module = parsed(
+        "@g = internal global [4 x i16] zeroinitializer
+@h = internal global i16 0
+@taken = global i16 0
+
+define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p
+  %gv = load i16, ptr @g
+  %hv = load i16, ptr @h
+  %tv = load i16, ptr @taken
+  ret i16 %a
+}
+",
+    );
+    let info = compute(&module);
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+    let pointer = |result: &str| {
+        let value = crate::testing::value(f, result);
+        let load = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+        f.instruction(load).operands[0]
+    };
+    let global = |name: &str| match name {
+        "g" => pointer("gv"),
+        "h" => pointer("hv"),
+        _ => pointer("tv"),
+    };
+    let at = |ptr| MemoryLocation::new(ptr, LocationSize::Precise(2));
+    let argument = llrm_mir::module::Operand::Value(crate::testing::value(f, "p"));
+    let mut aa = GlobalsAAResult::new(&unit, &info);
+    let mut aaqi = AAQueryInfo::default();
+    assert_eq!(aa.alias(&at(global("g")), &at(argument), &mut aaqi, None), AliasResult::NoAlias, "@g, an argument");
+    assert_eq!(aa.alias(&at(argument), &at(global("g")), &mut aaqi, None), AliasResult::NoAlias, "an argument, @g");
+    assert_eq!(aa.alias(&at(global("g")), &at(global("h")), &mut aaqi, None), AliasResult::NoAlias, "@g, @h");
+    assert_eq!(aa.alias(&at(global("g")), &at(global("g")), &mut aaqi, None), AliasResult::MayAlias, "@g, @g");
+    assert_eq!(aa.alias(&at(global("taken")), &at(argument), &mut aaqi, None), AliasResult::MayAlias, "@taken");
+}
+
 /// DEVIATE G8 takes the globals the program does not export as local. QB's
 /// `VARPTR`, `VARSEG` and `@` still make one reachable by a far pointer: the
 /// address passed to a call, turned into an integer or stored is taken, so

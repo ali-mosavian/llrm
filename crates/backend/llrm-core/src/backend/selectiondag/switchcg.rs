@@ -13,12 +13,8 @@
 //! Probabilities are the pin's 31-bit fractions ([`BranchProbability`]).
 //!
 //! # Runs
-//! Called by the builder's `switch` (A2c, next piece) at -O1 and above.
-//!
-//! DEVIATE SD101: every case has probability `1/(cases+1)`, as the pin's
-//! `BranchProbabilityInfo` gives a switch with no unreachable, cold-call or
-//! loop successors; those heuristics are not ported. Exit: with a BPI port
-//! (outside this group). Owner sdag-a. Review 2026-11-13.
+//! Called by the builder's `switch` at -O1 and above, with the IR switch's
+//! edge probabilities from `llrm_analysis::bpi`.
 //!
 //! # See also
 //! LLVM's `findJumpTables`
@@ -200,9 +196,19 @@ pub fn plan(
     target: &SwitchTarget,
 ) -> SwitchPlan {
     let prob = BranchProbability::new(1, cases.len() as u32 + 1);
+    let with: Vec<(i128, u32, BranchProbability)> = cases.iter().map(|&(value, dest)| (value, dest, prob)).collect();
+    plan_with(&with, default, target)
+}
+
+/// [`plan`] with each case's own probability (the IR switch's edge).
+pub fn plan_with(
+    cases: &[(i128, u32, BranchProbability)],
+    default: u32,
+    target: &SwitchTarget,
+) -> SwitchPlan {
     let mut clusters: Vec<CaseCluster> = cases
         .iter()
-        .map(|&(value, dest)| CaseCluster { kind: ClusterKind::Range, low: value, high: value, dest, prob })
+        .map(|&(value, dest, prob)| CaseCluster { kind: ClusterKind::Range, low: value, high: value, dest, prob })
         .collect();
     sort_and_rangeify(&mut clusters);
     let mut plan = SwitchPlan::default();

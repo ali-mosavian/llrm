@@ -8,7 +8,7 @@ pub const RET_GLUE: ISD = ISD::Target(2);
 pub const REP_STOS: ISD = ISD::Target(3);
 pub const REP_MOVS: ISD = ISD::Target(4);
 /// A `llrm.ia16.asm.*` block (`tools/dagisel/own_ids.txt`); see
-/// [`super::inline_asm`].
+/// `selectiondag::inline_asm` in llrm-core.
 pub const LLRM_ASM: ISD = ISD::Target(24578);
 
 /// `getTargetNodeName`.
