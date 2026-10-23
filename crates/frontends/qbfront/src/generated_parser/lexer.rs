@@ -47,7 +47,7 @@ pub fn lex(
     dialect: Dialect,
 ) -> Result<Vec<Token>, LexError> {
     let mut out = Vec::new();
-    for (line_index, line) in logical_lines(source) {
+    for (line_index, line) in logical_lines(source, dialect) {
         let bytes = line.as_bytes();
         let mut at = 0;
         while at < bytes.len() {
@@ -69,14 +69,24 @@ pub fn lex(
                 }
                 b'"' => {
                     at += 1;
-                    let content = at;
-                    while at < bytes.len() && bytes[at] != b'"' {
-                        at += 1;
+                    let mut content = at;
+                    let mut value = String::new();
+                    loop {
+                        while at < bytes.len() && bytes[at] != b'"' {
+                            at += 1;
+                        }
+                        if at == bytes.len() {
+                            return Err(error(span(at), "unterminated string"));
+                        }
+                        if dialect.quote_escape() && bytes.get(at + 1) == Some(&b'"') {
+                            value.push_str(&line[content..=at]);
+                            at += 2;
+                            content = at;
+                            continue;
+                        }
+                        value.push_str(&line[content..at]);
+                        break;
                     }
-                    if at == bytes.len() {
-                        return Err(error(span(at), "unterminated string"));
-                    }
-                    let value = line[content..at].to_string();
                     at += 1;
                     TokenKind::String(value)
                 }
@@ -89,7 +99,7 @@ pub fn lex(
                     while at < bytes.len() && identifier_char(bytes[at], dialect) {
                         at += 1;
                     }
-                    if at < bytes.len() && is_type_suffix(bytes[at]) {
+                    if at < bytes.len() && is_type_suffix(bytes[at], dialect) {
                         at += 1;
                     }
                     TokenKind::Identifier(line[start..at].to_ascii_uppercase())
@@ -99,7 +109,7 @@ pub fn lex(
                         || (bytes.get(at + 1).is_some_and(u8::is_ascii_digit)
                             && (at == 0 || !identifier_char(bytes[at - 1], dialect))) =>
                 {
-                    numeric(&line, &mut at, span)?
+                    numeric(&line, &mut at, span, dialect)?
                 }
                 b'A'..=b'Z' | b'a'..=b'z' => identifier_or_reserved(&line, &mut at, dialect),
                 b'_' => {
@@ -253,8 +263,11 @@ fn identifier_char(
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-fn is_type_suffix(byte: u8) -> bool {
-    matches!(byte, b'%' | b'&' | b'!' | b'#' | b'$')
+fn is_type_suffix(
+    byte: u8,
+    dialect: Dialect,
+) -> bool {
+    matches!(byte, b'%' | b'&' | b'!' | b'#' | b'$') || (byte == b'@' && dialect.currency_suffix())
 }
 
 fn reserved(spelling: &str) -> Option<u16> {
@@ -278,7 +291,7 @@ fn identifier_or_reserved(
     while *at < bytes.len() && identifier_char(bytes[*at], dialect) {
         *at += 1;
     }
-    if *at < bytes.len() && is_type_suffix(bytes[*at]) {
+    if *at < bytes.len() && is_type_suffix(bytes[*at], dialect) {
         *at += 1;
     }
     let name = line[start..*at].to_ascii_uppercase();
@@ -303,6 +316,7 @@ fn numeric(
     line: &str,
     at: &mut usize,
     span: impl Fn(usize) -> Span,
+    dialect: Dialect,
 ) -> Result<TokenKind, LexError> {
     let bytes = line.as_bytes();
     let start = *at;
@@ -334,14 +348,16 @@ fn numeric(
             return Err(error(span(*at), "missing exponent digits"));
         }
     }
-    let explicit_suffix = if *at < bytes.len() && matches!(bytes[*at], b'%' | b'&' | b'!' | b'#') {
-        let suffix = char::from(bytes[*at]);
-        real |= matches!(bytes[*at], b'!' | b'#');
-        *at += 1;
-        Some(suffix)
-    } else {
-        None
-    };
+    let currency = dialect.currency_suffix();
+    let explicit_suffix =
+        if *at < bytes.len() && (matches!(bytes[*at], b'%' | b'&' | b'!' | b'#') || (currency && bytes[*at] == b'@')) {
+            let suffix = char::from(bytes[*at]);
+            real |= matches!(bytes[*at], b'!' | b'#' | b'@');
+            *at += 1;
+            Some(suffix)
+        } else {
+            None
+        };
     let text = &line[start..*at];
     if real {
         let suffix = explicit_suffix.or_else(|| {
@@ -354,7 +370,7 @@ fn numeric(
                 None
             }
         });
-        Ok(TokenKind::Real(text.trim_end_matches(['!', '#']).replace(['D', 'd'], "E"), suffix))
+        Ok(TokenKind::Real(text.trim_end_matches(['!', '#', '@']).replace(['D', 'd'], "E"), suffix))
     } else {
         let parsed = text.trim_end_matches(['%', '&']).parse::<i64>();
         // BC: digits beyond a LONG make a double (`DATA 123456789012345`).
@@ -417,7 +433,10 @@ fn based_integer(
     Ok(TokenKind::Integer(value, if bits == 32 { Some('&') } else { suffix }))
 }
 
-fn logical_lines(source: &str) -> Vec<(usize, String)> {
+fn logical_lines(
+    source: &str,
+    dialect: Dialect,
+) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut begins = 1;
@@ -426,7 +445,11 @@ fn logical_lines(source: &str) -> Vec<(usize, String)> {
             begins = index + 1;
         }
         let trimmed = physical.trim_end();
-        let continued = trimmed.ends_with('_') && trimmed[..trimmed.len() - 1].ends_with(char::is_whitespace);
+        let before = trimmed.strip_suffix('_').unwrap_or("");
+        let word = before.len() - before.trim_end_matches(|c: char| c.is_ascii_alphanumeric()).len();
+        let after_number = word > 0 && before[before.len() - word..].starts_with(|c: char| c.is_ascii_digit());
+        let continued = trimmed.ends_with('_')
+            && (before.ends_with(char::is_whitespace) || (dialect.tight_continuation() && after_number));
         if continued {
             current.push_str(trimmed[..trimmed.len() - 1].trim_end());
             current.push(' ');
@@ -452,5 +475,47 @@ mod tests {
         assert!(tokens.iter().any(|token| token.kind == reserved_token("SIN")));
         assert!(tokens.iter().any(|token| token.kind == reserved_token("RIGHT$")));
         assert!(tokens.iter().any(|token| token.kind == TokenKind::Integer(255, None)));
+    }
+
+    fn kinds(
+        source: &str,
+        dialect: Dialect,
+    ) -> Result<Vec<TokenKind>, LexError> {
+        lex(source, dialect).map(|tokens| tokens.into_iter().map(|token| token.kind).collect())
+    }
+
+    /// BC 7.1 and VBDOS take `det@` for a name (CURRENCY); BC 4.5 does not.
+    /// mgl's MATH.BAS and PDS's MATB.BAS stopped the lexer at the `@`.
+    #[test]
+    fn at_sign_ends_a_name_where_the_compiler_has_a_currency_type() {
+        for dialect in [Dialect::Pds71, Dialect::VbDos] {
+            assert!(kinds("det@ = 1\n", dialect).unwrap().contains(&TokenKind::Identifier("DET@".into())));
+        }
+        assert!(kinds("det@ = 1\n", Dialect::QuickBasic45).is_err());
+    }
+
+    /// The same suffix ends a number: mgl's MATH.BAS has `0@` and `(-1@)`.
+    #[test]
+    fn at_sign_ends_a_currency_number_under_pds_and_vbdos() {
+        for dialect in [Dialect::Pds71, Dialect::VbDos] {
+            assert!(kinds("x = 0@\n", dialect).unwrap().contains(&TokenKind::Real("0".into(), Some('@'))));
+        }
+        assert!(kinds("x = 0@\n", Dialect::QuickBasic45).is_err());
+    }
+
+    /// VBDOS BC reads `""` in a string as one quote: `": """` is `: "`.
+    /// vbdos/INC/SETUP.BAS line 147 was two strings and a stray one.
+    #[test]
+    fn vbdos_reads_a_doubled_quote_in_a_string_as_one_quote() {
+        assert_eq!(kinds("x$ = \"a\"\"b\"\n", Dialect::VbDos).unwrap()[2], TokenKind::String("a\"b".into()));
+        assert_eq!(kinds("x$ = \"a\"\"b\"\n", Dialect::QuickBasic45).unwrap()[2], TokenKind::String("a".into()));
+    }
+
+    /// VBDOS BC continues a line at an `_` after a number with no space, `1_`.
+    /// tests/differential/conformance/vbdos/contterm.bas stopped the lexer.
+    #[test]
+    fn vbdos_continues_a_line_at_an_underscore_after_a_digit() {
+        assert_eq!(kinds("x = 1_\n+ 2\n", Dialect::VbDos), kinds("x = 1 + 2\n", Dialect::VbDos));
+        assert!(kinds("x = 1_\n+ 2\n", Dialect::QuickBasic45).is_err());
     }
 }
