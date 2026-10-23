@@ -172,11 +172,15 @@ impl FunctionPass for CgpAddr {
         let masks =
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
+        let extended = match analyses.outer().target().lowering() {
+            Some(lowering) => ext_uses(unit, analyses, &*lowering),
+            None => false,
+        };
         let addresses = match analyses.outer().target().tti() {
             Some(tti) => sunk(unit, &*tti),
             None => false,
         };
-        if phis || sunk_compares || masks || addresses {
+        if phis || sunk_compares || masks || addresses || extended {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and
@@ -194,6 +198,98 @@ impl FunctionPass for CgpAddr {
         }
     }
 }
+/// `optimizeExtUses`
+/// ([CodeGenPrepare.cpp#L7361](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7361)):
+/// where a `zext` or `sext` and its source are both live out of the source's
+/// block, the other blocks that read the source read a `trunc` of the
+/// extension instead, one for each block; only where truncating is free
+/// (`TargetLowering::isTruncateFree`). Whether any was made.
+///
+/// DEVIATE CGP2: a block that reads the source is rewritten only if the
+/// extension's block dominates it. The pin does not ask, and a source read in a
+/// block the extension does not reach would read an undefined `trunc`.
+fn ext_uses(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+    lowering: &dyn llrm_mir::lowering::Lowering,
+) -> bool {
+    let exts: Vec<(BlockId, InstId)> = unit
+        .function
+        .walk()
+        .filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt)))
+        .collect();
+    let mut tree = None;
+    let mut changed = false;
+    for (home, ext) in exts {
+        let inst = unit.function.instruction(ext).clone();
+        let (Operand::Value(source), Some(result)) = (inst.operands[0], inst.result) else { continue };
+        // A source read once has no other reader to move.
+        if unit.function.users(source).has_n_uses(1) {
+            continue;
+        }
+        let (Some(from), Some(to)) = (
+            unit.function.operand_type(unit.context, inst.operands[0]).and_then(|ty| unit.context.types.int_bits(ty)),
+            unit.context.types.int_bits(inst.ty),
+        ) else {
+            continue;
+        };
+        if !lowering.is_truncate_free(to, from) {
+            continue;
+        }
+        // Only safe where the source is made in this block.
+        let ValueDef::Instruction(made) = unit.function.value(source).def else { continue };
+        if unit.function.parent(made) != Some(home) {
+            continue;
+        }
+        let live_out = unit.function.users(result).iter().any(|one| unit.function.parent(one.user) != Some(home));
+        if !live_out {
+            continue;
+        }
+        // Be conservative: no phi, load or store of the source elsewhere.
+        let readers: Vec<(InstId, u32)> = unit.function.users(source).iter().map(|one| (one.user, one.index)).collect();
+        let elsewhere = |reader: &InstId| unit.function.parent(*reader).is_some_and(|block| block != home);
+        if readers.iter().filter(|(reader, _)| elsewhere(reader)).any(|(reader, _)| {
+            matches!(unit.function.instruction(*reader).opcode, Opcode::Phi | Opcode::Load { .. } | Opcode::Store { .. })
+        }) {
+            continue;
+        }
+        let tree = tree
+            .get_or_insert_with(|| analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function))
+            .clone();
+        let mut truncs: Vec<(BlockId, Operand)> = Vec::new();
+        for (reader, index) in readers {
+            let Some(block) = unit.function.parent(reader) else { continue };
+            if block == home || !tree.dominates(home, block) {
+                continue;
+            }
+            let trunc = match truncs.iter().find(|(seen, _)| *seen == block) {
+                Some(&(_, trunc)) => trunc,
+                None => {
+                    let first = unit
+                        .function
+                        .iter_block(block)
+                        .find(|&one| unit.function.instruction(one).opcode != Opcode::Phi)
+                        .expect("a terminated block");
+                    let made = unit.function.create_instruction(
+                        Opcode::Cast(CastOp::Trunc),
+                        unit.function.value(source).ty,
+                        vec![Operand::Value(result)],
+                        Flags::default(),
+                        None,
+                    );
+                    unit.function.insert(made, Position::Before(first)).expect("a position before the first instruction");
+                    let trunc = Operand::Value(unit.function.instruction(made).result.expect("a value"));
+                    truncs.push((block, trunc));
+                    trunc
+                }
+            };
+            unit.function.set_operand(reader, index as usize, trunc);
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// `base + offset + scale * index`, the instructions that made it, and what it
 /// is made of.
 struct Mode {
