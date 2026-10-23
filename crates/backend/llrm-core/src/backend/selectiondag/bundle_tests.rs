@@ -108,7 +108,7 @@ fn flat(
 }
 
 /// The blocks of each function, ours and the pin's, as sorted dumps.
-fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+pub(super) fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     let text: String =
         text.lines().filter(|line| !line.starts_with("target triple")).map(|line| format!("{line}\n")).collect();
     let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
@@ -143,7 +143,7 @@ fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     all
 }
 
-fn pins(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+pub(super) fn pins(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut all: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     let mut current: Option<(String, String)> = None;
     let finish = |current: &mut Option<(String, String)>, all: &mut std::collections::BTreeMap<String, Vec<String>>| {
