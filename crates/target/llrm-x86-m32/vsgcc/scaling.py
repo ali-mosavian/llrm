@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import levels_time
 import llrmbin
+import pin_clang
 
 WORK = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 COMPILERS = ("llrm", "gcc", "clang")
@@ -369,7 +370,7 @@ def check(axis: str, n: int, work: Path) -> str:
     seen = {}
     for compiler, level in (("gcc", "O0"), ("gcc", "O2"), ("clang", "O2")):
         exe = work / f"{axis}.{compiler}{level}"
-        subprocess.run([compiler, f"-{level}", "-w", "-o", str(exe), str(source), str(work / "report.c")], check=True, capture_output=True)
+        subprocess.run([pin_clang.path() if compiler == "clang" else compiler, f"-{level}", "-w", "-o", str(exe), str(source), str(work / "report.c")], check=True, capture_output=True)
         seen[f"{compiler} {level}"] = int(subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout)
     (harness.OUT / "o").mkdir(parents=True, exist_ok=True)
     subprocess.run(levels_time.command("llrm", "O2", source)[:-3] + ["-o", str(harness.OUT / "o" / f"{axis}.llrm.obj"), str(source)], check=True, capture_output=True)
