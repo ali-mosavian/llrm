@@ -677,6 +677,43 @@ fn wrap_of(
     )
 }
 
+/// `procedure` with its callee-saved registers pushed before the space for its
+/// locals, as the pin's frame is (`push ebp; mov ebp, esp; push esi; sub esp,
+/// N`), and every local that much lower. Unchanged where the entry or a piece
+/// of the frame is set up elsewhere: runtime-built, interrupt, stack-checked,
+/// far, `enter`, inline-code, `alloca`, 16-bit and shrink-wrapped frames.
+pub fn saved_first(procedure: Procedure) -> Procedure {
+    let eligible = procedure.entry == 0
+        && procedure.interrupt.is_none()
+        && procedure.stack_check.is_none()
+        && !procedure.far
+        && procedure.body.bits == 32
+        && procedure.reserve != 0
+        && !(procedure.size && procedure.registers.enter)
+        && procedure.callees.values().all(|one| one.code.is_empty())
+        && !moves_stack(&procedure.body)
+        && [false, true]
+            .iter()
+            .all(|omit| wrap_of(&procedure, &procedure.body, true, *omit).is_none_or(|wrap| wrap.wrapped.is_empty()));
+    let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
+    if !eligible || pushed == 0 {
+        return procedure;
+    }
+    // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
+    // costs a 486 3 clocks): they lie a multiple of it below the registers,
+    // and the gap is reserved with them.
+    let align = procedure.registers.align.max(procedure.registers.slot);
+    let gap = (align - pushed % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+        Some(body) => Procedure {
+            body: lir::LirBody { saved_first: true, ..body },
+            reserve: procedure.reserve + gap,
+            ..procedure
+        },
+        None => procedure,
+    }
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
@@ -736,6 +773,7 @@ fn parts(
     let (bp, sp) = (reg(FRAME), reg(STACK));
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
+    let first = procedure.body.saved_first;
     let moved = !omit && framed && moves_stack(&procedure.body);
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
@@ -743,18 +781,33 @@ fn parts(
         let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
         leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
     }
-    leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
-    if omit && reserve != 0 {
-        leave.push(semantics(
+    let pops = || saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![]));
+    let release = || {
+        semantics(
             Operation::Binary,
             "add",
             vec![sp_reg()],
             vec![sp_reg(), Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
-        ));
-    } else if reserve != 0 && framed {
-        leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
-    } else if framed {
-        leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        )
+    };
+    if first {
+        // The registers lie between SP and BP: the locals go first.
+        if reserve != 0 {
+            leave.push(release());
+        }
+        leave.extend(pops());
+        if framed {
+            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        }
+    } else {
+        leave.extend(pops());
+        if omit && reserve != 0 {
+            leave.push(release());
+        } else if reserve != 0 && framed {
+            leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
+        } else if framed {
+            leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
+        }
     }
     // `enter` only where the target's description takes it for size
     // (`frame_enter`).
@@ -797,7 +850,15 @@ fn parts(
             overflow("jb"),
         ]);
     }
-    enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
+    let pushes = saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)]));
+    if first {
+        // Before `sub sp`: the frame register's `mov` ends the frame's setup,
+        // then the registers, then the locals.
+        let at = enter.iter().position(|one| one.name.as_deref() == Some("sub")).unwrap_or(enter.len());
+        enter.splice(at..at, pushes);
+    } else {
+        enter.extend(pushes);
+    }
     if let Some(group) = procedure.interrupt {
         let (before, after) = _interrupt_parts(group);
         enter.splice(0..0, before);
@@ -918,14 +979,15 @@ fn built(
     // Each piece (the frame, a register kept) is set up where it is first
     // needed and taken back on the returns that path reaches, not at the entry
     // and every return (`shrinkwrap`).
-    let count = saved_of(procedure).len();
-    let wrap = wrap_of(procedure, &procedure.body, enter.len() > count, omit);
+    // The registers a `saved_first` frame pushes are part of `enter`.
+    let first = procedure.body.saved_first;
+    let lows = if first { Vec::new() } else { saved_of(procedure) };
+    let count = lows.len();
+    let wrap = if first { None } else { wrap_of(procedure, &procedure.body, enter.len() > count, omit) };
     let kept = enter.split_off(enter.len() - count);
     let restores: Vec<Semantics> = leave.drain(..count).collect();
-    let saved: Vec<RegId> = {
-        let lows = saved_of(procedure);
-        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect()
-    };
+    let saved: Vec<RegId> =
+        procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
     // The items that set a piece up and take it back.
     let item = |piece: &crate::backend::shrinkwrap::Piece| -> (Vec<Semantics>, Vec<Semantics>) {
         match piece {

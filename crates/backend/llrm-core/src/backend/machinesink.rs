@@ -96,9 +96,11 @@
 
 use std::sync::Arc;
 
-use crate::analysis::frequency::Frequency;
+use llrm_mir::blockfrequency::BranchProbability;
+
 use crate::analysis::loops;
 use crate::backend::liveness;
+use crate::liveness::blockfrequency::{MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
 use crate::model::ir::{Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
@@ -109,7 +111,10 @@ use crate::support::hash::{HashMap, HashSet, IndexMap};
 /// ([MachineSink.cpp#L74](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L74)):
 /// an edge taken this much of the time or less is worth breaking for a cheap
 /// instruction.
-const SPLIT_EDGE_PROBABILITY_THRESHOLD: f64 = 0.40;
+/// `SplitEdgeProbabilityThreshold`, 40 percent
+/// ([MachineSink.cpp#L82](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L82)).
+// 0.4 * 2^31, rounded
+const SPLIT_EDGE_PROBABILITY_THRESHOLD: BranchProbability = BranchProbability::get_raw(858_993_459);
 /// `SinkLoadInstsPerBlockThreshold` and `SinkLoadBlocksThreshold`
 /// ([MachineSink.cpp#L91](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L91)).
 const SINK_LOAD_INSTS_PER_BLOCK_THRESHOLD: usize = 2000;
@@ -182,6 +187,26 @@ fn safe_to_move(
         && !one.defines.is_empty()
 }
 
+/// `MBPI->getEdgeProbability(From, To)` of every edge of `body`, by block
+/// index: the sum over the successor positions that lead to `To`.
+fn edge_probabilities(body: &LirBody) -> HashMap<(usize, usize), BranchProbability> {
+    let position: HashMap<i64, usize> =
+        body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
+    let found = MachineBranchProbabilityInfo::of(body);
+    let mut all = HashMap::default();
+    for (from, block) in body.blocks.iter().enumerate() {
+        let mut seen: Vec<usize> = Vec::new();
+        for to in block.succ.iter().filter_map(|at| position.get(at).copied()) {
+            if !seen.contains(&to) {
+                let odds = found.get_edge_probability(from, seen.len());
+                seen.push(to);
+                all.insert((from, to), odds);
+            }
+        }
+    }
+    all
+}
+
 /// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `hasStoreBetween`
 /// counts. No alias analysis reaches here, so any of these may alias a load
 /// (DEVIATE M7).
@@ -245,7 +270,10 @@ struct Sinker {
     /// The innermost loop of each block, as its header.
     cycle: Vec<Option<usize>>,
     irreducible: Vec<bool>,
-    frequency: Arc<Frequency>,
+    /// `MBFI->getBlockFreq(B).getFrequency()` of each block.
+    frequency: Vec<u64>,
+    /// `MBPI->getEdgeProbability(From, To)` of each edge.
+    probability: HashMap<(usize, usize), BranchProbability>,
     /// `CEBCandidates` and `CEMergeCandidates`.
     considered: HashSet<(usize, usize)>,
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
@@ -351,7 +379,11 @@ impl Sinker {
             at: body.blocks.iter().map(|block| block.at).collect(),
             irreducible: body.blocks.iter().map(|block| hard.contains(&block.at)).collect(),
             depth: body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect(),
-            frequency: Frequency::of(body),
+            frequency: {
+                let found = MachineBlockFrequencyInfo::of(body);
+                (0..body.blocks.len()).map(|block| found.get_block_freq(block).get_frequency()).collect()
+            },
+            probability: edge_probabilities(body),
             position,
             cfg,
             dom,
@@ -536,7 +568,7 @@ impl Sinker {
                 }
             }
         }
-        let busy = |one: usize| self.frequency.block(self.at[one]);
+        let busy = |one: usize| self.frequency[one];
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
@@ -545,12 +577,12 @@ impl Sinker {
                         all.push(child);
                     }
                 }
-                let unknown = all.iter().all(|&one| busy(one) == 0.0);
+                let unknown = all.iter().all(|&one| busy(one) == 0);
                 all.sort_by(|&left, &right| {
                     if self.size || unknown {
                         self.depth[left].cmp(&self.depth[right])
                     } else {
-                        busy(left).total_cmp(&busy(right))
+                        busy(left).cmp(&busy(right))
                     }
                 });
                 all
@@ -683,10 +715,8 @@ impl Sinker {
             }
             self.merged.insert((value, to), from);
         }
-        let busy = self.frequency.block(self.at[from]);
         if self.cfg.succs[from].contains(&to)
-            && busy > 0.0
-            && self.frequency.edge(self.at[from], self.at[to]) / busy <= SPLIT_EDGE_PROBABILITY_THRESHOLD
+            && self.probability.get(&(from, to)).is_some_and(|&odds| odds <= SPLIT_EDGE_PROBABILITY_THRESHOLD)
         {
             return true;
         }
@@ -1428,5 +1458,34 @@ mod tests {
         assert!(loads(&clear, 4) && !loads(&clear, 1), "no store between: the load left the loop");
         let blocked = build(store);
         assert!(loads(&blocked, 1) && !loads(&blocked, 4), "a store between: the load stays");
+    }
+
+    /// The edge a loop is left by is split-worthy (at most the pin's 40
+    /// percent), the edge back into it is not: they come from the body's
+    /// odds through `MachineBranchProbabilityInfo`, as the pin asks it, not
+    /// from a walk of the sinker's own.
+    #[test]
+    fn test_a_loop_exit_is_under_the_split_threshold_and_its_back_edge_is_over() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![]).into(),
+                block(1, vec![1, 2], vec![jump(1)]).into(),
+                block(2, vec![], vec![ret(2)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body.odds.taken.insert((1, 2), (0.1 * crate::model::lir::BlockOdds::CERTAIN) as u32);
+        body.odds.taken.insert((1, 1), (0.9 * crate::model::lir::BlockOdds::CERTAIN) as u32);
+        let odds = edge_probabilities(&body);
+        assert!(odds[&(1, 2)] <= SPLIT_EDGE_PROBABILITY_THRESHOLD, "the exit");
+        assert!(odds[&(1, 1)] > SPLIT_EDGE_PROBABILITY_THRESHOLD, "the back edge");
     }
 }

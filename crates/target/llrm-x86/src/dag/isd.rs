@@ -120,6 +120,8 @@ pub enum ISD {
     FNeg,
     FAbs,
     FSqrt,
+    /// `FREEZE`: stops undef and poison propagating.
+    Freeze,
     FSin,
     FCos,
     FAtan,
@@ -267,6 +269,7 @@ impl ISD {
             FNeg => "fneg",
             FAbs => "fabs",
             FSqrt => "fsqrt",
+            Freeze => "freeze",
             FSin => "fsin",
             FCos => "fcos",
             FAtan => "fatan",

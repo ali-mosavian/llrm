@@ -1052,12 +1052,16 @@ pub enum GlobalKind {
 pub struct GlobalName {
     text: Option<String>,
     intrinsic: Option<crate::intrinsics::Intrinsic>,
+    /// `pattern::intrinsic_id_of_name` of the text, found once with it: the
+    /// combiner asked it of every call it visited.
+    intrinsic_id: Option<crate::valuetracking::pattern::IntrinsicId>,
 }
 
 impl From<Option<String>> for GlobalName {
     fn from(text: Option<String>) -> Self {
         let intrinsic = text.as_deref().and_then(crate::intrinsics::Intrinsic::named);
-        GlobalName { text, intrinsic }
+        let intrinsic_id = text.as_deref().and_then(crate::valuetracking::pattern::intrinsic_id_of_name);
+        GlobalName { text, intrinsic, intrinsic_id }
     }
 }
 
@@ -1071,6 +1075,11 @@ impl GlobalName {
     /// The name as an owned `Option<String>`.
     pub fn owned(&self) -> Option<String> {
         self.text.clone()
+    }
+
+    /// `Function::getIntrinsicID` for the intrinsics of `pattern::IntrinsicId`.
+    pub fn intrinsic_id(&self) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.intrinsic_id
     }
 }
 

@@ -262,3 +262,39 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
         "{wide}"
     );
 }
+
+/// At real mode the default convention returns an `i32` in `dx:ax` though
+/// `i32` is a register type: the return value is two `i16` halves, low in
+/// `ax`, glued, and a call reads them back and pairs them. Before, both
+/// stopped at "result in registers the value does not fill" (14 QB blocks).
+#[test]
+fn an_i32_returned_in_dx_ax_is_two_halves_at_m16() {
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+        declare i32 @g(i16)\n\
+        define i32 @f(i16 %a) {\n  %r = call i32 @g(i16 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let dump = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m16(),
+        &llrm_x86_m16::M16,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0))
+    .dag
+    .dump();
+    assert!(dump.contains("i32 = build_pair") && dump.contains("Register:i16 $dx"), "{dump}");
+    let returned: Vec<&str> = dump
+        .lines()
+        .filter(|line| line.contains("CopyToReg"))
+        .filter_map(|line| line.split("Register:i16 $").nth(1)?.split(',').next())
+        .collect();
+    assert_eq!(returned, ["ax", "dx"], "the result's low half in ax, the high in dx:\n{dump}");
+}

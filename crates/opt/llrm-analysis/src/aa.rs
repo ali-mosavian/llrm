@@ -544,6 +544,21 @@ pub trait AAResults {
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo;
 
+    /// `get_mod_ref_info` where `others`, the other providers of an aggregate,
+    /// also answer each `alias` a call's argument is asked against `loc`
+    /// (`AAQI.AAR.alias`, BasicAliasAnalysis.cpp L1030): without them a
+    /// provider answers from its own `alias` alone.
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(&MemoryLocation, &MemoryLocation, &mut AAQueryInfo, Option<InstId>) -> AliasResult,
+    ) -> ModRefInfo {
+        let _ = others;
+        self.get_mod_ref_info(inst, loc, aaqi)
+    }
+
     /// `getModRefInfo(Instruction, CallBase)`: what `inst` does to what `call`
     /// touches.
     fn get_mod_ref_info_call(

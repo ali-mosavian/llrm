@@ -1,0 +1,129 @@
+//! Turns an `llvm.memcpy` the target should not copy inline into a call of
+//! `memcpy`, as the pin's `EmitTargetCodeForMemcpy` leaves it: a call for a
+//! length the target cannot move in a few loads and stores.
+//! Translated from llvm/lib/Target/X86/X86SelectionDAGInfo.cpp at d1106deb71cc.
+//!
+//! # How it works
+//! A copy of a variable length, of a constant length over [`INLINE_LIMIT`]
+//! (`getMaxInlineSizeThreshold`) or of pointers aligned under four bytes is
+//! a call of `memcpy(dst, src, len)` in the ABI's default convention; the
+//! rest stays for the selector. Only on a target whose runtime says it has
+//! `memcpy` (`libcalls` of its `c.toml`): the selector's `rep movs` stays
+//! for the others (DEVIATE I1, AM-F-1).
+//!
+//! # Example
+//! `call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)` becomes
+//! `call ptr @memcpy(ptr %d, ptr %s, i32 %n)`; with a constant length of 16
+//! and 4-byte alignment it is left alone.
+//!
+//! # Runs
+//! Once per module in `driver::optimized`, when the target names `memcpy`
+//! among its libcalls.
+//!
+//! # See also
+//! LLVM's `X86SelectionDAGInfo::EmitTargetCodeForMemcpy`
+//! ([#L328](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SelectionDAGInfo.cpp#L328)).
+
+use llrm_mir::context::ConstantKind;
+use llrm_mir::edit::Position;
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::module::{Linkage, Module, Operand};
+use llrm_mir::opcode::{Attribute, CallInfo, Flags, Opcode};
+
+use super::expansion;
+
+/// `X86SelectionDAGInfo::getMaxInlineSizeThreshold`: a constant copy over this
+/// many bytes is a call.
+pub const INLINE_LIMIT: u128 = 128;
+
+/// Every `llvm.memcpy` of `module` the target copies by a call, as a call of
+/// `memcpy` in calling convention `convention` (LLVM's number).
+pub fn expanded(
+    module: &mut Module,
+    convention: u32,
+) -> Result<(), String> {
+    let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
+    let mut any = false;
+    expansion::expand_calls(module, needs, |context, function, call, ()| {
+        any |= calls(context, function, call);
+        Ok(())
+    })?;
+    if !any {
+        return Ok(());
+    }
+    let (pointer, word, returns) = {
+        let types = &module.context.types;
+        (types.ptr(0), types.int(32), types.ptr(0))
+    };
+    let ty = module
+        .context
+        .types
+        .intern(
+            llrm_mir::types::Type::Function {
+                returns,
+                parameters: vec![pointer, pointer, word],
+                variadic: false,
+            },
+        );
+    let id = match module.named("memcpy") {
+        Some(id) => id,
+        None => module.add_function("memcpy", ty, Linkage::External)?,
+    };
+    let reference = module.reference(id);
+    expansion::expand_calls(module, needs, |context, function, call, ()| {
+        if !calls(context, function, call) {
+            return Ok(());
+        }
+        let instruction = function.instruction(call).clone();
+        let (dst, src, len) = (instruction.operands[0], instruction.operands[1], instruction.operands[2]);
+        let info = CallInfo {
+            function_type: ty,
+            calling_convention: convention,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); 3],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let made = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            pointer,
+            vec![dst, src, len, Operand::Constant(reference)],
+            Flags::default(),
+            None,
+        );
+        function.insert(made, Position::Before(call)).map_err(|why| why.to_string())?;
+        function.erase(call).map_err(|why| why.to_string())
+    })
+}
+
+/// Whether `call` is a copy the target does not make inline.
+fn calls(
+    context: &llrm_mir::context::Context,
+    function: &llrm_mir::module::Function,
+    call: llrm_mir::module::InstId,
+) -> bool {
+    let instruction = function.instruction(call);
+    let Opcode::Call(info) = &instruction.opcode else { return false };
+    let align = |at: usize| {
+        info.argument_attrs
+            .get(at)
+            .into_iter()
+            .flatten()
+            .find_map(|attr| match attr {
+                Attribute::Int(name, value) if name == "align" => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(1)
+    };
+    if align(0) < 4 || align(1) < 4 {
+        return true;
+    }
+    match instruction.operands[2] {
+        Operand::Constant(id) => match context.get(id).kind {
+            ConstantKind::Int(bits) => bits > INLINE_LIMIT,
+            ConstantKind::Zero | ConstantKind::Null => false,
+            _ => true,
+        },
+        _ => true,
+    }
+}

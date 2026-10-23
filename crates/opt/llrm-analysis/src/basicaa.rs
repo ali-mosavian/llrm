@@ -890,6 +890,14 @@ impl BasicAA<'_> {
         call: llrm_mir::module::InstId,
         loc: &MemoryLocation,
         aaqi: &mut AAQueryInfo,
+        mut others: Option<
+            &mut dyn FnMut(
+                &MemoryLocation,
+                &MemoryLocation,
+                &mut AAQueryInfo,
+                Option<llrm_mir::module::InstId>,
+            ) -> AliasResult,
+        >,
     ) -> ModRefInfo {
         use crate::aa::IRMemLocation::{ArgMem, ErrnoMem, InaccessibleMem, Other};
         let op = self.unit.function.instruction(call);
@@ -955,7 +963,14 @@ impl BasicAA<'_> {
                 }
                 let at = at as u32;
                 let Some(place) = MemoryLocation::get_for_argument(self.unit, call, at) else { continue };
-                if self.alias_check(&place, loc, aaqi) != AliasResult::NoAlias {
+                let mut verdict = AliasResult::MayAlias;
+                if let Some(others) = others.as_mut() {
+                    verdict = others(&place, loc, aaqi, Some(call));
+                }
+                if verdict == AliasResult::MayAlias {
+                    verdict = self.alias_check(&place, loc, aaqi);
+                }
+                if verdict != AliasResult::NoAlias {
                     narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
                 }
                 if narrowed == arg {
@@ -1127,7 +1142,7 @@ impl AAResults for BasicAA<'_> {
         // nothing for the rest.
         match self.unit.function.instruction(inst).opcode {
             Opcode::Call(_) | Opcode::Invoke(_) => match loc {
-                Some(loc) => self.call_mod_ref(inst, loc, aaqi),
+                Some(loc) => self.call_mod_ref(inst, loc, aaqi, None),
                 None => ModRefInfo::ModRef,
             },
             // A load that cannot alias the location neither reads nor writes
@@ -1155,6 +1170,24 @@ impl AAResults for BasicAA<'_> {
                 ModRefInfo::Mod
             }
             _ => ModRefInfo::NoModRef,
+        }
+    }
+
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: llrm_mir::module::InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(
+            &MemoryLocation,
+            &MemoryLocation,
+            &mut AAQueryInfo,
+            Option<llrm_mir::module::InstId>,
+        ) -> AliasResult,
+    ) -> ModRefInfo {
+        match (&self.unit.function.instruction(inst).opcode, loc) {
+            (Opcode::Call(_) | Opcode::Invoke(_), Some(loc)) => self.call_mod_ref(inst, loc, aaqi, Some(others)),
+            _ => self.get_mod_ref_info(inst, loc, aaqi),
         }
     }
 
@@ -1226,7 +1259,7 @@ impl AAResults for BasicAA<'_> {
                 } else if arg_mod_ref_c2.is_ref_set() {
                     arg_mask = ModRefInfo::Mod;
                 }
-                arg_mask = arg_mask.intersect(self.call_mod_ref(call1, &place, aaqi));
+                arg_mask = arg_mask.intersect(self.call_mod_ref(call1, &place, aaqi, None));
                 r = r.union(arg_mask).intersect(result);
                 if r == result {
                     break;
@@ -1251,7 +1284,7 @@ impl AAResults for BasicAA<'_> {
                 // If Call1 might Mod its argument, Call2's Mod or Ref matters;
                 // if it might Ref, only a Mod by Call2.
                 let arg_mod_ref_c1 = self.get_arg_mod_ref_info(call1, at);
-                let mod_ref_c2 = self.call_mod_ref(call2, &place, aaqi);
+                let mod_ref_c2 = self.call_mod_ref(call2, &place, aaqi, None);
                 if (arg_mod_ref_c1.is_mod_set() && (mod_ref_c2.is_mod_set() || mod_ref_c2.is_ref_set()))
                     || (arg_mod_ref_c1.is_ref_set() && mod_ref_c2.is_mod_set())
                 {

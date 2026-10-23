@@ -60,6 +60,10 @@ pub mod x86isd {
     /// chain; the segment is read back from `ES`/`DS`.
     pub const LES: ISD = ISD::Target(24576);
     pub const LDS: ISD = ISD::Target(24577);
+    /// A huge pointer plus an `i32` byte delta (a GEP the builder cannot
+    /// prove stays in its segment): `(far, i32) -> far`. Expanded by the
+    /// type legalizer, never selected.
+    pub const HUGE_ADD: ISD = ISD::Target(24579);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);

@@ -220,6 +220,9 @@ pub mod machinelicm;
 pub mod machinesched;
 pub mod machinesink;
 pub mod masm;
+pub mod memcpycall;
+#[cfg(test)]
+mod memcpycall_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
