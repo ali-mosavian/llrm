@@ -1,49 +1,57 @@
 //! Flags kept across an instruction that clobbers them: `X86FlagsCopyLowering`.
 //! Translated from
-//! [X86FlagsCopyLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp)
-//! (`runOnMachineFunction`).
+//! [X86FlagsCopyLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp),
+//! function by function, in the pin's order.
 //!
 //! # How it works
-//! A copy of the flags is two pseudo instructions: `v := flags_copy` where the
-//! flags are live, and `flags_restore v` where they are wanted back. Each
-//! condition read after the restore (up to the next instruction that writes
-//! the flags) gets a byte, `setcc`, made where the copy was; the reader is
-//! preceded by `test byte, byte` and reads `ne` (`e` for the inverse
-//! condition, which shares the byte). `adc`/`sbb` read the carry: it is saved
-//! as `setb` and made again by `add byte, 0xff`. A reader right after another
-//! of the same byte reuses the `test`. The pseudo instructions go.
+//! A copy of the flags is the pin's two `COPY`s as two pseudo instructions:
+//! `v := flags_copy` (`%1 = COPY $eflags`) and `flags_restore v`
+//! (`$eflags = COPY %1`). For each restore, in reverse post-order, the
+//! conditions the code after it reads are saved as bytes by `setcc` at the
+//! copy (`promote_cond_to_reg`, [L744]) and each reader is rewritten:
+//! a `setcc` takes the saved byte ([`rewriteSetCC`][L785]),
+//! `adc`/`sbb`/`rcl`/`rcr` rebuild the carry with `add byte, 255`
+//! ([`rewriteArithmetic`][L824]), any other reader (`jcc`, `cmov`) is preceded
+//! by `test byte, byte` and reads `ne`, or `e` of the opposite condition's byte
+//! ([`rewriteMI`][L899], [`getCondOrInverseInReg`][L761],
+//! [`insertTest`][L775]). A reader after the first jump of a block needs the
+//! block split ([`splitBlock`][L149]).
 //!
-//! Pin functions, in order:
-//! [`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263)
-//! is `lowered`;
-//! [`collectCondsInRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721)
-//! and
-//! [`promoteCondToReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744)
-//! are the byte made per condition (`bytes`, `setcc` at the copy);
-//! [`getCondOrInverseInReg`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761)
-//! is the shared byte for a condition and its inverse (`PAIRS`);
-//! [`insertTest`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775)
-//! is the `test`;
-//! [`rewriteSetCC`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785)
-//! and
-//! [`rewriteMI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899)
-//! (jcc, cmov) are the
-//! `Read::Cond` arm;
-//! [`rewriteArithmetic`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824)
-//! (adc, sbb) is the
-//! `Read::Carry` arm.
+//! Pin functions in file order: `isArithmeticOp` ([L144]) is `reads::Arith`;
+//! `splitBlock` ([L149]) is `split_block`; `getClobberType` ([L251]) only
+//! serves the NF variants, which the target lacks (`hasNF` is APX: N/A);
+//! `runOnMachineFunction` ([L263]) is `lowered` and `lower_copy`;
+//! `collectCondsInRegs` ([L721]), `promoteCondToReg` ([L744]),
+//! `getCondOrInverseInReg` ([L761]), `insertTest` ([L775]), `rewriteSetCC`
+//! ([L785]), `rewriteArithmetic` ([L824]), `getImplicitCondFromMI` ([L855],
+//! the x87 `fcmov`s: LIR has none before allocation, N/A) and `rewriteMI`
+//! ([L899]) keep their names in snake case.
 //!
-//! DEVIATE R2 (no number yet): the pin finds `COPY $eflags` that isel and
-//! earlier passes leave; LIR has none, so the copy is the pseudo pair and
-//! `lowered` takes the place of the search. The pin splits blocks
-//! ([`splitBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149))
-//! to follow a copy across them; see R1. Owner w-5, review 2026-11-19; exit: an
-//! isel producer of a flags copy.
+//! [L144]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L144
+//! [L149]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L149
+//! [L744]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744
+//! [L761]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761
+//! [L775]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775
+//! [L785]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785
+//! [L824]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824
+//! [L899]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899
 //!
-//! DEVIATE R1 (no number yet): a copy and its restore must be in one block (the
-//! pin follows the copy across blocks by dominance); else the pass fails.
-//! Exit: the first isel producer of a cross-block copy. Nothing in isel makes
-//! a copy yet, so the pass does nothing on the corpus.
+//! Blockers (named, with the date each lands, 2026-11-04 unless said):
+//! the copy and its restore in different blocks, flags live into successors,
+//! and the hoisting of the test position up the dominator tree (the loop in
+//! `runOnMachineFunction` over `TestMBB`) are an error with a message that
+//! says so; the split of a block with a second `jcc` on the flags is too.
+//! DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
+//! exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
+//! producer.
 //!
 //! # Example
 //! ```lir
@@ -91,11 +99,11 @@ impl LIRTransform for FlagsCopy {
     }
 }
 
-/// The saved conditions and their inverses; a condition and its inverse share
-/// one byte, saved as the first.
-const PAIRS: [(&str, &str); 8] =
+/// The condition codes and their opposites (`GetOppositeBranchCondition`).
+const OPPOSITES: [(&str, &str); 8] =
     [("e", "ne"), ("l", "ge"), ("le", "g"), ("b", "ae"), ("be", "a"), ("s", "ns"), ("o", "no"), ("p", "np")];
 
+/// Other spellings of the same code.
 const ALIASES: [(&str, &str); 14] = [
     ("z", "e"),
     ("nz", "ne"),
@@ -113,38 +121,83 @@ const ALIASES: [(&str, &str); 14] = [
     ("po", "np"),
 ];
 
-/// What an instruction reads of the flags.
-enum Read {
-    /// A condition: the saved one, and whether the reader wants it inverted.
-    Cond {
-        saved: &'static str,
-        inverted: bool,
-        stem: &'static str,
-    },
-    Carry,
+/// A condition code by its canonical name.
+fn cond(name: &str) -> Option<&'static str> {
+    let name = ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |(_, to)| to);
+    OPPOSITES.iter().flat_map(|&(a, b)| [a, b]).find(|one| *one == name)
 }
 
-fn reading(one: &Insn) -> Option<Read> {
-    let name = one.what.as_ref()?.name.as_deref()?;
-    if name == "adc" || name == "sbb" {
-        return Some(Read::Carry);
-    }
-    let (stem, cc): (&'static str, &str) =
-        ["j", "set", "cmov"].iter().find_map(|&s| name.strip_prefix(s).map(|c| (s, c)))?;
-    if stem == "j" && cc == "mp" {
-        return None;
-    }
-    let cc = ALIASES.iter().find(|(from, _)| *from == cc).map_or(cc, |(_, to)| to);
-    PAIRS.iter().find_map(|&(saved, inverse)| {
-        (cc == saved || cc == inverse).then_some(Read::Cond { saved, inverted: cc == inverse, stem })
-    })
+/// `GetOppositeBranchCondition`.
+fn opposite(cond: &str) -> &'static str {
+    OPPOSITES
+        .iter()
+        .find_map(|&(a, b)| {
+            if a == cond {
+                Some(b)
+            } else if b == cond {
+                Some(a)
+            } else {
+                None
+            }
+        })
+        .expect("a condition code")
 }
 
-fn is(
+/// What an instruction does with the flags it reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Reads {
+    /// `jcc`: a conditional branch (`getCondFromBranch`).
+    Jump(&'static str),
+    /// `setcc` into a register, or to memory if `store`.
+    Set(&'static str, bool),
+    /// Any other instruction with a condition operand (`cmovcc`).
+    Cond(&'static str),
+    /// `adc`, `sbb`, `rcl`, `rcr`, `setb_c`: the carry (`isArithmeticOp`).
+    Arith,
+    /// `%x = COPY $eflags`.
+    Copy,
+}
+
+fn name_of(one: &Insn) -> Option<&str> {
+    one.what.as_ref()?.name.as_deref()
+}
+
+fn reads(one: &Insn) -> Option<Reads> {
+    let what = one.what.as_ref()?;
+    let name = what.name.as_deref()?;
+    match name {
+        "flags_copy" => return Some(Reads::Copy),
+        "adc" | "sbb" | "rcl" | "rcr" | "setb_c" => return Some(Reads::Arith),
+        _ => {}
+    }
+    if let Some(code) = name.strip_prefix('j').filter(|_| what.op == Operation::Branch).and_then(cond) {
+        return Some(Reads::Jump(code));
+    }
+    if let Some(code) = name.strip_prefix("set").and_then(cond) {
+        return Some(Reads::Set(code, matches!(what.dests.as_slice(), [Loc::Mem(_)])));
+    }
+    name.strip_prefix("cmov").and_then(cond).map(Reads::Cond)
+}
+
+/// Whether the instruction modifies the flags (`modifiesRegister(EFLAGS)`): an
+/// unknown effect might.
+fn modifies_flags(
     one: &Insn,
-    name: &str,
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
 ) -> bool {
-    one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name)
+    if name_of(one) == Some("flags_restore") {
+        return true;
+    }
+    // A jump, a `setcc`, a `cmovcc` and the copy out only read.
+    if matches!(
+        reads(one),
+        Some(Reads::Jump(_) | Reads::Set(..) | Reads::Cond(_) | Reads::Copy)
+    ) {
+        return false;
+    }
+    liveness::effect(regs, bits, one)
+        .is_none_or(|e| e.writes.iter().any(|&(r, _)| r == llrm_lir::registers::RegId::None))
 }
 
 fn make(
@@ -164,10 +217,245 @@ fn byte(value: u32) -> Loc {
     Loc::Held(Held { value, width: 1 })
 }
 
-/// `body` with its flag copies lowered.
+/// The bytes already holding a condition, by code (`CondRegArray`).
+type CondRegs = HashMap<&'static str, u32>;
+
+/// Fresh values and the renames the pass makes (`replaceRegWith`).
+struct State {
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    next: u32,
+    renames: HashMap<u32, u32>,
+}
+
+impl State {
+    fn fresh(&mut self) -> u32 {
+        self.next += 1;
+        self.next - 1
+    }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L721
+/// `collectCondsInRegs`: the conditions `setcc`ed into registers before
+/// `test_pos` and after the last instruction that defines the flags.
+fn collect_conds_in_regs(
+    insns: &[Arc<Insn>],
+    test_pos: usize,
+    state: &State,
+) -> CondRegs {
+    let mut conds = CondRegs::new();
+    for one in insns[..test_pos].iter().rev() {
+        if let Some(Reads::Set(code, false)) = reads(one)
+            && let [Loc::Held(into)] = one.what.as_ref().expect("semantics").dests.as_slice()
+        {
+            conds.insert(code, into.value);
+        }
+        // The first definition of the flags: before it the state would be
+        // wrong.
+        if modifies_flags(one, state.regs, state.bits) {
+            break;
+        }
+    }
+    conds
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L744
+/// `promoteCondToReg`: a byte holding `cond`, `setcc`ed before `test_pos`.
+fn promote_cond_to_reg(
+    insns: &mut Vec<Arc<Insn>>,
+    test_pos: &mut usize,
+    state: &mut State,
+    cond: &str,
+) -> u32 {
+    let value = state.fresh();
+    let at = insns[*test_pos].at;
+    insns.insert(
+        *test_pos,
+        make(at, &format!("set{cond}"), Operation::Unary, vec![byte(value)], vec![], vec![value], vec![]),
+    );
+    *test_pos += 1;
+    value
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L761
+/// `getCondOrInverseInReg`: the byte of `cond`, else the byte of its opposite
+/// and `true`; neither: `cond` is saved.
+fn get_cond_or_inverse_in_reg(
+    insns: &mut Vec<Arc<Insn>>,
+    test_pos: &mut usize,
+    state: &mut State,
+    cond: &'static str,
+    conds: &mut CondRegs,
+) -> (u32, bool) {
+    if !conds.contains_key(cond) && !conds.contains_key(opposite(cond)) {
+        let value = promote_cond_to_reg(insns, test_pos, state, cond);
+        conds.insert(cond, value);
+    }
+    match conds.get(cond) {
+        Some(&value) => (value, false),
+        None => (conds[opposite(cond)], true),
+    }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L775
+/// `insertTest`: `test reg, reg` before `at`.
+fn insert_test(
+    insns: &mut Vec<Arc<Insn>>,
+    at: usize,
+    value: u32,
+) {
+    let place = insns[at].at;
+    insns.insert(
+        at,
+        make(place, "test", Operation::Compare, vec![], vec![byte(value), byte(value)], vec![], vec![value]),
+    );
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L785
+/// `rewriteSetCC`: the `setcc` at `at` takes the byte of its condition; the
+/// opposite is not used (it would need an analysis of the byte's readers).
+/// To memory, it becomes a byte store of the saved byte.
+fn rewrite_set_cc(
+    insns: &mut Vec<Arc<Insn>>,
+    test_pos: &mut usize,
+    at: usize,
+    state: &mut State,
+    conds: &mut CondRegs,
+    code: &'static str,
+    store: bool,
+) {
+    let before = insns.len();
+    let saved = match conds.get(code) {
+        Some(&value) => value,
+        None => {
+            let value = promote_cond_to_reg(insns, test_pos, state, code);
+            conds.insert(code, value);
+            value
+        }
+    };
+    // A byte saved at `test_pos`, which precedes `at`, moves the reader down.
+    let at = at + insns.len() - before;
+    let one = Arc::clone(&insns[at]);
+    let what = one.what.as_ref().expect("semantics");
+    if !store {
+        let [Loc::Held(old)] = what.dests.as_slice() else { return };
+        state.renames.insert(old.value, saved);
+        insns.remove(at);
+        return;
+    }
+    // A byte store of the saved byte to the same address.
+    let mut store_what = Semantics { name: Some("mov".into()), ..Semantics::new(Operation::Move) };
+    store_what.dests = what.dests.clone();
+    store_what.sources = vec![byte(saved)];
+    let mut made = (*one).clone();
+    made.what = Some(store_what);
+    made.defines = vec![];
+    made.uses.push(saved);
+    insns[at] = Arc::new(made);
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L824
+/// `rewriteArithmetic`: a reader of the carry gets it back by `add byte, 255`
+/// of the saved `b` byte.
+fn rewrite_arithmetic(
+    insns: &mut Vec<Arc<Insn>>,
+    test_pos: &mut usize,
+    at: &mut usize,
+    state: &mut State,
+    conds: &mut CondRegs,
+) {
+    let saved = match conds.get("b") {
+        Some(&value) => value,
+        None => {
+            let value = promote_cond_to_reg(insns, test_pos, state, "b");
+            *at += 1;
+            conds.insert("b", value);
+            value
+        }
+    };
+    let tmp = state.fresh();
+    let place = insns[*at].at;
+    insns.insert(
+        *at,
+        make(
+            place,
+            "add",
+            Operation::Binary,
+            vec![byte(tmp)],
+            vec![byte(saved), Loc::Imm(Imm { value: 255, width: 1, address: None })],
+            vec![tmp],
+            vec![saved],
+        ),
+    );
+    *at += 1;
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L899
+/// `rewriteMI`: a reader with a condition tests the saved byte first and reads
+/// `ne` (`e` for the opposite condition's byte).
+fn rewrite_mi(
+    insns: &mut Vec<Arc<Insn>>,
+    test_pos: &mut usize,
+    at: &mut usize,
+    state: &mut State,
+    conds: &mut CondRegs,
+    code: &'static str,
+) {
+    let before = insns.len();
+    let (saved, inverted) = get_cond_or_inverse_in_reg(insns, test_pos, state, code, conds);
+    // A byte saved at `test_pos`, which precedes `at`, moves the reader down.
+    *at += insns.len() - before;
+    insert_test(insns, *at, saved);
+    *at += 1;
+    let mut changed = (*insns[*at]).clone();
+    let what = changed.what.as_mut().expect("semantics");
+    let name = what.name.clone().expect("a name");
+    let stem = ["cmov", "set", "j"].into_iter().find(|stem| name.starts_with(stem)).expect("a conditional");
+    what.name = Some(format!("{stem}{}", if inverted { "e" } else { "ne" }).into());
+    insns[*at] = Arc::new(changed);
+}
+
+/// The blocks in reverse post-order from the entry, as indices into
+/// `body.blocks` (`ReversePostOrderTraversal`).
+fn reverse_post_order(body: &LirBody) -> Vec<usize> {
+    let index: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut seen = vec![false; body.blocks.len()];
+    let mut order = Vec::new();
+    let mut stack = vec![(0usize, 0usize)];
+    if body.blocks.is_empty() {
+        return order;
+    }
+    seen[0] = true;
+    while let Some(&mut (block, ref mut next)) = stack.last_mut() {
+        let succ = &body.blocks[block].succ;
+        if let Some(&to) = succ.iter().nth(*next).and_then(|to| index.get(to)) {
+            *next += 1;
+            if !seen[to] {
+                seen[to] = true;
+                stack.push((to, 0));
+            }
+        } else if *next < succ.len() {
+            *next += 1;
+        } else {
+            order.push(block);
+            stack.pop();
+        }
+    }
+    order.reverse();
+    order
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FlagsCopyLowering.cpp#L263
+/// `runOnMachineFunction`: every restore of the flags, in reverse post-order,
+/// lowered; the copies left unused go.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let (regs, bits) = (body.regs(), body.bits);
-    let mut next = body
+    let has = |name: &str| body.blocks.iter().any(|block| block.insns.iter().any(|one| name_of(one) == Some(name)));
+    // None of the work unless a copy of the flags exists.
+    if !has("flags_restore") {
+        return if has("flags_copy") { Err("a flags copy with no restore".to_owned()) } else { Ok(body.clone()) };
+    }
+    let next = body
         .blocks
         .iter()
         .flat_map(|b| b.insns.iter())
@@ -176,109 +464,182 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         .max()
         .unwrap_or(0)
         + 1;
-    let flag_lane = |lanes: &crate::backend::lanes::Lanes| {
-        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-    };
+    let mut state = State { regs, bits, next, renames: HashMap::new() };
     let mut out = body.clone();
-    for block in &mut out.blocks {
-        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
-        while let Some(copy_at) = insns.iter().position(|one| is(one, "flags_copy")) {
-            let saved = insns[copy_at].defines[0];
-            let restore_at = insns[copy_at..]
-                .iter()
-                .position(|one| is(one, "flags_restore") && one.uses == [saved])
-                .map(|at| at + copy_at)
-                .ok_or_else(|| format!("flags copy v{saved} is restored in another block"))?;
-            // Readers after the restore, up to the first writer of the flags.
-            let mut readers = Vec::new();
-            for index in restore_at + 1..insns.len() {
-                let reads = reading(&insns[index]);
-                let effect = liveness::effect(regs, bits, &insns[index]);
-                let writes = effect.as_ref().map_or(true, |e| flag_lane(&e.writes));
-                if reads.is_some() {
-                    readers.push((index, reads.unwrap()));
-                }
-                if writes {
-                    break;
-                }
-            }
-            // A byte for each saved condition, made at the copy.
-            let mut bytes: HashMap<&str, u32> = HashMap::new();
-            let mut made = Vec::new();
-            for (_, read) in &readers {
-                let (key, name) = match read {
-                    Read::Cond { saved, .. } => (*saved, format!("set{saved}")),
-                    Read::Carry => ("b", "setb".to_owned()),
-                };
-                if !bytes.contains_key(key) {
-                    let value = next;
-                    next += 1;
-                    bytes.insert(key, value);
-                    made.push(make(
-                        insns[copy_at].at,
-                        &name,
-                        Operation::Unary,
-                        vec![byte(value)],
-                        vec![],
-                        vec![value],
-                        vec![],
-                    ));
-                }
-            }
-            let mut tested: Option<u32> = None;
-            let mut edits: Vec<(usize, Vec<Arc<Insn>>)> = Vec::new();
-            for (index, read) in &readers {
-                let one = &insns[*index];
-                match read {
-                    Read::Cond { saved, inverted, stem } => {
-                        let value = bytes[saved];
-                        let mut before = Vec::new();
-                        if tested != Some(value) {
-                            before.push(make(
-                                one.at,
-                                "test",
-                                Operation::Compare,
-                                vec![],
-                                vec![byte(value), byte(value)],
-                                vec![],
-                                vec![value],
-                            ));
-                            tested = Some(value);
-                        }
-                        let mut changed = (**one).clone();
-                        if let Some(what) = changed.what.as_mut() {
-                            what.name = Some(format!("{stem}{}", if *inverted { "e" } else { "ne" }).into());
-                        }
-                        before.push(Arc::new(changed));
-                        edits.push((*index, before));
-                    }
-                    Read::Carry => {
-                        let value = bytes["b"];
-                        let again = next;
-                        next += 1;
-                        let add = make(
-                            one.at,
-                            "add",
-                            Operation::Binary,
-                            vec![byte(again)],
-                            vec![byte(value), Loc::Imm(Imm { value: 0xff, width: 1, address: None })],
-                            vec![again],
-                            vec![value],
-                        );
-                        edits.push((*index, vec![add, Arc::clone(one)]));
-                        tested = None;
-                    }
-                }
-            }
-            for (index, replacement) in edits.into_iter().rev() {
-                insns.splice(index..=index, replacement);
-            }
-            insns.remove(restore_at);
-            insns.splice(copy_at..=copy_at, made);
+    for at in reverse_post_order(body) {
+        let mut insns: Vec<Arc<Insn>> = out.blocks[at].insns.iter().cloned().collect();
+        while let Some(restore_at) = insns.iter().position(|one| name_of(one) == Some("flags_restore")) {
+            lower_copy(&out, at, &mut insns, restore_at, &mut state)?;
         }
+        out.blocks[at] = out.blocks[at].with_insns(insns);
+    }
+    // The renames (`replaceRegWith`), chains followed.
+    let resolve = |mut value: u32| {
+        while let Some(&to) = state.renames.get(&value) {
+            value = to;
+        }
+        value
+    };
+    if !state.renames.is_empty() {
+        for block in &mut out.blocks {
+            let insns: Vec<Arc<Insn>> = block.insns.iter().map(|one| one.renamed(&resolve)).collect();
+            *block = block.with_insns(insns);
+            block.phis = block
+                .phis
+                .iter()
+                .map(|phi| crate::model::lir::Phi {
+                    result: resolve(phi.result),
+                    incoming: phi.incoming.iter().map(|&(at, value)| (at, resolve(value))).collect(),
+                })
+                .collect();
+        }
+    }
+    // A copy none reads (`use_empty`) goes; one that remains is read by what
+    // was not lowered.
+    let mut used: HashMap<u32, usize> = HashMap::new();
+    for block in &out.blocks {
+        for one in block.insns.iter() {
+            for &value in &one.uses {
+                *used.entry(value).or_default() += 1;
+            }
+        }
+        for phi in block.phis.iter() {
+            for &(_, value) in &phi.incoming {
+                *used.entry(value).or_default() += 1;
+            }
+        }
+    }
+    for block in &mut out.blocks {
+        let insns: Vec<Arc<Insn>> = block
+            .insns
+            .iter()
+            .filter(|one| name_of(one) != Some("flags_copy") || one.defines.iter().any(|v| used.contains_key(v)))
+            .cloned()
+            .collect();
         *block = block.with_insns(insns);
     }
+    if out.blocks.iter().any(|b| b.insns.iter().any(|one| name_of(one) == Some("flags_copy"))) {
+        return Err("an unlowered flags copy".to_owned());
+    }
     Ok(out)
+}
+
+/// Whether a block reads the flags before it writes them: they live in.
+fn flags_live_in(
+    block: &crate::model::lir::Block,
+    state: &State,
+) -> bool {
+    for one in block.insns.iter() {
+        if reads(one).is_some() && name_of(one) != Some("flags_copy") {
+            return true;
+        }
+        if modifies_flags(one, state.regs, state.bits) {
+            return false;
+        }
+    }
+    false
+}
+
+/// One `flags_restore` at `restore_at` of the block `block` and the code after
+/// it that reads the flags it restores.
+fn lower_copy(
+    body: &LirBody,
+    block: usize,
+    insns: &mut Vec<Arc<Insn>>,
+    restore_at: usize,
+    state: &mut State,
+) -> Result<(), String> {
+    let value = *insns[restore_at].uses.first().ok_or("a flags_restore reads no copy")?;
+    let Some(def_at) =
+        insns[..restore_at].iter().position(|one| name_of(one) == Some("flags_copy") && one.defines == [value])
+    else {
+        return Err(format!(
+            "the flags copy v{value} is not in the block of its restore (cross-block lowering lands 2026-11-04)"
+        ));
+    };
+    // The test position is the copy.
+    let mut test_pos = def_at;
+    let mut conds = collect_conds_in_regs(insns, test_pos, state);
+    let mut jumps: Vec<usize> = Vec::new();
+    let mut at = restore_at + 1;
+    let mut killed = false;
+    while at < insns.len() {
+        let one = Arc::clone(&insns[at]);
+        killed = modifies_flags(&one, state.regs, state.bits);
+        let Some(reading) = reads(&one) else {
+            if killed {
+                break;
+            }
+            at += 1;
+            continue;
+        };
+        match reading {
+            // Once a branch is met the rest are branches too: they are handled
+            // below, as splitting the block perturbs the walk.
+            Reads::Jump(_) => {
+                jumps.push(at);
+                let mut next = at + 1;
+                while next < insns.len() && matches!(reads(&insns[next]), Some(Reads::Jump(_))) {
+                    jumps.push(next);
+                    next += 1;
+                }
+                break;
+            }
+            // Just replace this copy with the original copy def.
+            Reads::Copy => {
+                let [copied] = one.defines[..] else { return Err("a flags copy defines one value".to_owned()) };
+                state.renames.insert(copied, value);
+                insns.remove(at);
+                continue;
+            }
+            Reads::Set(code, store) => {
+                let before = insns.len();
+                rewrite_set_cc(insns, &mut test_pos, at, state, &mut conds, code, store);
+                // A register set leaves, a store stays; a byte saved before
+                // the copy moves the rest down.
+                let saved = (insns.len() + usize::from(!store)).saturating_sub(before);
+                at += saved + usize::from(store);
+            }
+            Reads::Arith => {
+                rewrite_arithmetic(insns, &mut test_pos, &mut at, state, &mut conds);
+                at += 1;
+            }
+            Reads::Cond(code) => {
+                rewrite_mi(insns, &mut test_pos, &mut at, state, &mut conds, code);
+                at += 1;
+            }
+        }
+        if killed {
+            break;
+        }
+    }
+    // Flags not killed in the block may be read in a successor that was not
+    // visited.
+    let reaches_end = !killed && (jumps.len() + at >= insns.len() || !jumps.is_empty());
+    if reaches_end {
+        for to in body.blocks[block].succ.iter() {
+            if let Some(next) = body.blocks.iter().find(|b| b.at == *to)
+                && next.at != body.blocks[block].at
+                && flags_live_in(next, state)
+            {
+                return Err(format!("flags live into the block at {to} (cross-block lowering lands 2026-11-04)"));
+            }
+        }
+    }
+    // Now the jumps: the first in place; past it the block is split.
+    if let Some((&first, rest)) = jumps.split_first() {
+        if !rest.is_empty() {
+            return Err("a second jcc on the restored flags needs the block split (lands 2026-11-04)".to_owned());
+        }
+        let Reads::Jump(code) = reads(&insns[first]).expect("a jump") else { unreachable!("found as a jump") };
+        let mut at = first;
+        rewrite_mi(insns, &mut test_pos, &mut at, state, &mut conds, code);
+    }
+    // All uses are rewritten: the restore goes, and the copy if unread (the
+    // sweep in `lowered`).
+    let gone = insns.iter().position(|one| name_of(one) == Some("flags_restore") && one.uses == [value]);
+    insns.remove(gone.expect("the restore"));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -311,36 +672,50 @@ mod tests {
         make(0, name, Operation::Unary, vec![byte(value)], vec![], vec![value], vec![])
     }
 
-    /// The flags are copied before `add` clobbers them, restored, then read.
+    fn clobber() -> Arc<Insn> {
+        make(0, "add", Operation::Binary, vec![held(2)], vec![held(3), held(3)], vec![2], vec![3])
+    }
+
+    /// The names of the instructions after lowering a body: the flags are
+    /// copied, `add` clobbers them, they are restored and `readers` read them.
     fn after(readers: &[&str]) -> Vec<String> {
-        let mut insns = vec![
-            pseudo("flags_copy", vec![1], vec![]),
-            make(0, "add", Operation::Binary, vec![held(2)], vec![held(3), held(3)], vec![2], vec![3]),
-            pseudo("flags_restore", vec![], vec![1]),
-        ];
+        let mut insns =
+            vec![pseudo("flags_copy", vec![1], vec![]), clobber(), pseudo("flags_restore", vec![], vec![1])];
         insns.extend(readers.iter().zip(10..).map(|(&name, value)| reader(name, value)));
         let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let done = lowered(&body).unwrap();
-        done.blocks[0]
-            .insns
-            .iter()
-            .map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap())
-            .collect()
+        done.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect()
     }
 
     #[test]
-    fn a_condition_read_after_a_clobber_is_a_saved_byte_tested() {
+    fn a_jump_after_a_clobber_tests_the_saved_byte() {
         assert_eq!(after(&["jl"]), ["setl", "add", "test", "jne"]);
     }
 
     #[test]
-    fn the_inverse_condition_reads_the_same_byte_for_equal() {
-        assert_eq!(after(&["setl", "setge"]), ["setl", "add", "test", "setne", "sete"]);
+    fn a_condition_is_saved_as_asked_and_its_opposite_reads_it_for_equal() {
+        // `cmovge` asks first: `setge` is saved, then `cmovl` reads its
+        // opposite.
+        assert_eq!(
+            after(&["cmovge", "cmovl"]),
+            ["setge", "add", "test", "cmovne", "test", "cmove"],
+            "the pin tests before every reader"
+        );
     }
 
     #[test]
-    fn a_second_condition_gets_its_own_byte_and_test() {
-        assert_eq!(after(&["setl", "sete"]), ["setl", "sete", "add", "test", "setne", "test", "setne"]);
+    fn a_setcc_reader_takes_the_saved_byte_with_no_test() {
+        let mut insns =
+            vec![pseudo("flags_copy", vec![1], vec![]), clobber(), pseudo("flags_restore", vec![], vec![1])];
+        insns.push(reader("setl", 10));
+        insns.push(make(0, "mov", Operation::Move, vec![held(20)], vec![byte(10)], vec![20], vec![10]));
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let done = lowered(&body).unwrap();
+        let names: Vec<_> = done.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect();
+        assert_eq!(names, ["setl", "add", "mov"]);
+        // The reader of the old byte reads the saved one.
+        let saved = done.blocks[0].insns[0].defines[0];
+        assert_eq!(done.blocks[0].insns[2].uses, [saved]);
     }
 
     #[test]
@@ -349,8 +724,23 @@ mod tests {
     }
 
     #[test]
+    fn a_condition_already_in_a_byte_before_the_copy_is_reused() {
+        let mut insns = vec![
+            reader("setl", 30),
+            pseudo("flags_copy", vec![1], vec![]),
+            clobber(),
+            pseudo("flags_restore", vec![], vec![1]),
+        ];
+        insns.push(reader("cmovl", 0));
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let done = lowered(&body).unwrap();
+        let names: Vec<_> = done.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect();
+        assert_eq!(names, ["setl", "add", "test", "cmovne"], "no second setl");
+    }
+
+    #[test]
     fn a_restore_in_another_block_is_refused() {
-        let insns = vec![pseudo("flags_copy", vec![1], vec![])];
+        let insns = vec![pseudo("flags_restore", vec![], vec![1])];
         let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         assert!(lowered(&body).is_err());
     }
