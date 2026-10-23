@@ -40,14 +40,31 @@ pub mod qb {
     lalrpop_util::lalrpop_mod!(pub grammar, "/qb.rs");
 }
 
-/// The QB token stream parsed to a generic tree, or where it stopped.
+#[allow(clippy::all, unused)]
+pub mod qb2 {
+    lalrpop_util::lalrpop_mod!(pub grammar, "/qb2.rs");
+}
+
+type QbError = lalrpop_util::ParseError<usize, qb_tokens::Tok, qb_tokens::Never>;
+
+/// The QB token stream parsed to a generic tree by the generated grammar, or
+/// where it stopped.
 pub fn parse_qb(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
-    qb::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| match error {
+    qb::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
+}
+
+/// The same by the hand-written grammar.
+pub fn parse_qb_by_hand(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
+    qb2::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
+}
+
+fn qb_error(tokens: &[qbfront::generated_parser::Token], error: QbError) -> String {
+    match error {
         lalrpop_util::ParseError::UnrecognizedToken { token: (at, ..), expected } => {
             let token = &tokens[at];
             format!("{}:{} unexpected {:?}, expected {}", token.span.line, token.span.start, token.kind, expected.join(" "))
         }
         lalrpop_util::ParseError::UnrecognizedEof { expected, .. } => format!("eof, expected {}", expected.join(" ")),
         other => format!("{other:?}"),
-    })
+    }
 }
