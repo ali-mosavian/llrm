@@ -11,7 +11,7 @@ fn main() {
     let (mut only_hand, mut only_lalr) = (Vec::new(), Vec::new());
     for path in std::env::args().skip(1) {
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let source = String::from_utf8_lossy(&bytes).into_owned();
+        let source = lalrspike::dos_source(&bytes);
         let dialect = DIALECTS.into_iter().find(|&dialect| qbfront::parse(&source, dialect).is_ok());
         let lalr = DIALECTS
             .into_iter()
