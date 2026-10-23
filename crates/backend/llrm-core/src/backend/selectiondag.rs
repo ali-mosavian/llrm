@@ -84,6 +84,11 @@
 //! (`[TF=7]`, PLT, in the pin): the object writer picks the relocation.
 //! Exit: none. Owner sdag-a.
 //!
+//! DEVIATE SD101: `freeze` folds away only for a constant or another
+//! `freeze` (`isGuaranteedNotToBeUndefOrPoison` also looks through
+//! arithmetic on frozen operands, `Register`s of known width and the like).
+//! Exit: with the known-bits translation (sdag-b). Owner sdag-a.
+//!
 //! # See also
 //! LLVM's `SelectionDAG::getNode`
 //! ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
@@ -150,5 +155,7 @@ mod switchbpi_tests;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
+#[cfg(test)]
+mod freeze_tests;
 #[cfg(test)]
 mod vararg_tests;
