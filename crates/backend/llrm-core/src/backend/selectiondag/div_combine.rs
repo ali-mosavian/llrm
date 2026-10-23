@@ -124,8 +124,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(c) = divisor.filter(|&c| c != 0 && !exact) {
             let negated = c.wrapping_neg() & super::fold::mask(bits);
             if c.is_power_of_two() || negated.is_power_of_two() {
-                // `Sign = x >> (bits-1)`, add `Sign >>> (bits - log2 |d|)`, shift
-                // right by `log2 |d|`; a negative divisor negates.
+                // `Sign = x >> (bits-1)`, add `Sign >>> (bits - log2 |d|)`,
+                // shift right by `log2 |d|`; a negative divisor
+                // negates.
                 let log = c.trailing_zeros();
                 let (top, inexact, by) =
                     (self.shift_amount(bits - 1), self.shift_amount(bits - log), self.shift_amount(log));

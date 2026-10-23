@@ -121,8 +121,7 @@ pub fn unsigned_magic(
         debug_assert!(!shifted.is_add && shifted.pre_shift == 0);
         return UnsignedMagic { pre_shift, ..shifted };
     }
-    let mut result =
-        UnsignedMagic { magic: (q2 + 1) & m, is_add, widen: false, pre_shift: 0, post_shift: p - bits };
+    let mut result = UnsignedMagic { magic: (q2 + 1) & m, is_add, widen: false, pre_shift: 0, post_shift: p - bits };
     if is_add {
         result.post_shift -= 1;
     }

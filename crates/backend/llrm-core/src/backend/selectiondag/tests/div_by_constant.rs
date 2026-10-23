@@ -35,7 +35,13 @@ fn eval(
         }
         ISD::MulHS => ((signed(arg(0), bits) * signed(arg(1), bits)) >> bits) as u128,
         ISD::MulHU => (arg(0) * arg(1)) >> bits,
-        ISD::Select => if arg(0) & 1 == 1 { arg(1) } else { arg(2) },
+        ISD::Select => {
+            if arg(0) & 1 == 1 {
+                arg(1)
+            } else {
+                arg(2)
+            }
+        }
         ISD::SetCC => match dag.node(dag.operand(v, 2)).data {
             NodeData::CondCode(CondCode::SetEq) => u128::from(arg(0) == arg(1)),
             other => panic!("compare {other:?}"),
@@ -84,11 +90,37 @@ fn division_by_a_constant_is_multiplies_and_shifts_with_the_same_value() {
     for bits in [8u32, 16, 32] {
         let vt = EVT::integer(bits);
         let m = super::super::fold::mask(bits);
-        let divisors = [3u128, 5, 6, 7, 9, 10, 12, 25, 100, 125, 641, 1000, 4, 16, 64, 2, 128, 255 & m, m - 1, m - 6, m - 2, m - 3];
+        let divisors = [
+            3u128,
+            5,
+            6,
+            7,
+            9,
+            10,
+            12,
+            25,
+            100,
+            125,
+            641,
+            1000,
+            4,
+            16,
+            64,
+            2,
+            128,
+            255 & m,
+            m - 1,
+            m - 6,
+            m - 2,
+            m - 3,
+        ];
         for d in divisors.into_iter().filter(|&d| d > 1 && d <= m) {
             for op in [ISD::UDiv, ISD::URem, ISD::SDiv, ISD::SRem] {
                 let (dag, root) = folded(op, vt, d);
-                assert!(!reaches(&dag, root, &[ISD::UDiv, ISD::URem, ISD::SDiv, ISD::SRem]), "i{bits} {op:?} {d}: a divide is left");
+                assert!(
+                    !reaches(&dag, root, &[ISD::UDiv, ISD::URem, ISD::SDiv, ISD::SRem]),
+                    "i{bits} {op:?} {d}: a divide is left"
+                );
                 for x in samples(bits) {
                     let signed = |v: u128| ((v << (128 - bits)) as i128) >> (128 - bits);
                     let want = match op {
