@@ -62,7 +62,6 @@ const UNOPTIMIZED: &[&str] = &[
     "Scheduler",
     "Coalescer",
     "PressureSink",
-    "MachineScheduler",
     "MachineSink",
     "MachineCSE",
     "OptimizePHIs",
@@ -95,7 +94,6 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineCombiner", "combiner@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("PressureSink", "pressuresink@5"),
-    ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
     ("CallFrameOpt", "callframe@5"),
@@ -185,9 +183,6 @@ pub fn machine_with<'a>(
             segments: segments.clone(),
             classes: Rc::clone(classes),
         }),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler { classes: Rc::clone(classes) }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
