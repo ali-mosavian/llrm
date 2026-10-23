@@ -52,6 +52,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |
+| [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
 | [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
@@ -66,6 +67,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pin-slot-table](pin-slot-table.md) | Pin pipeline slots against llrm's pipeline |
 | [premise-peephole-sink-scheduler](premise-peephole-sink-scheduler.md) | Premise tests: Peephole, MachineSink, Machine Scheduler |
 | [process-implicit-defs-plan](process-implicit-defs-plan.md) | ProcessImplicitDefs: the translation |
+| [x-base64-ties](x-base64-ties.md) | x_base64: the two ties that flip in the shared-LiveIntervals landing |
+| [twoaddress-rest-plan](twoaddress-rest-plan.md) | Row 62: what of TwoAddressInstructionPass is left |
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
