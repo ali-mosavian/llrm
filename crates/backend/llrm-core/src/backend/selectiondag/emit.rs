@@ -285,6 +285,13 @@ impl Emitter<'_, '_> {
                         self.sp_values.insert(result);
                     }
                     NodeData::PhysReg(register) => {
+                        // A quotient, remainder or product is the value the
+                        // instruction made.
+                        if self.reads_implicit_result(node.ops.get(2).copied()) {
+                            let made = self.accumulated(register)?;
+                            self.values.insert(result, made.value);
+                            return Ok(());
+                        }
                         let phys = Reg { register, width: width_of(self.dag, result) };
                         let held = self.fresh(width_of(self.dag, result));
                         // The result of a call is what the call delivers in

@@ -323,8 +323,22 @@ fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
     let module = llrm_mir::parse::module(DIVIDE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
         .unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
-    let (cdq, idiv) = (names.iter().position(|n| n == "cdq").expect("cdq"), names.iter().position(|n| n == "idiv").expect("idiv"));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    let (cdq, idiv) =
+        (names.iter().position(|n| n == "cdq").expect("cdq"), names.iter().position(|n| n == "idiv").expect("idiv"));
     assert!(cdq + 1 == idiv, "cdq right before idiv: {names:?}");
+    // Physical EAX/EDX operands are invisible to the allocator: it emitted
+    // `idiv eax` and trapped. The operands are values the form pins.
+    let insns = done.body.insns();
+    let divide = insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.name.as_deref() == Some("idiv")).unwrap();
+    assert!(
+        divide.dests.iter().chain(&divide.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))),
+        "idiv operands are held values: {divide:?}"
+    );
 }
