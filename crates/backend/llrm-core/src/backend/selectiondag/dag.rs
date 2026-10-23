@@ -749,7 +749,12 @@ impl SelectionDAG {
             let low = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, zero]);
             let high = self.get_node(ISD::ExtractElement, EVT::I16, &[ptr, one]);
             let step = self.get_constant(offset as u128 & 0xffff, EVT::I16);
-            let moved = self.get_node_flags(ISD::Add, EVT::I16, &[low, step], SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS));
+            let moved = self.get_node_flags(
+                ISD::Add,
+                EVT::I16,
+                &[low, step],
+                SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
+            );
             return self.get_node(ISD::BuildPair, vt, &[moved, high]);
         }
         let index = self.get_constant(offset as u128, vt);
