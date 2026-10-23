@@ -1113,6 +1113,31 @@ define i16 @f() addrspace(1) {
     assert!(!lines.iter().any(|one| one.starts_with("sub si") || one.starts_with("sub di")), "{lines:?}");
 }
 
+/// `to[off + n - 1]`: the address reads the two loads and the sum less one is
+/// its displacement. `arithmetic_cell` took the second load for the add's
+/// memory operand, looking only at a direct `getelementptr` reader, and the
+/// address then read a value nothing defined: "a unique value" panic in the
+/// allocator (#2705, bintree.bas at -O0, -O1 in QCport).
+#[test]
+fn test_a_sum_less_a_constant_that_is_an_address_keeps_its_loads() {
+    let text = "@to = internal global [300 x i8] zeroinitializer
+@n = internal global i16 150
+@off = internal global i16 1
+define i8 @f() addrspace(1) {
+  %a = load i16, ptr @off
+  %b = load i16, ptr @n
+  %s = add i16 %a, %b
+  %i = sub i16 %s, 1
+  %p = getelementptr inbounds i8, ptr @to, i16 %i
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+";
+    let lines = listing(text, "f");
+    let loads = lines.iter().filter(|one| one.starts_with("mov") && one.contains("word ptr")).count();
+    assert_eq!(loads, 2, "both words are loaded for the address: {lines:?}");
+}
+
 /// Every near string op saved ES, set it to DS and restored it
 /// (`push es / push ds / pop es / ... / pop es`), 16 instructions a trip of
 /// scroll's loop. DGROUP is a constant any op reads: set once ahead of the
