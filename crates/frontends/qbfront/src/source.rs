@@ -54,6 +54,15 @@ fn dos_file(path: &Path) -> PathBuf {
     found.map_or_else(|| path.to_path_buf(), |entry| directory.join(entry.file_name()))
 }
 
+/// `name` as DOS reads a path under `directory`: `\\` separates, `..` goes up, and every part ignores case.
+fn dos_path(directory: &Path, name: &str) -> PathBuf {
+    let mut path = directory.to_path_buf();
+    for part in name.split(['\\', '/']).filter(|part| !part.is_empty() && *part != ".") {
+        path = if part == ".." { path.join("..") } else { dos_file(&path.join(part)) };
+    }
+    path
+}
+
 pub fn load_with_map(
     path: &Path,
     include_dirs: &[PathBuf],
@@ -80,7 +89,7 @@ fn expand(
         if let Some(name) = include_name(line) {
             let found = std::iter::once(path.parent().unwrap_or_else(|| Path::new(".")))
                 .chain(include_dirs.iter().map(PathBuf::as_path))
-                .map(|directory| dos_file(&directory.join(name)))
+                .map(|directory| dos_path(directory, name))
                 .find(|candidate| candidate.is_file())
                 .ok_or_else(|| format!("{}: included file {name:?} was not found", path.display()))?;
             expand(&found, include_dirs, active, loaded, main_line.or(Some(index + 1)))?;

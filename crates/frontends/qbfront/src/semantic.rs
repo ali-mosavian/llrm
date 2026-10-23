@@ -1075,7 +1075,7 @@ fn check_zero_based(statements: &[Statement]) -> Result<(), SemanticError> {
                     message: "arrays start at 0: OPTION BASE 1 needs a Microsoft profile".into(),
                 });
             }
-            Statement::Dim(items)
+            Statement::Dim(items) | Statement::Common { declarations: items, .. }
             | Statement::Static(items)
             | Statement::Shared(items)
             | Statement::Redim(items)
@@ -2377,7 +2377,7 @@ impl Compiler {
         for statement in statements {
             self.position = source_position(statement.span());
             match statement {
-                Statement::Dim(items) => {
+                Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
                         let each = item.name.strip_prefix(EACH);
                         let item = &Declaration { name: each.unwrap_or(&item.name).into(), ..item.clone() };
@@ -3078,6 +3078,7 @@ impl Compiler {
             Some(TypeName::Single) => "!",
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
+            Some(TypeName::Currency) => "@",
             Some(TypeName::Named(_) | TypeName::Integral { .. } | TypeName::Tuple(_) | TypeName::Array(_)) => "",
             None => type_suffix(type_id),
         };
@@ -3298,8 +3299,7 @@ impl Compiler {
             }
             match statement {
                 Statement::OnErrorResumeNext { .. } => return self.fail("ON ERROR RESUME NEXT is not supported"),
-                Statement::Common { .. } => return self.fail("COMMON is not supported"),
-                Statement::Dim(items) => {
+                Statement::Dim(items) | Statement::Common { declarations: items, .. } => {
                     for item in items {
                         self.allocate(item)?;
                         self.rezero(item)?;
@@ -10075,6 +10075,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         TypeName::Named(name) => {
             return Err(SemanticError { message: format!("user-defined type {name} is not attached yet") })
         }
+        TypeName::Currency => return Err(SemanticError { message: "CURRENCY is not attached yet".into() }),
         TypeName::Tuple(_) | TypeName::Array(_) => return Err(tuple_misplaced()),
     })
 }

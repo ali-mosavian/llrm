@@ -29,6 +29,8 @@ pub enum Ty {
     Long,
     Single,
     Double,
+    /// PDS and VBDOS's CURRENCY.
+    Currency,
     /// A string; a fixed one has its length.
     Str(Option<usize>),
     Record(String),
@@ -36,7 +38,7 @@ pub enum Ty {
 
 impl Ty {
     fn numeric(&self) -> bool {
-        matches!(self, Ty::Int | Ty::Long | Ty::Single | Ty::Double)
+        matches!(self, Ty::Int | Ty::Long | Ty::Currency | Ty::Single | Ty::Double)
     }
 
     fn string(&self) -> bool {
@@ -47,8 +49,9 @@ impl Ty {
         match self {
             Ty::Int => 1,
             Ty::Long => 2,
-            Ty::Single => 3,
-            Ty::Double => 4,
+            Ty::Currency => 3,
+            Ty::Single => 4,
+            Ty::Double => 5,
             _ => 0,
         }
     }
@@ -67,6 +70,7 @@ impl Ty {
             b'&' => Some(Ty::Long),
             b'!' => Some(Ty::Single),
             b'#' => Some(Ty::Double),
+            b'@' => Some(Ty::Currency),
             b'$' => Some(Ty::Str(None)),
             _ => None,
         }
@@ -88,6 +92,8 @@ struct Var {
     shared: bool,
     /// Dimensioned as a dynamic array (REDIM, or under $DYNAMIC): REDIM may resize it.
     dynamic: bool,
+    /// Named by a declaration (DIM, a parameter, SHARED), not made by a first use.
+    explicit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -154,7 +160,11 @@ struct Checker {
     scope: Scope,
     /// Inside a procedure: its kind and name.
     procedure: Option<(ProcedureKind, String)>,
+    /// CONSTs and TYPEs registered ahead of the statements that declare them (`const N`, `type N`).
+    pre_done: HashSet<String>,
     labels: HashSet<String>,
+    /// The module level's labels, kept while a procedure's are the ones in use.
+    module_labels: HashSet<String>,
     option_base: i64,
     span: Span,
     in_loop: Vec<&'static str>,
@@ -172,7 +182,9 @@ impl Checker {
             module_scope: Scope::default(),
             scope: Scope::default(),
             procedure: None,
+            pre_done: HashSet::new(),
             labels: HashSet::new(),
+            module_labels: HashSet::new(),
             option_base: 0,
             span: Span { line: 1, start: 0, end: 0 },
             in_loop: Vec::new(),
@@ -186,7 +198,22 @@ impl Checker {
     // ---- the module ----------------------------------------------------------------------------
 
     fn module(&mut self, module: &Module) {
-        // procedures first: a call may precede its definition
+        // what a procedure's signature depends on, in order: DEFtype ranges, CONSTs, record types
+        for statement in &module.statements {
+            match statement {
+                Statement::DefType { .. } => self.statement(statement),
+                Statement::Const { name, value, span } => {
+                    self.constant(name, value, *span);
+                    self.pre_done.insert(format!("const {}", stem(name)));
+                }
+                Statement::TypeDecl { name, fields, span } => {
+                    self.type_declaration(name, fields, *span);
+                    self.pre_done.insert(format!("type {name}"));
+                }
+                _ => {}
+            }
+        }
+        // procedures next: a call may precede its definition
         for procedure in &module.procedures {
             self.declare_procedure(procedure);
         }
@@ -196,6 +223,7 @@ impl Checker {
             self.statement(statement);
         }
         self.module_scope = self.scope.clone();
+        self.module_labels = self.labels.clone();
         for procedure in &module.procedures {
             if procedure.declaration {
                 continue;
@@ -223,6 +251,7 @@ impl Checker {
             TypeName::Long => Some(Ty::Long),
             TypeName::Single => Some(Ty::Single),
             TypeName::Double => Some(Ty::Double),
+            TypeName::Currency => Some(Ty::Currency),
             TypeName::String => Some(Ty::Str(None)),
             TypeName::Named(name) if name == "ANY" => None,
             TypeName::Named(name) => self.records.contains_key(name).then(|| Ty::Record(name.clone())),
@@ -320,7 +349,7 @@ impl Checker {
             self.err(span, "Array not dimensioned");
             return None;
         }
-        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false };
+        let var = Var { ty, rank: None, declared: false, shared: false, dynamic: false, explicit: false };
         self.scope.vars.entry(key).or_default().push(var.clone());
         Some(var)
     }
@@ -354,7 +383,7 @@ impl Checker {
             .as_ref()
             .and_then(|name| self.type_of_name(name))
             .unwrap_or_else(|| self.default_type(&declaration.name));
-        let var = Var { ty, rank: declaration.array.then_some(1), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true };
+        let var = Var { ty, rank: declaration.array.then_some(usize::MAX), declared: declaration.type_name.is_some() && Ty::of_suffix(&declaration.name).is_none(), shared: false, dynamic: true, explicit: true };
         self.scope.vars.entry(stem(&declaration.name).to_owned()).or_default().push(var);
     }
 }
@@ -423,6 +452,7 @@ impl Checker {
             Expr::Literal(literal, _) => Some(match literal {
                 Literal::Integer(value, TypeName::Long) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Long) },
                 Literal::Integer(value, _) => Typed { constant: Some(*value as f64), ..Typed::value(Ty::Int) },
+                Literal::Real(text, TypeName::Currency) => Typed { constant: parse_real(text), ..Typed::value(Ty::Currency) },
                 Literal::Real(text, TypeName::Double) => {
                     Typed { constant: parse_real(text), ..Typed::value(Ty::Double) }
                 }
@@ -630,7 +660,7 @@ impl Checker {
         if let Some(sig) = qb_sigs::function(name, self.dialect) {
             return self.intrinsic(sig, name, arguments, span);
         }
-        if let Some(procedure) = self.procs.get(key).cloned() {
+        if let Some(procedure) = self.procs.get(key).or_else(|| self.procs.get(name)).cloned() {
             if procedure.kind == ProcedureKind::Function {
                 self.check_arguments(&procedure, arguments, span, false);
                 return procedure.result.map(Typed::value);
@@ -884,6 +914,14 @@ impl Checker {
                     }
                     continue;
                 }
+                'p' => {
+                    // a PUT action verb
+                    if !matches!(argument, Expr::Name(name, _) if matches!(name.as_str(), "AND" | "OR" | "PRESET" | "PSET" | "XOR")) {
+                        self.err(argument.span(), "Syntax error");
+                        ok = false;
+                    }
+                    continue;
+                }
                 other => panic!("spec letter {other}"),
             };
             ok &= self.argument_of_class(class, argument).is_some();
@@ -903,7 +941,11 @@ impl Checker {
                     }
                 }
             }
-            Statement::TypeDecl { name, fields, span } => self.type_declaration(name, fields, *span),
+            Statement::TypeDecl { name, fields, span } => {
+                if !self.pre_done.remove(&format!("type {name}")) {
+                    self.type_declaration(name, fields, *span);
+                }
+            }
             Statement::Dim(items) | Statement::Static(items) => {
                 for item in items {
                     self.declare(item, false);
@@ -924,6 +966,10 @@ impl Checker {
             }
             Statement::Common { declarations, .. } => {
                 for item in declarations {
+                    // `COMMON x()` names an array that may already exist, or be dimensioned later
+                    if item.array && item.bounds.is_empty() && self.array_var(&item.name).is_some() {
+                        continue;
+                    }
                     self.declare(item, false);
                 }
             }
@@ -932,7 +978,11 @@ impl Checker {
                     self.argument_of_class(Class::Array, name);
                 }
             }
-            Statement::Const { name, value, span } => self.constant(name, value, *span),
+            Statement::Const { name, value, span } => {
+                if !self.pre_done.remove(&format!("const {}", stem(name))) {
+                    self.constant(name, value, *span);
+                }
+            }
             Statement::Assign { target, value, span } => self.assign(target, value, *span),
             Statement::Label(..) | Statement::Comment(_) | Statement::OptionExplicit(_) => {}
             Statement::OptionBase(_, span) => {
@@ -1021,7 +1071,8 @@ impl Checker {
                 if *local {
                     self.on_local_error(*span);
                 }
-                if label != "0" && !self.labels.contains(label) {
+                // an error handler is module-level code, even when the statement stands in a procedure
+                if label != "0" && !self.labels.contains(label) && !self.module_labels.contains(label) {
                     self.err(*span, "Label not defined");
                 }
             }
@@ -1271,6 +1322,10 @@ impl Checker {
                     None
                 }
             },
+            // `UGL.8BIT`: a constant whose name has a dot is read as a field access
+            Expr::Field { .. } if dotted(expr).is_some_and(|name| self.consts.contains_key(stem(&name))) => {
+                dotted(expr).and_then(|name| self.consts.get(stem(&name)).cloned())
+            }
             Expr::Unary { op, operand, .. } if !matches!(op, Unary::ByValue | Unary::Segmented) => {
                 self.constant_expr(operand)?;
                 self.expr(expr)
@@ -1392,7 +1447,7 @@ impl Checker {
                 self.err(span, "Array already dimensioned");
                 return;
             }
-        } else if existing.iter().any(|v| v.rank.is_none() && (v.ty.plain() == ty.plain() || v.declared || as_declared)) {
+        } else if existing.iter().any(|v| v.explicit && v.rank.is_none() && (v.ty.plain() == ty.plain() || v.declared || as_declared)) {
             self.err(span, "Duplicate definition");
             return;
         }
@@ -1406,7 +1461,8 @@ impl Checker {
             rank: d.array.then_some(if d.bounds.is_empty() { usize::MAX } else { d.bounds.len() }),
             declared: as_declared,
             shared: d.shared,
-            dynamic: redim || d.dynamic,
+            dynamic: redim || d.dynamic || (d.array && d.bounds.is_empty()),
+            explicit: true,
         };
         self.scope.vars.entry(key).or_default().push(var);
     }
@@ -1426,7 +1482,7 @@ impl Checker {
             }
             None => {
                 let ty = wanted.clone().unwrap_or_else(|| self.default_type(&d.name));
-                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false };
+                let var = Var { ty, rank: d.array.then_some(usize::MAX), declared: wanted.is_some() && Ty::of_suffix(&d.name).is_none(), shared: true, dynamic: false, explicit: true };
                 self.scope.vars.entry(key.clone()).or_default().push(var.clone());
                 self.module_scope.vars.entry(key).or_default().push(var);
             }
@@ -1556,7 +1612,7 @@ impl Checker {
             "PAINT" => "n n x? n? s?",
             "DRAW" | "PLAY" => "s",
             "GET" => "n n n n e",
-            "PUT" => "n n e m?",
+            "PUT" => "n n e p?",
             "VIEW" | "VIEW_SCREEN" => "n? n? n? n? n? n?",
             "VIEW_PRINT" => "n? n?",
             "WINDOW" => "n? n? n? n?",

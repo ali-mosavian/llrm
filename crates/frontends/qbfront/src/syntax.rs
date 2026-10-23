@@ -15,6 +15,8 @@ pub enum TypeName {
     Single,
     Double,
     String,
+    /// PDS and VBDOS's `CURRENCY` (suffix `@`); the compiler lowers no such type.
+    Currency,
     Named(String),
     /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
     Integral {
