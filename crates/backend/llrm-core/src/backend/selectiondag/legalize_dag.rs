@@ -249,6 +249,25 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
     }
 
+    /// `ExpandNode` for `BR_JT`: load the entry at `table + index * size` and
+    /// branch to it.
+    fn expand_br_jt(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let (chain, table, index) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let pointer = self.dag.config().pointer;
+        let entry = pointer.size_in_bits() / 8;
+        let index_vt = self.dag.value_type(index);
+        let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
+        let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
+        let address = self.dag.get_node(ISD::Add, pointer, &[table, index]);
+        let info =
+            MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
+        let target = self.dag.get_load(pointer, chain, address, info);
+        self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
+    }
+
     /// `LegalizeSetCCCondCode` for the two codes that need two compares:
     /// `oeq` is `eq` and ordered, `une` is `ne` or unordered.
     fn expand_setcc_code(
@@ -264,6 +283,51 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
         let (one, other) = (self.dag.get_setcc(vt, lhs, rhs, first), self.dag.get_setcc(vt, lhs, rhs, second));
         Some(self.dag.get_node(combine, vt, &[one, other]))
+    }
+
+    /// `TargetLowering::expandIntMINMAX`: a select on a compare, reusing a
+    /// compare of the same operands when the DAG has one. (This target has no
+    /// `USUBSAT`, so the `usubsat` forms are not taken.)
+    fn expand_min_max(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let op = self.dag.opcode(node);
+        let (x, y) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let alternative = match op {
+            ISD::SMax => ISD::UMax,
+            ISD::SMin => ISD::UMin,
+            ISD::UMax => ISD::SMax,
+            _ => ISD::SMin,
+        };
+        let sign_clear = |dag: &SelectionDAG, v: SDValue| {
+            super::known_bits::known_bits(dag, v).zero >> (vt.size_in_bits() - 1) & 1 == 1
+        };
+        if self.tli.is_operation_legal(alternative, vt) && sign_clear(self.dag, x) && sign_clear(self.dag, y) {
+            return self.dag.get_node(alternative, vt, &[x, y]);
+        }
+        let bool_vt = self.tli.types.set_cc_result_type(vt);
+        let (preferred, other, preferred_swapped, other_swapped) = match op {
+            ISD::SMax => (CondCode::SetGt, CondCode::SetGe, CondCode::SetLt, CondCode::SetLe),
+            ISD::SMin => (CondCode::SetLt, CondCode::SetLe, CondCode::SetGt, CondCode::SetGe),
+            ISD::UMax => (CondCode::SetUGt, CondCode::SetUGe, CondCode::SetULt, CondCode::SetULe),
+            _ => (CondCode::SetULt, CondCode::SetULe, CondCode::SetUGt, CondCode::SetUGe),
+        };
+        for cc in [preferred, other] {
+            if self.dag.does_setcc_exist(bool_vt, x, y, cc) {
+                let test = self.dag.get_setcc(bool_vt, x, y, cc);
+                return self.dag.get_select(vt, test, x, y);
+            }
+        }
+        for cc in [preferred_swapped, other_swapped] {
+            if self.dag.does_setcc_exist(bool_vt, x, y, cc) {
+                let test = self.dag.get_setcc(bool_vt, x, y, cc);
+                return self.dag.get_select(vt, test, y, x);
+            }
+        }
+        let test = self.dag.get_setcc(bool_vt, x, y, preferred);
+        self.dag.get_select(vt, test, x, y)
     }
 
     /// `ExpandNode`, for the cases translated: the replacement for each result
@@ -305,7 +369,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
+            ISD::Undef | ISD::Poison => {
+                // `ExpandNode`: zero of the type.
+                Some(vec![if vt.is_integer() { self.dag.get_constant(0, vt) } else { self.dag.get_constant_fp(0, vt) }])
+            }
             ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
+            ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => Some(vec![self.expand_min_max(node)]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),

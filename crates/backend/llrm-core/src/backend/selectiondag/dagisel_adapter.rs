@@ -50,6 +50,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         TargetFrameIndex => pin::TargetFrameIndex,
         ConstantPool => pin::ConstantPool,
         TargetConstantPool => pin::TargetConstantPool,
+        TargetJumpTable => pin::TargetJumpTable,
         BasicBlock => pin::BasicBlock,
         ValueType => pin::VALUETYPE,
         CondCodeNode => pin::CONDCODE,
@@ -756,6 +757,22 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn segment_override(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        use llrm_dagisel::generated::ids::x86;
+        match self.dag.nodes()[node as usize].data {
+            // The pin's address spaces 256, 257 and 258 are GS, FS and SS.
+            NodeData::Mem(info) => match info.space {
+                256 => Some(x86::GS),
+                257 => Some(x86::FS),
+                258 => Some(x86::SS),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     fn is_add_like(
         &self,
         value: PinValue,

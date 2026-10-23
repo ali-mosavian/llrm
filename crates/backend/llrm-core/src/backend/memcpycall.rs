@@ -28,7 +28,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Linkage, Module, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 
 use super::expansion;
 
@@ -37,10 +37,11 @@ use super::expansion;
 pub const INLINE_LIMIT: u128 = 128;
 
 /// Every `llvm.memcpy` of `module` the target copies by a call, as a call of
-/// `memcpy` in calling convention `convention` (LLVM's number).
+/// the routine `symbol` in calling convention `convention` (LLVM's number).
 pub fn expanded(
     module: &mut Module,
     convention: u32,
+    symbol: &str,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
     let mut any = false;
@@ -65,9 +66,9 @@ pub fn expanded(
                 variadic: false,
             },
         );
-    let id = match module.named("memcpy") {
+    let id = match module.named(symbol) {
         Some(id) => id,
-        None => module.add_function("memcpy", ty, Linkage::External)?,
+        None => module.add_function(symbol, ty, Linkage::External)?,
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
@@ -76,6 +77,19 @@ pub fn expanded(
         }
         let instruction = function.instruction(call).clone();
         let (dst, src, len) = (instruction.operands[0], instruction.operands[1], instruction.operands[2]);
+        let bits = function
+            .operand_type(context, len)
+            .and_then(|ty| context.types.int_bits(ty))
+            .ok_or("a copy of an integer length")?;
+        let len = match bits.cmp(&32) {
+            std::cmp::Ordering::Equal => len,
+            order => {
+                let op = if order.is_lt() { CastOp::ZExt } else { CastOp::Trunc };
+                let made = function.create_instruction(Opcode::Cast(op), word, vec![len], Flags::default(), None);
+                function.insert(made, Position::Before(call)).map_err(|why| why.to_string())?;
+                Operand::Value(function.instruction(made).result.expect("a value"))
+            }
+        };
         let info = CallInfo {
             function_type: ty,
             calling_convention: convention,

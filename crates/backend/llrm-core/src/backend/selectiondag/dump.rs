@@ -138,6 +138,7 @@ impl SelectionDAG {
                     MemBase::Global(id) => format!("@{}", self.global_names[id as usize]),
                     MemBase::Stack(index) => format!("%stack.{index}"),
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
+                    MemBase::JumpTable => "jump-table".to_string(),
                 };
                 let volatile = if info.volatile { "volatile " } else { "" };
                 write!(text, "<({volatile}{verb} (s{}) {to} {base}", info.mem_vt.size_in_bits()).ok();

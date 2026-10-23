@@ -218,10 +218,13 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
 | SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
+| SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form), no DIVREM merge | `selectiondag/div_combine.rs` |
+| SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
 | SD205 | sdag-b | ext-of-load fold: single-use simple loads, before operations are legal; no `ExtendUsesToFormExtLoad` or `isLoadExtLegal` | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
+| SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | DIVREM selects i16 and i32 only; i8 (AL/AH) and i64 (RAX/CQO) stay unselected | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |

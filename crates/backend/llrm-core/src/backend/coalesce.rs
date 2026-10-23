@@ -933,3 +933,28 @@ impl Alive {
         values.into_iter().for_each(|value| self.insert(value));
     }
 }
+
+#[cfg(test)]
+mod handoff_tests {
+    use crate::backend::regalloc_input::{Calls, before_phase};
+    use crate::liveness::liveintervals::{BUILT, take_handed_over};
+
+    /// The pin's coalescer reads the `LiveIntervals` TwoAddress edited; a
+    /// fresh set per phase was one `LiveIntervals::new` more per function.
+    #[test]
+    fn test_the_coalescer_takes_the_intervals_two_address_left_and_builds_none() {
+        let built = |taking: bool| {
+            let (body, mut phases) =
+                before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "Coalescer");
+            if !taking {
+                // The premise: without the hand-over the coalescer builds its
+                // own.
+                assert!(take_handed_over(&body).is_some(), "TwoAddress left no intervals");
+            }
+            let before = BUILT.with(std::cell::Cell::get);
+            phases[0].transform(body).expect("coalesces");
+            BUILT.with(std::cell::Cell::get) - before
+        };
+        assert_eq!((built(true), built(false)), (0, 1));
+    }
+}

@@ -24,7 +24,7 @@ fn names(text: &str) -> Result<Vec<String>, String> {
 /// two stack arguments comes out as the instructions the pin selects.
 #[test]
 fn a_function_of_one_block_is_selected_to_lir() {
-    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", "ret"]);
+    assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", ""]);
 }
 
 const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -341,4 +341,28 @@ fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
         divide.dests.iter().chain(&divide.sources).all(|l| matches!(l, crate::model::ir::Loc::Held(_))),
         "idiv operands are held values: {divide:?}"
     );
+}
+
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
+entry:
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+
+/// At m16 the arguments arrive in registers and the procedure is far. The
+/// driver refused every m16 function ("only m32"); once it took them, the
+/// return was named `ret` and printed as a near return in a far procedure.
+#[test]
+fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
+    let module = llrm_mir::parse::module(M16_SUM).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let arrival = insns.iter().find(|i| !i.delivers.is_empty()).expect("an arrival instruction");
+    assert_eq!(arrival.delivers.len(), 2, "both arguments arrive in registers");
+    assert!(arrival.delivers.iter().all(|(held, _)| held.width == 2), "as 16-bit views");
+    let last = insns.last().and_then(|i| i.what.as_ref()).expect("a return");
+    assert_eq!((last.op, last.name.as_deref()), (crate::model::ir::Operation::Return, Some("")));
 }
