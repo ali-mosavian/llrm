@@ -268,7 +268,7 @@ pub fn selected(
         names: &tables.names,
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
-    let mut calls: IndexMap<i64, String> = IndexMap::default();
+    let mut calls = IndexMap::default();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
