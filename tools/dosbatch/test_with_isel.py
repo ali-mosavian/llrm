@@ -42,3 +42,21 @@ def test_real_mode_c_keeps_the_old_selector(monkeypatch, tmp_path):
     monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
     command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
     assert not any(one.startswith("--isel") for one in command), command
+
+
+def test_a_selection_count_needs_the_selectors_report(tmp_path):
+    """445 of 449 programs 'passed' under LLRM_ISEL=dag on the old selector: a count without the report that shows who selected is void."""
+    import pytest
+
+    report = tmp_path / "isel.txt"
+    with pytest.raises(dosbatch.ProofMissing):
+        dosbatch.isel_proof(report, "dag")
+    report.write_text("")
+    with pytest.raises(dosbatch.ProofMissing):
+        dosbatch.isel_proof(report, "dag")
+    report.write_text("f old\ng old\n")
+    with pytest.raises(dosbatch.ProofMissing):
+        dosbatch.isel_proof(report, "dag")
+    assert dosbatch.isel_proof(report, "old") == (0, 2)
+    report.write_text("f dag\ng old\nh dag\n")
+    assert dosbatch.isel_proof(report, "dag") == (2, 1)
