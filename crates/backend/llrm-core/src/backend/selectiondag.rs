@@ -128,6 +128,8 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod asmcall_tests;
+#[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
 mod dag_function_tests;
