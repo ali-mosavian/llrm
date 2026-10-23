@@ -1902,7 +1902,16 @@ fn synthesize_statement(
                 Ok(arguments) => arguments,
                 Err(_) => return false,
             };
-            Statement::Open { path, mode, file, span }
+            Statement::Open {
+                path,
+                mode,
+                file,
+                mode_written: true,
+                access: None,
+                lock: None,
+                record_length: None,
+                span,
+            }
         }
         StatementShape::Close => Statement::Close { files: arguments, span },
         StatementShape::Resume => {
@@ -1996,7 +2005,7 @@ fn synthesize_statement(
                 write: matches!(descriptor, StatementShape::FileTransferWrite),
                 file,
                 position: Some(position),
-                target,
+                target: Some(target),
                 span,
             }
         }
@@ -2009,7 +2018,7 @@ fn synthesize_statement(
                 write: matches!(descriptor, StatementShape::FileTransferWriteUnpositioned),
                 file,
                 position: None,
-                target,
+                target: Some(target),
                 span,
             }
         }
@@ -2989,6 +2998,7 @@ fn statement_end(statement: &Statement) -> usize {
         | Statement::OnError { span, .. }
         | Statement::Resume { span, .. }
         | Statement::Open { span, .. }
+        | Statement::OpenClassic { span, .. }
         | Statement::Close { span, .. }
         | Statement::LineInput { span, .. }
         | Statement::FileTransfer { span, .. }
@@ -2997,7 +3007,9 @@ fn statement_end(statement: &Statement) -> usize {
         | Statement::Input { span, .. }
         | Statement::Data { span, .. }
         | Statement::Read { span, .. }
-        | Statement::Runtime { span, .. } => span.end,
+        | Statement::Runtime { span, .. }
+        | Statement::OnErrorResumeNext { span, .. }
+        | Statement::Common { span, .. } => span.end,
     }
 }
 
