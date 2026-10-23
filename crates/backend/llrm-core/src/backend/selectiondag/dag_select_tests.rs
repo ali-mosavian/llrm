@@ -116,6 +116,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let ctx = EmitContext {
         caller_saved: &Default::default(),
         conventions: &super::emit::NoConventions,
+        constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &HashMap::new(),
