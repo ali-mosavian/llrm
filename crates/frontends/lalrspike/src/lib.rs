@@ -42,11 +42,31 @@ pub mod qb {
     lalrpop_util::lalrpop_mod!(pub grammar, "/qb.rs");
 }
 
-type QbError = lalrpop_util::ParseError<usize, qb_tokens::Tok, qb_tokens::Never>;
+type QbError = lalrpop_util::ParseError<usize, qb_tokens::Tok, qb_tokens::Failure>;
 
 /// The QB token stream parsed to a generic tree, or where it stopped.
 pub fn parse_qb(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
     qb::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
+}
+
+/// A QB source parsed to a generic tree with the tokens pulled from the lexer as the parser
+/// needs them, kinds only. `spans` has each token's span, indexed as the tree's `At` nodes.
+pub fn parse_qb_stream(
+    source: &str,
+    dialect: qbfront::Dialect,
+    spans: &mut Vec<qbfront::syntax::Span>,
+) -> Result<qb_tree::Tree, String> {
+    let lines = qb_lexer::Lines::new(source, dialect).ok_or("dialect is lexed by the old lexer")?;
+    let result = qb::grammar::ProgramParser::new().parse(lines.stream(spans));
+    result.map_err(|error| match error {
+        lalrpop_util::ParseError::UnrecognizedToken { token: (at, token, _), expected } => {
+            let span = spans.get(at).map_or_else(String::new, |span| format!("{}:{} ", span.line, span.start));
+            format!("{span}unexpected {token:?}, expected {}", expected.join(" "))
+        }
+        lalrpop_util::ParseError::UnrecognizedEof { expected, .. } => format!("eof, expected {}", expected.join(" ")),
+        lalrpop_util::ParseError::User { error } => format!("lex: {}", error.message),
+        other => format!("{other:?}"),
+    })
 }
 
 fn qb_error(tokens: &[qbfront::generated_parser::Token], error: QbError) -> String {
