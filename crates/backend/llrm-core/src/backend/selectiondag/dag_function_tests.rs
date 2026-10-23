@@ -1297,3 +1297,33 @@ fn a_double_read_as_its_words_is_refused_not_emitted() {
         }
     }
 }
+
+const CONSTANT_AFTER_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare double @g(double)
+define double @f(double %x) {
+entry:
+  %a = call double @g(double %x)
+  %r = fadd double %a, 1.0
+  ret double %r
+}
+";
+
+/// A floating constant is loaded where it is read: `fld1` hoisted above the
+/// call stayed on the x87 stack across it, and the function was refused
+/// ("a floating value is live across ...").
+#[test]
+fn a_floating_constant_is_loaded_after_the_call_that_precedes_its_use() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(CONSTANT_AFTER_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
+    let call = whats.iter().position(|w| w.op == Operation::Call).expect("a call");
+    let load = whats.iter().position(|w| w.name.as_deref() == Some("fld1")).expect("an fld1");
+    assert!(
+        load > call,
+        "the constant is read after the call: {:?}",
+        whats.iter().map(|w| &w.name).collect::<Vec<_>>()
+    );
+}
