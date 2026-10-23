@@ -19,6 +19,14 @@ pub const SEGMENT_OF: ISD = ISD::Target(24580);
 /// segment window, `far -> far` (a delta-0 `HUGE_ADD`, expanded by the type
 /// legalizer).
 pub const LLRM_WINDOW: ISD = ISD::Target(24581);
+/// A `llrm.ia16.code.*` block: `chain, TargetExternalSymbol(name),
+/// TargetFrameIndex per place the name patches in, glue`; the result is read
+/// from the convention's result registers after it.
+pub const LLRM_CODE: ISD = ISD::Target(24582);
+/// `llrm.ia16.ptrdiff`: the byte difference of two huge pointers into one
+/// object, `(far, far) -> i32`, expanded by the type legalizer with the
+/// machine's selector stride.
+pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
 
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
@@ -31,6 +39,8 @@ pub fn name(code: u16) -> String {
         24578 => "X86ISD::LLRM_ASM".into(),
         24580 => "X86ISD::SEGMENT_OF".into(),
         24581 => "X86ISD::LLRM_WINDOW".into(),
+        24582 => "X86ISD::LLRM_CODE".into(),
+        24583 => "X86ISD::LLRM_PTRDIFF".into(),
         other => format!("X86ISD#{other}"),
     }
 }

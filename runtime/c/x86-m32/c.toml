@@ -3,7 +3,7 @@
 
 # Library routines this runtime has (ext.asm), which the compiler may call for what it does not move inline: `memcpy` for a copy of a
 # variable length, over 128 bytes or of unaligned pointers (the pin's EmitTargetCodeForMemcpy). Absent, those are `rep movs`.
-# libcalls = ["memcpy"]
+libcalls = ["memcpy"]
 
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"

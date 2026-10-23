@@ -108,6 +108,8 @@ pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
 pub mod dagisel_adapter;
+pub mod div_combine;
+pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod fold;
@@ -136,6 +138,8 @@ mod asmcall_tests;
 #[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
+mod codecall_tests;
+#[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]
 mod dag_select_tests;
@@ -161,6 +165,8 @@ mod invoke_tests;
 mod mathops_tests;
 #[cfg(test)]
 mod memconst_tests;
+#[cfg(test)]
+mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
