@@ -77,6 +77,8 @@ def compare(args):
     counts = collections.Counter()
     rows = collections.defaultdict(list)
     for path in paths:
+        if path.lower().endswith(".bi") and not args.bi:
+            continue  # an include file alone: BC does not check what it declares until a program uses it
         refused = bc[path].get(args.family)
         if refused == ["CRASH"]:
             counts["crash"] += 1
@@ -97,5 +99,6 @@ if __name__ == "__main__":
     ap.add_argument("--family", default="qb45")
     ap.add_argument("--kind", default="gap")
     ap.add_argument("--show", type=int, default=0)
+    ap.add_argument("--bi", action="store_true")
     a = ap.parse_args()
     run(a.limit) if a.cmd == "run" else compare(a)
