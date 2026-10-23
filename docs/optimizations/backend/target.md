@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/target.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/target.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:d2857bc8a2074f4a6f60af9c3cf3116ddc29a989fb65ffd4a8620e3c880babd0 -->
+<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:5e14bfcee03a76f389938d81e0782de2dfea9ffef8409e21235bae9add6334b4 -->
 
 # target
 
@@ -43,7 +43,7 @@ show each answer.
 [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
 [`crate::backend::constrain`](constrain.md), [`crate::backend::datagroup`](datagroup.md),
 [`crate::backend::regclass`](regclass.md), [`crate::backend::parcopy`](parcopy.md),
-[`crate::backend::ssaspill`](ssaspill.md) and [`crate::backend::masm`](masm.md) (register names).
+`crate::backend::ssaspill` and [`crate::backend::masm`](masm.md) (register names).
 
 ## See also
 LLVM's
