@@ -59,7 +59,7 @@ use super::mvt::{EVT, MVT};
 use super::opcodes::OpcodeMap;
 use super::schedule::Unit;
 use crate::backend::isel::{_read, _written};
-use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
+use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, Phi};
 
 /// Why a node was not emitted.
@@ -69,6 +69,17 @@ pub enum EmitError {
     Unsupported(String),
     /// An opcode with no `x86.instr` form (`opcodes_unmapped.txt`).
     Unmapped(String),
+}
+
+/// Where the module's globals are.
+pub trait GlobalMap {
+    /// The address of global `symbol` (`GlobalId`) plus `offset`: its symbol's
+    /// space (defined here, or external) and index.
+    fn address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> Addr;
 }
 
 /// Where the frame's fixed objects are.
@@ -84,6 +95,7 @@ pub trait FrameMap {
 
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    pub globals: &'a dyn GlobalMap,
     /// The LIR address of each MIR block, by `BlockId`: what a branch names.
     pub block_at: &'a HashMap<u32, i64>,
     pub frame: &'a dyn FrameMap,
@@ -536,6 +548,13 @@ impl Emitter<'_, '_> {
         let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
+        if let NodeData::Global { symbol, offset } = self.dag.node(group[3]).data {
+            let addr = self.ctx.globals.address(symbol, offset);
+            if self.address_register(group[4], Role::Segment)?.is_some() {
+                return Err(EmitError::Unsupported("a segment override".to_owned()));
+            }
+            return Ok(Mem { base, index, scale, ..Mem::new(Some(addr), cell_width) });
+        }
         let disp = self.constant(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
@@ -607,6 +626,10 @@ impl Emitter<'_, '_> {
         }
         if self.dag.opcode(value) == ISD::Register {
             return self.register(value);
+        }
+        if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
+            let addr = self.ctx.globals.address(symbol, offset);
+            return Ok(Loc::Imm(Imm { value: 0, width: width_of(self.dag, value), address: Some(addr) }));
         }
         match self.values.get(&value) {
             Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.dag, value) })),

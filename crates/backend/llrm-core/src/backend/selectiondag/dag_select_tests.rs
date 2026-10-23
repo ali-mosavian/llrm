@@ -19,6 +19,18 @@ use super::x86_lowering::X86Lowering;
 use crate::backend::isel::Parameter;
 use crate::model::ir::{Addr, Mem, Space};
 
+struct NoGlobals;
+
+impl super::emit::GlobalMap for NoGlobals {
+    fn address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> Addr {
+        Addr { index: i64::from(symbol), ..Addr::new(Space::Segment, offset) }
+    }
+}
+
 struct Info;
 
 impl SchedInfo for Info {
@@ -86,6 +98,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        globals: &NoGlobals,
         block_at: &HashMap::new(),
         frame: &frame,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
