@@ -34,8 +34,39 @@ impl Builder<'_> {
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
+            Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
             _ => Err(Refused("intrinsic call")),
         }
+    }
+
+    /// `visitVAStart`, `visitVAEnd`, `visitVACopy`: the node on the root with
+    /// a `SrcValue` per list.
+    fn visit_va(
+        &mut self,
+        instruction: &Instruction,
+        intrinsic: &Intrinsic,
+    ) -> Result<(), Refused> {
+        let root = self.root();
+        let mut ops = vec![root];
+        for operand in &instruction.operands[..if matches!(intrinsic, Intrinsic::VaCopy) { 2 } else { 1 }] {
+            ops.push(self.get_value(*operand)?);
+        }
+        for operand in &instruction.operands[..ops.len() - 1] {
+            let key = match operand {
+                Operand::Value(value) => value.0,
+                Operand::Constant(id) => 1 << 31 | id.index() as u32,
+                _ => 0,
+            };
+            ops.push(self.dag.get_src_value(key));
+        }
+        let code = match intrinsic {
+            Intrinsic::VaStart => ISD::VAStart,
+            Intrinsic::VaEnd => ISD::VAEnd,
+            _ => ISD::VACopy,
+        };
+        let node = self.dag.get_node(code, EVT::OTHER, &ops);
+        self.dag.set_root(node);
+        Ok(())
     }
 
     /// `fshl`/`fshr`: a rotate when both inputs are one value, else the funnel

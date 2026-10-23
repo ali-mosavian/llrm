@@ -92,6 +92,8 @@ pub enum NodeData {
     PoolIndex(u32),
     Mem(MemInfo),
     JumpTable(u32),
+    /// `SrcValueSDNode`: which IR value, by a key the builder makes.
+    Src(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -867,6 +869,14 @@ impl SelectionDAG {
     ) -> SDValue {
         let id = self.symbol_id(name);
         self.intern(ISD::TargetExternalSymbolNode, &[vt], &[], SDNodeFlags::default(), NodeData::Symbol(id))
+    }
+
+    /// `getSrcValue`.
+    pub fn get_src_value(
+        &mut self,
+        key: u32,
+    ) -> SDValue {
+        self.intern(ISD::SrcValue, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::Src(key))
     }
 
     pub fn get_jump_table(
