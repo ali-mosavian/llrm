@@ -211,7 +211,6 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         false,
         "386",
         &crate::backend::target::BUILT_IN,
-        false,
     )
     .unwrap()
     .into_iter()
@@ -916,7 +915,6 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
         false,
         "386",
         &crate::backend::target::BUILT_IN,
-        false,
     )
     .unwrap()
     .into_iter()
@@ -1950,7 +1948,6 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
             false,
             cpu,
             &crate::backend::target::BUILT_IN,
-            false,
         )
         .unwrap()
         .iter()
