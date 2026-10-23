@@ -126,7 +126,7 @@ a quarter of the time and lalrpop's tables the rest.
 
 ## A recursive-descent parser, for comparison
 
-`src/qb_rd.rs` is the same grammar by hand: about 1,400 lines over a pre-lexed
+`src/qb_rd.rs` is the same grammar by hand: about 2,000 lines over a pre-lexed
 `Vec<Tok>` (`qb_lexer::prelex`, the logos DFA lexer, kinds and spans), one function
 per rule, precedence levels as a ladder with the grammar's `P` threaded to the
 leftmost primary (`First::{Full, NoParen, Joined, NoErr}`), and the keyword sets
