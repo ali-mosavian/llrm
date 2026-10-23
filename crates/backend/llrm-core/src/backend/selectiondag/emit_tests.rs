@@ -84,6 +84,7 @@ fn context_in(
     let no_blocks = HashMap::new();
     f(&EmitContext {
         caller_saved: &Default::default(),
+        conventions: &super::emit::NoConventions,
         stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &no_blocks,
