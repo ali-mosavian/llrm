@@ -378,7 +378,7 @@ impl TargetLowering {
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
         t.set_ops(&[Select, SetCC], &ints, Custom);
-        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[MVT::I32], Custom);
+        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[ptr], Custom);
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // L720..L760: x87 float classes (no SSE)
