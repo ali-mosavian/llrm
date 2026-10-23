@@ -29,8 +29,8 @@ One PR per step, ledger pair in each body. Dates are land dates.
 
 | land | owner | step | pin source | M removed |
 |---|---|---|---|--:|
-| 10-30 | funcattrs-port | functionattrs post-order: 44 calls to `post_order` (8.2 M) against the pin's 1.4 M | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | up to 6.8 |
-| 11-06 | funcattrs-port | SCCP to the pin's SCCPPass + IPSCCP | SCCPSolver.cpp, SCCP.cpp `runSCCP` | up to 3.4 |
+| dropped 10-24 | funcattrs-port | functionattrs post-order: 5.7 of the 8.2 M is inside `stamped_all` (the Stamp row, w-6's); the walk's own is 2.5 vs pin 1.4. Skipping unchanged components measured -1.6 M (0.14%), object identical: not landed | FunctionAttrs.cpp `PostOrderFunctionAttrsPass` | 0 |
+| dropped 10-24 | funcattrs-port | SCCP: the 3.4 M is flat (no self cost over 1.0 M: `Range::intersect_with`, `icmp`, `Solver::visit`, `get_value_state`), no translation gap to mirror | SCCPSolver.cpp | 0 |
 | 11-20 | funcattrs-port | Bounded callers cleanup, delete `Bounded` | none (llrm-only) | ~7 |
 | 11-20 | w-3 | EarlyCse fork + `Context` clone: `AliasQuery` takes the function per call (alias.rs), with S2's exit | EarlyCSE.cpp `EarlyCSE::run` | 3.4 |
 | 11-27 | w-5 | MemCpyOpt without `Pointers::run` (the llrm-only points-to solve AA reads), with AA call pairs | MemCpyOptimizer.cpp `runImpl` | 2.7 |
