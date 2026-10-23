@@ -349,8 +349,11 @@ pub(crate) fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'
         let before = trimmed.strip_suffix('_').unwrap_or("");
         let word = before.len() - before.trim_end_matches(|c: char| c.is_ascii_alphanumeric()).len();
         let after_number = word > 0 && before[before.len() - word..].starts_with(|c: char| c.is_ascii_digit());
+        // BC takes a `_` ending the line as a continuation after anything that is not part of a name:
+        // a space, a comma, an operator, a parenthesis (`b AS INTEGER,_`)
+        let after_punctuation = before.chars().next_back().is_some_and(|c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '$' | '%' | '&' | '!' | '#' | '@' | '"' | '\''));
         let continued = trimmed.ends_with('_')
-            && (before.ends_with(char::is_whitespace) || (dialect.tight_continuation() && after_number));
+            && (before.ends_with(char::is_whitespace) || after_punctuation || (dialect.tight_continuation() && after_number));
         if continued {
             current.push_str(trimmed[..trimmed.len() - 1].trim_end());
             current.push(' ');

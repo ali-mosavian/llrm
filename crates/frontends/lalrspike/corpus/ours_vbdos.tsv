@@ -3571,7 +3571,7 @@
 3570	syntax	15:16 syntax error
 3571	ok	
 3572	ok	
-3573	ok	
+3573	semantic	15:10 Fixed-length string illegal
 3574	semantic	15:10 String expression required
 3575	syntax	15:10 syntax error
 3576	syntax	15:10 syntax error
