@@ -1276,6 +1276,25 @@ impl Emitter<'_, '_> {
         n: u32,
         name: &str,
     ) -> Result<Option<()>, EmitError> {
+        // `FP64_TO_INT32_IN_MEM`: the truncating store of a float as an
+        // integer. It is `fistt` (the pin's custom inserter writes the
+        // control-word dance around a `fist`); `floatalloc` makes `fistt` what
+        // a 387 has, once for a run of them.
+        if let Some(bits) = name
+            .strip_prefix("FP")
+            .and_then(|rest| rest.split_once("_TO_INT"))
+            .and_then(|(_, rest)| rest.strip_suffix("_IN_MEM"))
+            .and_then(|bits| bits.parse::<u32>().ok())
+        {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported(format!("a short {name}")))?;
+            let cell = self.cell(group, bits / 8)?;
+            let Loc::Held(source) = self.operand(node.ops[5])? else {
+                return Err(EmitError::Unsupported(format!("{name}: a stored value that is no register")));
+            };
+            self.push(Operation::FloatStore, "fistt", vec![Loc::Mem(cell)], vec![Loc::Held(source)]);
+            return Ok(Some(()));
+        }
         let Some((prefix, rest)) = name.split_once("_Fp") else { return Ok(None) };
         let digits = |text: &str| -> (u32, String) {
             let end = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
