@@ -19,7 +19,7 @@ use crate::backend::target::Segments;
 use crate::backend::verify::{self, Malformed};
 use crate::backend::{
     allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue,
-    schedule, ssaspill, twoaddr,
+    schedule, twoaddr,
 };
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
@@ -40,7 +40,6 @@ pub fn machine<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
-    spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     machine_with(
         pinned,
@@ -51,7 +50,6 @@ pub fn machine<'a>(
         cpu,
         segments,
         &crate::backend::classes::RegisterClasses::m16(),
-        spilling.then(Rc::<ssaspill::Run>::default),
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     )
@@ -88,7 +86,6 @@ const SLOTS: &[(&str, &str)] = &[
     ("OptimizePHIs", "optimizephis@1"),
     ("SharedConstants", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
-    ("SsaSpill", "ssaspill@3"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
@@ -118,8 +115,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("CopyPropagation", "copyprop@18"),
 ];
 
-/// `machine`, its peephole made of the rules `rules` holds; the spiller, where
-/// `spilling` names a run, reports to it.
+/// `machine`, its peephole made of the rules `rules` holds.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
     pinned: &IndexMap<u32, RegId>,
@@ -130,7 +126,6 @@ pub fn machine_with<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
     classes: &Rc<crate::backend::classes::RegisterClasses>,
-    spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
@@ -159,13 +154,6 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs),
-        Box::new(ssaspill::SsaSpill {
-            frame: or_empty(),
-            segments: segments.clone(),
-            classes: Rc::clone(classes),
-            prices: ssaspill::Prices::of(target),
-            run: spilling.clone().unwrap_or_default(),
-        }),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
@@ -261,9 +249,6 @@ pub fn machine_with<'a>(
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
-    if spilling.is_none() {
-        phases.retain(|phase| phase.class_name() != "SsaSpill");
-    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
@@ -345,9 +330,7 @@ pub fn checked(
     if crate::support::debug::enabled("regclass")
         && matches!(
             stage.as_str(),
-            "SsaSpill"
-                | "ssaspill"
-                | "PhiElimination"
+            "PhiElimination"
                 | "phielim"
                 | "FloatAssign"
                 | "FloatAlloc"
@@ -495,7 +478,7 @@ mod tests {
     #[test]
     fn test_the_stackifier_runs_after_allocation_under_rfp() {
         let names = || -> Vec<&'static str> {
-            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN, false)
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
                 .expect("phases")
                 .iter()
                 .map(|phase| phase.class_name())
@@ -519,7 +502,7 @@ mod tests {
     #[test]
     fn test_a_load_is_folded_before_the_combiner_sees_the_chain() {
         let names: Vec<&'static str> =
-            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN, false)
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
                 .expect("phases")
                 .iter()
                 .map(|phase| phase.class_name())

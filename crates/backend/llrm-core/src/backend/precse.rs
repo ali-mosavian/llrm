@@ -420,7 +420,7 @@ fn hoisted(
     // `PREMap`: expression -> the block it was last seen in or hoisted to.
     let mut seen: HashMap<Semantics, usize> = HashMap::default();
     let mut put: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
-    let mut next = crate::backend::spiller::_next_value_following(body);
+    let mut next = crate::backend::postings::next_value_following(body);
     let mut like: Vec<(u32, u32)> = Vec::new();
     let mut stack = vec![body.entry];
     while let Some(at) = stack.pop() {
