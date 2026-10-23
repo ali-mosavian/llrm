@@ -119,6 +119,7 @@ pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
+pub mod logic_setcc;
 pub mod opcodes;
 pub mod schedule;
 pub mod switchcg;
@@ -137,6 +138,8 @@ pub use mvt::{EVT, MVT};
 mod asmcall_tests;
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod codecall_tests;
 #[cfg(test)]
 mod dag_function_tests;
 #[cfg(test)]
@@ -165,6 +168,8 @@ mod mathops_tests;
 mod memconst_tests;
 #[cfg(test)]
 mod memlib_tests;
+#[cfg(test)]
+mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]

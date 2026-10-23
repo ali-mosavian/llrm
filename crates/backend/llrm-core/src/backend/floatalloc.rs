@@ -133,7 +133,7 @@ use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
 use crate::backend::constpool::Pool;
 #[cfg(test)]
-use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::cpu::ProfileOrName;
 use crate::backend::floatregions::Raised;
 use crate::backend::floatregions::Unlowered;
 use crate::backend::frame::Frame;
@@ -355,18 +355,17 @@ pub(super) fn _terminators(block: &LirBlock) -> usize {
     cut
 }
 
-/// Both passes: `floatassign`'s decisions, then stack form.
+/// Stack form of a body whose x87 values are in registers, as the pipeline
+/// hands it over.
 #[cfg(test)]
 pub fn allocated<'a>(
     body: &LirBody,
-    mut frame: Option<&mut Frame>,
-    pool: Option<&mut Pool>,
-    basic_semantics: bool,
-    cpu: impl Into<ProfileOrName<'a>>,
+    frame: Option<&mut Frame>,
+    _pool: Option<&mut Pool>,
+    _basic_semantics: bool,
+    _cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, Raised> {
-    let target = targets::profile(cpu).map_err(Raised::Value)?;
-    let assigned = crate::backend::floatassign::assigned(body, frame.as_deref_mut(), pool, basic_semantics, target)?;
-    _truncating(&crate::backend::fpstack::converted(&assigned, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
+    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
 }
 
 /// The control word an x87 instruction needs: the one place the fact lives.
@@ -533,14 +532,8 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    let loaded_id = body.next_value();
-    let chopped_id = loaded_id + 1;
-    let loaded = Held { value: loaded_id, width: 2 };
-    let chopped = Held { value: chopped_id, width: 2 };
-    // Under RFP the registers are allocated by now: no value is
-    // left to hold the word, so it goes through memory alone.
-    let through_memory = super::allocate::rfp_on();
-
+    // The registers are allocated by now: no value is left to hold the word, so
+    // it goes through memory alone.
     let insn = |what: Semantics, at: i64| -> Arc<Insn> {
         let held = |args: &[Loc]| -> Vec<Held> {
             args.iter()
@@ -573,36 +566,19 @@ pub(super) fn _truncating(
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
             insns.extend(block.insns[..arrivals].iter().cloned());
-            if through_memory {
-                insns.extend([
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
-                    insn(
-                        semantics(
-                            Operation::Binary,
-                            "or",
-                            vec![Loc::Mem(chop.clone())],
-                            vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
-                        ),
-                        at,
+            insns.extend([
+                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
+                insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(chop.clone())], Vec::new()), at),
+                insn(
+                    semantics(
+                        Operation::Binary,
+                        "or",
+                        vec![Loc::Mem(chop.clone())],
+                        vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
                     ),
-                ]);
-            } else {
-                insns.extend([
-                    insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
-                    insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
-                    insn(
-                        semantics(
-                            Operation::Binary,
-                            "or",
-                            vec![Loc::Held(chopped)],
-                            vec![Loc::Held(loaded), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
-                        ),
-                        at,
-                    ),
-                    insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
-                ]);
-            }
+                    at,
+                ),
+            ]);
         }
         let mut current = modes.entering[&block.at];
         for one in &block.insns[arrivals..] {
@@ -724,7 +700,7 @@ impl LIRTransform for FloatAlloc {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        let propagated = if super::allocate::rfp_on() { crate::backend::fpcopyprop::propagated(&body) } else { None };
+        let propagated = crate::backend::fpcopyprop::propagated(&body);
         crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())

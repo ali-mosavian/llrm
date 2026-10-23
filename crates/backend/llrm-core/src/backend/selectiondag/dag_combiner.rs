@@ -212,6 +212,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
+            ISD::Or => self.visit_or(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -281,6 +282,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
+            return Some(folded);
+        }
         let vt = self.dag.value_type(n0);
         let all = super::fold::mask(vt.size_in_bits());
         for (other, constant) in [(n0, n1), (n1, n0)] {

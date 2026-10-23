@@ -384,7 +384,7 @@ impl TargetLowering {
         }
         t.set_ops(&[Select, SetCC], &FLOATS, Custom);
         t.set_ops(&[Select, SetCC], &ints, Custom);
-        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol], &[ptr], Custom);
+        t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], &[ptr], Custom);
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // L559..L566: 32-bit va_list is a pointer

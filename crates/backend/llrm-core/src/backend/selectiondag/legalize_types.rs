@@ -437,6 +437,15 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            ISD::Select => {
+                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+                // is.
+                let (cond, then, other) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
+                let wide = self.dag.value_type(then);
+                self.dag.get_node(ISD::Select, wide, &[cond, then, other])
+            }
             ISD::SetCC => {
                 // Compare into the target's own result type, then sign extend
                 // or truncate to the promoted type.
@@ -656,6 +665,7 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::Load => self.expand_load(value, half),
             x86isd::HUGE_ADD if vt == EVT::Simple(MVT::Far) => self.expand_huge_add(value, half)?,
+            x86isd::LLRM_WINDOW if vt == EVT::Simple(MVT::Far) => self.expand_window(value, half)?,
             ISD::BuildPair => (self.dag.operand(value, 0), self.dag.operand(value, 1)),
             ISD::Select => {
                 // `ExpandIntRes_SELECT`: one select per half.
@@ -1127,6 +1137,68 @@ impl<'a> TypeLegalizer<'a> {
         Ok((self.dag.get_node(ISD::Truncate, half, &[sum]), self.dag.get_node(ISD::Add, half, &[selector, stride])))
     }
 
+    /// A huge pointer normalized: the offset's whole selector steps move into
+    /// the selector, leaving an offset below one step. A step is
+    /// `2^(bits - huge_shift)` bytes (16 on DOS), the selector counts steps.
+    fn expand_window(
+        &mut self,
+        node: SDValue,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_WINDOW,
+                    ty: self.dag.value_type(node),
+                    what: "expand result: no selector stride",
+                },
+            )?;
+        let below = half.size_in_bits() - shift;
+        let (offset, selector) = self.expanded_integer(self.dag.operand(node, 0));
+        let by = self.dag.get_constant(u128::from(below), EVT::I8);
+        let steps = self.dag.get_node(ISD::Srl, half, &[offset, by]);
+        let mask = self.dag.get_constant((1u128 << below) - 1, half);
+        Ok((self.dag.get_node(ISD::And, half, &[offset, mask]), self.dag.get_node(ISD::Add, half, &[selector, steps])))
+    }
+
+    /// The bytes between two carried huge pointers into one object: both are
+    /// canonical, so the selectors differ by whole strides and the offsets by
+    /// the rest: `((sel_a - sel_b) >> huge_shift << 16) + (off_a - off_b)`,
+    /// each difference taken as a zero-extended dword.
+    fn expand_ptrdiff(
+        &mut self,
+        node: SDValue,
+    ) -> Result<SDValue, LegalizeError> {
+        let shift = self
+            .target
+            .and_then(|target| target.machine().huge_shift())
+            .ok_or(
+                LegalizeError::Unsupported {
+                    op: x86isd::LLRM_PTRDIFF,
+                    ty: self.dag.value_type(node),
+                    what: "expand operand: no selector stride",
+                },
+            )?;
+        let vt = self.dag.value_type(node);
+        let ((a_off, a_sel), (b_off, b_sel)) =
+            (self.expanded_integer(self.dag.operand(node, 0)), self.expanded_integer(self.dag.operand(node, 1)));
+        let half = self.dag.value_type(a_off);
+        let widen = |dag: &mut SelectionDAG, value| dag.get_node(ISD::ZeroExtend, vt, &[value]);
+        let (offsets, selectors) =
+            ((widen(self.dag, a_off), widen(self.dag, b_off)), (widen(self.dag, a_sel), widen(self.dag, b_sel)));
+        let within = self.dag.get_node(ISD::Sub, vt, &[offsets.0, offsets.1]);
+        let between = self.dag.get_node(ISD::Sub, vt, &[selectors.0, selectors.1]);
+        let (by_stride, by_offset) = (
+            self.dag.get_constant(u128::from(shift), EVT::I8),
+            self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8),
+        );
+        let strides = self.dag.get_node(ISD::Sra, vt, &[between, by_stride]);
+        let high = self.dag.get_node(ISD::Shl, vt, &[strides, by_offset]);
+        Ok(self.dag.get_node(ISD::Add, vt, &[within, high]))
+    }
+
     /// `IntegerExpandSetCCOperands`: equality is the halves' xors or-ed
     /// against zero; an ordering is the low halves' unsigned compare unless
     /// the high halves differ.
@@ -1197,6 +1269,7 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.constant(self.dag.operand(node, 1)).is_some_and(|which| which != 0) { hi } else { lo }
             }
             ISD::Store if at == 1 => self.expand_store(node),
+            x86isd::LLRM_PTRDIFF => self.expand_ptrdiff(node)?,
             ISD::BitCast => {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
                 // joined.

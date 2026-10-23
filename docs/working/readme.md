@@ -69,6 +69,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [row23-plan](row23-plan.md) | Row 23: CodeGenPrepare translation plan |
 | [row44-plan](row44-plan.md) | Row 44: MachineSink translation plan |
 | [row45-plan](row45-plan.md) | Row 45: PeepholeOptimizer translation plan |
+| [row61-deleted-tests](row61-deleted-tests.md) | Row 61: the tests deleted with the non-RFP route |
 | [row63-66-plan](row63-66-plan.md) | Rows 63 (RegisterCoalescer) and 66 (RAGreedy): translation plan |
 | [row82-plan](row82-plan.md) | Row 82, Control Flow Optimizer: translation plan |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5): plan |
@@ -76,6 +77,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [segment-cast-audit](segment-cast-audit.md) | Casts through the selector space: audit |
 | [selectiondag-c2-plan](selectiondag-c2-plan.md) | C2: m16 patterns for the DAG selector |
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
+| [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |

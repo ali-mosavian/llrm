@@ -414,28 +414,6 @@ pub(crate) fn ready<K: Eq + std::hash::Hash>(
         .collect()
 }
 
-/// One copy of a cycle `ready` is stuck on, when none of `left` may go:
-/// following who is waited for until a copy comes round again. Taking that
-/// copy's sources first breaks the cycle.
-pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(
-    reads: &[Vec<K>],
-    writes: &[Vec<K>],
-    left: &[usize],
-) -> Option<usize> {
-    let waiting_for = |one: usize| {
-        left.iter()
-            .copied()
-            .find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)))
-    };
-    let mut seen = Vec::new();
-    let mut one = *left.first()?;
-    while !seen.contains(&one) {
-        seen.push(one);
-        one = waiting_for(one)?;
-    }
-    Some(one)
-}
-
 type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
 
 /// One cycle out of `left`, broken without a free register: by exchanges
