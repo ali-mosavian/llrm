@@ -795,7 +795,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "peephole.peep `lea_fixup`, `lea_alu`; peephole.rs (`lea_fixed`, `lea_alus`)",
         "",
-        "CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`) is translated for the add or sub right after the LEA, where the pin looks five instructions ahead (peephole.peep `lea_alu`); reason: a window rewrite is slot for slot, and a gap would put the two steps in different places than the pin; cost: none measured; exit: widen the search to the pin's five by 2026-11-09; owner w-8; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`) is translated for the add or sub right after the LEA, where the pin looks five instructions ahead (peephole.peep `lea_alu`); reason: a window rewrite is slot for slot, and a gap would put the two steps in different places than the pin; cost: none, measured 2026-10-23 over the 71 bench programs at -O2 and -Os: 79 two-register LEAs, none followed within the pin's five instructions by the add or sub that reads it; exit: widen the search to the pin's five if a site appears; owner w-8; review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",

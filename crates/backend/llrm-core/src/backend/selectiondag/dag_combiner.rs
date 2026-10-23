@@ -252,7 +252,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(_) => return None,
         };
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
-        let info = super::dag::MemInfo { ext: None, ..info };
+        let info = super::dag::MemInfo { ext: None, space: 0, ..info };
         let wide = self.dag.value_type(node);
         let extended = self.dag.get_ext_load(ext, wide, chain, ptr, info);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
