@@ -699,8 +699,17 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     if !eligible || pushed == 0 {
         return procedure;
     }
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed) {
-        Some(body) => Procedure { body: lir::LirBody { saved_first: true, ..body }, ..procedure },
+    // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
+    // costs a 486 3 clocks): they lie a multiple of it below the registers,
+    // and the gap is reserved with them.
+    let align = procedure.registers.align.max(procedure.registers.slot);
+    let gap = (align - pushed % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+        Some(body) => Procedure {
+            body: lir::LirBody { saved_first: true, ..body },
+            reserve: procedure.reserve + gap,
+            ..procedure
+        },
         None => procedure,
     }
 }

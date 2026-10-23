@@ -51,3 +51,25 @@ fn test_callee_saved_registers_are_pushed_before_the_locals_are_reserved() {
     assert!(lines[ret - 5].starts_with("add esp,"), "locals released first: {:?}", &lines[ret - 6..=ret]);
     assert_eq!(lines[ret - 1], "pop ebp");
 }
+
+/// Three registers pushed first moved the locals 12 bytes down, so a double
+/// array sat at 4 mod 8 from BP: nbody -O2 took +15% clocks on the 486 (3
+/// clocks per misaligned access).
+#[test]
+fn test_locals_stay_8_aligned_below_three_pushed_registers() {
+    let source = r#"extern int g(double *, int);
+int h(int n, int *p, int (*fp)(double *, int))
+{
+    double a[3];
+    int s = 0;
+    int i;
+    a[0] = 1.5;
+    for (i = 0; i < n; i++) { a[i % 3] = p[i]; s += fp(a, i); s += g(a, s); }
+    return s + (int)a[1];
+}
+"#;
+    let text = listing(source, &["-O2", "-m32", "-mabi=sysv", "-march=i486"]);
+    let array = text.lines().find_map(|line| line.trim().strip_prefix("lea ecx, [ebp-")).expect("the array's address");
+    let distance: i64 = array.trim_end_matches(']').parse().unwrap();
+    assert_eq!(distance % 8, 0, "{text}");
+}
