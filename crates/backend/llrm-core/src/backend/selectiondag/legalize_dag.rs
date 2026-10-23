@@ -272,11 +272,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::Undef | ISD::Poison => {
                 // `ExpandNode`: zero of the type.
-                Some(vec![if vt.is_integer() {
-                    self.dag.get_constant(0, vt)
-                } else {
-                    self.dag.get_constant_fp(0, vt)
-                }])
+                Some(vec![if vt.is_integer() { self.dag.get_constant(0, vt) } else { self.dag.get_constant_fp(0, vt) }])
             }
             ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
