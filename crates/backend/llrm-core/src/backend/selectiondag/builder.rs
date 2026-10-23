@@ -292,6 +292,12 @@ impl Builder<'_> {
         match self.module.context.types.get(ty) {
             Type::Int(bits) if (1..=128).contains(bits) => Ok(EVT::integer(*bits)),
             Type::Pointer(0) => Ok(self.target.dag.pointer),
+            // a pair (selector, offset) is `far`; a flat space as wide as a
+            // near pointer is one
+            Type::Pointer(space) if self.layout.is_pair(*space) => Ok(MVT::Far.into()),
+            Type::Pointer(space) if self.layout.pointer(*space).bits == self.layout.pointer(0).bits => {
+                Ok(self.target.dag.pointer)
+            }
             Type::Pointer(_) => Err(Refused("pointer in another address space")),
             Type::Float(kind) => Ok(EVT::Simple(match kind {
                 llrm_mir::types::FloatKind::Float => MVT::F32,
@@ -308,7 +314,7 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
-        if vt.is_floating_point() {
+        if vt.is_floating_point() || vt == MVT::Far.into() {
             return Ok(vt);
         }
         let bits = vt.size_in_bits();
@@ -348,6 +354,9 @@ impl Builder<'_> {
         vt: EVT,
         registers: usize,
     ) -> Result<(EVT, usize), Refused> {
+        if registers == 2 && vt == MVT::Far.into() {
+            return Ok((EVT::I16, 2));
+        }
         if registers == 2 && vt.is_integer() && vt.size_in_bits() % 2 == 0 {
             return Ok((EVT::integer(vt.size_in_bits() / 2), 2));
         }
@@ -478,6 +487,7 @@ impl Builder<'_> {
                             volatile: false,
                             base: MemBase::Stack(-fixed),
                             ext: None,
+                            space: 0,
                         };
                         pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
                     }
@@ -519,6 +529,29 @@ impl Builder<'_> {
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
         }
+        Ok(())
+    }
+
+    /// `visitInvoke`: the call, then the branch to the normal block. The
+    /// unwind edge is a CFG edge only; QB's runtime enters its pad, so no
+    /// `EH_LABEL`s or tables (DEVIATE SD102).
+    fn visit_invoke(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: &llrm_mir::opcode::CallInfo,
+    ) -> Result<(), Refused> {
+        // the arguments, the normal and unwind blocks, then the callee
+        let [.., Operand::Block(normal), Operand::Block(_), callee] = instruction.operands[..] else {
+            return Err(Refused("invoke without its blocks"));
+        };
+        let mut call = instruction.clone();
+        call.operands.truncate(instruction.operands.len() - 3);
+        call.operands.push(callee);
+        self.visit_call(&call, info)?;
+        let root = self.control_root();
+        let dest = self.dag.get_basic_block(normal.0);
+        let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[root, dest]);
+        self.dag.set_root(node);
         Ok(())
     }
 
@@ -686,7 +719,14 @@ impl Builder<'_> {
                             );
                         let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                         let vt = self.dag.value_type(*piece);
-                        let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown, ext: None };
+                        let mem = MemInfo {
+                            mem_vt: vt,
+                            align: 1,
+                            volatile: false,
+                            base: MemBase::Unknown,
+                            ext: None,
+                            space: 0,
+                        };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
                 }
@@ -865,6 +905,12 @@ impl Builder<'_> {
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
             ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
             ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
+            // a far global: its offset and the selector of its segment
+            ConstantKind::Global(global) if vt == MVT::Far.into() => {
+                let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
+                let segment = self.segment_of(Some(global.0));
+                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+            }
             ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
                 source,
@@ -875,10 +921,20 @@ impl Builder<'_> {
             }) => {
                 let base = self.constant_value(operands[0])?;
                 let indices: Vec<Operand> = operands[1..].iter().map(|id| Operand::Constant(*id)).collect();
+                if self.dag.value_type(base) == MVT::Far.into() {
+                    let pointer = Operand::Constant(operands[0]);
+                    return self.far_gep(pointer, base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices);
+                }
                 self.gep_value(base, *source, *nuw, *nusw || *inbounds, *inbounds, &indices)
             }
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op, value }) => {
                 let operand = self.constant_value(*value)?;
+                if *op == CastOp::AddrSpaceCast
+                    || self.dag.value_type(operand) == MVT::Far.into()
+                    || vt == MVT::Far.into()
+                {
+                    return self.pointer_cast(*op, Operand::Constant(*value), operand, constant.ty);
+                }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
             }
             _ => Err(Refused("aggregate constant")),
@@ -997,7 +1053,10 @@ impl Builder<'_> {
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => self.visit_call(&instruction, info)?,
-            Opcode::Invoke(_) => return Err(Refused("invoke")),
+            Opcode::Invoke(info) => self.visit_invoke(&instruction, info)?,
+            // QB's pad is entered by the runtime, which `ehprepare` set up
+            // and whose selector it took out: nothing to build
+            Opcode::LandingPad { .. } => {}
             other => return Err(Refused(Box::leak(format!("instruction {}", other.mnemonic()).into_boxed_str()))),
         }
         if !instruction.opcode.is_terminator() {
@@ -1061,7 +1120,9 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let operand = self.get_value(instruction.operands[0])?;
         let dest = self.type_of(instruction.ty)?;
-        let result = if op == CastOp::FPRound {
+        let result = if self.is_pointer_cast(op, instruction)? {
+            self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
+        } else if op == CastOp::FPRound {
             self.round_through_memory(operand, dest)
         } else {
             self.cast_value(op, operand, dest, flags_of(instruction.flags))?
@@ -1082,13 +1143,125 @@ impl Builder<'_> {
         let index = self.info.new_stack_object();
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
         let align = vt.size_in_bits().div_ceil(8);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None };
+        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
         let value = self.dag.get_load(vt, store, slot, info);
         self.pending_loads.push(SDValue { node: value.node, res: 1 });
         value
+    }
+
+    /// Whether a cast moves a pointer between address spaces or to or from
+    /// a two-word pointer.
+    fn is_pointer_cast(
+        &self,
+        op: CastOp,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<bool, Refused> {
+        let far: EVT = MVT::Far.into();
+        Ok(matches!(op, CastOp::AddrSpaceCast)
+            || (matches!(op, CastOp::PtrToInt | CastOp::IntToPtr)
+                && (self.operand_type(instruction.operands[0])? == far || self.type_of(instruction.ty)? == far)))
+    }
+
+    /// A cast between address spaces: a far and a huge pointer are the same
+    /// two words, `(offset, selector)`; a near pointer's offset is the
+    /// first, and its selector `SS` for a frame object; a bare segment is a
+    /// selector with offset 0.
+    fn pointer_cast(
+        &mut self,
+        op: CastOp,
+        pointer: Operand,
+        operand: SDValue,
+        to: TypeId,
+    ) -> Result<SDValue, Refused> {
+        let types = &self.module.context.types;
+        let roles = self.arch.layout().spaces.roles;
+        let from_ty = self.function.operand_type(&self.module.context, pointer).ok_or(Refused("block operand"))?;
+        let far: EVT = MVT::Far.into();
+        let word = self.target.dag.pointer;
+        let (dest, from) = (self.type_of(to)?, self.dag.value_type(operand));
+        let space_of = |ty: TypeId| match types.get(ty) {
+            llrm_mir::types::Type::Pointer(space) => Some(*space),
+            _ => None,
+        };
+        let (from_space, to_space) = (space_of(from_ty), space_of(to));
+        if from == far && dest == far {
+            return Ok(operand);
+        }
+        if from == far {
+            let [offset, selector] = self.split_value(operand, word);
+            return match (op, to_space) {
+                (CastOp::AddrSpaceCast, Some(space)) if roles.segment == Some(space) => Ok(selector),
+                (CastOp::AddrSpaceCast, Some(_)) => Ok(offset),
+                (CastOp::PtrToInt, None) if dest == EVT::I32 => {
+                    Ok(self.dag.get_node(ISD::BuildPair, dest, &[offset, selector]))
+                }
+                // truncated, as LLVM's is: segment:offset's low word
+                (CastOp::PtrToInt, None) if dest == word => Ok(offset),
+                _ => Err(Refused("cast of a far pointer")),
+            };
+        }
+        if dest == far {
+            return match (op, from_space) {
+                (CastOp::IntToPtr, None) if from == EVT::I32 => {
+                    let [offset, selector] = self.split_value(operand, word);
+                    Ok(self.dag.get_node(ISD::BuildPair, far, &[offset, selector]))
+                }
+                (CastOp::AddrSpaceCast, Some(space)) if roles.segment == Some(space) => {
+                    let zero = self.dag.get_constant(0, word);
+                    Ok(self.dag.get_node(ISD::BuildPair, far, &[zero, operand]))
+                }
+                (CastOp::AddrSpaceCast, Some(space)) if space == roles.stack => {
+                    let selector = self.stack_selector();
+                    Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
+                }
+                (CastOp::AddrSpaceCast, Some(space)) if space == roles.near => {
+                    let (base, _) =
+                        llrm_mir::valuetracking::underlying(&self.module.context, self.layout, self.function, pointer);
+                    let framed = matches!(
+                        base,
+                        Operand::Value(value) if matches!(
+                            self.function.value(value).def,
+                            ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
+                        )
+                    );
+                    // a frame object is in SS; a global is in its own segment;
+                    // any other near pointer is into DGROUP
+                    let selector = match base {
+                        _ if framed => self.stack_selector(),
+                        Operand::Constant(id) => match self.module.context.get(id).kind {
+                            ConstantKind::Global(global) => self.segment_of(Some(global.0)),
+                            _ => self.segment_of(None),
+                        },
+                        _ => self.segment_of(None),
+                    };
+                    Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
+                }
+                _ => Err(Refused("cast to a far pointer")),
+            };
+        }
+        // one word to one word: the near and stack spaces share their offsets
+        match op {
+            CastOp::AddrSpaceCast if from == dest => Ok(operand),
+            _ => Err(Refused("cast between address spaces")),
+        }
+    }
+
+    /// The selector of the segment `global` lives in (`SEGMENT_OF`).
+    fn segment_of(
+        &mut self,
+        global: Option<u32>,
+    ) -> SDValue {
+        self.dag.get_segment_of(global)
+    }
+
+    /// `SS`, the stack's selector.
+    fn stack_selector(&mut self) -> SDValue {
+        let ss = self.sized_register(self.arch.register_named("ss"), EVT::I16);
+        let entry = self.dag.entry_node();
+        self.dag.get_copy_from_phys_reg_plain(entry, ss, EVT::I16)
     }
 
     /// The node a cast makes of `operand` (`visitTrunc`, `visitZExt`, ...).
@@ -1099,6 +1272,10 @@ impl Builder<'_> {
         dest: EVT,
         flags: SDNodeFlags,
     ) -> Result<SDValue, Refused> {
+        let far: EVT = MVT::Far.into();
+        if self.dag.value_type(operand) == far || dest == far {
+            return Err(Refused("cast of a far pointer constant"));
+        }
         Ok(match op {
             CastOp::Trunc => self.dag.get_node_flags(ISD::Truncate, dest, &[operand], flags),
             CastOp::ZExt => self.dag.get_node_flags(ISD::ZeroExtend, dest, &[operand], flags),
@@ -1220,7 +1397,7 @@ impl Builder<'_> {
             }
             Operand::Block(_) => MemBase::Unknown,
         };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space: 0 })
     }
 
     fn visit_load(
@@ -1279,9 +1456,42 @@ impl Builder<'_> {
         let nuw = instruction.flags.contains(Flags::NUW);
         let inbounds = instruction.flags.contains(Flags::INBOUNDS);
         let nusw = instruction.flags.contains(Flags::NUSW) || inbounds;
-        let n = self.gep_value(base, source, nuw, nusw, inbounds, &instruction.operands[1..])?;
+        let n = if self.dag.value_type(base) == MVT::Far.into() {
+            self.far_gep(instruction.operands[0], base, source, nuw, nusw, inbounds, &instruction.operands[1..])?
+        } else {
+            self.gep_value(base, source, nuw, nusw, inbounds, &instruction.operands[1..])?
+        };
         self.set_value(instruction.result.expect("a gep has a result"), n);
         Ok(())
+    }
+
+    /// A GEP on a two-word pointer. A far one wraps in its offset word and
+    /// keeps the selector; a huge one (a displacement that carries) is the
+    /// whole byte displacement added by `HUGE_ADD`, whose stride the
+    /// legalizer knows.
+    fn far_gep(
+        &mut self,
+        pointer: Operand,
+        base: SDValue,
+        source: TypeId,
+        nuw: bool,
+        nusw: bool,
+        inbounds: bool,
+        indices: &[Operand],
+    ) -> Result<SDValue, Refused> {
+        let ty = self.function.operand_type(&self.module.context, pointer).ok_or(Refused("block operand"))?;
+        let llrm_mir::types::Type::Pointer(space) = self.module.context.types.get(ty) else {
+            return Err(Refused("far gep on a non-pointer"));
+        };
+        let pointer_vt = self.target.dag.pointer;
+        if self.layout.carries(*space) {
+            let zero = self.dag.get_constant(0, EVT::I32);
+            let delta = self.gep_value(zero, source, nuw, nusw, inbounds, indices)?;
+            return Ok(self.dag.get_node(super::x86_lowering::x86isd::HUGE_ADD, MVT::Far.into(), &[base, delta]));
+        }
+        let [offset, selector] = self.split_value(base, pointer_vt);
+        let moved = self.gep_value(offset, source, nuw, nusw, inbounds, indices)?;
+        Ok(self.dag.get_node(ISD::BuildPair, MVT::Far.into(), &[moved, selector]))
     }
 
     /// `visitGetElementPtr`'s walk over the indices, for an instruction or a

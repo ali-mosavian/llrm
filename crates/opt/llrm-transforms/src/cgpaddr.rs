@@ -165,6 +165,7 @@ impl FunctionPass for CgpAddr {
         // A closing phi (`lcssa`) whose arms are all one value is that value:
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
+        let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
         let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
@@ -172,6 +173,10 @@ impl FunctionPass for CgpAddr {
         let masks =
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
+        let sunk_casts = match analyses.outer().target().lowering() {
+            Some(lowering) => crate::sinkcast::casts_sunk(unit.context, unit.layout, &*lowering, unit.function),
+            None => false,
+        };
         let extended = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
@@ -184,7 +189,10 @@ impl FunctionPass for CgpAddr {
             Some(tti) => sunk(unit, &*tti),
             None => false,
         };
-        if phis || sunk_compares || masks || addresses || extended {
+        if merged {
+            // A block went: the blocks and edges are not as they were.
+            PreservedAnalyses::none()
+        } else if phis || sunk_compares || masks || addresses || extended || sunk_casts {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and

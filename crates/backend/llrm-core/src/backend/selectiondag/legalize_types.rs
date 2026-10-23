@@ -254,23 +254,26 @@ impl<'a> TypeLegalizer<'a> {
         users.sort_unstable();
         users.dedup();
         for user in users {
+            // One operand slot per read of `n`, whichever of its results.
+            let slots =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
                 NodeId::Pending(count) => {
-                    if count == 1 {
+                    if count <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(count - 1));
+                        self.set_id(user, NodeId::Pending(count - slots));
                     }
                 }
                 NodeId::New => {}
                 NodeId::Unanalyzed => {
                     let operands = self.dag.node(SDValue { node: user, res: 0 }).ops.len() as u32;
-                    if operands == 1 {
+                    if operands <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(operands - 1));
+                        self.set_id(user, NodeId::Pending(operands - slots));
                     }
                 }
                 NodeId::Ready | NodeId::Processed => {}

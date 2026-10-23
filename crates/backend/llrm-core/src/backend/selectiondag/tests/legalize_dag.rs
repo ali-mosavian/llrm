@@ -10,7 +10,7 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
+    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -94,4 +94,21 @@ fn a_custom_lowering_sees_its_operands_as_built() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Add);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Add, "the inner one was lowered too");
+}
+
+/// `1 << x` with an `i32` amount (the bit-test switch makes it) reached
+/// selection with the amount in the wrong type, and the shift patterns, which
+/// take an `i8` count, never matched: three `shl` left unselected in the 6-case
+/// switch. The pin adjusts it in `LegalizeOp`.
+#[test]
+fn a_shift_amount_is_made_an_i8() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let (one, amount) = (dag.get_constant(1, EVT::I32), load(&mut dag, EVT::I32, 1));
+    let shifted = dag.get_node(ISD::Shl, EVT::I32, &[one, amount]);
+    dag.set_root(shifted);
+    DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Shl);
+    assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I8);
 }

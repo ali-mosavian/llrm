@@ -76,6 +76,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [segment-cast-audit](segment-cast-audit.md) | Casts through the selector space: audit |
 | [selectiondag-c2-plan](selectiondag-c2-plan.md) | C2: m16 patterns for the DAG selector |
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
+| [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
 | [shared-se](shared-se.md) | One ScalarEvolution across the loop passes — w-3, plan note 2026-10-28 |

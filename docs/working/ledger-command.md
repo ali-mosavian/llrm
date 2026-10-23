@@ -10,6 +10,18 @@ valgrind --tool=callgrind --callgrind-out-file=OUT.cg DIST/llrm-c -m32 -mabi=sys
   -o REAL_FILE.o qbq-llrm/src/render/d_faces.c
 ```
 
+The pin side is the same file, flags and `-I` set, with `-c -o` to a real file (encoder and object write included, 553 MC frames in
+its profile; not `-S`, not `/dev/null`):
+
+```bash
+valgrind --tool=callgrind --callgrind-out-file=CLANG.cg clang -w -m32 -march=i486 -O2 \
+  -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near= \
+  -I qbq-llrm/src -I qbq-llrm/src/render -I qbq-llrm/src/game -I qbq-llrm/src/host -I qbq-llrm/src/qgl \
+  -c -o REAL_FILE.o qbq-llrm/src/render/d_faces.c
+```
+
+QCport's pin side adds `-std=gnu89 -DQCPORT_NATIVE_TEST` and QCport's `-I` set. `-w` only silences warnings.
+
 `-o` goes to a real file (`/dev/null` skips the object write: emit reads 0). The number is the `summary:` line of OUT.cg, written
 in the body as `d_faces qbq-llrm: BASE -> NEW M Ir`. Other programs (QCport's `render/d_faces.c`, which needs its struct-size
 asserts removed at m32; see `qcsrc`) may be added, labelled with the program's name.

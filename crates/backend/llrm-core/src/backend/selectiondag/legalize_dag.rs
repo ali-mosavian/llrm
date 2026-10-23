@@ -40,7 +40,7 @@ use std::collections::HashSet;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
-use super::isd::ISD;
+use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
 
@@ -151,11 +151,46 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
     }
 
+    /// `LegalizeOp`'s adjustment of a shift or rotate amount to the target's
+    /// shift amount type ([L1298][pin]; X86 has `i8` for scalars):
+    /// `getShiftAmountOperand` on the amount, which is operand 1, or
+    /// operand 2 of a funnel shift or a double-width shift.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1298
+    fn fix_shift_amount(
+        &mut self,
+        n: u32,
+    ) -> u32 {
+        let at = SDValue { node: n, res: 0 };
+        let amount_at = match self.dag.opcode(at) {
+            ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotl | ISD::Rotr => 1,
+            ISD::FShl | ISD::FShr | ISD::ShlParts | ISD::SrlParts | ISD::SraParts => 2,
+            _ => return n,
+        };
+        let amount = self.dag.operand(at, amount_at);
+        let want = EVT::I8;
+        if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
+            return n;
+        }
+        let mut ops: Vec<SDValue> = (0..=amount_at).map(|i| self.dag.operand(at, i)).collect();
+        ops[amount_at] = self.dag.get_zext_or_trunc(amount, want);
+        let new = self.dag.update_node_operands(n, &ops);
+        if new != n {
+            let results = self.dag.node(at).values.len() as u8;
+            for res in 0..results {
+                self.replace_node(SDValue { node: n, res }, SDValue { node: new, res });
+            }
+        }
+        new
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
         n: u32,
     ) -> Result<(), LegalizeError> {
+        let n = self.fix_shift_amount(n);
         let node = SDValue { node: n, res: 0 };
         if matches!(self.dag.opcode(node), ISD::TargetConstant | ISD::Register) {
             return Ok(());
@@ -168,6 +203,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Simple(_) => self.tli.operation_action(self.dag.opcode(node), vt),
             EVT::Int(_) => Action::Expand,
         };
+        if self.dag.opcode(node) == ISD::SetCC
+            && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
+            && self.tli.cond_code_action(cc, operand) == Action::Expand
+        {
+            action = Action::Expand;
+        }
         if action == Action::Custom {
             if let Some(result) = self.hooks.lower_operation(self.dag, node) {
                 if result != node {
@@ -206,6 +247,23 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" })
             }
         }
+    }
+
+    /// `LegalizeSetCCCondCode` for the two codes that need two compares:
+    /// `oeq` is `eq` and ordered, `une` is `ne` or unordered.
+    fn expand_setcc_code(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
+        let (first, second, combine) = match cc {
+            CondCode::SetOEq => (CondCode::SetEq, CondCode::SetO, ISD::And),
+            CondCode::SetUNe => (CondCode::SetNe, CondCode::SetUo, ISD::Or),
+            _ => return None,
+        };
+        let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
+        let (one, other) = (self.dag.get_setcc(vt, lhs, rhs, first), self.dag.get_setcc(vt, lhs, rhs, second));
+        Some(self.dag.get_node(combine, vt, &[one, other]))
     }
 
     /// `ExpandNode`, for the cases translated: the replacement for each result
@@ -247,6 +305,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::Undef | ISD::Poison => {
+                // `ExpandNode`: zero of the type.
+                Some(vec![if vt.is_integer() { self.dag.get_constant(0, vt) } else { self.dag.get_constant_fp(0, vt) }])
+            }
+            ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
@@ -263,6 +326,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     volatile: false,
                     base: MemBase::Unknown,
                     ext: None,
+                    space: 0,
                 };
                 let loaded = self.dag.get_load(pointer, chain, src, info);
                 Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
@@ -427,7 +491,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => 4,
         };
         let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
-        let info = MemInfo { mem_vt: pool_vt, align, volatile: false, base: MemBase::ConstantPool(entry), ext: None };
+        let info = MemInfo {
+            mem_vt: pool_vt,
+            align,
+            volatile: false,
+            base: MemBase::ConstantPool(entry),
+            ext: None,
+            space: 0,
+        };
         let chain = self.dag.entry_node();
         let loaded = self.dag.get_load(vt, chain, index, info);
         self.replace_node(node, loaded);
