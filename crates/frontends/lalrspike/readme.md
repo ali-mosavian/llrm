@@ -109,6 +109,21 @@ Release build, 737 files, 766 KB: old lexer 33.5 ms (23 MB/s), logos 12.5 ms
 (63 MB/s), 2.7x. The old one's cost was the linear scan of the token table, up to
 three times per word, plus `String` per logical line.
 
+### Feeding lalrpop from the lexer
+
+`parse_qb_stream(source, dialect, &mut spans)` hands lalrpop an iterator over the
+logos lexer: no `Vec<Token>`, no text for identifiers, strings and reals (the
+parser needs kinds only; each token's span goes to `spans`, indexed as the tree's
+`At` nodes, so a later pass re-reads the text from the span). `terminal()` is now an
+array lookup instead of a hash lookup per token. QuickrBASIC's dialect is not
+streamed. `streaming_tokens_to_the_parser_builds_the_same_tree` asserts the same
+tree and the same spans as the vector path on every tracked program in three
+dialects.
+
+Same 737 files: old lexer + token vector + lalrpop 73.6 ms (10.7 MB/s); streamed
+49.8 ms (15.8 MB/s). The parser itself is 36.9 ms of that, so lexing is now about
+a quarter of the time and lalrpop's tables the rest.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

@@ -28,21 +28,37 @@ pub enum Tok {
     FnWord,
 }
 
-#[derive(Debug)]
-pub enum Never {}
+/// What the lexer can fail with, when the parser pulls tokens from it.
+pub type Failure = qbfront::LexError;
 
-pub type Spanned = Result<(usize, Tok, usize), Never>;
+pub type Spanned = Result<(usize, Tok, usize), Failure>;
 
-fn by_name() -> &'static HashMap<&'static str, Kw> {
-    static TABLE: OnceLock<HashMap<&'static str, Kw>> = OnceLock::new();
-    TABLE.get_or_init(|| NAMES.iter().copied().collect())
+/// The terminal of each reserved id.
+fn reserved() -> &'static [Option<Tok>] {
+    static TABLE: OnceLock<Vec<Option<Tok>>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let by_name: HashMap<&str, Kw> = NAMES.iter().copied().collect();
+        TOKENS.iter().map(|(name, ..)| by_name.get(name).map(|&kw| Tok::Kw(kw))).collect()
+    })
+}
+
+/// Whether a word is a reserved word's spelling, so that a longer span is its suffixed name.
+fn alphabetic(id: u16) -> Option<usize> {
+    static TABLE: OnceLock<Vec<Option<usize>>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        TOKENS.iter().map(|(_, spelling, ..)| spelling.starts_with(|c: char| c.is_ascii_alphabetic()).then_some(spelling.len())).collect()
+    })[usize::from(id)]
+}
+
+/// `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the suffix makes it a name.
+pub fn suffixed(id: u16, width: usize) -> bool {
+    alphabetic(id).is_some_and(|spelling| width == spelling + 1)
 }
 
 pub fn terminal(kind: &TokenKind) -> Tok {
     match kind {
         TokenKind::Reserved(id) => {
-            let (name, ..) = TOKENS[usize::from(*id)];
-            Tok::Kw(by_name()[name])
+            reserved()[usize::from(*id)].clone().expect("every reserved word has a terminal")
         }
         TokenKind::ExtensionKeyword(_) => Tok::Ext,
         TokenKind::Identifier(_) => Tok::Ident,
@@ -68,15 +84,8 @@ pub fn tokens(source: &[Token]) -> Vec<Spanned> {
         .map(|(at, token)| {
             let apart = matches!(&token.kind, TokenKind::Identifier(word) if word == "FN") && name(at + 1);
             // `type$`, `key%`: the lexer takes a suffixed word for its bare keyword; the suffix makes it a name
-            let suffixed = matches!(&token.kind, TokenKind::Reserved(id) if suffixed_name(*id, token));
+            let suffixed = matches!(&token.kind, TokenKind::Reserved(id) if suffixed(*id, token.span.end - token.span.start));
             Ok((at, if apart { Tok::FnWord } else if suffixed { Tok::Ident } else { terminal(&token.kind) }, at + 1))
         })
         .collect()
-}
-
-fn suffixed_name(id: u16, token: &Token) -> bool {
-    let (_, spelling, ..) = TOKENS[usize::from(id)];
-    spelling.starts_with(|c: char| c.is_ascii_alphabetic())
-        && token.span.end - token.span.start > spelling.len()
-        && token.span.end - token.span.start == spelling.len() + 1
 }

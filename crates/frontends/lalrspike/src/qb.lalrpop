@@ -11,7 +11,7 @@ grammar;
 
 extern {
     type Location = usize;
-    type Error = crate::qb_tokens::Never;
+    type Error = crate::qb_tokens::Failure;
 
     enum Tok {
         "tkEtInteger" => Tok::Kw(Kw::EtInteger),
