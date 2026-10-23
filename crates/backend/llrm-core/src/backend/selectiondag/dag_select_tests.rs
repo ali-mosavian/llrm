@@ -31,6 +31,18 @@ impl super::emit::GlobalMap for NoGlobals {
     }
 }
 
+struct NoTemps;
+
+impl super::x86_preprocess::FrameObjects for NoTemps {
+    fn create_stack_temporary(
+        &mut self,
+        _size: u32,
+        _align: u32,
+    ) -> i32 {
+        panic!("this test makes no stack temporary")
+    }
+}
+
 struct Info;
 
 impl SchedInfo for Info {
@@ -121,6 +133,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &ctx,
             &mut super::emit::EmitState::default(),
             0,
+            &machine,
+            &mut NoTemps,
         )
         .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
         for b in emitted.blocks {
@@ -169,7 +183,7 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }).expect("legalizes");
+    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &machine).expect("legalizes");
     let root = built.dag.get_root();
     let mut seen = std::collections::HashSet::new();
     let mut work = vec![root.node];

@@ -99,3 +99,23 @@ fn a_load_of_a_global_names_its_symbol() {
     };
     assert!(named.is_some_and(|a| a.index == 0), "{first:?}");
 }
+
+/// A stack temporary is a cell below BP at `-depth`, each aligned and below
+/// the last; the frame reports the depth the slots take. A slot at 0 would
+/// overwrite the saved frame pointer.
+#[test]
+fn stack_temporaries_are_cells_below_the_frame_pointer() {
+    use super::dag_function::{Frame, Temporaries};
+    use super::emit::FrameMap;
+    use super::x86_preprocess::FrameObjects;
+    let frame = Frame::new(vec![8, 12]);
+    let mut temps = Temporaries(&frame);
+    let (first, second) = (temps.create_stack_temporary(4, 4), temps.create_stack_temporary(8, 8));
+    let disp = |index| match frame.cell(index, 4).expect("a cell").addr {
+        Some(addr) => addr.disp,
+        None => panic!("a frame cell"),
+    };
+    assert_eq!((first, second), (0, 1));
+    assert_eq!((disp(0), disp(1)), (-4, -16), "the 8-byte slot is aligned below the first");
+    assert_eq!(disp(-1), 8, "the first parameter keeps its cell");
+}
