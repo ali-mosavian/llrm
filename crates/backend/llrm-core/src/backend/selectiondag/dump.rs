@@ -123,7 +123,8 @@ impl SelectionDAG {
                 write!(text, "<{} 0x0>", self.block_names[block as usize]).ok();
             }
             NodeData::PhysReg(reg) => {
-                // the allocator's x87 registers are iced's MM0..MM6, the pin's FP0..FP6
+                // the allocator's x87 registers are iced's MM0..MM6, the pin's
+                // FP0..FP6
                 let name = format!("{reg:?}").to_lowercase();
                 write!(text, " ${}", name.strip_prefix("mm").map_or(name.clone(), |n| format!("fp{n}"))).ok();
             }
