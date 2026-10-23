@@ -53,9 +53,13 @@ pub struct TargetLoweringInfo {
 }
 
 impl TargetLoweringInfo {
-    /// `legal` are the integer types a register class holds (`addRegisterClass`);
-    /// `far` says the target has the far pointer type.
-    pub fn new(legal: &[MVT], far: bool) -> TargetLoweringInfo {
+    /// `legal` are the integer types a register class holds
+    /// (`addRegisterClass`); `far` says the target has the far pointer
+    /// type.
+    pub fn new(
+        legal: &[MVT],
+        far: bool,
+    ) -> TargetLoweringInfo {
         let is_legal = |vt: MVT| legal.contains(&vt);
         let largest = INTEGERS.iter().rposition(|&vt| is_legal(vt)).expect("no integer register class");
         let mut integers = INTEGERS.map(|vt| (TypeAction::Legal, vt));
@@ -84,7 +88,10 @@ impl TargetLoweringInfo {
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
-    pub fn type_conversion(&self, vt: EVT) -> (TypeAction, EVT) {
+    pub fn type_conversion(
+        &self,
+        vt: EVT,
+    ) -> (TypeAction, EVT) {
         match vt {
             EVT::Simple(MVT::Far) => {
                 assert!(self.far, "this target has no far pointer");
@@ -102,7 +109,11 @@ impl TargetLoweringInfo {
                     let rounded = EVT::integer(if bits < 8 { 8 } else { bits.next_power_of_two() });
                     let next = self.type_conversion(rounded);
                     // Avoid multi-step promotion.
-                    return if next.0 == TypeAction::PromoteInteger { next } else { (TypeAction::PromoteInteger, rounded) };
+                    return if next.0 == TypeAction::PromoteInteger {
+                        next
+                    } else {
+                        (TypeAction::PromoteInteger, rounded)
+                    };
                 }
                 (TypeAction::ExpandInteger, EVT::integer(bits / 2))
             }
@@ -110,15 +121,24 @@ impl TargetLoweringInfo {
     }
 
     /// `getSetCCResultType`: X86 compares into an `i8`, whatever the operands.
-    pub fn set_cc_result_type(&self, _operand: EVT) -> EVT {
+    pub fn set_cc_result_type(
+        &self,
+        _operand: EVT,
+    ) -> EVT {
         EVT::I8
     }
 
-    pub fn type_action(&self, vt: EVT) -> TypeAction {
+    pub fn type_action(
+        &self,
+        vt: EVT,
+    ) -> TypeAction {
         self.type_conversion(vt).0
     }
 
-    pub fn is_type_legal(&self, vt: EVT) -> bool {
+    pub fn is_type_legal(
+        &self,
+        vt: EVT,
+    ) -> bool {
         self.type_action(vt) == TypeAction::Legal
     }
 }

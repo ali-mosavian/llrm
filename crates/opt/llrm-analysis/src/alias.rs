@@ -159,7 +159,7 @@ use crate::memory::{
     object_of, wrapped,
 };
 use crate::num::Num as BigInt;
-use crate::ranges::{self, Interval, Lookup};
+use crate::ranges::{self, Interval};
 use crate::regions;
 use crate::sliceset::{self, Shared, SliceSet};
 
@@ -2345,7 +2345,8 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
     let mut elsewhere_unknown = None;
     let mut out = llrm_mir::dense::IdMap::default();
     // Calls reaching the same references share the one list.
-    // Hashed by Fx: the default SipHash of these lists was 27 M Ir on d_faces -O2.
+    // Hashed by Fx: the default SipHash of these lists was 27 M Ir on d_faces
+    // -O2.
     let mut shared: llrm_support::hash::HashMap<Vec<MemRef>, Rc<[MemRef]>> = llrm_support::hash::HashMap::default();
     let mut share = |list: Vec<MemRef>| -> Rc<[MemRef]> {
         if let Some(one) = shared.get(&list) {
@@ -3610,26 +3611,54 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
-/// `ranges::bounded`'s facts, the manager's where the unit carries them for the
-/// registers asked of, else worked out.
-enum Bounded<'a> {
-    Held(&'a ranges::Bounds),
-    Worked(ranges::Facts),
-}
-
-impl Bounded<'_> {
-    /// What is known of `value` at block `at`.
-    fn of(
-        &self,
-        unit: &Unit,
-        value: &ValueId,
-        at: i64,
-    ) -> Option<Interval> {
-        match self {
-            Bounded::Held(held) => held.scope(unit, at).lookup(value).map(std::borrow::Cow::into_owned),
-            Bounded::Worked(worked) => worked.get(&at).and_then(|scope| scope.get(value)).cloned(),
-        }
+///
+/// DEVIATE AN1 (owner funcattrs-port, review 2026-11-13): Annotated keeps the
+/// MemRef path (Accesses/PlainAccesses consume its slices); exit: they ask
+/// BasicAA per query and Annotated is deleted.
+///
+/// DEVIATE AN2 (owner funcattrs-port, review 2026-11-13): an index's range is
+/// `computeConstantRange` at the access, with the dominator tree and no
+/// assumption cache; BasicAA's SCEV `getSignedRange` of an add recurrence is
+/// not asked, so a loop counter's interval is its ValueTracking range only.
+/// The range `analyzeVariableOffsets` finds of a variable index:
+/// `computeConstantRange` at `at` intersected with `fromKnownBits(Known,
+/// IsSigned)`, read as the signed interval of `value`; none where it is the
+/// whole type.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1973>
+fn signed_range_at(
+    unit: &Unit,
+    tree: Option<&llrm_mir::domtree::DomTree>,
+    at: InstId,
+    value: ValueId,
+) -> Option<Interval> {
+    let q = llrm_mir::valuetracking::Query {
+        context: unit.context,
+        globals: unit.globals,
+        metadata: unit.metadata,
+        function: unit.function,
+        layout: unit.layout,
+        dt: tree,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: Some(at),
+    };
+    let operand = Operand::Value(value);
+    let known = llrm_mir::valuetracking::known::compute_known_bits(&q, operand, 0);
+    let range = llrm_mir::valuetracking::range::compute_constant_range(&q, operand, false, 0).intersect_with(
+        &llrm_mir::constantrange::ConstantRange::from_known_bits(&known, true),
+        llrm_mir::constantrange::PreferredRangeType::Signed,
+    );
+    let width = range.width;
+    if range.is_full_set() || range.is_empty_set() {
+        return None;
     }
+    let signed = |bits: u128| {
+        let bits = BigInt::from(bits);
+        if bits >= BigInt::from(1_u8) << (width - 1) { bits - (BigInt::from(1_u8) << width) } else { bits }
+    };
+    Some(Interval { low: signed(range.get_signed_min()), high: signed(range.get_signed_max()), width })
 }
 
 pub fn annotated_with(
@@ -3637,32 +3666,16 @@ pub fn annotated_with(
     facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
-    let bounded = match (unit.bounds, unit.registers) {
-        (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
-            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
-                // The body's own intervals, or at a level without them (-O1:
-                // `Outer::loop_intervals`) none: a unit made for alias carries
-                // none there, one made for an induction variable's range the
-                // body's.
-                let facts = held.loops_facts();
-                assert!(
-                    (!unit.loop_intervals && facts.is_empty())
-                        || facts == ranges::bounded_solved(unit, known, None, false)?.loops_facts(),
-                    "the bounds a unit carries are not those of the body it stands over: stale"
-                );
-            }
-            Bounded::Held(held)
-        }
-        _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
-    };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
     let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
+    let tree = unit.shape.map(|shape| shape.dominance.tree(unit.function));
 
-    let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
+    let tag = |reference: &MemRef, at: InstId| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval =
-            reference.base.and_then(|base| bounded.of(unit, &base, at).or_else(|| constants.get(&base).cloned()));
+        let interval = reference
+            .base
+            .and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -3702,7 +3715,9 @@ pub fn annotated_with(
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
             let lookup = |value: ValueId| {
-                bounded.of(unit, &value, at).or_else(|| constants.get(&value).cloned()).map(|one| (value, one))
+                signed_range_at(unit, tree, at, value)
+                    .or_else(|| constants.get(&value).cloned())
+                    .map(|one| (value, one))
             };
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
@@ -3731,7 +3746,7 @@ pub fn annotated_with(
     };
 
     let mut out = IndexMap::default();
-    for (block, inst) in unit.function.walk() {
+    for (_, inst) in unit.function.walk() {
         if !matches!(
             unit.function.instruction(inst).opcode,
             Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
@@ -3739,7 +3754,7 @@ pub fn annotated_with(
             continue;
         }
         if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
-            out.insert(inst, tag(&reference, cfg::id(block))?);
+            out.insert(inst, tag(&reference, inst)?);
         }
     }
     Ok(out)

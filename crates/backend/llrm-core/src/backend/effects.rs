@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn the_rows_are_those_of_the_register_file_asked() {
         let load = Semantics {
-            name: Some("les".to_owned()),
+            name: Some("les".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 2 }), Loc::Held(Held { value: 2, width: 2 })],
             sources: vec![Loc::Mem(Mem::new(None, 4))],
             ..Semantics::new(Operation::Move)

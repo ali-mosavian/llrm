@@ -3,28 +3,42 @@
 use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+use llrm_dagisel::x86_select::select_node;
 
-use super::dagisel_adapter::DagisAdapter;
 use super::dag::{MemBase, MemInfo};
+use super::dagisel_adapter::DagisAdapter;
 use super::isd::ISD;
 use super::mvt::EVT;
 use super::{DagConfig, SDValue, SelectionDAG};
 
 fn hooks() -> X86Hooks {
-    X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32 })
+    X86Hooks::new(Options {
+        cpu: Cpu::I486,
+        opt_none: false,
+        opt_for_size: false,
+        min_size: false,
+        has_frame_pointer: true,
+        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+    })
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None }
 }
 
-fn input(dag: &mut SelectionDAG, reg: u32) -> SDValue {
+fn input(
+    dag: &mut SelectionDAG,
+    reg: u32,
+) -> SDValue {
     let entry = dag.entry_node();
     dag.get_copy_from_reg(entry, reg, EVT::I32)
 }
 
 /// The pin's name of the machine instruction a node became.
-fn machine_name(dag: &SelectionDAG, node: u32) -> &'static str {
+fn machine_name(
+    dag: &SelectionDAG,
+    node: u32,
+) -> &'static str {
     let ISD::Machine(code) = dag.nodes()[node as usize].opcode else { panic!("node {node} is not a machine node") };
     table::MACHINE_OPCODES.iter().find(|(v, _)| u32::from(*v) == code).map_or("?", |(_, n)| n)
 }
@@ -97,18 +111,49 @@ fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
     let outcome = select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), shift.node);
 
     assert_eq!(outcome, Outcome::Selected);
-    let copied = dag.nodes().iter().find_map(|node| {
-        (node.opcode == ISD::CopyToReg && matches!(dag.nodes()[node.ops[1].node as usize].data, super::NodeData::Register(r) if r == u32::from(llrm_dagisel::generated::ids::x86::CL)))
-            .then(|| node.ops[2])
-    });
+    let copied = dag
+        .nodes()
+        .iter()
+        .find_map(
+            |node| (node.opcode == ISD::CopyToReg
+                && matches!(
+                    dag.nodes()[node.ops[1].node as usize].data,
+                    super::NodeData::Register(r) if r == u32::from(llrm_dagisel::generated::ids::x86::CL)
+                ))
+            .then(|| node.ops[2]),
+        );
     assert_eq!(copied, Some(n), "CL gets n, not n + 32");
 }
 
 #[test]
 fn jump_table_external_symbol_and_register_mask_nodes_have_the_pins_numbers() {
-    use super::dagisel_adapter::pin_opcode;
     use llrm_dagisel::generated::ids::isd as pin;
+
+    use super::dagisel_adapter::pin_opcode;
     assert_eq!(pin_opcode(ISD::RegisterMask), pin::RegisterMask);
     assert_eq!(pin_opcode(ISD::JumpTable), pin::JumpTable);
     assert_eq!(pin_opcode(ISD::TargetExternalSymbolNode), pin::TargetExternalSymbol);
+}
+
+#[test]
+fn a_return_node_is_selected_to_ret() {
+    use super::x86isd;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let ret = dag.get_node(x86isd::RET_GLUE, EVT::OTHER, &[entry, zero]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+
+    assert_eq!(select_node(&Selector::new(table::TABLE), &mut adapter, &mut hooks(), ret.node), Outcome::Selected);
+
+    assert_eq!(machine_name(&dag, ret.node), "RET");
+}
+
+#[test]
+fn a_target_code_is_named_or_already_the_pins_number() {
+    use llrm_dagisel::generated::ids::x86isd as pin;
+
+    use super::dagisel_adapter::pin_opcode;
+    assert_eq!(pin_opcode(super::x86isd::CALL), pin::CALL, "sdag-a's private code, by name");
+    assert_eq!(pin_opcode(ISD::Target(pin::Wrapper)), pin::Wrapper, "sdag-b's lowering writes the pin's number");
 }

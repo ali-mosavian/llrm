@@ -1,10 +1,10 @@
 //! LoopStrengthReduce does not preserve GlobalsAA at the pin
 //! (`LoopStrengthReducePass::run` returns `getLoopPassPreservedAnalyses()`): a
 //! pointer induction variable over a global array makes the global's address
-//! escape to the pass that reads it. Ours kept the module's `GlobalsModRef` past
-//! `lsr` as if nothing escaped, and `LLRM_CHECK_STALE` failed on 12 front-end
-//! compiles after the call footprints came from it ("lsr added a memory
-//! operation: the frozen globals-modref no longer covers the module").
+//! escape to the pass that reads it. Ours kept the module's `GlobalsModRef`
+//! past `lsr` as if nothing escaped, and `LLRM_CHECK_STALE` failed on 12
+//! front-end compiles after the call footprints came from it ("lsr added a
+//! memory operation: the frozen globals-modref no longer covers the module").
 
 use std::process::Command;
 
@@ -35,10 +35,6 @@ fn lsr_leaves_no_stale_globals_modref_in_the_front_end_compiles() {
             .env("LLRM_CHECK_STALE", "1")
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{program} {target} {level}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success(), "{program} {target} {level}: {}", String::from_utf8_lossy(&output.stderr));
     }
 }

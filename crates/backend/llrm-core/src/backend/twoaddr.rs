@@ -70,8 +70,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 /// Operations that read their destination.
 pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
 
-/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE TA-4,
-/// twoaddress.rs).
+/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
+/// TA-4, twoaddress.rs).
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
@@ -133,7 +133,8 @@ pub fn tied(
                 changed = true;
                 one = Arc::clone(chosen);
             }
-            // `rescheduleMIBelowKill`: a tied instruction whose source dies in a later reader goes below it.
+            // `rescheduleMIBelowKill`: a tied instruction whose source dies in
+            // a later reader goes below it.
             if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
                 changed = true;
                 continue;
@@ -148,6 +149,12 @@ pub fn tied(
                 changed = true;
                 insns.push(three);
                 place += 1;
+                continue;
+            }
+            // `rescheduleKillAboveMI`: the reader that kills the source goes
+            // above the tied instruction.
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+                changed = true;
                 continue;
             }
             place += 1;
@@ -361,12 +368,7 @@ fn _move(
     into: Loc,
     out_of: Loc,
 ) -> Semantics {
-    Semantics {
-        name: Some("mov".to_owned()),
-        dests: vec![into],
-        sources: vec![out_of],
-        ..Semantics::new(Operation::Move)
-    }
+    Semantics { name: Some("mov".into()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
 }
 
 /// Whether `what` writes the register of its first source: x86's two-address
@@ -409,8 +411,15 @@ fn _untied(
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
-    let movement =
+    let mut movement =
         _inserted(one, _move(Loc::Held(*into), first.clone()), vec![into.value], first_value.into_iter().collect());
+    // The copy of an undef source reads it as undef
+    // (TwoAddressInstructionPass.cpp: `RegBUndef`).
+    if let Some(value) = first_value.filter(|value| one.undefs.contains(value)) {
+        let copy = Arc::make_mut(&mut movement);
+        copy.uses.retain(|used| *used != value);
+        copy.undefs.push(value);
+    }
     let remaining: BTreeSet<u32> = what.sources[1..].iter().flat_map(ir::values).map(|value| value.value).collect();
     let uses: Vec<u32> = one
         .uses
@@ -423,6 +432,7 @@ fn _untied(
     sources.extend(what.sources[1..].iter().cloned());
     fixed.what = Some(Semantics { sources, ..what.clone() });
     fixed.uses = std::iter::once(into.value).chain(uses).collect::<IndexSet<u32>>().into_iter().collect();
+    fixed.undefs.retain(|value| first_value != Some(*value) || remaining.contains(value));
     Some(vec![movement, Arc::new(fixed)])
 }
 
@@ -496,7 +506,7 @@ mod tests {
 
     fn addition(name: &str) -> Insn {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![held(3, 4)],
             sources: vec![held(1, 4), held(2, 4)],
             ..Semantics::new(Operation::Binary)
@@ -517,7 +527,7 @@ mod tests {
         value: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(value, 4)],
             sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
@@ -551,7 +561,7 @@ mod tests {
         second: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![held(into, 4)],
             sources: vec![held(first, 4), held(second, 4)],
             ..Semantics::new(Operation::Binary)
@@ -596,7 +606,7 @@ mod tests {
         use llrm_lir::registers::RegId;
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
-                name: Some("add".to_owned()),
+                name: Some("add".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(first, 4), held(second, 4)],
                 ..Semantics::new(Operation::Binary)
@@ -604,7 +614,7 @@ mod tests {
             Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![into], vec![first, second]))
         };
         let nothing = |at: i64| {
-            let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
             Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         };
         let mut arrival = nothing(0);
@@ -677,7 +687,7 @@ mod tests {
     #[test]
     fn test_funnel_shift_copies_its_low_source_into_the_destructive_destination() {
         let what = Semantics {
-            name: Some("shrd".to_owned()),
+            name: Some("shrd".into()),
             dests: vec![held(3, 4)],
             sources: vec![held(1, 4), held(2, 4), Loc::Imm(Imm { value: 9, width: 1, address: None })],
             ..Semantics::new(Operation::Funnel)
@@ -698,7 +708,7 @@ mod tests {
     #[test]
     fn test_an_update_copied_back_is_made_in_place() {
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let add = Insn::new(
             0,
@@ -745,7 +755,7 @@ mod tests {
     #[test]
     fn test_an_update_whose_old_value_is_still_copied_is_not_made_in_place() {
         let what = |op, name: &str, dests, sources| {
-            Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+            Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
         };
         let add = Insn::new(
             0,
@@ -849,7 +859,7 @@ mod tests {
         from: u32,
     ) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(into, 4)],
             sources: vec![held(from, 4)],
             ..Semantics::new(Operation::Move)
@@ -896,7 +906,7 @@ mod tests {
         name: &str,
     ) -> Vec<Arc<Insn>> {
         let what = Semantics {
-            name: Some(name.to_owned()),
+            name: Some(name.into()),
             dests: vec![held(8, 4)],
             sources: vec![held(7, 4), Loc::Imm(Imm { value: step, width: 4, address: None })],
             ..Semantics::new(Operation::Binary)
@@ -906,23 +916,33 @@ mod tests {
     }
 
     fn names_of(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     fn of(insns: Vec<Arc<Insn>>) -> LirBody {
         LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
     }
 
-    /// pop's `x &= x - 1`: the pin's `convertInstTo3Addr` makes the `dec` of a live `x` a `lea`
-    /// (TwoAddressInstructionPass.cpp#L1402), so no `t := mov x` pins `t` to `x`'s register; the
-    /// old pass copied, and x_popcount kept a `mov` per iteration (+10.4% clocks, AM-TA-1).
+    /// pop's `x &= x - 1`: the pin's `convertInstTo3Addr` makes the `dec` of a
+    /// live `x` a `lea` (TwoAddressInstructionPass.cpp#L1402), so no `t :=
+    /// mov x` pins `t` to `x`'s register; the old pass copied, and
+    /// x_popcount kept a `mov` per iteration (+10.4% clocks, AM-TA-1).
     #[test]
     fn test_an_add_of_a_live_source_with_dead_flags_is_a_lea_not_a_copy() {
         let got = tied(&of(live_source_add(-1, "add")), All);
         let names = names_of(&got);
         assert_eq!(names.iter().filter(|name| *name == "lea").count(), 1, "{names:?}");
-        assert_eq!(names.iter().filter(|name| *name == "mov").count(), 2, "the def of v7 and the copy for the tied and: {names:?}");
-        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().unwrap();
+        assert_eq!(
+            names.iter().filter(|name| *name == "mov").count(),
+            2,
+            "the def of v7 and the copy for the tied and: {names:?}"
+        );
+        let lea = got
+            .insns()
+            .iter()
+            .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+            .cloned()
+            .unwrap();
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!((cell.base.map(|held| held.value), cell.offset), (Some(7), -1));
     }
@@ -930,13 +950,18 @@ mod tests {
     #[test]
     fn test_a_sub_of_an_immediate_is_a_lea_of_its_negation() {
         let got = tied(&of(live_source_add(5, "sub")), All);
-        let lea = got.insns().iter().find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea"))).cloned().expect("a lea");
+        let lea = got
+            .insns()
+            .iter()
+            .find(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("lea")))
+            .cloned()
+            .expect("a lea");
         let Loc::Mem(cell) = &lea.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
         assert_eq!(cell.offset, -5);
     }
 
-    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`, `[a*8]`; a shift of 4 or a
-    /// shift of a register stays.
+    /// `SHL32ri` by 1 to 3 of a live source is a `lea` too: `[a + a]`, `[a*4]`,
+    /// `[a*8]`; a shift of 4 or a shift of a register stays.
     #[test]
     fn test_a_shift_by_one_to_three_of_a_live_source_is_a_scaled_lea() {
         for (shift, scale, base) in [(1, 1, true), (2, 4, false), (3, 8, false)] {
@@ -953,9 +978,10 @@ mod tests {
         assert!(!names_of(&tied(&of(live_source_add(4, "shl")), All)).contains(&"lea".to_owned()));
     }
 
-    /// A commuted instruction is a new one, which the intervals do not know: the kill of its tied
-    /// source is asked of the instruction as it was (the sweep failed 120 of 568 objects with "Instruction
-    /// not found in maps" on the first version of the conversion).
+    /// A commuted instruction is a new one, which the intervals do not know:
+    /// the kill of its tied source is asked of the instruction as it was
+    /// (the sweep failed 120 of 568 objects with "Instruction not found in
+    /// maps" on the first version of the conversion).
     #[test]
     fn test_a_commuted_add_is_still_asked_about_its_kills_by_the_instruction_it_was() {
         let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 1), read(4, 3)];
@@ -963,8 +989,9 @@ mod tests {
         assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
     }
 
-    /// A target that reads addresses through a prefix (m16) converts adds and subs and leaves a shift to
-    /// the peephole, which fuses it with the add after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
+    /// A target that reads addresses through a prefix (m16) converts adds and
+    /// subs and leaves a shift to the peephole, which fuses it with the add
+    /// after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
     /// `lea eax, [ecx+ecx]; add eax, ecx` (test_m16_emits_386_forms).
     #[test]
     fn test_the_prefixed_mode_converts_an_add_and_leaves_a_shift() {
@@ -974,7 +1001,8 @@ mod tests {
         assert!(!lea(&tied(&of(live_source_add(1, "shl")), AddSub)));
     }
 
-    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied instruction.
+    /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied
+    /// instruction.
     fn lea_of(
         at: i64,
         into: u32,
@@ -983,7 +1011,7 @@ mod tests {
         use crate::model::ir::Mem;
         let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
         let what = Semantics {
-            name: Some("lea".to_owned()),
+            name: Some("lea".into()),
             dests: vec![held(into, 4)],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Address)
@@ -998,8 +1026,9 @@ mod tests {
         names_of(body).iter().position(|one| one == name).unwrap_or_else(|| panic!("no {name}"))
     }
 
-    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more, by a `lea`, and dies
-    /// there: the add goes below the `lea`, so `v1` dies at the add and the copy it needs joins.
+    /// `rescheduleMIBelowKill`: `v3 := add v1, 5` while `v1` is read once more,
+    /// by a `lea`, and dies there: the add goes below the `lea`, so `v1`
+    /// dies at the add and the copy it needs joins.
     #[test]
     fn test_a_tied_add_goes_below_the_one_reader_that_kills_its_source() {
         let add = live_source_add(5, "add")[1].clone();
@@ -1009,20 +1038,62 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
     }
 
-    /// The pin's checks: a kill that is a copy, or a call between, leaves the add where it was.
+    /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down
+    /// (a load stays), so the `lea` that kills its source goes up above it.
+    #[test]
+    fn test_the_reader_that_kills_the_source_of_a_tied_add_with_a_load_goes_above_it() {
+        use crate::model::ir::Mem;
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(8, 4)],
+            sources: vec![held(7, 4), Loc::Mem(Mem::new(None, 4))],
+            ..Semantics::new(Operation::Binary)
+        };
+        let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
+        let insns = vec![imm_def(0, 7), add, lea_of(2, 5, 7), read(3, 8), read(4, 5)];
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// The pin's checks: a kill that is a copy, or a call between, leaves the
+    /// add where it was.
     #[test]
     fn test_a_tied_add_stays_where_the_kill_is_a_copy_or_something_stands_between() {
         let add = || live_source_add(5, "add")[1].clone();
         let copy_kill = vec![imm_def(0, 7), add(), copy_insn(2, 5, 7), read(3, 8), read(4, 5)];
         let got = tied(&of(copy_kill), Off);
-        assert!(position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2);
+        assert!(
+            position(&got, "add") < position(&got, "mov") || names_of(&got).iter().filter(|n| *n == "mov").count() >= 2
+        );
         let call = {
-            let what = Semantics { name: Some("call".to_owned()), ..Semantics::new(Operation::Call) };
+            let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
             Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![], vec![]))
         };
         let blocked = vec![imm_def(0, 7), add(), call, lea_of(3, 5, 7), read(4, 8), read(5, 5)];
         let got = tied(&of(blocked), Off);
         assert!(position(&got, "add") < position(&got, "lea"), "{:?}", names_of(&got));
+    }
+
+    /// `s.a + s.c + a`: the sum `t1` then `t1 + a` with `a` loaded just before.
+    /// The pin folds the load into the add (`addl 16(%esp), %eax`); tying
+    /// the loaded value instead gave `mov eax, [a]; add eax, ecx` and `push
+    /// ecx` (c32/regs.c `by_value`: 5 instructions against 3).
+    #[test]
+    fn test_a_value_a_load_defines_is_not_the_operand_that_is_tied() {
+        use crate::model::ir::Mem;
+        let load = {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![held(3, 4)],
+                sources: vec![Loc::Mem(Mem::new(None, 4))],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![3], vec![]))
+        };
+        // v1, v2 defined; t1 = v1 + v2 (v8 here: `sum_into` into 8); v3 loaded
+        // after it; v9 = t1 + v3.
+        let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 8, 1, 2), load, sum_into(4, 9, 8, 3), read(5, 9)];
+        assert!(commuted(insns, 4, &Fixed::default()).is_none());
     }
 
     #[test]
@@ -1037,7 +1108,7 @@ mod tests {
         flags_live[2] = Arc::new(Insn::new(
             2,
             Some((2, 2)),
-            Some(Semantics { name: Some("jne".to_owned()), target: Some(0), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some("jne".into()), target: Some(0), ..Semantics::new(Operation::Branch) }),
             vec![],
             vec![],
         ));
@@ -1064,7 +1135,7 @@ mod tests {
     fn test_two_address_materializes_a_constant_first_operand() {
         let (result, source) = (held(900, 2), held(901, 2));
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![result.clone()],
             sources: vec![imm(21, 2), source.clone()],
             ..Semantics::new(Operation::Binary)
@@ -1082,7 +1153,7 @@ mod tests {
     fn test_two_address_multiply_preserves_its_first_factor() {
         let (result, first, second) = (held(900, 2), held(901, 2), held(902, 2));
         let what = Semantics {
-            name: Some("imul".to_owned()),
+            name: Some("imul".into()),
             dests: vec![result.clone()],
             sources: vec![first.clone(), second.clone()],
             ..Semantics::new(Operation::Multiply)
@@ -1099,7 +1170,7 @@ mod tests {
     fn test_two_address_copy_ends_the_original_source_use() {
         let (result, source) = (held(900, 2), held(901, 2));
         let what = Semantics {
-            name: Some("add".to_owned()),
+            name: Some("add".into()),
             dests: vec![result],
             sources: vec![source, imm(21, 2)],
             ..Semantics::new(Operation::Binary)
@@ -1118,7 +1189,7 @@ mod tests {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
-                name: Some("add".to_owned()),
+                name: Some("add".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(first, 4), held(second, 4)],
                 ..Semantics::new(Operation::Binary)
@@ -1127,7 +1198,7 @@ mod tests {
         };
         let copy = |at: i64, into: u32, from: u32| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![held(into, 4)],
                 sources: vec![held(from, 4)],
                 ..Semantics::new(Operation::Move)
@@ -1143,11 +1214,13 @@ mod tests {
         );
         let before = crate::backend::allocate::live_rows_walks(&input);
         let got = tied(&input, Default::default());
-        let names: Vec<_> = got.insns().iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+        let names: Vec<_> =
+            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
-        // The pin shares one LiveIntervals with the coalescer; here the kills are one backward scan
-        // over the live-out rows and none is built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        // The pin shares one LiveIntervals with the coalescer; here the kills
+        // are one backward scan over the live-out rows and none is
+        // built (TA-6): building one per phase cost +3.0 M Ir at m32.
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
         assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);

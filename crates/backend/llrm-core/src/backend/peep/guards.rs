@@ -264,7 +264,7 @@ pub fn split_push_smaller(
 ) -> bool {
     let push = |width: u32, value: i64| {
         let what = ir::Semantics {
-            name: Some("push".to_owned()),
+            name: Some("push".into()),
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };
@@ -544,9 +544,9 @@ fn delayed(
         return false;
     }
     // A write to memory crosses where the cell still holds after it
-    // (`spiller::_keeps`: the optimizer's proofs included); anything else
-    // must write registers alone, which the lane check below keeps from the
-    // load's.
+    // (`crate::backend::bodyfacts::_keeps`: the optimizer's proofs included);
+    // anything else must write registers alone, which the lane check below
+    // keeps from the load's.
     let writes_memory = crossed_what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)));
     let load_cell = match load.what.as_ref().map(|what| what.sources.as_slice()) {
         Some([Loc::Mem(cell)]) => Some(cell),
@@ -554,7 +554,7 @@ fn delayed(
     };
     if writes_memory {
         let Some(cell) = load_cell else { return false };
-        if !crate::backend::spiller::_keeps(crossed, load, cell, true, cx.facts.body()) {
+        if !crate::backend::bodyfacts::_keeps(crossed, load, cell, true, cx.facts.body()) {
             return false;
         }
     } else if !(matches!(

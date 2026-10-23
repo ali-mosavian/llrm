@@ -136,7 +136,8 @@ pub fn folded(body: &LirBody) -> LirBody {
             what.sources = vec![Loc::Mem(cell)];
             let mut fused = (*push).clone();
             fused.what = Some(what);
-            fused.uses = push.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
+            fused.uses =
+                push.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
             fused.uses.dedup();
             fused.widths = push
                 .widths
@@ -176,12 +177,16 @@ fn candidate(
     if !plain || !matches!(held.width, 2 | 4) || reads.get(&held.value) != Some(&1) {
         return None;
     }
-    let home = (0..at).rev().find(|&back| {
-        insns[back]
-            .what
-            .as_ref()
-            .is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == held.value)))
-    })?;
+    let home = (0..at)
+        .rev()
+        .find(
+            |&back| insns[back]
+                .what
+                .as_ref()
+                .is_some_and(
+                    |made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == held.value)),
+                ),
+        )?;
     let load = &insns[home];
     let made = load.what.as_ref()?;
     let [Loc::Held(defined)] = made.dests.as_slice() else { return None };
@@ -203,15 +208,17 @@ fn candidate(
     {
         return None;
     }
-    let blocked = insns[home + 1..at].iter().any(|between| {
-        between.volatile
-            || between.call.is_some()
-            || may_write(between, cell, false)
-            || between
-                .what
-                .as_ref()
-                .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
-    });
+    let blocked = insns[home + 1..at]
+        .iter()
+        .any(
+            |between| between.volatile
+                || between.call.is_some()
+                || may_write(between, cell, false)
+                || between
+                    .what
+                    .as_ref()
+                    .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)),
+        );
     (!blocked).then_some((home, held.value))
 }
 

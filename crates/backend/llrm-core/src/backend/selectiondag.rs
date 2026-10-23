@@ -23,9 +23,21 @@
 //! `ret` is `RET_GLUE`); a direct call is `callseq_start`, stack stores,
 //! register copies, `X86ISD::CALL`, `callseq_end`, the result read back.
 //! A `switch` of range clusters is the split-and-chain compare blocks of
-//! `visitSwitch` (jump tables and bit tests included). Small constant copies and fills are loads and stores; indirect calls,
-//! intrinsics, floats and values wider than a
-//! register are refused (`Refused`) until their pieces land.
+//! `visitSwitch` (jump tables and bit tests included). Small constant copies
+//! and fills are loads and stores; indirect calls, intrinsics, floats and
+//! values wider than a register are refused (`Refused`) until their pieces
+//! land.
+//!
+//! # Example
+//! `%s = add i32 %a, %b` with `%a` and `%b` exported from an earlier block,
+//! then `store i32 %s, ptr @g`:
+//!
+//! ```text
+//! t2: i32,ch = CopyFromReg t0, Register:i32 %0
+//! t4: i32,ch = CopyFromReg t0, Register:i32 %1
+//! t5: i32 = add t2, t4
+//! t6: ch = store t0, t5, GlobalAddress:i32<ptr @g> 0, poison:i32
+//! ```
 //!
 //! # Runs
 //! Nothing runs it yet but the tests and the shadow harness (sdag-d). The
@@ -82,22 +94,27 @@
 
 pub mod actions;
 pub mod builder;
-pub mod dag_combiner;
 mod dag;
+pub mod dag_combiner;
+pub mod dag_function;
+pub mod dag_select;
 pub mod dagisel_adapter;
 pub mod dump;
 pub mod emit;
 pub mod fold;
 pub mod function_lowering;
+pub mod inline_asm;
 pub mod isd;
+pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
+pub mod libcall;
 pub mod lowering;
 pub mod mvt;
 pub mod opcodes;
-pub mod x86_lowering;
 pub mod schedule;
 pub mod switchcg;
+pub mod x86_lowering;
 pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
@@ -109,12 +126,24 @@ pub use lowering::{TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
+mod bundle_tests;
+#[cfg(test)]
+mod dag_function_tests;
+#[cfg(test)]
+mod dag_select_tests;
+#[cfg(test)]
+mod dagisel_tests;
+#[cfg(test)]
 mod emit_tests;
+#[cfg(test)]
+mod extload_tests;
+#[cfg(test)]
+mod fpround_tests;
 #[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
-mod dagisel_tests;
-#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_ext;

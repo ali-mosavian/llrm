@@ -28,6 +28,19 @@
 //! invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
 //! (`MayCSE`).
 //!
+//! # Example
+//! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
+//! sum is made by instruction selection, after the IR's LICM has run). The
+//! sum is made once, ahead of the loop:
+//!
+//! ```text
+//!   pre:                              pre:
+//!     jmp loop                          v9 := add k, 0x3
+//!   loop:                       =>      jmp loop
+//!     v9 := add k, 0x3                loop:
+//!     v10 := imul v8, v9                v10 := imul v8, v9
+//! ```
+//!
 //! # Runs
 //! A machine phase before `precse` (`flow::machine_with`), at every -O level
 //! but -O0.
@@ -271,7 +284,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -302,7 +315,11 @@ mod tests {
         let classes = RegisterClasses::m16();
         let done = hoisted(&body, &classes);
         let names = |at: usize| -> Vec<String> {
-            done.blocks[at].insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect()
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);

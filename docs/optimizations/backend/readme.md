@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 130 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -84,6 +84,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented
 | machinelicm | Early `MachineLICM`: a pure computation of values defined outside a loop, made in the loop, is made once in its preheader. | A machine phase before `precse` (`flow::machine_with`), at every -O level | [machinelicm](machinelicm.md) |
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
+| memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
 | needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |
@@ -107,6 +108,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 128 documented
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
+| rewriter | `VirtRegRewriter`: the allocation put into the function. | `allocate::RegAlloc`. | [rewriter](rewriter.md) |
 | rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |

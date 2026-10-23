@@ -65,7 +65,7 @@
 //!  Counted          Registers
 //!  DominatedEdges   Registers
 //!  Bounded          Registers, Counted, DominatedEdges
-//!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
+//!  Annotated        PointerValues, Registers, Counted, DominatedEdges
 //!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
@@ -859,7 +859,6 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let bounds = loop_bounds(context, layout, function, analyses);
         let mut unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
@@ -869,9 +868,6 @@ impl Analysis for Annotated {
             .with_counted(&counted);
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
-        }
-        if let Ok(bounds) = &*bounds {
-            unit = unit.with_bounds(bounds);
         }
         alias::annotated_with(&unit, pointers, &registers)
     }
@@ -1138,9 +1134,9 @@ impl Analysis for CallFootprints {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        // The unit `Accesses` made them under: without the shape and the exposed
-        // frames each argument's object was worked out from the body again (3x
-        // the Ir a walk).
+        // The unit `Accesses` made them under: without the shape and the
+        // exposed frames each argument's object was worked out from the
+        // body again (3x the Ir a walk).
         let values = analyses.get::<PointerValues>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);

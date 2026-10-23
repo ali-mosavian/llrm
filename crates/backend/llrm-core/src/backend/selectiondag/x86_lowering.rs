@@ -36,27 +36,33 @@
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
 use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
-use super::isd::{CondCode, ISD};
 use super::dag_combiner::{CombineHooks, CombineLevel};
+use super::isd::{CondCode, ISD};
 use super::legalize_dag::Hooks;
 use super::mvt::EVT;
 
-/// The pin's `X86ISD` numbers, as the matcher table (`llrm-dagisel`) names them.
+/// The pin's `X86ISD` numbers, as the matcher table (`llrm-dagisel`) names
+/// them.
 pub mod x86isd {
     use super::ISD;
 
+    pub const ADC: ISD = ISD::Target(477);
     pub const ADD: ISD = ISD::Target(478);
     pub const AND: ISD = ISD::Target(485);
     pub const BRCOND: ISD = ISD::Target(493);
+    pub const BSF: ISD = ISD::Target(495);
+    pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
     /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
     pub const MUL_IMM: ISD = ISD::Target(694);
-    /// Real mode's `les`/`lds` (`tools/dagisel/own_ids.txt`): the offset, a chain; the segment is read back from `ES`/`DS`.
+    /// Real mode's `les`/`lds` (`tools/dagisel/own_ids.txt`): the offset, a
+    /// chain; the segment is read back from `ES`/`DS`.
     pub const LES: ISD = ISD::Target(24576);
     pub const LDS: ISD = ISD::Target(24577);
     pub const OR: ISD = ISD::Target(697);
     pub const SETCC: ISD = ISD::Target(739);
+    pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
     pub const WRAPPER: ISD = ISD::Target(953);
     pub const XOR: ISD = ISD::Target(955);
@@ -75,6 +81,7 @@ pub mod cond {
     pub const A: u128 = 7;
     pub const S: u128 = 8;
     pub const NS: u128 = 9;
+    pub const NP: u128 = 11;
     pub const L: u128 = 12;
     pub const GE: u128 = 13;
     pub const LE: u128 = 14;
@@ -87,11 +94,19 @@ pub struct X86Lowering {
 }
 
 impl CombineHooks for X86Lowering {
-    fn has_target_combine(&self, op: ISD) -> bool {
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
         op == ISD::Mul
     }
 
-    fn perform_dag_combine(&mut self, dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Option<SDValue> {
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        level: CombineLevel,
+    ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level),
             _ => None,
@@ -100,22 +115,41 @@ impl CombineHooks for X86Lowering {
 }
 
 impl Hooks for X86Lowering {
-    fn lower_operation(&mut self, dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+    fn lower_operation(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
+            ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
+            ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::ConstantPool => lower_constant_pool(dag, node),
+            ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
+            ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
+            ISD::CtTz => Some(lower_cttz(dag, node)),
+            ISD::Parity => Some(lower_parity(dag, node)),
+            ISD::CtPop => lower_ctpop(dag, node),
             _ => None,
         }
     }
 }
 
-fn cond_code(dag: &mut SelectionDAG, code: u128) -> SDValue {
+fn cond_code(
+    dag: &mut SelectionDAG,
+    code: u128,
+) -> SDValue {
     dag.get_constant_with(code, EVT::I8, true, false)
 }
 
-fn cond_of(dag: &SelectionDAG, setcc: SDValue) -> CondCode {
+fn cond_of(
+    dag: &SelectionDAG,
+    setcc: SDValue,
+) -> CondCode {
     match dag.node(setcc).data {
         super::dag::NodeData::CondCode(cc) => cc,
         other => unreachable!("a condition code operand, not {other:?}"),
@@ -124,7 +158,11 @@ fn cond_of(dag: &SelectionDAG, setcc: SDValue) -> CondCode {
 
 /// `TranslateX86CC` for integers: the code, and a right-hand side that may
 /// have been replaced (`x > -1` is `NS` on `x`).
-fn translate_cc(dag: &mut SelectionDAG, cc: CondCode, rhs: &mut SDValue) -> u128 {
+fn translate_cc(
+    dag: &mut SelectionDAG,
+    cc: CondCode,
+    rhs: &mut SDValue,
+) -> u128 {
     if let Some(bits) = dag.constant(*rhs) {
         let vt = dag.value_type(*rhs);
         let all_ones = bits == super::fold::mask(vt.size_in_bits());
@@ -158,13 +196,20 @@ fn translate_cc(dag: &mut SelectionDAG, cc: CondCode, rhs: &mut SDValue) -> u128
 }
 
 /// `EmitTest`, without the arithmetic-flag reuse (SD35): `cmp x, 0`.
-fn emit_test(dag: &mut SelectionDAG, op: SDValue) -> SDValue {
+fn emit_test(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+) -> SDValue {
     let zero = dag.get_constant(0, dag.value_type(op));
     dag.get_node(x86isd::CMP, EVT::I32, &[op, zero])
 }
 
 /// `EmitCmp`: the flags of `op0 - op1`.
-fn emit_cmp(dag: &mut SelectionDAG, op0: SDValue, op1: SDValue) -> SDValue {
+fn emit_cmp(
+    dag: &mut SelectionDAG,
+    op0: SDValue,
+    op1: SDValue,
+) -> SDValue {
     if dag.is_null_constant(op1) {
         return emit_test(dag, op0);
     }
@@ -174,8 +219,16 @@ fn emit_cmp(dag: &mut SelectionDAG, op0: SDValue, op1: SDValue) -> SDValue {
 }
 
 /// `emitFlagsForSetcc`: the flags and the condition-code constant.
-fn emit_flags_for_setcc(dag: &mut SelectionDAG, op0: SDValue, op1: SDValue, cc: CondCode) -> (SDValue, SDValue) {
-    if matches!(cc, CondCode::SetEq | CondCode::SetNe) && (dag.is_null_constant(op1) || dag.constant(op1) == Some(1)) && dag.opcode(op0) == x86isd::SETCC {
+fn emit_flags_for_setcc(
+    dag: &mut SelectionDAG,
+    op0: SDValue,
+    op1: SDValue,
+    cc: CondCode,
+) -> (SDValue, SDValue) {
+    if matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && (dag.is_null_constant(op1) || dag.constant(op1) == Some(1))
+        && dag.opcode(op0) == x86isd::SETCC
+    {
         // A test of a `setcc` is the `setcc`'s own flags, inverted if needed.
         let invert = (cc == CondCode::SetNe) ^ dag.is_null_constant(op1);
         let code = dag.constant(dag.operand(op0, 0)).expect("a SETCC reads a condition code");
@@ -189,7 +242,10 @@ fn emit_flags_for_setcc(dag: &mut SelectionDAG, op0: SDValue, op1: SDValue, cc: 
 }
 
 /// `LowerSETCC`, integers.
-fn lower_setcc(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+fn lower_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if !dag.value_type(op0).is_integer() {
         return None;
@@ -208,7 +264,8 @@ fn lower_setcc(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
             let extended = ((value << (128 - width)) as i128) >> (128 - width);
             extended >= -(1i128 << (bits_wide - 1)) && extended < (1i128 << (bits_wide - 1))
         };
-        if widens && signed(plus_one, 32.min(width)) && (!signed(bits, 8.min(width)) || signed(plus_one, 8.min(width))) {
+        if widens && signed(plus_one, 32.min(width)) && (!signed(bits, 8.min(width)) || signed(plus_one, 8.min(width)))
+        {
             op1 = dag.get_constant(plus_one, vt);
             cc = if cc == CondCode::SetGt { CondCode::SetGe } else { CondCode::SetUGe };
         }
@@ -218,18 +275,29 @@ fn lower_setcc(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
 }
 
 /// `isX86LogicalCmp`: flags a `CMOV` can read directly.
-fn is_logical_cmp(dag: &SelectionDAG, flags: SDValue) -> bool {
+fn is_logical_cmp(
+    dag: &SelectionDAG,
+    flags: SDValue,
+) -> bool {
     let op = dag.opcode(flags);
-    op == x86isd::CMP || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
+    op == x86isd::CMP
+        || (flags.res == 1 && [x86isd::ADD, x86isd::SUB, x86isd::OR, x86isd::XOR, x86isd::AND].contains(&op))
 }
 
 /// `X86::mayFoldLoad`: a plain load nothing else reads.
-fn may_fold_load(dag: &SelectionDAG, value: SDValue) -> bool {
+fn may_fold_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
     dag.opcode(value) == ISD::Load && dag.users(value).count() == 1
 }
 
 /// `LowerSELECT`, integers: `cmov` of a compare's flags.
-fn lower_select(dag: &mut SelectionDAG, node: SDValue, can_cmov: bool) -> Option<SDValue> {
+fn lower_select(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    can_cmov: bool,
+) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if !vt.is_integer() {
         return None;
@@ -248,17 +316,21 @@ fn lower_select(dag: &mut SelectionDAG, node: SDValue, can_cmov: bool) -> Option
         code = cond_code(dag, cond::NE);
         flags = emit_test(dag, cond);
     }
-    let (op1, op2, result_vt) = if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
-        (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
-    } else {
-        (op1, op2, vt)
-    };
+    let (op1, op2, result_vt) =
+        if (vt == EVT::I8 && can_cmov) || (vt == EVT::I16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2)) {
+            (dag.get_node(ISD::AnyExtend, EVT::I32, &[op1]), dag.get_node(ISD::AnyExtend, EVT::I32, &[op2]), EVT::I32)
+        } else {
+            (op1, op2, vt)
+        };
     let cmov = dag.get_node(x86isd::CMOV, result_vt, &[op2, op1, code, flags]);
     Some(if result_vt == vt { cmov } else { dag.get_node(ISD::Truncate, vt, &[cmov]) })
 }
 
 /// `LowerConditionalBranch`, integers: `X86ISD::BRCOND chain, dest, cc, flags`.
-fn lower_brcond(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+fn lower_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
     let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
@@ -271,7 +343,11 @@ fn lower_brcond(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
         // Anything else is tested: `and cond, 1`, then `!= 0`.
         let vt = dag.value_type(cond);
         let one = dag.get_constant(1, vt);
-        let masked = if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) { cond } else { dag.get_node(ISD::And, vt, &[cond, one]) };
+        let masked = if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
+            cond
+        } else {
+            dag.get_node(ISD::And, vt, &[cond, one])
+        };
         let zero = dag.get_constant(0, vt);
         let (flags, code) = emit_flags_for_setcc(dag, masked, zero, CondCode::SetNe);
         (code, flags)
@@ -282,11 +358,20 @@ fn lower_brcond(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
 /// (TargetGlobalAddress sym+offset)`. A non-negative offset folds into the
 /// symbol; a negative one is added after.
-fn lower_global_address(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue> {
+fn lower_global_address(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
     let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let (folded, rest) = if offset >= 0 && offset <= i64::from(i32::MAX) { (offset, 0) } else { (0, offset) };
-    let target = dag.intern(ISD::TargetGlobalAddress, &[vt], &[], SDNodeFlags::default(), NodeData::Global { symbol, offset: folded });
+    let target = dag.intern(
+        ISD::TargetGlobalAddress,
+        &[vt],
+        &[],
+        SDNodeFlags::default(),
+        NodeData::Global { symbol, offset: folded },
+    );
     let wrapped = dag.get_node(x86isd::WRAPPER, vt, &[target]);
     Some(if rest == 0 {
         wrapped
@@ -294,6 +379,57 @@ fn lower_global_address(dag: &mut SelectionDAG, node: SDValue) -> Option<SDValue
         let delta = dag.get_constant(rest as u128, vt);
         dag.get_node(ISD::Add, vt, &[wrapped, delta])
     })
+}
+
+/// `LowerConstantPool`: `Wrapper (TargetConstantPool)`.
+fn lower_constant_pool(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    Some(dag.get_node(x86isd::WRAPPER, vt, &[target]))
+}
+
+/// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of
+/// `X86ISD::ADD`/`SUB`, and the carry (`B`; `E` for an add of one) as a
+/// `setcc`, merged with the sum.
+fn lower_xalu(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let (opcode, code) = match dag.opcode(node) {
+        ISD::UAddO => (x86isd::ADD, if dag.constant(rhs) == Some(1) { cond::E } else { cond::B }),
+        _ => (x86isd::SUB, cond::B),
+    };
+    let value = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    let flags = SDValue { node: value.node, res: 1 };
+    let code = cond_code(dag, code);
+    let overflow = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[value, overflow])
+}
+
+/// `LowerADDSUBO_CARRY`: the carry in is put into the flags (`carry + -1`),
+/// then `ADC`/`SBB` add or subtract it; the carry out is `B` of its flags.
+fn lower_addsub_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(node);
+    let carry_vt = dag.value_type(carry);
+    let ones = dag.get_all_ones_constant(carry_vt);
+    let set_carry = dag.get_node_multi(x86isd::ADD, &[carry_vt, EVT::I32], &[carry, ones]);
+    let flags_in = SDValue { node: set_carry.node, res: 1 };
+    let opcode = if dag.opcode(node) == ISD::UAddOCarry { x86isd::ADC } else { x86isd::SBB };
+    let sum = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs, flags_in]);
+    let flags = SDValue { node: sum.node, res: 1 };
+    let code = cond_code(dag, cond::B);
+    let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
 }
 
 fn is_pow2(value: u128) -> bool {
@@ -306,7 +442,12 @@ fn log2(value: u128) -> u128 {
 
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
 /// shift or an add.
-fn combine_mul_special(dag: &mut SelectionDAG, x: SDValue, amount: u128, vt: EVT) -> Option<SDValue> {
+fn combine_mul_special(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    amount: u128,
+    vt: EVT,
+) -> Option<SDValue> {
     let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
         let by = dag.get_constant(mult, vt);
         let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
@@ -356,7 +497,11 @@ fn combine_mul_special(dag: &mut SelectionDAG, x: SDValue, amount: u128, vt: EVT
 }
 
 /// `combineMul`, the scalar integer part: `x * c` as `lea`s, shifts, adds.
-fn combine_mul(dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Option<SDValue> {
+fn combine_mul(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 {
         return None;
@@ -398,7 +543,8 @@ fn combine_mul(dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Op
     }
     let mut new_mul;
     if second != 0 && (is_pow2(second) || (signed >= 0 && matches!(second, 3 | 5 | 9))) {
-        let single_add_user = dag.users(node).count() == 1 && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
+        let single_add_user = dag.users(node).count() == 1
+            && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
         if is_pow2(second) && !(signed >= 0 && single_add_user) {
             std::mem::swap(&mut first, &mut second);
         }
@@ -415,7 +561,11 @@ fn combine_mul(dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Op
             new_mul = Some(negate(dag, sum));
         } else if is_pow2(abs + 1) {
             let shifted = shift(dag, x, log2(abs + 1));
-            new_mul = Some(if signed < 0 { dag.get_node(ISD::Sub, vt, &[x, shifted]) } else { dag.get_node(ISD::Sub, vt, &[shifted, x]) });
+            new_mul = Some(if signed < 0 {
+                dag.get_node(ISD::Sub, vt, &[x, shifted])
+            } else {
+                dag.get_node(ISD::Sub, vt, &[shifted, x])
+            });
         } else if signed >= 0 && abs > 2 && is_pow2(abs - 2) {
             let shifted = shift(dag, x, log2(abs - 2));
             let twice = dag.get_node(ISD::Add, vt, &[x, x]);
@@ -427,4 +577,240 @@ fn combine_mul(dag: &mut SelectionDAG, node: SDValue, level: CombineLevel) -> Op
         }
     }
     new_mul
+}
+
+/// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width
+/// shift by a variable amount as two shifts, a funnel shift and selects on
+/// bit 5 of the amount.
+fn lower_shift_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lo, hi, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let bits = u128::from(vt.size_in_bits());
+    let amount_vt = dag.value_type(amount);
+    let is_shl = dag.opcode(node) == ISD::ShlParts;
+    let is_sra = dag.opcode(node) == ISD::SraParts;
+    let mask = dag.get_constant(bits - 1, amount_vt);
+    let safe = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+    let tmp1 = if is_sra {
+        let sign = dag.get_constant(bits - 1, amount_vt);
+        dag.get_node(ISD::Sra, vt, &[hi, sign])
+    } else {
+        dag.get_constant(0, vt)
+    };
+    let (tmp2, tmp3) = if is_shl {
+        (dag.get_node(ISD::FShl, vt, &[hi, lo, amount]), dag.get_node(ISD::Shl, vt, &[lo, safe]))
+    } else {
+        (
+            dag.get_node(ISD::FShr, vt, &[hi, lo, amount]),
+            dag.get_node(if is_sra { ISD::Sra } else { ISD::Srl }, vt, &[hi, safe]),
+        )
+    };
+    let width = dag.get_constant(bits, amount_vt);
+    let and = dag.get_node(ISD::And, amount_vt, &[amount, width]);
+    let zero = dag.get_constant(0, amount_vt);
+    let cond = dag.get_setcc(EVT::I8, and, zero, CondCode::SetNe);
+    let (out_lo, out_hi) = if is_shl {
+        (dag.get_select(vt, cond, tmp1, tmp3), dag.get_select(vt, cond, tmp3, tmp2))
+    } else {
+        (dag.get_select(vt, cond, tmp3, tmp2), dag.get_select(vt, cond, tmp1, tmp3))
+    };
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[out_lo, out_hi])
+}
+
+/// `isKnownNeverZero`, the part known bits answer: some bit is known set.
+/// DEVIATE SD304: the pin also looks through `or`, `shl`, `zext`, `smax` and
+/// the like; a value they prove non-zero costs one `cmov` more here. Reason:
+/// no general query yet. Exit: with the combiner's `isKnownNeverZero`.
+/// Owner sdag-c. Review 2026-12-10.
+fn is_known_never_zero(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    super::known_bits::known_bits(dag, value).one != 0
+}
+
+/// `KnownBits::countMinLeadingZeros`.
+fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
+    (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+}
+
+/// `LowerABS` for `i16`/`i32`: `x < 0 ? -x : x` as `cmov` on the flags of `0 -
+/// x`.
+fn lower_abs(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let x = dag.operand(node, 0);
+    let zero = dag.get_constant(0, vt);
+    let neg = dag.get_node_multi(x86isd::SUB, &[vt, EVT::I32], &[zero, x]);
+    let flags = SDValue { node: neg.node, res: 1 };
+    let code = cond_code(dag, cond::NS);
+    dag.get_node(x86isd::CMOV, vt, &[x, neg, code, flags])
+}
+
+/// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and
+/// `xor bits-1`. No pass-through `bsr` (a tuning of newer CPUs).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29730
+fn lower_ctlz(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let bits = u128::from(vt.size_in_bits());
+    let mut op = dag.operand(node, 0);
+    let mut op_vt = vt;
+    if vt == EVT::I8 {
+        // There is no 8-bit bsr.
+        op_vt = EVT::I32;
+        op = dag.get_node(ISD::ZeroExtend, op_vt, &[op]);
+    }
+    let pass_through = dag.get_undef(op_vt);
+    let scan = dag.get_node_multi(x86isd::BSR, &[op_vt, EVT::I32], &[pass_through, op]);
+    let mut result = SDValue { node: scan.node, res: 0 };
+    if dag.opcode(node) == ISD::CtLz {
+        // A zero source sets ZF: the answer is `bits`, which the xor leaves.
+        let zero_answer = dag.get_constant(bits + bits - 1, op_vt);
+        let code = cond_code(dag, cond::E);
+        let flags = SDValue { node: scan.node, res: 1 };
+        result = dag.get_node(x86isd::CMOV, op_vt, &[result, zero_answer, code, flags]);
+    }
+    let last = dag.get_constant(bits - 1, op_vt);
+    result = dag.get_node(ISD::Xor, op_vt, &[result, last]);
+    if vt == EVT::I8 { dag.get_node(ISD::Truncate, EVT::I8, &[result]) } else { result }
+}
+
+/// `LowerCTTZ` ([L29776][pin]) for scalars: `bsf`, then a `cmov` of `bits`
+/// for a zero source unless the source cannot be zero.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29776
+fn lower_cttz(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let src = dag.operand(node, 0);
+    let pass_through = dag.get_undef(vt);
+    let scan = dag.get_node_multi(x86isd::BSF, &[vt, EVT::I32], &[pass_through, src]);
+    if is_known_never_zero(dag, src) {
+        return SDValue { node: scan.node, res: 0 };
+    }
+    let zero_answer = dag.get_constant(u128::from(vt.size_in_bits()), vt);
+    let code = cond_code(dag, cond::E);
+    let flags = SDValue { node: scan.node, res: 1 };
+    dag.get_node(x86isd::CMOV, vt, &[SDValue { node: scan.node, res: 0 }, zero_answer, code, flags])
+}
+
+/// `LowerPARITY` ([L33977][pin]) without POPCNT: the parity flag of an
+/// 8-bit `test`, or of the xor of the two low bytes after folding the rest.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L33977
+fn lower_parity(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let mut x = dag.operand(node, 0);
+    let known = super::known_bits::known_bits(dag, x);
+    let active = known.width - min_leading_zeros(&known);
+    let not_parity = |dag: &mut SelectionDAG, flags: SDValue| {
+        let code = cond_code(dag, cond::NP);
+        let setnp = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
+        if vt == EVT::I8 { setnp } else { dag.get_node(ISD::ZeroExtend, vt, &[setnp]) }
+    };
+    if vt == EVT::I8 || active <= 8 {
+        x = dag.get_zext_or_trunc(x, EVT::I8);
+        let zero = dag.get_constant(0, EVT::I8);
+        let flags = dag.get_node(x86isd::CMP, EVT::I32, &[x, zero]);
+        return not_parity(dag, flags);
+    }
+    if vt != EVT::I16 {
+        let sixteen = dag.get_constant(16, EVT::I8);
+        let hi16 = dag.get_node(ISD::Srl, EVT::I32, &[x, sixteen]);
+        x = dag.get_node(ISD::Xor, EVT::I32, &[x, hi16]);
+    } else {
+        x = dag.get_node(ISD::AnyExtend, EVT::I32, &[x]);
+    }
+    let eight = dag.get_constant(8, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I32, &[x, eight]);
+    let hi = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let lo = dag.get_node(ISD::Truncate, EVT::I8, &[x]);
+    let xor = dag.get_node_multi(x86isd::XOR, &[EVT::I8, EVT::I32], &[lo, hi]);
+    not_parity(dag, SDValue { node: xor.node, res: 1 })
+}
+
+/// `LowerCTPOP` ([L33649][pin]) for scalars: a constant source, or a value
+/// with few active bits, gets a short sequence; anything else is `None`,
+/// the generic expansion.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L33649
+fn lower_ctpop(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let mut op = dag.operand(node, 0);
+    let known = super::known_bits::known_bits(dag, op);
+    if known.is_constant() {
+        return Some(dag.get_constant(u128::from(known.one.count_ones()), vt));
+    }
+    let width = known.width;
+    let leading = min_leading_zeros(&known);
+    let trailing = known.zero.trailing_ones();
+    let active = width - leading;
+    let shifted_active = width - (leading + trailing);
+    let i8_amount = |dag: &mut SelectionDAG, n: u32| dag.get_constant(u128::from(n), EVT::I8);
+    let shift_down = |dag: &mut SelectionDAG, op: SDValue| {
+        let amount = i8_amount(dag, trailing);
+        dag.get_node(ISD::Srl, vt, &[op, amount])
+    };
+    if shifted_active <= 2 {
+        if active > 2 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let one = i8_amount(dag, 1);
+        let half = dag.get_node(ISD::Srl, EVT::I32, &[op, one]);
+        op = dag.get_node(ISD::Sub, EVT::I32, &[op, half]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    if shifted_active <= 3 {
+        if active > 3 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let one = i8_amount(dag, 1);
+        op = dag.get_node(ISD::Shl, EVT::I32, &[op, one]);
+        let table = dag.get_constant(0b1110_1001_1001_0100, EVT::I32);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[table, op]);
+        let three = dag.get_constant(3, EVT::I32);
+        op = dag.get_node(ISD::And, EVT::I32, &[op, three]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    // The 4-bit table is an `i64` lookup, and `i64` is not legal here.
+    if shifted_active <= 8 {
+        let mask11 = dag.get_constant(0x1111_1111, EVT::I32);
+        if active > 8 {
+            op = shift_down(dag, op);
+        }
+        op = dag.get_zext_or_trunc(op, EVT::I32);
+        let magic = dag.get_constant(0x0804_0201, EVT::I32);
+        op = dag.get_node(ISD::Mul, EVT::I32, &[op, magic]);
+        let three = i8_amount(dag, 3);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[op, three]);
+        op = dag.get_node(ISD::And, EVT::I32, &[op, mask11]);
+        op = dag.get_node(ISD::Mul, EVT::I32, &[op, mask11]);
+        let top = i8_amount(dag, 28);
+        op = dag.get_node(ISD::Srl, EVT::I32, &[op, top]);
+        return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    None
 }

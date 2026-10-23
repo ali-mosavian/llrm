@@ -24,8 +24,9 @@
 //!    => unchanged
 //! ```
 //!
-//! DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the intrinsic definition, ours asks the
-//! target per call; exit: the frontends declare the memory attribute on the `in`/`out` intrinsics and this pass is
+//! DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the
+//! intrinsic definition, ours asks the target per call; exit: the frontends
+//! declare the memory attribute on the `in`/`out` intrinsics and this pass is
 //! deleted; owner w-6; review 2026-11-13).
 //!
 //! # Example
