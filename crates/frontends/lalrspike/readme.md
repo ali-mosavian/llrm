@@ -170,6 +170,43 @@ vector was never the cost: a `Tok` is two bytes. What it saves is the span vecto
 token, 4.6 MB for this corpus), which matters only if the later passes can re-lex from the
 source instead of reading spans.
 
+## The typed tree
+
+`src/qb_ast.rs` is the recursive-descent parser building qbfront's `syntax::Module` directly,
+from the logos lexer's tokens (with their text, and `type$`/`key%` kept as the names they spell).
+Blocks (IF in both forms, FOR/NEXT, WHILE/WEND, DO/LOOP, SELECT CASE, SUB/FUNCTION/DEF FN, TYPE) are
+recursion; `name(args)` stays an `Apply` for the semantic pass, as in the table-driven parser, so no
+symbol table is needed between them; the existing `semantic::compile` is the pass that resolves it
+and refuses what is not valid. Checked by `astcheck` (`-c` also compiles both modules) and
+`tests/qb_ast.rs`:
+
+* repo programs: 1,699 identical `Module`s, spans included; 24 identical but for the span of an
+  omitted CIRCLE argument; 3 differ in one place (below); the new parser refuses none the old takes.
+* through `semantic::compile` the two modules give the same output on 1,666 programs; the 3 that
+  differ are the same one case.
+* mgl and the private-tools sources, and the 487 programs harvested from test strings: the same,
+  but for the places below.
+
+Where the new tree differs from the table-driven parser's, on purpose (the old parser's behaviour is
+wrong or loses something):
+
+* `-a * b` is `(-a) * b` (BASIC's minus binds tighter than `*`); the old parser has `-(a * b)`.
+  Likewise `NOT a = b` is `NOT (a = b)` here; the old reads `(NOT a) = b`. Both follow BC's table.
+* a type suffix on a word that is also reserved is part of the name: `ERROR$`, `COLOR$(n)`, `key%`
+  (the old lexer drops the suffix, so `COLOR$` was `COLOR`).
+* `PUT (x, y), a` has no mode argument; the old parser takes one from the nearest earlier PUT/PSET/
+  XOR token anywhere before it.
+* `PRINT USING f$; a, b` keeps the separator the source gave.
+* an empty slot in a PRINT list is an `Omitted` item rather than dropped.
+* `CIRCLE (x, y), r, , c, s`: an empty slot keeps its place (the old drops it).
+
+Not in this parser: QuickrBASIC's extensions (`+=`, `FOR … IN`, PRIVATE, tuples, f-strings), which
+the table-driven parser reads in every dialect; statements the table-driven parser also refuses
+(`OPEN … LEN =`, classic `OPEN "I", #1, …`, `ON ERROR RESUME NEXT`, COMMON) fail here too.
+
+Speed, same 737 files: logos lexer + recursive descent to `Module`: 36.3 ms (21.6 MB/s);
+the table-driven parser to the same `Module`: 232 ms (3.4 MB/s), 6.4x.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

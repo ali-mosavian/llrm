@@ -22,6 +22,8 @@ pub struct Context {
     dialect: Dialect,
     /// Whether tokens carry their text; the parser needs only their kinds.
     payload: bool,
+    /// `type$`, `key%`: a reserved word with a type suffix is the name it spells, not the word.
+    suffixed_names: bool,
     line: usize,
     error: Option<LexError>,
 }
@@ -138,8 +140,8 @@ fn word(lex: &mut Lex) -> TokenKind {
     }
     let name = lex.slice();
     let bare = name.trim_end_matches(['%', '&', '!', '#', '$']);
-    reserved(name)
-        .or_else(|| reserved(bare))
+    let found = reserved(name).or_else(|| reserved(bare).filter(|_| name.len() == bare.len() || !lex.extras.suffixed_names));
+    found
         .map(TokenKind::Reserved)
         .or_else(|| extension_keyword(bare).map(TokenKind::ExtensionKeyword))
         .unwrap_or_else(|| TokenKind::Identifier(if lex.extras.payload { name.to_ascii_uppercase() } else { String::new() }))
@@ -366,13 +368,18 @@ fn logical_lines(source: &str, dialect: Dialect) -> Vec<(usize, Cow<'_, str>)> {
 }
 
 pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
+    lex_with(source, dialect, false)
+}
+
+/// `lex`, with `type$`-style words kept as the names they spell when `suffixed_names`.
+pub fn lex_with(source: &str, dialect: Dialect, suffixed_names: bool) -> Result<Vec<Token>, LexError> {
     if dialect.format_strings() {
         return qbfront::generated_parser::lex(source, dialect);
     }
     let newline = TokenKind::Reserved(ids().punct[usize::from(b'\n')]);
     let mut out = Vec::with_capacity(source.len() / 4);
     for (line_index, line) in logical_lines(source, dialect) {
-        let mut lexer = Raw::lexer_with_extras(&line, Context { dialect, payload: true, line: line_index, error: None });
+        let mut lexer = Raw::lexer_with_extras(&line, Context { dialect, payload: true, suffixed_names, line: line_index, error: None });
         while let Some(item) = lexer.next() {
             let span = lexer.span();
             match item {
@@ -482,7 +489,7 @@ impl<'s> Stream<'s> {
                 self.line_text = text;
                 self.lexer = Some(Raw::lexer_with_extras(
                     text,
-                    Context { dialect: self.dialect, payload: false, line: *index, error: None },
+                    Context { dialect: self.dialect, payload: false, suffixed_names: false, line: *index, error: None },
                 ));
                 continue;
             };

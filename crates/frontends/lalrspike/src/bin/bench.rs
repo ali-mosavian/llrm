@@ -67,7 +67,9 @@ fn qb(paths: &[String]) {
         both.iter().filter(|s| lalrspike::qb_rd::parse(&lalrspike::qb_lexer::prelex(s, dialect).unwrap().unwrap().0).is_ok()).count()
     });
     let by_line = time(ROUNDS, || both.iter().filter(|s| lalrspike::parse_qb_rd_by_line(s, dialect).is_ok()).count());
+    let typed = time(ROUNDS, || both.iter().filter(|s| lalrspike::qb_ast::parse(s, dialect).is_ok()).count());
     report("QB", both.len(), bytes, &[
+        ("typed Module: logos + recursive descent", typed),
         ("lex+rd a line at a time", by_line),
         ("pre-lex to Vec<Tok>", prelex),
         ("lalrpop on Vec<Tok>", lalr_kinds),
