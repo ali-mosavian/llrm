@@ -251,3 +251,19 @@ fn test_function_analyses_find_the_assume() {
         "no assumptions, no fact"
     );
 }
+
+/// A function's intrinsic id is found with its name, once: `intrinsic_id` of a
+/// call read it from the text of every call the combiner visited. The cached
+/// id is the one the text gives, for a suffix, a longer name and a
+/// non-intrinsic.
+#[test]
+fn a_global_name_carries_the_intrinsic_id_of_its_text() {
+    use crate::module::GlobalName;
+    use crate::valuetracking::pattern::intrinsic_id_of_name;
+    for text in ["llvm.smax.i32", "llvm.umin.i16", "llvm.memcpy.p0.p0.i32", "llvm.nosuch.i8", "printf", "llvm."] {
+        let name = GlobalName::from(text.to_owned());
+        assert_eq!(name.intrinsic_id(), intrinsic_id_of_name(text), "{text}");
+    }
+    assert_eq!(GlobalName::default().intrinsic_id(), None);
+    assert!(GlobalName::from("llvm.smax.i32".to_owned()).intrinsic_id().is_some(), "premise: smax is an id");
+}

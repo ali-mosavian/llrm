@@ -42,14 +42,18 @@ pub struct BuilderTarget {
 impl BuilderTarget {
     /// i486 and P5: 32-bit pointers, `i8`/`i16`/`i32` in registers.
     pub fn m32() -> BuilderTarget {
-        BuilderTarget { dag: DagConfig::default(), shift_amount: EVT::I8, legal_ints: vec![8, 16, 32] }
+        BuilderTarget {
+            dag: DagConfig { offset_folding: true, ..DagConfig::default() },
+            shift_amount: EVT::I8,
+            legal_ints: vec![8, 16, 32],
+        }
     }
 
     /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
     /// pin's `In16BitMode` has `GR32` legal).
     pub fn m16() -> BuilderTarget {
         BuilderTarget {
-            dag: DagConfig { pointer: EVT::I16, ..DagConfig::default() },
+            dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             legal_ints: vec![8, 16, 32],
         }
@@ -161,6 +165,18 @@ impl<'a> Builder<'a> {
         let mut dag = SelectionDAG::new(target.dag);
         dag.global_names =
             module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect();
+        // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the globals
+        // the IR marks local, an ELF target's only ones
+        dag.local_symbols = module
+            .globals
+            .iter()
+            .map(|global| {
+                matches!(
+                    global.linkage,
+                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                )
+            })
+            .collect();
         dag.block_names = (0..function.block_capacity())
             .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
             .collect();
@@ -482,6 +498,11 @@ impl Builder<'_> {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
+        }
+        // `LowerFormalArguments`: the first variadic argument is the next
+        // fixed object, which `va_start` stores the address of
+        if self.module.signature(self.function.ty).2 {
+            self.dag.var_args_frame_index = Some(-(fixed + 1));
         }
         Ok(())
     }
@@ -947,6 +968,7 @@ impl Builder<'_> {
             Opcode::FCmp(predicate) => self.visit_fcmp(&instruction, *predicate)?,
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
+            Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::Load { align, volatile } => self.visit_load(&instruction, *align, *volatile)?,
             Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
@@ -1134,6 +1156,17 @@ impl Builder<'_> {
         let vt = self.dag.value_type(operand);
         let node = self.dag.get_node_flags(ISD::FNeg, vt, &[operand], flags_of(instruction.flags));
         self.set_value(instruction.result.expect("an fneg has a result"), node);
+        Ok(())
+    }
+
+    fn visit_freeze(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let value = self.get_value(instruction.operands[0])?;
+        let vt = self.dag.value_type(value);
+        let node = self.dag.get_node(ISD::Freeze, vt, &[value]);
+        self.set_value(instruction.result.expect("a freeze has a result"), node);
         Ok(())
     }
 

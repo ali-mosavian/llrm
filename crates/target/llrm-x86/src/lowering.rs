@@ -39,6 +39,23 @@ impl Lowering for X86 {
         true
     }
 
+    // The register classes (X86ISelLowering L179-183), from the DAG's table; a
+    // 64-bit target has i64 as well (DEVIATE TL2, as below).
+    fn is_type_legal(
+        &self,
+        bits: u32,
+    ) -> bool {
+        if self.is_64bit {
+            return matches!(bits, 8 | 16 | 32 | 64);
+        }
+        MVT::integer(bits).is_some_and(|vt| table().types.is_type_legal(vt.into()))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L2955
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
     // `isOperationLegalOrCustom` from the DAG's action table (`dag::actions`):
     // one copy of what the legalizer does with each operation on each type.
     // DEVIATE TL2: the table translates the 32-bit arms only, so a 64-bit

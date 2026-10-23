@@ -118,7 +118,27 @@ impl AAResults for AggregateAA<'_> {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        meet(&mut self.results, |result| result.get_mod_ref_info(inst, loc, aaqi))
+        // Each provider's arguments are asked of the others as well: LLVM's
+        // `AAQI.AAR.alias`, the aggregate.
+        let mut answer = ModRefInfo::ModRef;
+        for at in 0..self.results.len() {
+            let (before, rest) = self.results.split_at_mut(at);
+            let (this, after) = rest.split_first_mut().expect("a provider");
+            let mut others = |a: &MemoryLocation, b: &MemoryLocation, aaqi: &mut AAQueryInfo, ctx: Option<InstId>| {
+                for other in before.iter_mut().chain(after.iter_mut()) {
+                    let found = other.alias(a, b, aaqi, ctx);
+                    if found != AliasResult::MayAlias {
+                        return found;
+                    }
+                }
+                AliasResult::MayAlias
+            };
+            answer = answer.intersect(this.get_mod_ref_info_with(inst, loc, aaqi, &mut others));
+            if answer.is_no_mod_ref() {
+                break;
+            }
+        }
+        answer
     }
 
     fn get_mod_ref_info_call(
