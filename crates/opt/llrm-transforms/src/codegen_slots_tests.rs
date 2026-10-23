@@ -446,7 +446,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "pushfold.rs",
         "",
-        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: callframe.rs translates the pass function by function (registry callframe@5), tested on hand-built call frames against llc -run-pass=x86-cf-opt; its input, stores into a reserved call frame, is made by no selector yet (llrm pushes at selection), so it finds none; pushfold.rs keeps the load fold for selection's pushes (CF1); reason: the producer is the SelectionDAG call lowering (sdag-a) and the reserved frame is laid out by prologue insertion (row 80, 2026-11-13); cost: none; exit: both landed and pushfold.rs deleted; owner w-5; review 2026-11-13. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",

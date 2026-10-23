@@ -189,6 +189,7 @@ pub mod selectors {
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
 pub mod booleans;
+pub mod callframe;
 pub mod cmpsub;
 pub mod edges;
 pub mod fixupbw;
