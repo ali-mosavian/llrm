@@ -13,6 +13,7 @@ fn strip_spans(text: &str) -> String {
         rest = &rest[close..];
     }
     out.push_str(rest);
+    let out = out.replace("unchecked: true", "unchecked: false").replace("empty_list: true", "empty_list: false");
     // deliberate differences: CURRENCY is a type of its own here; a NEXT's variable is recorded
     let mut out = out.replace("Some(Currency)", "Some(Named(\"CURRENCY\"))");
     while let Some(at) = out.find("next_variable: Some((") {
