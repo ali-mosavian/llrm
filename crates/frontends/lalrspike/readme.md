@@ -27,6 +27,7 @@ Nib programs and fences pulled out of the tests' string literals and the docs
 | Nib, 248 files | 248 | 0 | 0 | 0 |
 | Nib, test snippets and doc fences | 414 | 93 | 0 | 7 |
 | QB family, 591 files | 572 | 8 | 1 | 10 |
+| QB programs in the tests' sources, 487 | 411 | 20 | 42 | 14 |
 
 LALR only, Nib: what the hand parser checks while parsing and the grammar
 leaves to later passes: constant folding (`const X = f()`, unknown constant),
@@ -34,7 +35,11 @@ leaves to later passes: constant folding (`const X = f()`, unknown constant),
 LALR only, QB: `COMMON`, `NAME`, `PCOPY` and `OPEN` options, which parse but
 the table-driven builder has no syntax-tree node for.
 
-Old only, QB: `prelude.bas`, which uses QuickrBASIC's `x += 1` (a token
+Old only, QB test-source programs: 41 of the 42 are QuickrBASIC (`+=`, `FOR
+i AS INTEGER IN ...`, f-strings, `a IF c ELSE b`); the other is `VOLATILE` as a
+type name. The 14 LALR-only are error cases the old parser refuses later.
+
+Old only, QB files: `prelude.bas`, which uses QuickrBASIC's `x += 1` (a token
 prepass in the old parser; as a production it clashes with `foo -1`, a call
 with a negative argument). Not done.
 
@@ -69,9 +74,10 @@ with a negative argument). Not done.
   grammar's `|` joins the items on either side, not whole sequences
   (`PUT ..., PSET`).
 - **QB: reserved words as names**: a function's name (`point`, `pos`) is a
-  variable where no `(` follows, a `TYPE` member or field may be any word
-  (`name`, `pos`), and `PRIVATE` is a name before `SUB`/`FUNCTION`. The old
-  parser's "contextual names" are broader than that.
+  variable where no `(` follows, any statement word but the structural ones
+  (`NAME`, `WIDTH`, ...) is one in an expression or a declared name (not at a
+  statement start, nor `ERROR`/`IS`/event words, which clash), a `TYPE` member
+  or field may be any word, and `PRIVATE` is a name before `SUB`/`FUNCTION`.
 - **QB: `IF`**: the dangling else is gone because nothing nests.
 - **QB: the old parser's token prepasses** (`FUNCTION f() AS type`,
   `VOLATILE`) are productions here.
