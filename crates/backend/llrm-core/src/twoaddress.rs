@@ -63,13 +63,10 @@
 //! does in the pin): a value a load defines is not the operand that is tied
 //! (`is_profitable_to_commute`).
 //!
-//! DEVIATE TA-6 (exit: `LiveIntervals` shared across phases, TwoAddress to
-//! Coalescer, then revert to the pin's `isPlainlyKilled` on it; review
-//! 2026-11-14): the kills come from one backward scan of each block over the
-//! live-out rows (`BodyFacts`), not from `LiveIntervals`. The pin builds them
-//! once and shares them with the coalescer; ours built a second set here (+3.0
-//! M Ir on d_faces -O2 at m32, `LiveIntervals::new`), and the scan answers the
-//! same question for a use: no later read, or a redefinition.
+//! The kills are `isPlainlyKilled` on one `LiveIntervals` the pass edits (`handleMove`,
+//! `rewrite_instr`, the intervals of a tied copy made afresh) and hands to the
+//! coalescer (DEVIATE TA-6 retired: a backward scan of the live-out rows stood in
+//! for it).
 //!
 //! # Example
 //! `v3 := mov v1; v4 := add v1, v3` (the copy defines `v3`, `v1` lives on):
