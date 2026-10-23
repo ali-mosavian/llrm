@@ -954,7 +954,7 @@ impl Ast<'_> {
 
     /// An ISAM statement (`MOVEFIRST #1`, `SEEKEQ #t, key`, `CHECKPOINT`...), if the line starts with one.
     fn isam_statement(&mut self) -> R<Option<()>> {
-        if !self.dialect_has_isam() || !matches!(self.kinds[self.i], Tok::Ident) {
+        if !matches!(self.dialect, Dialect::Pds71 | Dialect::VbDos | Dialect::Quickr) || !matches!(self.kinds[self.i], Tok::Ident) {
             return Ok(None);
         }
         let TokenKind::Identifier(word) = self.tokens[self.i].kind.clone() else { return Ok(None) };
@@ -977,6 +977,13 @@ impl Ast<'_> {
                 };
                 self.i += 1;
                 self.runtime("EVENT_SWITCH", vec![Expr::Name(verb.into(), self.span(at))], span);
+                return Ok(Some(()));
+            }
+            "LOAD" | "UNLOAD" if matches!(self.dialect, Dialect::VbDos | Dialect::Quickr) => {
+                let span = self.span(self.i);
+                self.i += 1;
+                let form = self.name_ref()?;
+                self.runtime(&word, vec![form], span);
                 return Ok(Some(()));
             }
             "DEFCUR" => {
