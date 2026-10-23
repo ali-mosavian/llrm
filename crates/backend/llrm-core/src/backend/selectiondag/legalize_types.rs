@@ -1243,7 +1243,8 @@ impl<'a> TypeLegalizer<'a> {
         let mut ops = self.dag.node(access).ops.clone();
         ops[0] = chain;
         ops[at] = offset;
-        // The unindexed access's offset operand is a poison of the pointer type.
+        // The unindexed access's offset operand is a poison of the pointer
+        // type.
         let last = ops.len() - 1;
         ops[last] = self.dag.get_poison(self.dag.value_type(offset));
         let updated = self.dag.update_node_operands(access.node, &ops);
