@@ -643,7 +643,9 @@ fn check_bool_test(
     code: u128,
 ) -> Option<(SDValue, u128)> {
     let is_cmp = dag.opcode(cmp) == x86isd::CMP
-        || (dag.opcode(cmp) == x86isd::SUB && cmp.res == 1 && dag.users(SDValue { node: cmp.node, res: 0 }).next().is_none());
+        || (dag.opcode(cmp) == x86isd::SUB
+            && cmp.res == 1
+            && dag.users(SDValue { node: cmp.node, res: 0 }).next().is_none());
     if !is_cmp || !matches!(code, cond::E | cond::NE) {
         return None;
     }
