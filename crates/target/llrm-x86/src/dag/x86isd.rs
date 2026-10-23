@@ -16,8 +16,8 @@ pub const LLRM_ASM: ISD = ISD::Target(24578);
 /// `build_pair(GlobalAddress, SEGMENT_OF)`. Carries `NodeData::Global`.
 pub const SEGMENT_OF: ISD = ISD::Target(24580);
 /// `llrm.ia16.window`: a huge pointer as the far one into its current
-/// segment window, `far -> far` (a delta-0 `HUGE_ADD`, expanded by the type
-/// legalizer).
+/// segment window, `far -> far` (not a delta-0 `HUGE_ADD`, which does not
+/// normalize; expanded by the type legalizer).
 pub const LLRM_WINDOW: ISD = ISD::Target(24581);
 
 /// `getTargetNodeName`.
