@@ -28,7 +28,7 @@ Later slot PRs carry a row per growth cause in their body.
 ## FR-2: objects larger without fold@801, by cause (owner w-6, 2026-11-06)
 
 All 34 changed QCport objects (m16, +846 B net), the earliest stage where the bodies differ, `LLRM_MIR_STAGES` of the
-`fold801` dists with value numbers normalised (`~/scratch/ledger4/fr2/run.py`, results `fr2_result.json`):
+`fold801` dists with value numbers normalised (`run.py`, results `fr2_result.json`):
 
 | Cause | Objects | B | The difference |
 |---|---|--:|---|
@@ -45,7 +45,7 @@ C and D close as numbers (C is a gain).
 
 ## FR-3: objects changed by removing fold@837, by cause (owner w-6, 2026-11-06)
 
-QCport m16 (+553 B, 33 objects; earliest differing normalised stage of `LLRM_MIR_STAGES` of the `fold837` dists, `~/scratch/ledger4/fr2/run3.py`):
+QCport m16 (+553 B, 33 objects; earliest differing normalised stage of `LLRM_MIR_STAGES` of the `fold837` dists, `run3.py`):
 
 | Cause | Objects | B |
 |---|---|--:|

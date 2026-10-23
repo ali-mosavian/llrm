@@ -131,7 +131,7 @@ Nothing reaches 0.05% of the baseline except the late `loop-unroll` at -O2 (95 i
 the next most is `constraint-elimination` at -Os, 13 of 51432 (0.025%). The ranking of the first table stands, with these eight as
 the ones that move anything on QCport; every other MISSING pass changes 0 of 65 IRs at both levels. Instances our slots already
 match (`tailcallelim`, the early `loop-rotate`, `sroa`, `instcombine`) move code, as expected; they are in the raw output
-(`~/scratch/fa/qcablate_O2.txt`, `qcablate_Os.txt`).
+(`qcablate_O2.txt`, `qcablate_Os.txt`).
 
 ## Order structure
 
