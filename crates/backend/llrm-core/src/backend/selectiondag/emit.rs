@@ -213,6 +213,8 @@ struct Emitter<'a, 'd> {
     /// The nodes that read each value of a glue chain, from their operands (the
     /// matcher's nodes are not in the DAG's use lists).
     glue_users: HashMap<SDValue, Vec<u32>>,
+    /// The floating constants loaded where they are read: (mnemonic, cell).
+    lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The node whose flags EFLAGS holds now.
     flags_now: Option<u32>,
     /// The select a following one may join.
@@ -314,6 +316,7 @@ pub fn emit_in(
         calls: Vec::new(),
         last_call: None,
         flags_now: None,
+        lazy: HashMap::new(),
         last_select: None,
         flag_insns: HashMap::new(),
         glue_users: {
@@ -1368,11 +1371,16 @@ impl Emitter<'_, '_> {
                 .ok_or_else(|| EmitError::Unsupported(format!("a short {name}")))
         };
         match prefix {
+            // A constant is loaded where it is read, once for each reader: a
+            // value held on the x87 stack across a call cannot stay there.
             "LD" if rest.len() == 3 && rest.starts_with(['0', '1']) => {
-                let held = self.fresh(10);
-                self.values.insert(result, held.value);
                 let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
-                self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], Vec::new());
+                self.lazy.insert(result, (mnemonic, None));
+            }
+            "LD" if matches!(self.dag.node(group(0)?[3]).data, NodeData::PoolIndex(_)) => {
+                let (first, _) = digits(rest);
+                let cell = self.cell(&group(0)?, first / 8)?;
+                self.lazy.insert(result, ("fld", Some(cell)));
             }
             "LD" | "ILD" => {
                 let (first, _) = digits(rest);
@@ -1687,6 +1695,11 @@ impl Emitter<'_, '_> {
         if let NodeData::Const { bits, .. } = self.dag.node(value).data {
             let w = width_of(self.dag, value);
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
+        }
+        if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
+            let held = self.fresh(10);
+            self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            return Ok(Loc::Held(held));
         }
         if self.dag.opcode(value) == ISD::Register {
             return self.register(value);
