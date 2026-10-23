@@ -87,8 +87,7 @@
 //! 0x0009).
 //!
 //! # Runs
-//! A sub-pass of [`crate::backend::peephole`], after `spillforward`: a reload
-//! on the other path is gone by then, so the store need not run there. Once per
+//! A sub-pass of [`crate::backend::peephole`], after `copysink`. Once per
 //! peephole run. `latched` follows it.
 //!
 //! # Keeps

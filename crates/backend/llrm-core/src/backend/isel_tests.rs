@@ -230,6 +230,7 @@ fn test_locals_live_in_frame_slots() {
             "mov ax, word ptr [bp+6]",
             "mov word ptr [bp-2], ax",
             "mov word ptr [bp-4], 7",
+            "mov ax, word ptr [bp-2]",
             "leave",
             "retf",
         ]
@@ -361,6 +362,7 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             // arguments.
             "lea ax, [bp+8]",
             "mov word ptr [bp-2], ax",
+            "mov ax, word ptr [bp-2]",
             // va_copy: the second list holds the same pointer; va_end is no
             // code.
             "mov word ptr [bp-4], ax",

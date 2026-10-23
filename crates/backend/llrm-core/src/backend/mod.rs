@@ -75,11 +75,11 @@
 //! ```
 //!
 //! Phases 4 to 9 are in `machine_with` before `allocate`; `allocate` calls
-//! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
-//! live-range splitting and spilling, and consults `constrain`, `classes`,
+//! `spillplacement`, `slots` and `postings` for live-range splitting and
+//! spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
 //! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
-//! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
+//! `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
 //!
@@ -326,7 +326,6 @@ pub mod regclass;
 pub mod registerinfo;
 pub mod rewriter;
 pub mod sharedstores;
-pub mod spillforward;
 pub mod spillplacement;
 pub mod storecombine;
 pub mod storedhomes;
