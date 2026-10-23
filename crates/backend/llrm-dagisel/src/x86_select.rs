@@ -26,7 +26,7 @@ use crate::generated::ids::{isd, x86isd};
 use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
-use crate::x86_fcmp::select_fcmp;
+use crate::x86_fcmp::{select_fcmp, select_pop_from_x87};
 use crate::x86_hooks::X86Hooks;
 use crate::x86_llrm::{llrm_opcode, select_llrm_node};
 use crate::x86_mul::select_mul_lohi;
@@ -53,6 +53,10 @@ pub fn select_node<D: AddrDag>(
         }
         op if llrm_opcode(op).is_some() => {
             select_llrm_node(dag, node, llrm_opcode(op).expect("an llrm node"));
+            return Outcome::Selected;
+        }
+        x86isd::POP_FROM_X87_REG => {
+            select_pop_from_x87(dag, node);
             return Outcome::Selected;
         }
         x86isd::FCMP => {

@@ -1041,7 +1041,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [["docs_links"]]
+    assert asked == [["docs_links", "no_local_paths"]]
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1073,3 +1073,14 @@ def test_a_squash_github_refuses_prints_the_reason(capsys):
     assert ps.squash("4108", info, "body", run=refuse) is False
     out = capsys.readouterr().out
     assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
+
+
+def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_lib_tests_switch():
+    """tests/no_local_paths went red on parity from a doc naming ~/scratch (#4086) and nothing at landing ran it."""
+    def on_merged(targets):
+        return {"integration no_local_paths::test_no_tracked_markdown_names_a_path_of_one_machine"} if "no_local_paths" in targets else set()
+
+    failed = ps.landing_scanner_failures(["docs/working/machine-cleanup-compile-plan.md"], False, on_merged=on_merged, on_head=lambda t: set())
+    assert failed == {"integration no_local_paths::test_no_tracked_markdown_names_a_path_of_one_machine"}
+    smoke = ps.parity_smoke_module()
+    assert set(ps.ALWAYS_SCANNERS) <= set(smoke.SCANNERS) and not set(ps.ALWAYS_SCANNERS) & set(smoke.NIGHTLY_ONLY)

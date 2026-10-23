@@ -406,6 +406,21 @@ impl Dag for TestDag {
             ..Node::default()
         })
     }
+    fn copy_from_reg_node(
+        &mut self,
+        chain: SDValue,
+        register: SDValue,
+        vt: Vt,
+        glue: Option<SDValue>,
+    ) -> u32 {
+        let mut ops = vec![chain, register];
+        ops.extend(glue);
+        let mut vts = vec![vt, mvt::Other];
+        if glue.is_some() {
+            vts.push(mvt::Glue);
+        }
+        self.add(Node { opcode: isd::CopyFromReg, vts, ops, ..Node::default() })
+    }
     fn token_factor(
         &mut self,
         chains: &[SDValue],
