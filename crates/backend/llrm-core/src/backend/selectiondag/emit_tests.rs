@@ -83,6 +83,8 @@ fn context_in(
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::new();
     f(&EmitContext {
+        caller_saved: &Default::default(),
+        stack_pointer: RegId::SP,
         globals: &NoGlobals,
         block_at: &no_blocks,
         frame: &NoFrame,

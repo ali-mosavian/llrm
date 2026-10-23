@@ -829,10 +829,10 @@ fn staged(
     let dag = match target.selector {
         Selector::Old => None,
         Selector::Dag => {
-            Some(timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch)))
+            Some(timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu)))
         }
         Selector::Shadow => {
-            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch))
+            match timed("dag isel", || crate::backend::selectiondag::dag_function::selected(module, name, target.arch, target.cpu))
             {
                 Ok(done) => Some(Ok(done)),
                 Err(why) => {
