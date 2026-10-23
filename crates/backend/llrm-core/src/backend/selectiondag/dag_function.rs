@@ -386,7 +386,7 @@ fn selected_in(
     };
     let (builder_target, address_mode) =
         if m16 { (BuilderTarget::m16(), AddrMode::Real16) } else { (BuilderTarget::m32(), AddrMode::Flat32) };
-    let builder_target = builder_target.with_runtime_calls(libcalls);
+    let builder_target = builder_target.with_runtime_calls(libcalls).with_float_store(cpu.float_store);
     let tables = tables(arch);
     // The builder numbers the fixed objects the stack parameters make: a byval
     // aggregate one, a cell one for each register-sized part of its value (an
