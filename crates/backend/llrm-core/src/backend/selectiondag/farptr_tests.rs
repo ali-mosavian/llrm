@@ -4,25 +4,37 @@
 //! every one stopped the builder at "pointer in another address space" (7919
 //! corpus blocks). The pin has no far pointers; these test the shape.
 
+use llrm_mir::datalayout::DataLayout;
+
 use super::builder::{BuilderTarget, build_block};
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::ISD;
 use super::mvt::MVT;
 use super::x86_lowering::x86isd;
-use llrm_mir::datalayout::DataLayout;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n";
 
 fn built(body: &str) -> super::dag::SelectionDAG {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{body}")).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-    let (id, _, function) =
-        module.functions().find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f")).expect("f");
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .expect("f");
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap())
-        .unwrap_or_else(|why| panic!("{}", why.0))
-        .dag
+    build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m16(),
+        &llrm_x86_m16::M16,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0))
+    .dag
 }
 
 fn count(
