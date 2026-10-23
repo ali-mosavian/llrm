@@ -68,6 +68,15 @@ accepts: about 250, which are `OPTION EXPLICIT`, the VBDOS/PDS/Quickr forms
 grammar is too lax to (`DIM a() AS INTEGER` outside `$DYNAMIC`). BC's own
 checks, not the parser's, are what the later passes have to reproduce.
 
+The first version of the runner took 3m50s for 128 files on three compilers,
+211 s of it PDS 7.1's. Its `BC.EXE` is an NE image and the fork's debug-symbol
+watch (`WatchForLoader`) rescans all of RAM for its 13 segments on every newly
+executed page, about 4.5 s of host CPU a job for 40 emulated ms. `bcprobe.py`
+sends `:nosymbols`, a job option added by `dosbox-nosymbols.patch` (apply it
+to the `dosrun` branch of the fork and rebuild; a fork without it runs the
+line as a shell command and PDS stays slow). With that, one shared queue of
+(compiler, file) pairs over four machines per core: 28 s.
+
 ## Deferred to later passes
 
 | Written | Node | Decided by |

@@ -11,35 +11,38 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tqdm import tqdm
+
+from bcprobe import compiler, probe
+
 HERE = Path(__file__).parent
 
 
-def verdicts(command, files):
-    out = subprocess.run(command + [str(f) for f in files], stdout=subprocess.PIPE, text=True).stdout
-    result = {}
-    for line in out.splitlines():
-        name, _, rest = line.partition(": ")
-        result.setdefault(name, []).append(rest)
-    return result
+def mine_verdicts(files):
+    binary = HERE / "target" / "debug" / "qbone"
+    subprocess.run(["cargo", "build", "-q", "--manifest-path", str(HERE / "Cargo.toml"), "--bin", "qbone"], check=True)
+    out = subprocess.run([str(binary), *map(str, files)], capture_output=True, text=True).stdout
+    return {line.partition(": ")[0]: line.partition(": ")[2] for line in out.splitlines()}
 
 
 def main():
-    args, root = sys.argv[1:], []
+    args, root = sys.argv[1:], None
     if args[:1] == ["--root"]:
-        root, args = args[:2], args[2:]
-    families = {Path(one).name or one: one for one in args[0].split(",")}  # BC_DIR[,BC_DIR...]
+        root, args = Path(args[1]), args[2:]
+    dirs = [Path(one) for one in args[0].split(",")]  # BC_DIR[,BC_DIR...], one per family
     files = [Path(f) for f in args[1:]]
-    cargo = ["cargo", "run", "-q", "--manifest-path", str(HERE / "Cargo.toml"), "--bin", "qbone", "--"]
-    mine = verdicts(cargo, files)
-    bc = {name: verdicts([sys.executable, str(HERE / "bcprobe.py"), *root, bc_dir], files) for name, bc_dir in families.items()}
-    accepted = {name: 0 for name in families}
+    mine = mine_verdicts(files)
+    tasks = [(d, f) for f in files for d in dirs]
+    with tqdm(total=len(tasks), unit="job", desc="BC", file=sys.stderr) as bar:
+        bc = probe(tasks, root, bar.update)
+    accepted = {compiler(d)[0]: 0 for d in dirs}
     gaps, lax, both_ok, both_refused = [], [], 0, 0
     for f in files:
-        by = {name: got[str(f)][0] for name, got in bc.items()}
+        by = {compiler(d)[0]: bc[(d, f)] for d in dirs}
         for name, verdict in by.items():
             accepted[name] += verdict.startswith("ok")
         who = [name for name, verdict in by.items() if verdict.startswith("ok")]
-        m = mine[str(f)][0]
+        m = mine[str(f)]
         if who and m == "ok":
             both_ok += 1
         elif who:
@@ -56,4 +59,5 @@ def main():
     print("\n".join("  " + l for l in lax))
 
 
-main()
+if __name__ == "__main__":
+    main()

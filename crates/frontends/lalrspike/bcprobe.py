@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """Compile BASIC sources with the real BC.EXE and say which it accepts.
 
-    bcprobe.py [--root DIR] BC_DIR FILE.bas...      # BC_DIR holds BC.EXE (llrm-private-tools/qb45)
+    bcprobe.py [--root DIR] BC_DIR[,BC_DIR...] FILE.bas...
 
-Runs on the dosrun fork of DOSBox-X: four booted machines per core, every file
-a job forked from one of them, so the start-up is paid once per machine.
-Prints `ok`, `refused` with BC's first error, or `timeout`.
+BC_DIR holds BC.EXE (llrm-private-tools/qb45, /pds71, /vbdos). Runs on the
+dosrun fork of DOSBox-X: four booted machines per core. The work is one queue
+of (compiler, file) pairs that every machine takes from as it frees up, so a
+slow compile never leaves a core idle, and all the compilers run at once. A job
+is `:nosymbols` (the fork otherwise rescans RAM for a protected-mode compiler's
+segments, seconds a job for PDS 7.1) and has a wall limit of its own.
 
 With --root the sources are compiled in place from that directory, mounted as
 C:, so a `'$INCLUDE: '..\\inc\\x.bi'` finds its file; the files must have CR LF
 line ends and 8.3 names. Without it each source is copied to a directory of
 its own with the .bi/.inc files beside it.
+
+Prints `FAMILY<TAB>FILE: ok|refused ...|timeout` per pair; BCTIME=1 adds each
+job's emulated and CPU time on stderr.
 """
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -22,7 +29,6 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tqdm import tqdm
@@ -34,6 +40,7 @@ import dosbatch  # noqa: E402
 FORKS = [Path(__file__).resolve().parents[3].parent / "dosbox-x-fork" / "src" / "dosbox-x", Path.home() / "dosbox-x-fork" / "src" / "dosbox-x"]
 DOSBOX = os.environ.get("DOSBOX_BIN") or str(next((f for f in FORKS if f.exists()), dosbatch.DOSBOX))
 INCLUDES = (".bi", ".inc")
+JOB_SECONDS = 30  # host seconds a compile may take, in the fork's own clock
 
 
 def verdict(out):
@@ -60,54 +67,117 @@ def switches(source):
     return " /E /X" if b"ON ERROR" in text or b"RESUME" in text else ""
 
 
-def machine(bc_dir, sources, root, progress):
-    """One booted DOSBox-X, one job per source; the verdicts in order."""
-    with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        script = []
-        for at, source in enumerate(sources):
-            head = [":ms 600000", ":wall 60"]
-            if root:
-                rel = source.resolve().relative_to(root.resolve())
-                folder = "\\".join(rel.parts[:-1])
-                script += [*head, f"mount c {root}", f"mount d {work}", f"mount v {bc_dir}", "c:", f"cd \\{folder}", rf"{compiler(bc_dir)[1]} {rel.name},NUL,NUL /O{switches(source)}; > D:\O{at}.TXT", "."]
-                continue
-            job = work / f"D{at}"
-            job.mkdir()
-            for sibling in source.parent.iterdir():  # $INCLUDE files beside the source
-                if sibling.suffix.lower() in INCLUDES and sibling.is_file():
-                    shutil.copy(sibling, job / sibling.name.upper())
-            (job / "T.BAS").write_bytes(dosbatch.crlf(source.read_bytes().replace(b"\x1a", b"")))
-            script += [*head, f"mount c {work}", f"mount v {bc_dir}", "c:", f"cd D{at}", rf"{compiler(bc_dir)[1]} T.BAS /O{switches(source)}; > O.TXT", "."]
-        (work / "job.conf").write_text(dosbatch.CONF)
-        (work / "jobs.txt").write_text("\n".join(script) + "\n")
-        events = work / "events.txt"
-        with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
-            process = subprocess.Popen([DOSBOX, "-nolog", "-conf", str(work / "job.conf")], stdin=stdin, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
-                                       env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
-            counted = 0
-            while process.poll() is None:  # each job's end event moves the bar
-                time.sleep(0.1)
-                done = events.read_text().count('{"ev":"end"')
-                progress(done - counted)
-                counted = done
-            progress(events.read_text().count('{"ev":"end"') - counted)
-        ends = [json.loads(l) for l in events.read_text().splitlines() if l.startswith('{"ev":"end"')]
-        result = []
-        for at in range(len(sources)):
-            end = ends[at] if at < len(ends) else {}
-            out_file = work / (f"O{at}.TXT" if root else f"D{at}/O.TXT")
-            if os.environ.get("BCTIME"):
-                print(f"{sources[at].name}: reason={end.get('reason')} emulated_ms={end.get('ms')} cpu_ms={end.get('cpu_ms')}", file=sys.stderr)
-            if end.get("reason") != "exit" or not out_file.exists():
-                result.append("timeout" if end else "no result")
+class Machine:
+    """One booted DOSBox-X that takes a job at a time on its standard input."""
+
+    def __init__(self):
+        self.work = Path(tempfile.mkdtemp())
+        (self.work / "job.conf").write_text(dosbatch.CONF)
+        self.events = self.work / "events.txt"
+        self.jobs = 0
+        self.process = None
+        self.start()
+
+    def start(self):
+        sink = open(self.events, "w")
+        self.process = subprocess.Popen([DOSBOX, "-nolog", "-conf", str(self.work / "job.conf")], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
+                                        env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
+        sink.close()
+        self.reader = open(self.events)
+        self.ended = 0
+
+    def stop(self):
+        try:
+            self.process.stdin.close()
+            self.process.wait(timeout=5)
+        except Exception:
+            self.process.kill()
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def run(self, script):
+        """Send one job and wait for its end event; that event, or None when the machine died."""
+        self.process.stdin.write(script.encode())
+        self.process.stdin.flush()
+        deadline = time.monotonic() + JOB_SECONDS + 60
+        buffer = ""
+        while time.monotonic() < deadline:
+            more = self.reader.read()
+            buffer += more
+            lines = buffer.split("\n")
+            buffer = lines.pop()  # what is after the last newline is not a whole line yet
+            for line in lines:
+                if line.startswith('{"ev":"end"'):
+                    return json.loads(line)
+            if not more:
+                if self.process.poll() is not None:
+                    return None
+                time.sleep(0.01)
+        self.process.kill()
+        return None
+
+
+def job_script(bc_dir, source, root, machine):
+    """The job's text, its directory and the file BC's output lands in."""
+    machine.jobs += 1
+    name = f"J{machine.jobs}"
+    head = [f":ms 600000", f":wall {JOB_SECONDS}", ":nosymbols"]
+    exe = compiler(bc_dir)[1]
+    if root:
+        rel = source.resolve().relative_to(root.resolve())
+        folder = "\\".join(rel.parts[:-1])
+        out = machine.work / f"{name}.TXT"
+        lines = [f"mount c {root}", f"mount d {machine.work}", f"mount v {bc_dir}", "c:", f"cd \\{folder}", rf"{exe} {rel.name},NUL,NUL /O{switches(source)}; > D:\{name}.TXT"]
+    else:
+        job = machine.work / name
+        job.mkdir()
+        for sibling in source.parent.iterdir():  # $INCLUDE files beside the source
+            if sibling.suffix.lower() in INCLUDES and sibling.is_file():
+                shutil.copy(sibling, job / sibling.name.upper())
+        (job / "T.BAS").write_bytes(dosbatch.crlf(source.read_bytes().replace(b"\x1a", b"")))
+        out = job / "O.TXT"
+        lines = [f"mount c {machine.work}", f"mount v {bc_dir}", "c:", f"cd {name}", rf"{exe} T.BAS /O{switches(source)}; > O.TXT"]
+    return "\n".join([*head, *lines, ".", ""]), out
+
+
+def probe(tasks, root=None, progress=lambda n: None):
+    """{(bc_dir, source): verdict} for every pair, run on a pool of machines sharing one queue."""
+    work = queue.Queue()
+    for task in tasks:
+        work.put(task)
+    results, lock = {}, threading.Lock()
+
+    def worker():
+        machine = Machine()
+        while True:
+            try:
+                bc_dir, source = work.get_nowait()
+            except queue.Empty:
+                break
+            script, out = job_script(bc_dir, source, root, machine)
+            end = machine.run(script)
+            if end is None:  # the machine died or hung: this pair is a timeout, and a fresh machine takes over
+                answer = "timeout"
+                machine.stop()
+                machine = Machine()
+            elif end.get("reason") != "exit" or not out.exists():
+                answer = "timeout"
             else:
-                text = out_file.read_bytes().decode("latin-1")
-                if os.environ.get("BCRAW"):
-                    print(text, file=sys.stderr)
-                result.append(verdict(text))
-        return result
+                text = out.read_bytes().decode("latin-1")
+                if os.environ.get("BCTIME"):
+                    print(f"{compiler(bc_dir)[0]} {source.name}: emulated_ms={end.get('ms')} cpu_ms={end.get('cpu_ms')}", file=sys.stderr)
+                answer = verdict(text)
+            with lock:
+                results[(bc_dir, source)] = answer
+            progress(1)
+        machine.stop()
+
+    threads = [threading.Thread(target=worker) for _ in range(min(len(tasks), 4 * (os.cpu_count() or 4)))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
 
 
 def main():
@@ -115,22 +185,13 @@ def main():
     root = None
     if args[:1] == ["--root"]:
         root, args = Path(args[1]), args[2:]
-    bc_dir, files = Path(args[0]), [Path(f) for f in args[1:]]
-    machines = 4 * (os.cpu_count() or 4)  # four booted machines per core
-    slices = [files[i::machines] for i in range(machines) if files[i::machines]]
-    lock = threading.Lock()
-    with tqdm(total=len(files), unit="file", desc="BC", file=sys.stderr) as bar:
-        def progress(n):
-            with lock:
-                bar.update(n)
-
-        with ThreadPoolExecutor(len(slices)) as pool:
-            results = list(pool.map(lambda s: machine(bc_dir, s, root, progress), slices))
-    verdicts = {}
-    for chunk, got in zip(slices, results):
-        verdicts.update(zip(chunk, got))
-    for f in files:
-        print(f"{f}: {verdicts[f]}".rstrip())
+    bc_dirs, files = [Path(d) for d in args[0].split(",")], [Path(f) for f in args[1:]]
+    tasks = [(d, f) for f in files for d in bc_dirs]
+    with tqdm(total=len(tasks), unit="job", desc="BC", file=sys.stderr) as bar:
+        results = probe(tasks, root, bar.update)
+    for d, f in tasks:
+        print(f"{compiler(d)[0]}\t{f}: {results[(d, f)]}".rstrip())
 
 
-main()
+if __name__ == "__main__":
+    main()
