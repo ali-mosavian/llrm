@@ -147,7 +147,8 @@ def job_script(bc_dir, source, root, machine):
         job.mkdir()
         for sibling in source.parent.iterdir():  # $INCLUDE files beside the source
             if sibling.suffix.lower() in INCLUDES and sibling.is_file():
-                shutil.copy(sibling, job / sibling.name.upper())
+                # BC reads CRLF text; an include with bare LFs is read wrong
+                (job / sibling.name.upper()).write_bytes(dosbatch.crlf(sibling.read_bytes().replace(b"\x1a", b"")))
         (job / "T.BAS").write_bytes(dosbatch.crlf(source.read_bytes().replace(b"\x1a", b"")))
         out = job / "O.TXT"
         lines = [f"mount c {machine.work}", f"mount v {bc_dir}", "c:", f"cd {name}", rf"{exe} T.BAS /O{switches(source)}; > O.TXT"]
