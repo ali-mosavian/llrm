@@ -25,6 +25,13 @@
 //! asks for known bits sees only constants. Exit: a known-bits port. Owner
 //! sdag-b. Review 2026-11-13.
 //!
+//! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
+//! single-use simple load only, before operations are legal: no
+//! `ExtendUsesToFormExtLoad` (a load with other users) and no
+//! `isLoadExtLegal` query (the combiner has no action table). Exit: pass the
+//! table in and port `ExtendUsesToFormExtLoad`. Owner sdag-b. Review
+//! 2026-11-27.
+//!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
 //! ([L1845](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1845)),
@@ -35,7 +42,8 @@
 
 use std::collections::HashSet;
 
-use super::dag::{Rauw, SDValue, SelectionDAG};
+use super::actions::LoadExt;
+use super::dag::{NodeData, Rauw, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
 
@@ -193,8 +201,62 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         match self.dag.opcode(node) {
             ISD::Mul => self.visit_mul(node),
             ISD::And => self.visit_and(node),
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self.visit_extend(node),
             _ => None,
         }
+    }
+
+    /// The users of `old` read `new`, and are looked at again.
+    fn replace_value(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
+        for event in self.dag.replace_all_uses_with(old, new) {
+            match event {
+                Rauw::Updated(user) => self.add_to_worklist(user),
+                Rauw::Merged { into, .. } => self.add_to_worklist_with_users(into),
+            }
+        }
+    }
+
+    /// `visitSIGN_EXTEND`, `visitZERO_EXTEND` and `visitANY_EXTEND` for a
+    /// loaded operand (`tryToFoldExtOfLoad` and the load case after it): the
+    /// extension is the load's own. `(zext (load i8 p))` is `zextload i8 p`;
+    /// an already extending load is re-extended to the wider type.
+    fn visit_extend(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let load = self.dag.operand(node, 0);
+        if self.level >= CombineLevel::AfterLegalizeVectorOps
+            || self.dag.opcode(load) != ISD::Load
+            || self.dag.users(load).count() != 1
+        {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        if info.volatile {
+            return None;
+        }
+        let wanted = match self.dag.opcode(node) {
+            ISD::ZeroExtend => LoadExt::ZExtLoad,
+            ISD::SignExtend => LoadExt::SExtLoad,
+            _ => LoadExt::ExtLoad,
+        };
+        let ext = match info.ext {
+            None => wanted,
+            Some(have) if have == wanted => have,
+            Some(LoadExt::ExtLoad) => wanted,
+            Some(have) if wanted == LoadExt::ExtLoad => have,
+            Some(_) => return None,
+        };
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let info = super::dag::MemInfo { ext: None, space: 0, ..info };
+        let wide = self.dag.value_type(node);
+        let extended = self.dag.get_ext_load(ext, wide, chain, ptr, info);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        Some(extended)
     }
 
     /// `visitAND`, the part `SimplifyDemandedBits` does for it: `(and x, c)` is

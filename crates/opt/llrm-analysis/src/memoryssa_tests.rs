@@ -444,6 +444,42 @@ b0:
     }
 }
 
+/// A call is a clobber of a cell where the AA stack cannot rule it out
+/// (`instructionClobbersQuery`): `lifetime.end` of another slot is apart from
+/// this one (the pin's NoModRef), a call given the slot is not. The footprint
+/// made both clobbers (33 `lifetime.end` and 15 `lifetime.start` queries over
+/// QCport's modules).
+#[test]
+fn test_a_call_the_aa_stack_rules_out_does_not_clobber_the_cell() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.end.p0(i64, ptr)
+declare void @given(ptr)
+
+define i16 @f() {
+b0:
+  %slot = alloca i16
+  %other = alloca i16
+  store i16 1, ptr %slot
+  call void @llvm.lifetime.end.p0(i64 2, ptr %other)
+  %x = load i16, ptr %slot
+  call void @given(ptr %slot)
+  %y = load i16, ptr %slot
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let (store, ended, load, given, again) =
+        (site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4), site(&unit, "b0", 5), site(&unit, "b0", 6));
+    let graph = graph(&unit);
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(store).id]),
+        "lifetime.end {ended:?}"
+    );
+    assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(given).id]));
+}
+
 /// A loop write invalidates a dominating read made before entering the loop.
 #[test]
 fn test_loop_backedge_write_prevents_read_reuse() {

@@ -9,7 +9,7 @@ fn byte(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None };
+    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
     dag.get_load(EVT::I8, chain, ptr, info)
 }
 
@@ -52,7 +52,9 @@ fn known_bits_of_the_nodes_the_folds_ask_about() {
     let masked = dag.get_node(ISD::And, EVT::I32, &[wide, ff]);
     dag.set_root(masked);
     combine(&mut dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes);
-    assert_eq!(dag.get_root(), wide);
+    // The `and` is gone; the extension of the load became the load's own.
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, EVT::I32));
     let c = dag.get_constant(6, EVT::I8);
     assert_eq!(known_bits(&dag, c), KnownBits::constant(6, 8));
     assert!(known_bits(&dag, c).is_constant());

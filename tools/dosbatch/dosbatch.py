@@ -103,8 +103,16 @@ class BuildError(Exception):
 _RUNTIME_LOCK = threading.Lock()
 
 
+def with_isel(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, when the variable is set: the same programs through the other instruction selector."""
+    mode = os.environ.get("LLRM_ISEL")
+    if mode and Path(command[0]).name == "llrm-c":
+        return [command[0], f"--isel={mode}", *command[1:]]
+    return command
+
+
 def _host(command: list[str]) -> None:
-    done = cpulimit.run(command, 300, capture_output=True, text=True)
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
