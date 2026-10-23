@@ -18,8 +18,8 @@
 //! the action table makes it Custom at `i32` only (m16's `i16` is B0e's).
 //!
 //! DEVIATE SD200: not translated yet, so the nodes are the plain forms: the
-//! reassociated and immediate forms of `LowerAndToBT`, the `SUB 0, x` and `XOR` forms of
-//! `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
+//! reassociated and immediate forms of `LowerAndToBT`, the `SUB 0, x` and `XOR`
+//! forms of `EmitCmp` (`EmitTest` does reuse an arithmetic result's flags), the
 //! `SETCC_CARRY` and `CTTZ`-select folds of `LowerSELECT`, overflow
 //! intrinsics, and the 16-bit immediate widening in `EmitCmp`. Reason: each
 //! needs known-bits or use queries the DAG lacks. Exit: with the combiner
@@ -371,9 +371,9 @@ fn emit_cmp(
     SDValue { node: sub.node, res: 1 }
 }
 
-/// `getBT`: `bt src, bit` as flags; the source is any-extended to a dword (there
-/// is no byte `bt`, the word form is longer) and the bit number follows its
-/// width.
+/// `getBT`: `bt src, bit` as flags; the source is any-extended to a dword
+/// (there is no byte `bt`, the word form is longer) and the bit number follows
+/// its width.
 fn get_bt(
     dag: &mut SelectionDAG,
     mut src: SDValue,
@@ -401,9 +401,8 @@ fn lower_and_to_bt(
     cc: CondCode,
 ) -> Option<(SDValue, u128)> {
     let (a, b) = (dag.operand(and, 0), dag.operand(and, 1));
-    let is_bit_shift = |dag: &SelectionDAG, v: SDValue| {
-        dag.opcode(v) == ISD::Shl && dag.constant(dag.operand(v, 0)) == Some(1)
-    };
+    let is_bit_shift =
+        |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Shl && dag.constant(dag.operand(v, 0)) == Some(1);
     let (mut src, bit) = if is_bit_shift(dag, b) {
         (a, dag.operand(b, 1))
     } else if is_bit_shift(dag, a) {

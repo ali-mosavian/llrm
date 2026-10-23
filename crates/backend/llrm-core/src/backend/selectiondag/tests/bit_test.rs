@@ -2,7 +2,9 @@ use super::super::legalize_dag::DagLegalizer;
 use super::super::x86_lowering::{X86Lowering, cond, x86isd};
 use super::*;
 
-fn lowered(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue) -> (SelectionDAG, SDValue, [SDValue; 2]) {
+fn lowered(
+    build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue) -> SDValue
+) -> (SelectionDAG, SDValue, [SDValue; 2]) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let (x, n) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I8, 6));
