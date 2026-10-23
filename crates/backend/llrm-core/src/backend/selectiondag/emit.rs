@@ -416,7 +416,10 @@ impl Emitter<'_, '_> {
                 Some(k) if memory_dest => dests.get(k).cloned(),
                 _ => rest.next(),
             };
-            sources.push(taken.ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?);
+            // a shift by `cl` reads `CL` without an operand: the `CopyToReg`
+            // glued to it wrote the register
+            let implicit = || name.ends_with("rCL").then(|| Loc::Reg(Reg { register: llrm_lir::registers::RegId::CL, width: 1 }));
+            sources.push(taken.or_else(implicit).ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?);
         }
         if rest.next().is_some() {
             return Err(EmitError::Unsupported(format!("{name}: more operands than the form's sources")));
