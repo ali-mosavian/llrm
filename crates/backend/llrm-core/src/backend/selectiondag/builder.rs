@@ -477,7 +477,8 @@ impl Builder<'_> {
                             align,
                             volatile: false,
                             base: MemBase::Stack(-fixed),
-                            ext: None, space: 0,
+                            ext: None,
+                            space: 0,
                         };
                         pieces.push(self.dag.get_load(part_vt, entry_node, ptr, info));
                     }
@@ -686,7 +687,14 @@ impl Builder<'_> {
                             );
                         let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                         let vt = self.dag.value_type(*piece);
-                        let mem = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown, ext: None, space: 0 };
+                        let mem = MemInfo {
+                            mem_vt: vt,
+                            align: 1,
+                            volatile: false,
+                            base: MemBase::Unknown,
+                            ext: None,
+                            space: 0,
+                        };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
                 }

@@ -224,7 +224,8 @@ impl Builder<'_> {
                     align: common_alignment(dst_align, dst_off) as u32,
                     volatile: false,
                     base: MemBase::Unknown,
-                    ext: None, space: 0,
+                    ext: None,
+                    space: 0,
                 };
                 chains.push(self.dag.get_store(chain, value, to, info));
                 src_off += width;
@@ -238,7 +239,8 @@ impl Builder<'_> {
                 align: common_alignment(src_align, src_off) as u32,
                 volatile: false,
                 base: MemBase::Unknown,
-                ext: None, space: 0,
+                ext: None,
+                space: 0,
             };
             let value = self.dag.get_load(vt, chain, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -247,7 +249,8 @@ impl Builder<'_> {
                 align: common_alignment(dst_align, dst_off) as u32,
                 volatile: false,
                 base: MemBase::Unknown,
-                ext: None, space: 0,
+                ext: None,
+                space: 0,
             };
             let store = self.dag.get_store(chain, value, to, info);
             chains.push(SDValue { node: value.node, res: 1 });
@@ -287,7 +290,8 @@ impl Builder<'_> {
                 align: common_alignment(src_align, off) as u32,
                 volatile: false,
                 base: MemBase::Unknown,
-                ext: None, space: 0,
+                ext: None,
+                space: 0,
             };
             let value = self.dag.get_load(vt, chain, from, info);
             placed.push((value, off, vt));
@@ -304,7 +308,8 @@ impl Builder<'_> {
                 align: common_alignment(dst_align, at) as u32,
                 volatile: false,
                 base: MemBase::Unknown,
-                ext: None, space: 0,
+                ext: None,
+                space: 0,
             };
             stores.push(self.dag.get_store(joined, value, to, info));
         }
@@ -341,7 +346,8 @@ impl Builder<'_> {
                 align: common_alignment(align, off) as u32,
                 volatile: false,
                 base: MemBase::Unknown,
-                ext: None, space: 0,
+                ext: None,
+                space: 0,
             };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;
