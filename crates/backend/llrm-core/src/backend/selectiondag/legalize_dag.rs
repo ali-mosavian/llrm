@@ -247,6 +247,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let both = self.dag.get_node_multi(lohi, &[vt, vt], &[a, b]);
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
+            ISD::Undef | ISD::Poison => {
+                // `ExpandNode`: zero of the type.
+                Some(vec![if vt.is_integer() {
+                    self.dag.get_constant(0, vt)
+                } else {
+                    self.dag.get_constant_fp(0, vt)
+                }])
+            }
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
