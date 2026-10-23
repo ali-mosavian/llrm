@@ -1051,3 +1051,16 @@ def test_the_scanner_line_names_the_tree_it_scanned():
     """#4039 landed after `scanners: 13 targets, 0 red`; replaying its PRs on the head is red, and the log did not say which tree the scanners saw."""
     assert ps.scanner_tests_line(["docs_links"], set(), "abc123def") == "scanners: 1 targets, 0 red (tree abc123def)"
     assert ps.scanner_tests_line(["docs_links"], {"x"}) == "scanners: 1 targets, 1 red"
+
+
+def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
+    """The batch's scanners ran on a tree with #4042 in it; #4042 failed at the squash ("Head branch was modified") and the others were pushed on a tree no scanner had seen."""
+    asked = []
+    red = lambda number, info: asked.append(number) or {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}  # noqa: E731
+    assert ps.rescanned_refusal("4039", {}, [], rescan=red) == "" and not asked, "nothing dropped: the batch's scan stands"
+    why = ps.rescanned_refusal("4039", {}, ["4042"], rescan=red)
+    assert asked == ["4039"] and "dropped #4042" in why and "docs_links" in why
+    assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
+    import inspect
+
+    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"

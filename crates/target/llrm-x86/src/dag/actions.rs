@@ -350,6 +350,10 @@ impl TargetLowering {
         t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
         // L337..L370
         t.set_ops(&[MulHS, MulHU, SDiv, UDiv, SRem, URem], &ints64, Expand);
+        // The pin divides an i8 or i16 by a constant with a widened multiply
+        // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
+        // has the two-result multiply (`MUL32r`).
+        t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
         t.set_operation_action(BrJT, MVT::Other, Expand);
         t.set_operation_action(BrCond, MVT::Other, Custom);
         t.set_ops(&[BrCC, SelectCC], &[MVT::F32, MVT::F64, MVT::F80, MVT::I8, MVT::I16, MVT::I32, MVT::I64], Expand);

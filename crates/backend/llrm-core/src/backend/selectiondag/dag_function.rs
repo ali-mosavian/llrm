@@ -127,6 +127,10 @@ impl FrameMap for Frame {
 pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
 
 impl FrameObjects for Temporaries<'_> {
+    fn objects(&self) -> i32 {
+        self.0.locals.borrow().len() as i32
+    }
+
     fn create_stack_temporary(
         &mut self,
         size: u32,
@@ -337,6 +341,12 @@ pub fn selected(
             Parameter::Registers(_) => {}
         }
     }
+    // `LowerFormalArguments`: the first variadic argument is the next fixed
+    // object, where the convention puts the first stack argument it does not
+    // name.
+    if module.signature(function.ty).2 {
+        cells.push(convention.stack_arguments);
+    }
     let frame = Frame::new(cells);
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
@@ -514,11 +524,25 @@ pub fn selected(
     body.sealed_arguments = true;
     body.ordered = true;
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
+    // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
+    // their bytes are laid down at the call, as the old route did.
+    let mut inline = IndexMap::default();
+    for (at, name) in &calls {
+        for signed in [true, false] {
+            for wide in [true, false] {
+                if let Ok(routine) = arch.divide_routine(signed, wide) {
+                    if routine.name == name.as_str() {
+                        inline.insert(*at, routine.code);
+                    }
+                }
+            }
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
-        inline: IndexMap::default(),
+        inline,
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),
         far: Default::default(),

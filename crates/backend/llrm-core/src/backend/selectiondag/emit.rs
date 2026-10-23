@@ -416,7 +416,13 @@ impl Emitter<'_, '_> {
                 Some(k) if memory_dest => dests.get(k).cloned(),
                 _ => rest.next(),
             };
-            sources.push(taken.ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?);
+            // a shift by `cl` reads `CL` without an operand: the `CopyToReg`
+            // glued to it wrote the register
+            let implicit =
+                || name.ends_with("rCL").then(|| Loc::Reg(Reg { register: llrm_lir::registers::RegId::CL, width: 1 }));
+            sources.push(
+                taken.or_else(implicit).ok_or_else(|| EmitError::Unsupported(format!("{name}: missing source")))?,
+            );
         }
         if rest.next().is_some() {
             return Err(EmitError::Unsupported(format!("{name}: more operands than the form's sources")));
@@ -535,6 +541,19 @@ impl Emitter<'_, '_> {
         call.delivers.push((held, register));
         call.defines.push(held.value);
         true
+    }
+
+    /// The function a call's target operand names, if it names one.
+    fn direct_callee(
+        &self,
+        target: SDValue,
+    ) -> Option<Callee> {
+        match self.dag.node(target).data {
+            NodeData::Global { symbol, .. } => Some(Callee::Global(symbol)),
+            // A runtime routine the lowering named (`memcpy_`).
+            NodeData::Symbol(id) => Some(Callee::Named(self.dag.symbol_names[id as usize].clone())),
+            _ => None,
+        }
     }
 
     /// `value` as a held value, copied into one if it is a constant or a cell.
@@ -666,12 +685,9 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "CALLpcrel32" => {
-                let callee = match self.dag.node(node.ops[0]).data {
-                    NodeData::Global { symbol, .. } => Callee::Global(symbol),
-                    // A runtime routine the lowering named (`memcpy_`).
-                    NodeData::Symbol(id) => Callee::Named(self.dag.symbol_names[id as usize].clone()),
-                    _ => return Err(EmitError::Unsupported("a call of a non-global".to_owned())),
-                };
+                let callee = self
+                    .direct_callee(node.ops[0])
+                    .ok_or_else(|| EmitError::Unsupported("a call of a non-global".to_owned()))?;
                 let at = self.push_call(
                     Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
                     Some(&callee),
@@ -682,6 +698,19 @@ impl Emitter<'_, '_> {
             // A call through a register or a cell of memory.
             "CALL32r" | "CALL32m" | "CALL32r_NT" | "CALL32m_NT" | "CALL16r" | "CALL16m" | "CALL16r_NT"
             | "CALL16m_NT" => {
+                // At real mode the matcher spells a call of a symbol `CALL16r`
+                // of its address: a direct call, not one through an immediate
+                // (`call offset _report`; 79 programs of the m16 run).
+                if name[6..].starts_with('r')
+                    && let Some(callee) = self.direct_callee(node.ops[0])
+                {
+                    let at = self.push_call(
+                        Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) },
+                        Some(&callee),
+                    );
+                    self.calls.push((at, callee));
+                    return Ok(Some(()));
+                }
                 let bytes = if name.starts_with("CALL16") { 2 } else { 4 };
                 let target = if name[6..].starts_with('m') {
                     let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short call".to_owned()))?;

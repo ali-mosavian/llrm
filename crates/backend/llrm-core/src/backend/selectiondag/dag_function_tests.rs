@@ -619,3 +619,93 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     let crate::model::ir::Loc::Address(a) = &lea.sources[0] else { panic!("{lea:?}") };
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
+
+const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+";
+
+/// An `i64` divide is a call to the target's inline routine; the DAG path left
+/// the call without the routine's bytes, so the object had an undefined
+/// `divN_s` (link failures in c/int64_division.c, c/data_int64.c of the m32
+/// run). The routine's code must travel with the selected function, at the
+/// call.
+#[test]
+fn an_i64_divide_carries_the_routines_code_at_its_call() {
+    let module = llrm_mir::parse::module(DIV64).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let routine = llrm_target::Target::divide_routine(&llrm_x86_m32::M32, true, true).expect("a routine");
+    let at = done.calls.iter().find(|(_, name)| name.as_str() == routine.name).map(|(at, _)| *at).expect("a call");
+    assert_eq!(done.inline.get(&at), Some(&routine.code));
+}
+
+const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to float
+  ret float %r
+}
+";
+
+/// A legalizer's scratch slot (an integer stored to convert it) is a frame
+/// object the driver makes: the emitter refused its index as "frame index 6"
+/// in 11 programs of the m32 execution run. Until x87 is emitted the function
+/// is refused for its load, not for the slot.
+#[test]
+fn a_legalizers_stack_slot_is_a_frame_object() {
+    let module = llrm_mir::parse::module(INT_TO_FLOAT).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.as_deref().is_none_or(|why| !why.contains("frame index")), "{why:?}");
+}
+
+const VARIADIC: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f(i32 %n, ...) {
+entry:
+  %ap = alloca ptr, align 4
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 %n
+}
+";
+
+/// `va_start` stores the address of the next fixed object, the first variadic
+/// argument; the frame had no cell for it ("frame index -2" in the variadic
+/// programs).
+#[test]
+fn va_start_finds_the_first_variadic_argument() {
+    let module = llrm_mir::parse::module(VARIADIC).expect("parses");
+    let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .err()
+        .map(|e| e.0);
+    assert!(why.is_none(), "{why:?}");
+}
+
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 i16 @g(i16)
+define cc 1005 i16 @f(i16 %a) addrspace(1) {
+entry:
+  %r = call cc 1005 i16 @g(i16 %a)
+  ret i16 %r
+}
+";
+
+/// At m16 a call of a symbol is `CALL16r` of its address; it was emitted as a
+/// call through an immediate (`call offset _report`), the biggest cause in the
+/// m16 execution run (79 programs).
+#[test]
+fn an_m16_call_of_a_symbol_is_a_direct_call() {
+    let module = llrm_mir::parse::module(M16_DIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
+    let insns = done.body.insns();
+    let call =
+        insns.iter().filter_map(|i| i.what.as_ref()).find(|w| w.op == crate::model::ir::Operation::Call).unwrap();
+    assert!(!call.indirect && call.sources.is_empty(), "{call:?}");
+}
