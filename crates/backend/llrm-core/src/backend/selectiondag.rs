@@ -119,6 +119,7 @@ pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
+pub mod logic_setcc;
 pub mod opcodes;
 pub mod schedule;
 pub mod switchcg;

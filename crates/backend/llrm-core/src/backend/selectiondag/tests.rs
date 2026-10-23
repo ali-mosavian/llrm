@@ -33,6 +33,7 @@ mod int_to_fp;
 mod legalize_dag;
 mod legalize_pending;
 mod legalize_types;
+mod logic_setcc;
 mod m16_coverage;
 mod mem_space;
 mod pair_arith;
