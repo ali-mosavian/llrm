@@ -85,7 +85,11 @@ pub fn legalized(
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
     DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).run();
-    TypeLegalizer::new(dag, tli).with_target(arch).with_hooks(lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
+    TypeLegalizer::new(dag, tli)
+        .with_target(arch)
+        .with_hooks(lowering)
+        .run()
+        .map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).run();
     DagLegalizer::new(dag, tli, lowering).run().map_err(|e| Refusal::Legalize(format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).run();

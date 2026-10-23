@@ -199,8 +199,6 @@ entry:
 #[test]
 fn the_type_legalizer_has_the_targets_hooks() {
     let module = llrm_mir::parse::module(FLOAT64).expect("parses");
-    let why = selected(&module, "f", &llrm_x86_m32::M32)
-        .err()
-        .map_or_else(String::new, |e| e.0);
+    let why = selected(&module, "f", &llrm_x86_m32::M32).err().map_or_else(String::new, |e| e.0);
     assert!(!why.contains("expand operand"), "{why}");
 }
