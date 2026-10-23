@@ -416,6 +416,10 @@ impl<'a> Lines<'a> {
 
     /// The tokens as the parser pulls them, kinds only, with each one's span pushed to `spans`.
     pub fn stream<'s>(&'s self, spans: &'s mut Vec<Span>) -> Stream<'s> {
+        self.stream_with(Some(spans))
+    }
+
+    fn stream_with<'s>(&'s self, spans: Option<&'s mut Vec<Span>>) -> Stream<'s> {
         Stream {
             lines: &self.lines,
             dialect: self.dialect,
@@ -426,7 +430,15 @@ impl<'a> Lines<'a> {
             ended: false,
             pending: None,
             spans,
+            emitted: 0,
         }
+    }
+
+    /// The same tokens with no span kept.
+    pub fn stream_bare<'s>(&'s self) -> Stream<'s> {
+        let mut stream = self.stream_with(None);
+        stream.spans = None;
+        stream
     }
 }
 
@@ -445,7 +457,8 @@ pub struct Stream<'s> {
     line_index: usize,
     ended: bool,
     pending: Option<Piece>,
-    spans: &'s mut Vec<Span>,
+    spans: Option<&'s mut Vec<Span>>,
+    emitted: usize,
 }
 
 impl<'s> Stream<'s> {
@@ -536,8 +549,11 @@ impl<'s> Iterator for Stream<'s> {
                 None => {}
             }
         }
-        let at = self.spans.len();
-        self.spans.push(piece.span);
+        let at = self.emitted;
+        self.emitted += 1;
+        if let Some(spans) = self.spans.as_deref_mut() {
+            spans.push(piece.span);
+        }
         Some(Ok((at, piece.tok, at + 1)))
     }
 }

@@ -27,7 +27,7 @@ enum First {
 }
 
 pub fn parse(tokens: &[Tok]) -> R {
-    let mut parser = Parser { t: tokens, i: 0, injected: None };
+    let mut parser = Parser { t: tokens, i: 0, base: 0, injected: None };
     let mut lines = Vec::new();
     while parser.i < tokens.len() {
         lines.push(parser.line()?);
@@ -35,9 +35,16 @@ pub fn parse(tokens: &[Tok]) -> R {
     Ok(Tree::List(lines))
 }
 
+/// One line, `tokens` ending at its newline, the first being token number `base` of the program.
+pub fn parse_line(tokens: &[Tok], base: usize) -> R {
+    Parser { t: tokens, i: 0, base, injected: None }.line()
+}
+
 struct Parser<'a> {
     t: &'a [Tok],
     i: usize,
+    /// The index of `t[0]` among all the tokens, for the leaves.
+    base: usize,
     /// A primary already read, for `foo (a) * b`: the next `prim` returns it.
     injected: Option<Tree>,
 }
@@ -109,7 +116,7 @@ impl Parser<'_> {
     fn leaf(&mut self, want: &Tok) -> R {
         if self.tok_n(0) == Some(want) {
             self.i += 1;
-            Ok(Tree::At(self.i - 1))
+            Ok(Tree::At(self.base + self.i - 1))
         } else {
             self.fail()
         }
@@ -131,7 +138,7 @@ impl Parser<'_> {
         match self.tok_n(0) {
             Some(Tok::Ident | Tok::Int) => {
                 self.i += 1;
-                Ok(Tree::At(self.i - 1))
+                Ok(Tree::At(self.base + self.i - 1))
             }
             _ => self.fail(),
         }
@@ -1788,7 +1795,7 @@ impl Parser<'_> {
         match self.tok_n(0) {
             Some(Tok::Le | Tok::Ne | Tok::Ge) => {
                 self.i += 1;
-                Ok(Tree::At(self.i - 1))
+                Ok(Tree::At(self.base + self.i - 1))
             }
             Some(Tok::Kw(Kw::EQ | Kw::LT | Kw::GT)) => self.word(),
             _ => self.fail(),
@@ -1893,7 +1900,7 @@ impl Parser<'_> {
         let k = match self.tok_n(0) {
             Some(Tok::Int | Tok::Real | Tok::Str) => {
                 self.i += 1;
-                return Ok(Tree::At(self.i - 1));
+                return Ok(Tree::At(self.base + self.i - 1));
             }
             Some(Tok::Ident | Tok::FnWord) => return self.name_ref_exp(),
             Some(Tok::Kw(k)) => *k,
