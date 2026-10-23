@@ -662,8 +662,9 @@ impl Emitter<'_, '_> {
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             // The global rides in the node's own data.
-            let symbol = match node.data {
-                NodeData::Global { symbol, .. } => Some(symbol),
+            let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
+            let symbol = match (operand_data, node.data) {
+                (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
                 _ => None,
             };
             // Naming no global it is DGROUP's, which the builder also writes
