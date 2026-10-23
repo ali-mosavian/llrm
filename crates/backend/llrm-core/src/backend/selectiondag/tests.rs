@@ -37,6 +37,7 @@ mod switches;
 mod type_actions;
 mod vastart;
 mod wide_compare;
+mod x87_compare;
 mod wide_counts;
 mod wide_division;
 mod wide_shifts;
