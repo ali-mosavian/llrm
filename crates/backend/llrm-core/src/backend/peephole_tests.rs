@@ -3681,20 +3681,7 @@ fn lea_alu_body_at(
     between: Vec<Arc<Insn>>,
     flags_read: bool,
 ) -> LirBody {
-    lea_alu_body_sized(address, op, d, between, flags_read, 4)
-}
-
-/// `lea_alu_body_at` with the lea's result and the ALU's destination `width`
-/// bytes wide (the address registers stay dwords).
-fn lea_alu_body_sized(
-    address: AddressRef,
-    op: &str,
-    d: RegId,
-    between: Vec<Arc<Insn>>,
-    flags_read: bool,
-    width: u32,
-) -> LirBody {
-    let ecx = rl(if width == 2 { RegId::CX } else { RegId::ECX }, width);
+    let ecx = rl(RegId::ECX, 4);
     let mut insns = vec![Arc::new(insn(
         1,
         Some((1, 1)),
@@ -3706,7 +3693,7 @@ fn lea_alu_body_sized(
     insns.push(Arc::new(insn(
         3,
         Some((3, 3)),
-        Some(sem(Operation::Binary, op, vec![rl(d, width)], vec![rl(d, width), ecx])),
+        Some(sem(Operation::Binary, op, vec![rl(d, 4)], vec![rl(d, 4), ecx])),
         vec![12],
         vec![13, 11],
     )));
@@ -3766,19 +3753,44 @@ fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
     }
 }
 
-/// A word `lea` of dword address registers (`lea dx,[edi+esi]`, an address the
-/// 32-bit forms sum at m16) read by a word add: the steps add the words `di`
-/// and `si`. They added `edi` and `esi` under a word destination, `sub dx,
-/// edi`, which no encoding has: ui/console.c died in the encoder at m16
-/// -O1..-O3.
+/// `lea cx,[eax+edx]; add bx,cx` (a word `lea` of dword address registers, as
+/// the real-mode target makes one) is no two word steps on `eax` and `edx`,
+/// which are no word operands: QCport's `con_draw` ended `add ax, ecx; add ax,
+/// edi`, which no assembler takes, and its object was not made. The pin splits
+/// only the `lea`s whose terms are as wide as the add.
 #[test]
-fn test_a_word_lea_of_dword_registers_splits_into_word_steps() {
-    for op in ["add", "sub"] {
-        let body = lea_alu_body_sized(sum(RegId::EAX, RegId::EDX, 1, 0), op, RegId::BX, vec![], false, 2);
-        let done = steps(&lea_alus(rules(), &body));
-        assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::BX, 2), rl(RegId::AX, 2)]), "{done:?}");
-        assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::BX, 2), rl(RegId::DX, 2)]), "{done:?}");
-    }
+fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
+    let cx = rl(RegId::CX, 2);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![cx.clone()], vec![Loc::Address(sum(RegId::EAX, RegId::EDX, 1, 0))])),
+        vec![11],
+        vec![20, 21],
+    ));
+    let add = Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), cx])),
+        vec![12],
+        vec![13, 11],
+    ));
+    let cmp = Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 2), im(8, 2)])),
+        vec![],
+        vec![],
+    ));
+    // The return reads only eax: everything else is dead after it, as in
+    // `lea_alu_body_at`.
+    let ret = Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    });
+    let done = lea_alus(rules(), &body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
+    assert_eq!(names(&done.insns())[0], "lea", "{:?}", steps(&done));
 }
 
 /// Where the address register `d` is the index, `d` is added first: `d + (x+d)`

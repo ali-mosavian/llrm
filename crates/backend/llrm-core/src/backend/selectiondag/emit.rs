@@ -334,7 +334,9 @@ impl Emitter<'_, '_> {
         if name == "RET" {
             // The value is already in its register (`CopyToReg`); the frame
             // pass adds the epilogue before it.
-            self.push(Operation::Return, "ret", Vec::new(), Vec::new());
+            // Unnamed: the printer says `retf` in a far procedure and `ret` in
+            // a near one.
+            self.push(Operation::Return, "", Vec::new(), Vec::new());
             return Ok(());
         }
         if matches!(name, "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32") {

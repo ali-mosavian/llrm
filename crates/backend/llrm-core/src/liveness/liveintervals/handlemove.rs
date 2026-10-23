@@ -119,9 +119,13 @@ impl LiveIntervals {
                 continue;
             }
             done.push(value);
+            // An interval not made yet is made from the body as it is: nothing
+            // to update.
+            if !self.has_interval(value) {
+                continue;
+            }
             // `updateRange`: the interval is edited beside the maps
             // `findLastUseBefore` reads.
-            self.interval(value);
             let mut li = self.take_interval(value);
             if earlier(old, new) {
                 move_down(&mut li, old, new);

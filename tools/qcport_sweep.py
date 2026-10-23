@@ -11,6 +11,7 @@ named in the issue. The report goes to stdout for the coordinator. Hourly: one d
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -31,6 +32,14 @@ import cpulimit  # noqa: E402
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 KNOWN = HERE / "qcport_sweep_known.toml"
+
+
+@contextlib.contextmanager
+def object_file():
+    """An object path to compile to. llrm-c writes the object only for an `.o` or `.obj` output and the assembly text for any other, `/dev/null` included, so a
+    sweep that compiled to the null device never reached the encoder: ui/console.c died there for days while the sweep counted 0 failed."""
+    with tempfile.TemporaryDirectory(prefix="sweep-") as directory:
+        yield str(Path(directory) / "out.obj")
 
 
 def kind(message: str) -> str:
@@ -56,7 +65,8 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
     def one(job):
         source, level = job
         try:
-            done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", os.devnull], 300, capture_output=True, text=True)
+            with object_file() as out:
+                done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", out], 300, capture_output=True, text=True)
         except cpulimit.MemoryLimit as error:
             return (source.stem, level, f"memory limit: {error}")
         except subprocess.TimeoutExpired:
@@ -125,7 +135,8 @@ def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT, include: Path | No
     def one(job):
         tool, source, machine, level = job
         headers = ["-I", str(include)] if include and source.suffix == ".c" else []
-        done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", os.devnull], capture_output=True, text=True, env=env)
+        with object_file() as out:
+            done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", out], capture_output=True, text=True, env=env)
         if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
             return None
         return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
@@ -202,7 +213,7 @@ def issue_text(why: str, where: list[tuple[str, str]], head: str, first: tuple[s
     mods = ", ".join(sorted({f'{m} {l}' for m, l in where})[:12])
     body = (
         f"TL;DR: compiling QCport's {module}.c at {level} fails on feat/parity {head[:9]}: `{why}`.\n\n"
-        f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /dev/null` "
+        f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /tmp/out.obj` "
         f"(QCPORT=~/scratch/qcport/src, QCPORT_INC=~/scratch/qctc/inc).\n\nFails: {mods}{' ...' if len(where) > 12 else ''}.\n"
         + (f"\nFirst bad squash (first-parent bisection): {first[0][:9]} {first[1]}\n" if first else "")
     )
@@ -235,7 +246,7 @@ def main() -> int:
         if args.bisect:
             module, level = where[0]
             src = next((qcport / p / f"{module}.c" for p in MODULES if (qcport / p / f"{module}.c").exists()), None)
-            flags = [level] + [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include), str(src), "-o", os.devnull]
+            flags = [level] + [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include), str(src), "-o", str(Path(tempfile.gettempdir()) / "sweep-bisect.obj")]
             first = bisect_one(args.bisect, flags, worktree_build)
             print(f"  first bad squash of '{why[:60]}': {first[0][:9]} {first[1]}")
         if args.issue:

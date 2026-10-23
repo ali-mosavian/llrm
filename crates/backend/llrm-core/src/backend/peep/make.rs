@@ -169,7 +169,7 @@ pub fn renamed(
 /// The register of a sum `lea d,[x+y]` that is not `d`: both are `d` when the
 /// address doubles it.
 pub fn other_term(
-    regs: Regs,
+    _regs: Regs,
     one: &Loc,
     d: Reg,
 ) -> Loc {
@@ -178,15 +178,14 @@ pub fn other_term(
         Loc::Mem(m) => (m.through, m.index_through, m.offset),
         _ => unreachable!("the guard proved an address"),
     };
-    let other = if regs.root(base) == regs.root(d.register) { index } else { base };
-    viewed(regs, other, d)
+    let other = if base == d.register { index } else { base };
+    Loc::Reg(Reg { register: other, width: d.width })
 }
 
 /// The terms of `lea t,[x+y]` as the two steps `optLEAALU` makes on `d`: `x`
 /// then `y`, or `y` then `x` where `y` is `d`, so that `d` itself is added
 /// first.
 fn terms(
-    regs: Regs,
     one: &Loc,
     d: Reg,
 ) -> (RegId, RegId) {
@@ -195,33 +194,23 @@ fn terms(
         Loc::Mem(m) => (m.through, m.index_through, m.offset),
         _ => unreachable!("the guard proved an address"),
     };
-    if regs.root(index) == regs.root(d.register) { (index, base) } else { (base, index) }
-}
-
-/// `register` as a view of `d`'s width: an address of 32-bit registers names
-/// `edi`, and a word step on `dx` reads `di`.
-fn viewed(
-    regs: Regs,
-    register: RegId,
-    d: Reg,
-) -> Loc {
-    Loc::Reg(Reg { register: regs.named(regs.root(register), d.width.into()), width: d.width })
+    if index == d.register { (index, base) } else { (base, index) }
 }
 
 pub fn first_term(
-    regs: Regs,
+    _regs: Regs,
     one: &Loc,
     d: Reg,
 ) -> Loc {
-    viewed(regs, terms(regs, one, d).0, d)
+    Loc::Reg(Reg { register: terms(one, d).0, width: d.width })
 }
 
 pub fn second_term(
-    regs: Regs,
+    _regs: Regs,
     one: &Loc,
     d: Reg,
 ) -> Loc {
-    viewed(regs, terms(regs, one, d).1, d)
+    Loc::Reg(Reg { register: terms(one, d).1, width: d.width })
 }
 
 /// The displacement of `lea d,[d+disp]` as an immediate the width of `d`.
