@@ -918,7 +918,7 @@ fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
 const FLOAT_RESULT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define double @f(double %x) {
 entry:
-  %m = fmul double %x, 2.5
+  %m = fmul double %x, 2.1
   %r = fadd double %m, 1.0
   ret double %r
 }
@@ -1356,4 +1356,49 @@ fn no_call_delivers_two_values_in_one_register() {
         registers.dedup();
         assert_eq!(registers.len(), all, "{:?}", insn.delivers);
     }
+}
+
+const NARROW_POOL_CONSTANT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define double @f(double %x) {
+entry:
+  %r = fmul double %x, 2.5
+  ret double %r
+}
+";
+
+/// The pool holds 2.5 as four bytes (a double that is exactly a float), and the
+/// multiply reads four: it read eight, the constant's neighbour as its high
+/// word (float_return, x87_arguments, double_to_uint64 printed wrong values).
+/// A read at another width is refused as well.
+#[test]
+fn a_pool_entry_is_read_at_its_own_width() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(NARROW_POOL_CONSTANT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let multiply = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::FloatArith && w.name.as_deref() == Some("fmul"))
+        .expect("an fmul");
+    assert!(multiply.sources.iter().any(|l| matches!(l, Loc::Mem(m) if m.width == 4)), "{multiply:?}");
+}
+
+const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define x86_fp80 @f(x86_fp80 %x, x86_fp80 %y) {
+entry:
+  %r = fadd x86_fp80 %x, %y
+  ret x86_fp80 %r
+}
+";
+
+/// The 80-bit forms are refused until their moves and arguments are proved
+/// (long_double_arguments, long_double_constant_store: wrong values).
+#[test]
+fn a_long_double_is_refused() {
+    let module = llrm_mir::parse::module(LONG_DOUBLE_SUM).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]);
+    let Err(why) = done else { panic!("emitted") };
+    assert!(why.0.contains("long double"), "{why:?}");
 }
