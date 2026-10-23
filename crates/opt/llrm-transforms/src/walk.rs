@@ -187,7 +187,10 @@ impl ProgramPass for Walk {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
-        let params = crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 });
+        let params = crate::inlinecost::InlineParams {
+            allow_recursive_call: self.inline.recursive,
+            ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
+        };
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
         } else {
