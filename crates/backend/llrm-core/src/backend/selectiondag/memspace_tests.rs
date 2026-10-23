@@ -1,10 +1,11 @@
 //! Far and override accesses carry their address space (see `farptr_tests`
 //! for the pointer forms).
 
+use llrm_mir::datalayout::DataLayout;
+
 use super::builder::{BuilderTarget, build_block};
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::ISD;
-use llrm_mir::datalayout::DataLayout;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"\n";
 
@@ -17,9 +18,18 @@ fn built(body: &str) -> super::dag::SelectionDAG {
         .expect("f");
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    build_block(&module, function, &layout, &BuilderTarget::m16(), &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap())
-        .unwrap_or_else(|why| panic!("{}", why.0))
-        .dag
+    build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m16(),
+        &llrm_x86_m16::M16,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0))
+    .dag
 }
 
 /// A load through a far pointer reads through `ES` (space 259) and one through
