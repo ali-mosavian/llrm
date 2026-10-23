@@ -26,11 +26,10 @@
 //! sdag-b. Review 2026-11-13.
 //!
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
-//! single-use simple load only, before operations are legal: no
-//! `ExtendUsesToFormExtLoad` (a load with other users) and no
-//! `isLoadExtLegal` query (the combiner has no action table). Exit: pass the
-//! table in and port `ExtendUsesToFormExtLoad`. Owner sdag-b. Review
-//! 2026-11-27.
+//! simple, non-extending load before operations are legal, with the table
+//! given by `with_tli` (no table: only a load nothing else reads); every
+//! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
+//! truncate query. Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
