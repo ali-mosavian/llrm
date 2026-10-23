@@ -532,6 +532,17 @@ impl Emitter<'_, '_> {
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
                     }
+                    // The x87 result of a call: the stack's top (`FP0`), which
+                    // the stackifier reads as an unnamed load of no cell
+                    // (`handleCall`'s `STReturns`).
+                    NodeData::PhysReg(register)
+                        if register == llrm_lir::registers::RegId::MM0
+                            && self.dag.value_type(result).is_floating_point() =>
+                    {
+                        let held = self.fresh(10);
+                        self.values.insert(result, held.value);
+                        self.push(Operation::FloatLoad, "", vec![Loc::Held(held)], Vec::new());
+                    }
                     NodeData::PhysReg(register) => {
                         // A quotient, remainder or product is the value the
                         // instruction made.

@@ -1168,3 +1168,44 @@ fn every_part_of_a_far_phi_is_defined() {
         }
     }
 }
+
+const FLOAT_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare float @rf()
+declare double @rd(double)
+define float @g() {
+entry:
+  %a = call float @rf()
+  %b = fmul float %a, 2.0
+  ret float %b
+}
+define double @h(double %x) {
+entry:
+  %a = call double @rd(double %x)
+  %b = call double @rd(double %x)
+  %c = fadd double %a, %b
+  ret double %c
+}
+";
+
+/// A float call result is the stack's top after the call (an unnamed load of no
+/// cell); one live across another call cannot stay on the x87 stack and the
+/// function is refused, not left for the stackifier to fail the compile.
+#[test]
+fn a_float_result_is_the_stack_top_and_none_lives_across_a_call() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(FLOAT_CALL).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "g", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    assert!(
+        insns.iter().filter_map(|i| i.what.as_ref()).any(|w| {
+            w.op == Operation::FloatLoad
+                && w.name.as_deref() == Some("")
+                && w.sources.is_empty()
+                && matches!(&w.dests[..], [Loc::Held(h)] if h.width == 10)
+        }),
+        "an unnamed load of the stack top"
+    );
+    let why = selected(&module, "h", &llrm_x86_m32::M32, cpu, &[]).err().map(|e| e.0);
+    assert!(why.as_deref().is_some_and(|why| why.contains("live across")), "{why:?}");
+}
