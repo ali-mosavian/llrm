@@ -148,6 +148,8 @@ mod freeze_tests;
 #[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]
+mod memconst_tests;
+#[cfg(test)]
 mod opcodes_tests;
 #[cfg(test)]
 mod schedule_tests;
