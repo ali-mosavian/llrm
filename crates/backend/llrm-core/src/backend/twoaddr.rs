@@ -131,6 +131,8 @@ pub fn tied(
             let commuted = walk.try_instruction_commute(&one, dist);
             if let Some(chosen) = &commuted {
                 changed = true;
+                facts.rewrite(at, work[place].id(), Arc::clone(chosen));
+                work[place] = Arc::clone(chosen);
                 one = Arc::clone(chosen);
             }
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
@@ -155,6 +157,8 @@ pub fn tied(
                 {
                     walk.note_lea(into.value);
                 }
+                facts.rewrite(at, work[place].id(), Arc::clone(&three));
+                work[place] = Arc::clone(&three);
                 insns.push(three);
                 place += 1;
                 continue;
@@ -170,12 +174,17 @@ pub fn tied(
                 insns.push(one);
                 continue;
             };
+            facts.replace(at, &one, &fix);
             insns.extend(fix);
             changed = true;
         }
+        debug_assert!(
+            insns.iter().map(|one| one.id()).eq(facts.body_like(body).blocks[at].insns.iter().map(|one| one.id())),
+            "the intervals' block is not the pass's"
+        );
         blocks.push(block.with_insns(insns));
     }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
+    if changed { facts.body_like(body) } else { body.clone() }
 }
 
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
@@ -1214,6 +1223,8 @@ mod tests {
             vec![],
         ));
         flags_live.push(read(4, 7));
+        // a body the intervals can be made of: what is read is defined
+        flags_live.insert(0, imm_def(5, 6));
         assert!(!names_of(&tied(&of(flags_live), All)).contains(&"lea".to_owned()));
     }
 
@@ -1281,12 +1292,12 @@ mod tests {
         assert_eq!(fixed[1].uses, [900]);
     }
 
-    /// Update in place and the tied rewrite each walked the body for liveness
-    /// rows: twice a body, 4.0 M of TwoAddress's 10.0 M at d_faces -O2. The
-    /// update in place asks only whether a value read once is read in its own
-    /// block, which the use counts answer.
+    /// The pin builds one `LiveIntervals` for the function and edits it
+    /// (TwoAddressInstructionPass.cpp#L394): the pass walked the body for
+    /// liveness rows (DEVIATE TA-6, 3.0 M Ir at m32 to build an interval set
+    /// per phase otherwise); now one `LiveIntervals::new` and no walk.
     #[test]
-    fn test_two_address_walks_the_body_for_liveness_once_and_builds_no_intervals() {
+    fn test_two_address_builds_one_live_intervals_and_walks_the_body_for_no_liveness_rows() {
         let imm = |at: i64, value: u32| imm_def(at, value);
         let add = |at: i64, into: u32, first: u32, second: u32| {
             let what = Semantics {
@@ -1318,12 +1329,9 @@ mod tests {
         let names: Vec<_> =
             got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 1);
-        // The pin shares one LiveIntervals with the coalescer; here the kills
-        // are one backward scan over the live-out rows and none is
-        // built (TA-6): building one per phase cost +3.0 M Ir at m32.
+        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
-        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get), built);
+        assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 1);
     }
 }
