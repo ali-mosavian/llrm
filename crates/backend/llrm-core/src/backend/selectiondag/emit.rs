@@ -1232,7 +1232,7 @@ impl Emitter<'_, '_> {
             }
             // A call through a far pointer: the offset and the selector sit in
             // a four-byte cell, which the call reads (`call dword ptr [cell]`).
-            "LLRM_FARCALL" => {
+            "CALL_FAR" => {
                 let NodeData::FrameIndex(index) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a far call without a cell".to_owned()));
                 };
