@@ -65,23 +65,6 @@ fn a_variable_move_is_refused_without_a_memmove() {
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
-/// The call is the fact's: its symbol (`memset_`) and calling convention
-/// (watcom registers, not the stack) as `options.libcalls` states them. A
-/// call in the default convention under the routine's own name would have
-/// linked to nothing: before, 9 m32 programs stopped at the builder's refusal
-/// to make it.
-#[test]
-fn the_call_uses_the_facts_symbol_and_convention() {
-    let calls = [("memset".to_owned(), llrm_mir::opcode::WATCALL, "memset_".to_owned())];
-    let on = built("fill", &BuilderTarget::m32().with_runtime_calls(&calls)).expect("builds");
-    assert!(on.contains("TargetExternalSymbol:i32'memset_'") && !on.contains("'memset'"), "{on}");
-    assert!(on.contains("$eax") && on.contains("$edx") && on.contains("$ebx"), "register arguments:\n{on}");
-    assert!(!on.contains("store"), "no stack arguments:\n{on}");
-    // the `i8` fill value is widened to the register it goes in; it was copied
-    // to `$edx` as an `i8`
-    assert!(on.contains("any_extend") && on.contains("Register:i32 $edx") && !on.contains("Register:i8 $edx"), "{on}");
-}
-
 /// The libcalls the m32 runtime's `c.toml` names, read from the file.
 fn real_m32_fact() -> Vec<String> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/c/x86-m32/c.toml");
@@ -95,19 +78,17 @@ fn real_m32_fact() -> Vec<String> {
         .collect()
 }
 
-/// The fact the m32 runtime states while its QB link lacks the routines (qbrt
-/// was 183/218 with `memcpy` named): none. A variable fill is `rep stosb`, a
-/// copy `rep movsb`, and a variable move is refused. Turn this into the
-/// memcpy/memmove/memset case when the flip returns: a `memcpy` call with the
-/// fact on is the MIR pass's (`memcpycall`, with the fact's symbol and
-/// convention); the builder, which has neither, refuses one rather than call
-/// `memcpy` in the wrong convention.
+/// The fact the m32 runtime states: `memcpy`, `memmove` and `memset`, all three
+/// in ext.asm and (as `memfuncs.asm`) in the QB runtime; while the QB link
+/// lacked them the fact was none (qbrt 183/218 with it on). The builder has
+/// neither their symbols nor their convention yet, so with the real fact it
+/// refuses the variable fill, move and copy rather than call one in the wrong
+/// convention; the names given by hand (above) are the pin's shape.
 #[test]
-fn the_real_m32_fact_names_no_libcall_while_the_qb_link_lacks_them() {
-    assert!(real_m32_fact().is_empty(), "the fact changed: {:?}; state the new one here", real_m32_fact());
-    let target = BuilderTarget::m32();
-    let fill = built("fill", &target).expect("builds");
-    assert!(fill.contains("REP_STOS") && !fill.contains("'memset'"), "{fill}");
-    assert!(built("move", &target).is_err());
-    assert!(built("copy", &target).is_ok(), "a copy is rep movsb with no memcpy named");
+fn the_real_m32_fact_names_memcpy_memmove_and_memset() {
+    assert_eq!(real_m32_fact(), ["memcpy", "memmove", "memset"]);
+    for function in ["fill", "move", "copy"] {
+        let why = built(function, &BuilderTarget::m32()).expect_err(function);
+        assert!(why.contains("symbol and convention are the target fact's"), "{function}: {why}");
+    }
 }

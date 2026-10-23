@@ -1804,7 +1804,7 @@ mod tests {
         let names =
             |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
         assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
-        assert!(names(&llrm_x86_m32::M32).is_empty(), "m32 names none until its QB runtime link has the routines");
+        assert_eq!(names(&llrm_x86_m32::M32), ["memcpy", "memmove", "memset"]);
     }
 
     /// The call of `memcpy` named the routine `memcpy` in the stack convention:
@@ -1829,14 +1829,16 @@ mod tests {
     #[test]
     fn test_the_m32_runtime_defines_every_symbol_its_libcalls_name() {
         let m32: &dyn llrm_target::Target = &llrm_x86_m32::M32;
-        let ext = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("runtime/c/x86-m32/ext.asm")).unwrap();
+        let root = Path::new(env!("LLRM_ROOT"));
+        let ext = std::fs::read_to_string(root.join("runtime/c/x86-m32/ext.asm")).unwrap()
+            + &std::fs::read_to_string(root.join("runtime/shared/dos/m32/memfuncs.inc")).unwrap();
         let named = || ["memcpy", "memmove", "memset"].map(str::to_owned).to_vec();
         let defined: Vec<&str> = ext.lines().filter_map(|line| line.trim().strip_prefix("public ")).collect();
         for abi in ["watcom", "sysv"] {
             for (name, _, symbol) in super::libcalls_named(m32, Some(abi), "omf", named()).unwrap() {
                 assert!(
                     defined.contains(&symbol.as_str()),
-                    "{name} under {abi} is {symbol}, which ext.asm does not define: {defined:?}"
+                    "{name} under {abi} is {symbol}, which ext.asm does not define (ext.asm, memfuncs.inc): {defined:?}"
                 );
             }
         }
