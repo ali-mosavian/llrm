@@ -158,6 +158,11 @@ pub fn tied(
                 {
                     walk.note_lea(into.value);
                 }
+                if let Some(what) = one.what.as_ref()
+                    && let (Some(Loc::Held(into)), Some(Loc::Held(base))) = (what.dests.first(), what.sources.first())
+                {
+                    walk.converted_to_three_address(work[place].id(), three.id(), into.value, base.value);
+                }
                 facts.rewrite(at, work[place].id(), Arc::clone(&three));
                 work[place] = Arc::clone(&three);
                 walk.remove_clobbered_src_reg_map(&three);
@@ -1563,5 +1568,28 @@ mod tests {
             shapes.len() == 4 && shapes[1].0 == "mov" && mem(1) && shapes[2].0 == "mov" && shapes[3].0 == "add",
             "the load comes first, then the copy of what it loaded, then the add of `a`: {shapes:?}"
         );
+    }
+
+    /// `convertInstTo3Addr`: the `lea` has the place the add had, and the maps
+    /// forget the add's result as a source and its source as a destination.
+    #[test]
+    fn test_a_converted_instruction_keeps_its_distance_and_clears_its_map_entries() {
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![arrival(0, &[(7, RegId::EAX)]), sum_into(1, 8, 7, 7), read(2, 8)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let facts = crate::twoaddress::BodyFacts::of(&body);
+        let mut walk = Commuter::new(&facts, 0);
+        walk.pass(&body.blocks[0].insns[0]);
+        walk.process_copy(&body.blocks[0].insns[0]);
+        let at = walk.pass(&body.blocks[0].insns[1]);
+        assert_eq!(walk.src_register(8), Some(RegId::EAX), "premise: the sum arrives as v7 did");
+        let three = sum_into(1, 8, 7, 7);
+        walk.converted_to_three_address(body.blocks[0].insns[1].id(), three.id(), 8, 7);
+        assert_eq!(walk.distance_of(three.id()), Some(at));
+        assert_eq!(walk.src_register(8), None, "SrcRegMap[regA] is erased");
     }
 }
