@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 DEFINT A-Z
 f% = 1
 END FUNCTION

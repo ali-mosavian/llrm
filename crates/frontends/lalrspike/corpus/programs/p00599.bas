@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 DIM y%
 y% = 1
 f% = 1

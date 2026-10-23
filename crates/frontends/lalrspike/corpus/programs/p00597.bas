@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 RETURN
 f% = 1
 END FUNCTION

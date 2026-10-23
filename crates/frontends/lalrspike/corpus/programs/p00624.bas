@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 ON ERROR GOTO h
 h:
 RESUME NEXT

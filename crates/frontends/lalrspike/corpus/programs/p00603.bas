@@ -1,5 +1,5 @@
 DIM x%
-FUNCTION f% ()
+FUNCTION f%
 STATIC y%
 f% = 1
 END FUNCTION

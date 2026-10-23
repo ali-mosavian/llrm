@@ -4135,7 +4135,7 @@
 4134	semantic	15:0 Variable required
 4135	ok	
 4136	semantic	15:0 Identifier expected
-4137	semantic	15:0 Identifier expected
+4137	semantic	15:0 Variable required
 4138	syntax	15:6 syntax error
 4139	syntax	15:5 syntax error
 4140	semantic	15:0 Identifier expected
@@ -4733,7 +4733,7 @@
 4732	syntax	15:6 unknown character '$'
 4733	ok	
 4734	ok	
-4735	semantic	15:0 Identifier expected
+4735	semantic	15:0 Variable required
 4736	syntax	15:6 unknown character '$'
 4737	ok	
 4738	ok	
@@ -5930,7 +5930,7 @@
 5929	semantic	15:5 Identifier expected
 5930	semantic	15:5 Type mismatch
 5931	semantic	15:5 Identifier expected
-5932	semantic	15:5 Identifier expected
+5932	semantic	15:5 Type mismatch
 5933	semantic	15:5 Identifier expected
 5934	syntax	15:5 syntax error
 5935	semantic	15:5 Identifier expected
@@ -6529,7 +6529,7 @@
 6528	semantic	15:4 Type mismatch
 6529	semantic	15:4 Type mismatch
 6530	semantic	15:4 Identifier expected
-6531	semantic	15:4 Identifier expected
+6531	semantic	15:4 Type mismatch
 6532	semantic	15:4 Identifier expected
 6533	syntax	15:4 syntax error
 6534	semantic	15:4 Identifier expected
@@ -6819,7 +6819,7 @@
 6818	syntax	15:8 syntax error
 6819	syntax	15:8 syntax error
 6820	semantic	15:5 Array not dimensioned
-6821	semantic	15:5 Array not dimensioned
+6821	semantic	15:5 Type mismatch
 6822	semantic	15:5 Array not dimensioned
 6823	syntax	15:5 syntax error
 6824	syntax	15:5 syntax error
@@ -7649,7 +7649,7 @@
 7648	semantic	15:4 User-defined type not defined
 7649	semantic	15:4 User-defined type not defined
 7650	syntax	15:9 syntax error
-7651	semantic	15:4 User-defined type not defined
+7651	ok	
 7652	semantic	15:4 User-defined type not defined
 7653	semantic	15:4 User-defined type not defined
 7654	semantic	15:4 User-defined type not defined
@@ -7711,7 +7711,7 @@
 7710	semantic	15:4 User-defined type not defined
 7711	semantic	15:4 User-defined type not defined
 7712	syntax	15:9 syntax error
-7713	semantic	15:4 User-defined type not defined
+7713	ok	
 7714	semantic	15:4 User-defined type not defined
 7715	semantic	15:4 User-defined type not defined
 7716	semantic	15:4 User-defined type not defined
@@ -8563,7 +8563,7 @@
 8562	semantic	15:0 Element not defined
 8563	semantic	15:0 Element not defined
 8564	semantic	15:0 Element not defined
-8565	semantic	15:0 DECLARE required
+8565	ok	
 8566	semantic	15:0 Element not defined
 8567	semantic	15:0 Element not defined
 8568	semantic	15:0 Element not defined
@@ -8715,7 +8715,7 @@
 8714	semantic	15:0 Element not defined
 8715	semantic	15:0 Element not defined
 8716	semantic	15:0 Element not defined
-8717	semantic	15:0 Equal sign missing
+8717	ok	
 8718	semantic	15:0 Element not defined
 8719	semantic	15:0 Element not defined
 8720	semantic	15:0 Element not defined

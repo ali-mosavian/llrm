@@ -24,6 +24,7 @@ pub enum Tok {
     Ext,
     Dynamic,
     Static,
+    Form,
     /// `FN` written apart from the name it prefixes: `DEF FN twice`, `FN twice(4)`.
     FnWord,
 }
@@ -73,6 +74,7 @@ pub fn terminal(kind: &TokenKind) -> Tok {
         TokenKind::Period => Tok::Period,
         TokenKind::ArrayDynamic => Tok::Dynamic,
         TokenKind::ArrayStatic => Tok::Static,
+        TokenKind::FormDeclaration(_) => Tok::Form,
     }
 }
 

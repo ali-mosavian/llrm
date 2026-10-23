@@ -1,5 +1,5 @@
 DIM x%
-SUB q ()
+SUB q
 GOSUB l1
 EXIT FUNCTION
 l1:

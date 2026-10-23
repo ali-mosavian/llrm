@@ -1,4 +1,4 @@
 DIM x%
-SUB q ()
+SUB q
 DIM SHARED y%
 END SUB
