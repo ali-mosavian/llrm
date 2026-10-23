@@ -222,3 +222,43 @@ fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
     assert_eq!(registers, ["ax", "dx", "bx", "cx", "ax"], "four arguments, then the result:\n{dump}");
     assert!(!dump.contains("store"), "{dump}");
 }
+
+/// At real mode `i32` is a register type (the pin's `In16BitMode` has `GR32`
+/// legal) and `i64` is two of them. With `i8`/`i16` only, an `i32` was split
+/// into `i16` halves (`extract_element`, `build_pair`) and an `i64` into
+/// four: 47 corpus blocks refused at "wider than two registers", and the
+/// legalizer saw a pair for every `long`.
+#[test]
+fn an_i32_is_one_register_and_an_i64_two_at_m16() {
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\
+        define i16 @narrow(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  %t = trunc i32 %r to i16\n  ret i16 %t\n}\n\
+        define i16 @wide(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  %t = trunc i64 %r to i16\n  ret i16 %t\n}\n";
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let dump_of = |name: &str| {
+        let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap();
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        build_block(
+            &module,
+            function,
+            &layout,
+            &BuilderTarget::m16(),
+            &llrm_x86_m16::M16,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{name}: {}", why.0))
+        .dag
+        .dump()
+    };
+    let narrow = dump_of("narrow");
+    assert!(narrow.contains("i32 = add") && !narrow.contains("extract_element"), "{narrow}");
+    let wide = dump_of("wide");
+    assert!(
+        wide.contains("i64 = build_pair") && wide.contains("i32,ch = load") && !wide.contains("i16,ch = load"),
+        "{wide}"
+    );
+}

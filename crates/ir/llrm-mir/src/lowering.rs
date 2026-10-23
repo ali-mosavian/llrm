@@ -88,11 +88,6 @@ pub trait Lowering {
     /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h)):
     /// whether the type is legal and the target does `op` on it itself or by a
     /// node of its own. The base class has no registers: nothing is.
-    ///
-    /// DEVIATE TL1: a target answers from a table of its own (x86: a reduced
-    /// copy of `X86TargetLowering`'s scalar integer arms) until the DAG's
-    /// `TargetLowering` is the one `Lowering` the passes ask (the
-    /// `--isel=dag` switch). Owner w-4, 2027-02-04.
     fn is_operation_legal_or_custom(
         &self,
         op: Isd,

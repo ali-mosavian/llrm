@@ -161,7 +161,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     let mut slot = TABLES.lock().expect("the DAG tables");
     slot.get_or_insert_with(|| {
         let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
-        std::sync::Arc::new(Tables { map: OpcodeMap::new(forms), names: MACHINE_OPCODES.iter().copied().collect() })
+        std::sync::Arc::new(Tables {
+            map: OpcodeMap::new(forms),
+            names: MACHINE_OPCODES
+                .iter()
+                .copied()
+                .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
+                .collect(),
+        })
     })
     .clone()
 }
@@ -208,6 +215,7 @@ pub fn selected(
     module: &Module,
     name: &str,
     arch: &dyn Target,
+    cpu: &crate::backend::cpu::Profile,
 ) -> Result<Selected, Unselected> {
     if arch.object().bitness != 32 {
         return refuse("only m32 is built so far");
@@ -267,7 +275,26 @@ pub fn selected(
     // the blocks after it.
     let block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
     let globals = Globals(module);
+    // What a call destroys: the general registers the convention does not
+    // keep for the caller.
+    let regs = llrm_lir::registers::Regs(arch.registers());
+    let kept: std::collections::BTreeSet<_> = arch
+        .callee_saved()
+        .into_iter()
+        .filter(|(full, pushed)| full == pushed)
+        .map(|(full, _)| regs.root(full))
+        .collect();
+    let stack_pointer = arch.register_named("esp");
+    let frame_registers = [stack_pointer, llrm_lir::registers::RegId::BP].map(|r| regs.root(r));
+    let caller_saved: std::collections::BTreeSet<_> = cpu
+        .general
+        .iter()
+        .map(|r| regs.root(*r))
+        .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
+        .collect();
     let ctx = EmitContext {
+        caller_saved: &caller_saved,
+        stack_pointer,
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
@@ -276,6 +303,7 @@ pub fn selected(
         names: &tables.names,
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
+    let mut calls = IndexMap::default();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
@@ -301,6 +329,9 @@ pub fn selected(
         )
         .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
         let from = emitted.len();
+        calls.extend(done.calls.iter().map(|(at, symbol)| {
+            (*at, module.global(llrm_mir::context::GlobalId(*symbol)).name.as_deref().unwrap_or_default().to_owned())
+        }));
         emitted.extend(done.blocks);
         made.insert(block.0, from..emitted.len());
         exports.push((block, built.phi_updates));
@@ -356,7 +387,7 @@ pub fn selected(
     Ok(Selected {
         body,
         convention,
-        calls: IndexMap::default(),
+        calls,
         inline: IndexMap::default(),
         inline_places: IndexMap::default(),
         inline_symbols: IndexMap::default(),

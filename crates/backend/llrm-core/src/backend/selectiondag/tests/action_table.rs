@@ -112,3 +112,32 @@ fn defaults_and_overwriting() {
     t.set_operation_action(ISD::Select, MVT::I32, Action::Custom);
     assert_eq!(act(&t, ISD::Select, MVT::I32), Action::Custom);
 }
+
+/// m16 had no action table (`x86_32` was the only constructor), so no 16-bit
+/// function could be legalized: the same operations act as at 32 bits, and the
+/// far pointer expands.
+#[test]
+fn m16_has_the_32_bit_actions_and_a_far_pointer_type() {
+    let features = Features::default();
+    let (m32, m16) = (TargetLowering::x86_32(features, MVT::I32), TargetLowering::x86_16(features, MVT::I16));
+    for op in [ISD::SDiv, ISD::MulHU, ISD::CtPop, ISD::Parity, ISD::BrCond] {
+        for vt in [MVT::I16, MVT::I32] {
+            assert_eq!(m16.operation_action(op, vt.into()), m32.operation_action(op, vt.into()), "{op:?} {vt:?}");
+        }
+    }
+    assert_eq!(m16.types.type_action(MVT::Far.into()), TypeAction::ExpandInteger);
+}
+
+/// The address operations were Custom at `i32` whatever the pointer type, so an
+/// m16 global address (an `i16`) reached selection as a bare `GlobalAddress`.
+#[test]
+fn address_operations_are_custom_at_the_pointer_type() {
+    let features = Features::default();
+    for (tli, ptr) in
+        [(TargetLowering::x86_32(features, MVT::I32), MVT::I32), (TargetLowering::x86_16(features, MVT::I16), MVT::I16)]
+    {
+        for op in [ISD::GlobalAddress, ISD::ConstantPool, ISD::ExternalSymbol] {
+            assert_eq!(act(&tli, op, ptr), Action::Custom, "{op:?} {ptr:?}");
+        }
+    }
+}

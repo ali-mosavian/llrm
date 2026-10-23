@@ -10,7 +10,8 @@ entry:
 
 fn names(text: &str) -> Result<Vec<String>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32).map_err(|e| e.0)?;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .map_err(|e| e.0)?;
     Ok(done
         .body
         .insns()
@@ -52,7 +53,8 @@ done:
 #[test]
 fn a_loop_is_blocks_with_phis_and_branches() {
     let module = llrm_mir::parse::module(LOOP).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let blocks = &done.body.blocks;
     assert_eq!(blocks.len(), 4, "{blocks:#?}");
     let addresses: Vec<i64> = blocks.iter().map(|b| b.at).collect();
@@ -88,7 +90,8 @@ entry:
 #[test]
 fn a_load_of_a_global_names_its_symbol() {
     let module = llrm_mir::parse::module(GLOBAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let first = done.body.insns()[0].what.clone().expect("semantics");
     // The symbol is the operand's address: folded into the load's cell, or (as
     // selected today, sdag-c's wrapper fold being open) moved into a register.
@@ -137,7 +140,8 @@ entry:
 #[test]
 fn a_subregister_is_the_same_value_viewed_narrower() {
     let module = llrm_mir::parse::module(BYTE).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let add = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("add"))).expect("an add");
     let ext =
@@ -148,6 +152,103 @@ fn a_subregister_is_the_same_value_viewed_narrower() {
         panic!("{add:?} {ext:?}")
     };
     assert_eq!((written.value, written.width, read.value, read.width), (written.value, 4, written.value, 1));
+}
+
+const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @bar(i32, i32)
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %s = add i32 %a, 1
+  %r = call i32 @bar(i32 %b, i32 %s)
+  %t = add i32 %r, 3
+  ret i32 %t
+}
+";
+
+/// A call reserves its argument bytes, stores the arguments at SP, calls,
+/// releases the bytes, and takes its result from what the call delivers in
+/// EAX; it destroys the caller-saved registers. Each was `Unmapped
+/// (ADJCALLSTACKDOWN32)`: 114 + 86 functions of the corpora.
+#[test]
+fn a_call_is_a_sequence_around_a_call_instruction() {
+    let module = llrm_mir::parse::module(CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+        .expect("a call");
+    assert_eq!(done.calls.values().collect::<Vec<_>>(), ["bar"]);
+    assert!(done.calls.contains_key(&call.at));
+    assert_eq!(call.delivers.len(), 1, "the result is what the call delivers");
+    assert!(
+        call.clobbers.contains(&llrm_lir::registers::RegId::EAX),
+        "the call destroys the registers the convention does not keep: {:?}",
+        call.clobbers
+    );
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let (down, up) = (names.iter().position(|n| n == "sub").unwrap(), names.iter().rposition(|n| n == "add").unwrap());
+    let called = names.iter().position(|n| n == "call").unwrap();
+    assert!(down < called && called < up, "{names:?}");
+}
+
+const INDIRECT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@fp = global ptr null
+define i32 @f(i32 %a) {
+entry:
+  %p = load ptr, ptr @fp
+  %r = call i32 %p(i32 %a)
+  ret i32 %r
+}
+";
+
+/// A call through a pointer is a call with its target as the source and
+/// `indirect` set; without the flag it was a direct call with no callee and
+/// 71 modules of the vsgcc corpus stopped compiling.
+#[test]
+fn an_indirect_call_names_its_target() {
+    let module = llrm_mir::parse::module(INDIRECT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let call = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.clone())
+        .find(|w| w.op == crate::model::ir::Operation::Call)
+        .expect("a call");
+    assert!(call.indirect && call.sources.len() == 1, "{call:?}");
+    assert!(done.calls.is_empty());
+}
+
+const ABSOLUTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i8 @f() {
+entry:
+  %v = load volatile i8, ptr inttoptr (i32 753664 to ptr)
+  ret i8 %v
+}
+";
+
+/// A load from an absolute address needs its four displacement bytes; with
+/// none the encoder refused the function (`os_screen` stopped compiling).
+#[test]
+fn an_absolute_address_has_a_four_byte_displacement() {
+    let module = llrm_mir::parse::module(ABSOLUTE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let cell =
+        done.body.insns().iter().filter_map(|i| i.what.clone()).flat_map(|w| w.sources).find_map(|loc| match loc {
+            crate::model::ir::Loc::Mem(cell) => Some(cell),
+            _ => None,
+        });
+    let cell = cell.expect("a memory operand");
+    assert_eq!(
+        (cell.addr.map(|a| (a.space, a.disp)), cell.disp_width),
+        (Some((crate::model::ir::Space::Literal, 753664)), 4),
+        "{cell:?}"
+    );
 }
 
 const LOCAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -166,7 +267,8 @@ entry:
 #[test]
 fn a_local_is_a_frame_cell_below_bp() {
     let module = llrm_mir::parse::module(LOCAL).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"))
+        .unwrap_or_else(|e| panic!("{}", e.0));
     let cells: Vec<i64> = done
         .body
         .insns()
