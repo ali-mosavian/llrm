@@ -285,6 +285,25 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_node(combine, vt, &[one, other]))
     }
 
+    /// `ExpandBitCast` of a float to or from an integer of its size, with no
+    /// register move between the classes: `EmitStackConvert`, a store to a
+    /// stack slot of the source type and a load as the destination type.
+    fn expand_bitcast(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let src = self.dag.operand(node, 0);
+        let (from, to) = (self.dag.value_type(src), self.dag.value_type(node));
+        let size = from.size_in_bits().div_ceil(8);
+        let cell = self.dag.create_stack_temporary(size, 4);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let info = MemInfo { mem_vt: from, align: 4, volatile: false, base: MemBase::Stack(cell), ext: None, space: 0 };
+        let entry = self.dag.entry_node();
+        let store = self.dag.get_store(entry, src, slot, info);
+        self.dag.get_load(to, store, slot, MemInfo { mem_vt: to, ..info })
+    }
+
     /// `TargetLowering::expandIntMINMAX`: a select on a compare, reusing a
     /// compare of the same operands when the DAG has one. (This target has no
     /// `USUBSAT`, so the `usubsat` forms are not taken.)
@@ -388,6 +407,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
                 Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
             }
+            ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
