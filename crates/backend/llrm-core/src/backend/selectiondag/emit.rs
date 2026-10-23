@@ -189,6 +189,24 @@ struct Emitter<'a, 'd> {
     /// The nodes that read each value of a glue chain, from their operands (the
     /// matcher's nodes are not in the DAG's use lists).
     glue_users: HashMap<SDValue, Vec<u32>>,
+    /// The node whose flags EFLAGS holds now.
+    flags_now: Option<u32>,
+    /// The select a following one may join.
+    last_select: Option<Select>,
+    /// The compares that made flags, to make them again.
+    flag_insns: HashMap<u32, Arc<Insn>>,
+}
+
+/// The last lowered select: the block that branches, the one it skips, the
+/// one it joins, and what it reads.
+#[derive(Clone, Copy)]
+struct Select {
+    producer: u32,
+    cc: usize,
+    this: i64,
+    false_at: i64,
+    sink: i64,
+    result: u32,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the
@@ -269,6 +287,9 @@ pub fn emit_in(
         arguments: Vec::new(),
         calls: Vec::new(),
         last_call: None,
+        flags_now: None,
+        last_select: None,
+        flag_insns: HashMap::new(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::new();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -421,7 +442,8 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         match node.opcode {
-            ISD::CopyToReg if self.writes_flags(node.ops[1]) || self.is_flags_result(node.ops[2]) => Ok(()),
+            ISD::CopyToReg if self.writes_flags(node.ops[1]) => self.ensure_flags(node.ops[2].node),
+            ISD::CopyToReg if self.is_flags_result(node.ops[2]) => Ok(()),
             ISD::CopyToReg if self.feeds_call(n) => {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register passed to a call".to_owned()));
@@ -485,6 +507,50 @@ impl Emitter<'_, '_> {
     }
 
     fn machine(
+        &mut self,
+        n: u32,
+        opcode: u32,
+    ) -> Result<(), EmitError> {
+        self.machine_in(n, opcode)?;
+        // What it left in EFLAGS: a compare with no result is cheap to make
+        // again where a consumer needs it (`ensure_flags`).
+        if instr::desc(opcode as u16)
+            .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS))
+        {
+            self.flags_now = Some(n);
+            if let Some(last) = self.blocks.last().and_then(|block| block.insns.last())
+                && last.what.as_ref().is_some_and(|what| what.op == Operation::Compare && what.dests.is_empty())
+            {
+                self.flag_insns.insert(n, Arc::clone(last));
+            }
+        }
+        Ok(())
+    }
+
+    /// The flags `producer` made are what EFLAGS holds for the consumer glued
+    /// after this: made again if something else wrote them since. The pin's
+    /// scheduler may place a flag-writing unit between a compare and the second
+    /// of two selects on it (the sink block of the first select reads EFLAGS
+    /// live-in), and a pass here may place one anywhere: shift_int64_variable
+    /// at -O2 branched on the flags of an unrelated `sub`.
+    fn ensure_flags(
+        &mut self,
+        producer: u32,
+    ) -> Result<(), EmitError> {
+        if self.flags_now == Some(producer) {
+            return Ok(());
+        }
+        let Some(compare) = self.flag_insns.get(&producer).cloned() else {
+            return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
+        };
+        let at = self.next_address();
+        let again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
+        self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
+        self.flags_now = Some(producer);
+        Ok(())
+    }
+
+    fn machine_in(
         &mut self,
         n: u32,
         opcode: u32,
@@ -589,6 +655,27 @@ impl Emitter<'_, '_> {
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
         let result = self.fresh(width(node.values[0]));
         self.values.insert(SDValue { node: n, res: 0 }, result.value);
+        // The flags this select reads: the producer of the `CopyToReg EFLAGS`
+        // glued to it.
+        let producer =
+            node.ops.iter().find(|op| self.dag.opcode(**op) == ISD::CopyToReg).map(|op| self.dag.node(*op).ops[2].node);
+        // `EmitLoweredSelect`'s cascade: a select right after another on the
+        // same flags and condition, reading neither's result, is one more phi
+        // of the first's sink block (one branch, not two).
+        if let Some(last) = self.last_select
+            && Some(last.producer) == producer
+            && last.cc == cc
+            && self.blocks.last().is_some_and(|block| block.at == last.sink && block.insns.is_empty())
+            && when_false.value != last.result
+            && when_true.value != last.result
+        {
+            let phi = Phi {
+                result: result.value,
+                incoming: vec![(last.false_at, when_false.value), (last.this, when_true.value)],
+            };
+            self.blocks.last_mut().expect("a block").phis.push(phi);
+            return Ok(());
+        }
         let this = self.blocks.last().expect("a block").at;
         let (false_at, sink_at) = (self.next_address(), self.next_address());
         let target = Some(sink_at);
@@ -597,6 +684,8 @@ impl Emitter<'_, '_> {
         let phi = Phi { result: result.value, incoming: vec![(false_at, when_false.value), (this, when_true.value)] };
         self.blocks.push(EmitBlock { at: false_at, ..EmitBlock::default() });
         self.blocks.push(EmitBlock { at: sink_at, phis: vec![phi], ..EmitBlock::default() });
+        self.last_select =
+            producer.map(|producer| Select { producer, cc, this, false_at, sink: sink_at, result: result.value });
         Ok(())
     }
 

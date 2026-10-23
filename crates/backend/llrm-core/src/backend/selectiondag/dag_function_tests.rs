@@ -620,6 +620,40 @@ fn a_byval_parameter_is_a_fixed_object_of_its_own() {
     assert_eq!(a.addr.map(|a| a.disp), Some(12), "x follows z at BP+8: {lea:?}");
 }
 
+const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x) {
+entry:
+  switch i32 %x, label %d [ i32 1, label %a
+                            i32 100, label %b
+                            i32 5000, label %c ]
+a:
+  ret i32 10
+b:
+  ret i32 20
+c:
+  ret i32 30
+d:
+  ret i32 0
+}
+";
+
+/// A `switch` lowers to compare-and-branch blocks the builder makes after the
+/// switch's own; they were refused ("a switch lowering", 5 programs of the
+/// m32 execution run). Each is emitted after the block that made it and every
+/// branch names one.
+#[test]
+fn a_switch_is_a_chain_of_compare_and_branch_blocks() {
+    let module = llrm_mir::parse::module(SWITCH).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = done.body.blocks.len();
+    assert!(blocks > 5, "the switch's blocks and its four targets: {blocks}");
+    let at: Vec<i64> = done.body.blocks.iter().map(|b| b.at).collect();
+    for block in done.body.blocks.iter() {
+        assert!(block.succ.iter().all(|s| at.contains(s)), "{:?} leaves for a block that is not there", block.succ);
+    }
+}
+
 const DIV64: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i64 @f(i64 %a, i64 %b) {
 entry:
@@ -878,4 +912,68 @@ fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
         .collect();
     let expected = std::collections::BTreeSet::from([llrm_lir::registers::RegId::ESI, llrm_lir::registers::RegId::EDI]);
     assert_eq!(high, [expected.clone(), expected]);
+}
+
+const SHIFTS_ON_ONE_COUNT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %x, i64 %y, i32 %n) {
+entry:
+  %c = zext i32 %n to i64
+  %a = lshr i64 %x, %c
+  %b = shl i64 %y, %c
+  %m = mul i64 %b, 7
+  %r = add i64 %a, %m
+  ret i64 %r
+}
+";
+
+/// Two selects on one compare, the second in the sink block of the first: a
+/// flag-writing unit between them (the pin's scheduler allows it, its EFLAGS
+/// live-in covers it) left the second branch on the flags of a `sub`
+/// (shift_int64_variable -O2). Each branch is preceded by the compare that
+/// made its flags.
+#[test]
+fn a_branch_on_flags_follows_the_compare_that_made_them() {
+    let module = llrm_mir::parse::module(SHIFTS_ON_ONE_COUNT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<String> =
+        insns.iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    for (at, name) in names.iter().enumerate() {
+        if !matches!(name.as_str(), "jne" | "je") {
+            continue;
+        }
+        let before = names[..at].iter().rev().find(|n| !matches!(n.as_str(), "mov" | "jmp" | "jne" | "je" | ""));
+        assert!(
+            matches!(before.map(String::as_str), Some("test" | "cmp" | "and")),
+            "{name} after {before:?}: {names:?}"
+        );
+    }
+}
+
+const SHIFT_OPTIMIZED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1002 i64 @f(i64 noundef %0, i32 noundef %1) {
+b1:
+  %c = zext i32 %1 to i64
+  %r = lshr i64 %0, %c
+  ret i64 %r
+}
+";
+
+/// The two selects of a 64-bit shift read one compare: the pin cascades the
+/// second into the first's sink block (`EmitLoweredSelect`), one branch with
+/// two phis. Two branches, the second with an empty arm, reached the
+/// allocator as a shape that lost the zero of the high word (shr -O2 printed
+/// the low word's bits there).
+#[test]
+fn two_selects_on_one_compare_are_one_branch() {
+    let module = llrm_mir::parse::module(SHIFT_OPTIMIZED).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let branches =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Branch).count();
+    assert_eq!(branches, 1);
+    let phis: Vec<usize> = done.body.blocks.iter().map(|b| b.phis.len()).collect();
+    assert!(phis.contains(&2), "one sink block with both phis: {phis:?}");
 }
