@@ -557,6 +557,11 @@ impl Checker {
         Some(typed)
     }
 
+    /// An expression that must be numeric, and a 16-bit integer where it is a constant.
+    fn integer(&mut self, expr: &Expr) -> Option<Typed> {
+        self.argument_of_class(Class::Int, expr)
+    }
+
     /// An expression that must be numeric.
     fn numeric(&mut self, expr: &Expr) -> Option<Typed> {
         let typed = self.expr(expr);
@@ -808,7 +813,7 @@ impl Checker {
         let key = stem(name);
         if name == crate::qb_ast::ON_SELECTOR {
             for argument in arguments {
-                self.numeric(argument);
+                self.integer(argument);
             }
             return Some(Typed::value(Ty::Int));
         }
@@ -917,6 +922,16 @@ impl Checker {
     fn argument_of_class(&mut self, class: Class, argument: &Expr) -> Option<Typed> {
         match class {
             Class::Num => self.numeric(argument),
+            Class::Int => {
+                let typed = self.numeric(argument)?;
+                if let (Some(c), false) = (typed.constant, typed.variable) {
+                    if !(-32768.0..=32767.0).contains(&c.round()) {
+                        self.err(argument.span(), "Math overflow");
+                        return None;
+                    }
+                }
+                Some(typed)
+            }
             Class::Str => self.string_expr(argument),
             Class::Any => {
                 let typed = self.expr(argument);
@@ -1121,6 +1136,7 @@ impl Checker {
             }
             let class = match letter {
                 'n' => Class::Num,
+                'i' => Class::Int,
                 's' => Class::Str,
                 'x' => Class::Any,
                 'v' => Class::Var,
@@ -1247,15 +1263,19 @@ impl Checker {
                     }
                 }
                 let typed = self.expr(counter);
-                if let Some(typed) = typed {
+                if let Some(typed) = &typed {
                     if !typed.variable || !typed.ty.numeric() {
                         self.err(counter.span(), "Type mismatch");
                     }
                 }
-                self.numeric(start);
-                self.numeric(end);
-                if let Some(step) = step {
-                    self.numeric(step);
+                // an INTEGER counter takes constants of 16 bits
+                let integer_counter = typed.as_ref().is_some_and(|t| t.ty == Ty::Int);
+                for bound in [Some(start), Some(end), step.as_ref()].into_iter().flatten() {
+                    if integer_counter {
+                        self.integer(bound);
+                    } else {
+                        self.numeric(bound);
+                    }
                 }
                 let counter_key = match counter {
                     Expr::Name(name, _) => Some(format!("{}{}", stem(name), self.type_key(name))),
@@ -1344,18 +1364,18 @@ impl Checker {
                     self.err(*span, "User-defined type not defined");
                 }
                 self.string_expr(table);
-                self.numeric(file);
+                self.integer(file);
             }
             Statement::Open { path, file, record_length, .. } => {
                 self.string_expr(path);
-                self.numeric(file);
+                self.integer(file);
                 if let Some(length) = record_length {
-                    self.numeric(length);
+                    self.integer(length);
                 }
             }
             Statement::OpenClassic { mode, file, path, record_length, .. } => {
                 self.string_expr(mode);
-                self.numeric(file);
+                self.integer(file);
                 self.string_expr(path);
                 if let Some(length) = record_length {
                     self.numeric(length);
@@ -1363,12 +1383,12 @@ impl Checker {
             }
             Statement::Close { files, .. } => {
                 for file in files {
-                    self.numeric(file);
+                    self.integer(file);
                 }
             }
             Statement::LineInput { file, prompt, destination, .. } => {
                 if let Some(file) = file {
-                    self.numeric(file);
+                    self.integer(file);
                 }
                 if let Some(prompt) = prompt {
                     self.string_expr(prompt);
@@ -1380,7 +1400,7 @@ impl Checker {
                 }
             }
             Statement::FileTransfer { file, position, target, .. } => {
-                self.numeric(file);
+                self.integer(file);
                 if let Some(position) = position {
                     self.numeric(position);
                 }
@@ -1393,12 +1413,12 @@ impl Checker {
                 }
             }
             Statement::Seek { file, position, .. } => {
-                self.numeric(file);
+                self.integer(file);
                 self.numeric(position);
             }
             Statement::Print { kind, file, using, items, .. } => {
                 if let Some(file) = file {
-                    self.numeric(file);
+                    self.integer(file);
                 }
                 if let Some(using) = using {
                     self.string_expr(using);
@@ -1409,7 +1429,7 @@ impl Checker {
             }
             Statement::Input { file, prompt, destinations, .. } => {
                 if let Some(file) = file {
-                    self.numeric(file);
+                    self.integer(file);
                 }
                 if let Some(prompt) = prompt {
                     self.string_expr(prompt);
@@ -1472,7 +1492,9 @@ impl Checker {
                     CaseItem::Relation(_, a) => (vec![a], true),
                 };
                 for value in values {
-                    let Some(case) = self.expr(value) else { continue };
+                    let integer_selector = typed.as_ref().is_some_and(|t| t.ty == Ty::Int);
+                    let case = if integer_selector && matches!(value, Expr::Literal(Literal::Integer(..), _) | Expr::Unary { .. }) { self.integer(value) } else { self.expr(value) };
+                    let Some(case) = case else { continue };
                     if let Some(selector) = &typed {
                         if selector.ty.string() != case.ty.string() || matches!(case.ty, Ty::Record(_)) {
                             self.err(value.span(), "Type mismatch");
@@ -1761,9 +1783,9 @@ impl Checker {
         let mut constant_bounds = true;
         for bound in &d.bounds {
             if let Some(lower) = &bound.lower {
-                constant_bounds &= self.numeric(lower).is_some_and(|typed| typed.constant.is_some());
+                constant_bounds &= self.integer(lower).is_some_and(|typed| typed.constant.is_some());
             }
-            constant_bounds &= self.numeric(&bound.upper).is_some_and(|typed| typed.constant.is_some());
+            constant_bounds &= self.integer(&bound.upper).is_some_and(|typed| typed.constant.is_some());
         }
         let key = stem(&d.name).to_owned();
         let as_declared = d.type_name.is_some() && Ty::of_suffix(&d.name).is_none();
@@ -1990,7 +2012,7 @@ impl Checker {
         }
         let trailing = stripped.len() != arguments.len();
         let before = self.errors.len();
-        if !self.spec(stripped, "n n x? n? s?", span) {
+        if !self.spec(stripped, "n n x? i? s?", span) {
             return;
         }
         let tile = match stripped.get(2) {
@@ -2057,13 +2079,13 @@ impl Checker {
             self.err(span, "Syntax error");
             return;
         };
-        self.numeric(file);
+        self.integer(file);
         for pair in pairs.chunks(2) {
             let [width, variable] = pair else {
                 self.err(span, "Syntax error");
                 return;
             };
-            self.numeric(width);
+            self.integer(width);
             if let Some(typed) = self.expr(variable) {
                 if !typed.variable || !matches!(typed.ty, Ty::Str(None)) {
                     self.err(variable.span(), "Variable-length string required");
@@ -2083,26 +2105,29 @@ impl Checker {
 
     fn runtime(&mut self, name: &str, arguments: &[Expr], span: Span) {
         let spec = match name {
-            "SCREEN" => "n? n? n? n?",
-            "COLOR" => "n? n? n?",
-            "CLS" | "SLEEP" => "n?",
-            "LOCATE" => "n? n? n? n? n?",
+            "SCREEN" => "i? i? i? i?",
+            "COLOR" => "i? i? i?",
+            "CLS" => "i?",
+            "SLEEP" => "n?",
+            "LOCATE" => "i? i? i? i? i?",
             "WIDTH" => "x n?",
-            "WIDTH_FILE" => "n n",
-            "WIDTH_LPRINT" => "n",
-            "PSET" | "PRESET" => "n n n?",
-            "LINE" => "n n n n n? m? n?",
-            "CIRCLE" => "n n n n? n? n? n?",
-            "PAINT" => "n n x? n? s?",
+            "WIDTH_FILE" => "i i",
+            "WIDTH_LPRINT" => "i",
+            "PSET" | "PRESET" => "n n i?",
+            "LINE" => "n n n n i? m? i?",
+            "CIRCLE" => "n n n i? n? n? n?",
+            "PAINT" => "n n x? i? s?",
             "DRAW" | "PLAY" => "s",
             "GET" => "n n n n e",
             "PUT" => "n n e p?",
-            "VIEW" | "VIEW_SCREEN" => "n? n? n? n? n? n?",
-            "VIEW_PRINT" => "n? n?",
+            "VIEW" | "VIEW_SCREEN" => "i? i? i? i? i? i?",
+            "VIEW_PRINT" => "i? i?",
             "WINDOW" => "n? n? n? n?",
-            "PALETTE" => "n? n?",
-            "PCOPY" | "SOUND" | "POKE" | "OUT" => "n n",
-            "WAIT" => "n n n?",
+            "PALETTE" => "i? n?",
+            "PCOPY" => "i i",
+            "SOUND" => "i n",
+            "POKE" | "OUT" => "n i",
+            "WAIT" => "n i i?",
             "BEEP" | "TRON" | "TROFF" | "SYSTEM" | "END" => "",
             "FILES" => "s?",
             "RUN" => "x?",
@@ -2113,10 +2138,10 @@ impl Checker {
             "RESTORE" => "r?",
             "DATE$" | "TIME$" => "s",
             "KEY" if matches!(arguments, [Expr::Name(word, _)] if matches!(word.as_str(), "ON" | "OFF" | "LIST")) => "k",
-            "KEY" => "n s",
-            "EVENT" => "k n? k l?",
+            "KEY" => "i s",
+            "EVENT" => "k i? k l?",
             "LOCK" | "UNLOCK" => "n n? n?",
-            "IOCTL" => "n s",
+            "IOCTL" => "i s",
             "FIELD" | "PALETTE_USING" | "CREATEINDEX" | "INSERT" | "RETRIEVE" | "UPDATE" | "SEEKEQ" | "SEEKGE" | "SEEKGT" => "",
             "BEGINTRANS" | "COMMITTRANS" | "CHECKPOINT" => "",
             "CHDRIVE" => "s",
@@ -2236,6 +2261,8 @@ impl Checker {
             }
             return;
         }
+        // ON TIMER takes seconds, up to a day's worth
+        let spec = if name == "EVENT" && matches!(arguments.first(), Some(Expr::Name(device, _)) if device == "TIMER") { "k n? k l?" } else { spec };
         self.spec(arguments, spec, span);
     }
 }
