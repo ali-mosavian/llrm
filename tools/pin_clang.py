@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The pin's clang, from one setting (LLRM_PIN_CLANG, default
-~/scratch/llvm-build/bin/clang). Prints its path; its --version goes to stderr.
+<path to the pin build>/bin/clang). Prints its path; its --version goes to stderr.
 Refuses any build that is not the pin's commit."""
 import os
 import subprocess
