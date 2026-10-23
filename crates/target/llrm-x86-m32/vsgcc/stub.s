@@ -10,7 +10,7 @@ report_:
 input_read_:
  ret
 # libc stand-ins: dword string ops, then the tail bytes
-.globl memset, memcpy, memmove
+.globl memset, memcpy, memmove, memcpy_
 memset:
  push %edi
  mov 8(%esp),%edi
@@ -74,4 +74,21 @@ strlen:
  jne 1b
  dec %eax
  sub 4(%esp),%eax
+ ret
+# memcpy in llrm's default convention: dst in EAX, src in EDX, n in EBX, dst back in EAX; ECX, ESI, EDI and EBP kept
+memcpy_:
+ push %ecx
+ push %esi
+ push %edi
+ mov %eax,%edi
+ mov %edx,%esi
+ mov %ebx,%ecx
+ shr $2,%ecx
+ rep movsl
+ mov %ebx,%ecx
+ and $3,%ecx
+ rep movsb
+ pop %edi
+ pop %esi
+ pop %ecx
  ret
