@@ -32,8 +32,9 @@ Every float value is a vreg of class RFP32/64/80 from selection on; stack positi
 - Float arguments are never in x87 registers; the only x87 values crossing a call boundary are the call result (ST0) and the return value.
 - Calls, returns, block edges and inline asm follow the pin's `X86FloatingPoint` (stack empty at calls/returns except ST0; asm clobbers all of FP0..FP6). The legalizer adds nothing there.
 
-## Confirmed by sdag-d (2026-10-23)
+## Confirmed by sdag-d and sdag-c (2026-10-23)
 
 1. Pseudo names are whatever sdag-c's pin tables select (`LD_Fp*`, `ST_Fp*`, `ILD_Fp*`, `CHS_Fp`, the `FIST` pseudos); the emitter maps them, no renames.
 2. The `fnstcw`/`fldcw` dance around `FP_TO_INT*_IN_MEM` is the emitter's (the pin's custom inserter).
 3. f80 spills are `ST_FpP80m` / `LD_Fp80m`, as the pin.
+4. sdag-c: `FCMP` is `UCOM_Fpr32/64/80` + `FNSTSW16r` + an `AH` copy + `SAHF` (no `fcomi` on any CPU here); `ConstantFP` f80 0.0/1.0 match `fldz`/`fld1` (#4093); `LLRM_FARCALL` passes through the matcher (#4094).
