@@ -97,3 +97,29 @@ fn test_the_report_names_the_selector_that_selected_each_function() {
     assert_eq!(std::fs::read_to_string(&path).expect("a report"), "f old\ng dag\n");
     let _ = std::fs::remove_file(&path);
 }
+
+/// Parallel compiles append to one report: a line is one write, or two
+/// processes tear each other's. A run's selection count then read a one-word
+/// line and the whole `run_tests` launch died parsing it.
+#[test]
+fn test_report_lines_from_many_writers_stay_whole() {
+    let path = std::env::temp_dir().join(format!("isel-report-many-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let writers: Vec<_> = (0..8)
+        .map(|writer| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for at in 0..300 {
+                    shadow::recorded_to(&path, &format!("function_{writer}_{at}"), Selector::Dag);
+                }
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.join().unwrap();
+    }
+    let report = std::fs::read_to_string(&path).expect("a report");
+    assert_eq!(report.lines().count(), 8 * 300);
+    assert!(report.lines().all(|line| line.starts_with("function_") && line.ends_with(" dag")), "a torn line");
+    let _ = std::fs::remove_file(&path);
+}
