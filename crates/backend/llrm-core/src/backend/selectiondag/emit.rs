@@ -84,6 +84,8 @@ pub trait FrameMap {
 
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    /// The LIR address of each MIR block, by `BlockId`: what a branch names.
+    pub block_at: &'a HashMap<u32, i64>,
     pub frame: &'a dyn FrameMap,
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).
@@ -108,14 +110,44 @@ struct Emitter<'a, 'd> {
     /// `VRBaseMap`: the value each emitted result is.
     values: HashMap<SDValue, u32>,
     /// The LIR value a virtual register number of the DAG is.
-    vregs: HashMap<u32, u32>,
-    next_value: u32,
-    at: i64,
+    state: &'a mut EmitState,
     /// The blocks so far; the last is where the next instruction goes.
     blocks: Vec<EmitBlock>,
     /// The register tag each address component's value is constrained to
     /// (`constrainRegClass`).
     classes: Vec<(u32, &'static str)>,
+}
+
+/// What outlives one MIR block: the LIR value of each virtual register of the
+/// DAG, the next value number and the next address (blocks, instructions).
+#[derive(Debug)]
+pub struct EmitState {
+    pub vregs: HashMap<u32, u32>,
+    pub next_value: u32,
+    pub at: i64,
+}
+
+impl Default for EmitState {
+    fn default() -> EmitState {
+        EmitState { vregs: HashMap::new(), next_value: 1, at: 1 }
+    }
+}
+
+impl EmitState {
+    /// The LIR value a virtual register of the DAG is, made on first use.
+    pub fn vreg(&mut self, reg: u32) -> u32 {
+        if let Some(&v) = self.vregs.get(&reg) {
+            return v;
+        }
+        let v = self.state.next_value;
+        self.state.next_value += 1;
+        self.vregs.insert(reg, v);
+        v
+    }
+
+    pub fn next_address(&mut self) -> i64 {
+        self.state.next_address()
+    }
 }
 
 /// What [`emit`] makes: the blocks, and the register tags (`registers.regs`)
@@ -133,14 +165,24 @@ pub fn emit(
     units: &[Unit],
     ctx: &EmitContext<'_>,
 ) -> Result<Emitted, EmitError> {
+    emit_in(dag, units, ctx, &mut EmitState::default(), 0)
+}
+
+/// [`emit`] for one MIR block of a function: values and addresses continue
+/// from `state`, and the first block made is at `first_at`.
+pub fn emit_in(
+    dag: &SelectionDAG,
+    units: &[Unit],
+    ctx: &EmitContext<'_>,
+    state: &mut EmitState,
+    first_at: i64,
+) -> Result<Emitted, EmitError> {
     let mut emitter = Emitter {
         dag,
         ctx,
         values: HashMap::new(),
-        vregs: HashMap::new(),
-        next_value: 1,
-        at: 1,
-        blocks: vec![EmitBlock::default()],
+        state,
+        blocks: vec![EmitBlock { at: first_at, ..EmitBlock::default() }],
         classes: Vec::new(),
     };
     for unit in units {
@@ -214,6 +256,9 @@ impl Emitter<'_, '_> {
             instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "COPY" {
             return self.copy(n);
+        }
+        if name == "JMP_1" || name == "JCC_1" {
+            return self.jump(n, name == "JCC_1");
         }
         if name == "RET" {
             // The value is already in its register (`CopyToReg`); the frame
@@ -302,9 +347,39 @@ impl Emitter<'_, '_> {
     }
 
     fn next_address(&mut self) -> i64 {
-        let at = self.at;
-        self.at += 1;
-        at
+        self.state.next_address()
+    }
+
+    /// `JMP_1 dest` and `JCC_1 dest, cc`: a jump or a conditional branch to a
+    /// MIR block.
+    fn jump(
+        &mut self,
+        n: u32,
+        conditional: bool,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let block = node
+            .ops
+            .iter()
+            .find_map(|op| match self.dag.node(*op).data {
+                NodeData::Block(id) => Some(id),
+                _ => None,
+            })
+            .ok_or_else(|| EmitError::Unsupported("a jump without a block".to_owned()))?;
+        let target = *self.ctx.block_at.get(&block).ok_or_else(|| EmitError::Unsupported(format!("block {block}")))?;
+        let (op, name) = if conditional {
+            let cc = node
+                .ops
+                .iter()
+                .find_map(|op| self.dag.constant(*op))
+                .ok_or_else(|| EmitError::Unsupported("a branch without a condition".to_owned()))?
+                as usize;
+            (Operation::Branch, *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?)
+        } else {
+            (Operation::Jump, "jmp")
+        };
+        self.push_semantics(Semantics { target: Some(target), name: Some(name.into()), ..Semantics::new(op) });
+        Ok(())
     }
 
     /// `COPY dst <- src`, a register-to-register move.
@@ -455,17 +530,12 @@ impl Emitter<'_, '_> {
         &mut self,
         reg: u32,
     ) -> u32 {
-        if let Some(&v) = self.vregs.get(&reg) {
-            return v;
-        }
-        let v = self.new_value();
-        self.vregs.insert(reg, v);
-        v
+        self.state.vreg(reg)
     }
 
     fn new_value(&mut self) -> u32 {
-        let v = self.next_value;
-        self.next_value += 1;
+        let v = self.state.next_value;
+        self.state.next_value += 1;
         v
     }
 

@@ -86,7 +86,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx =
-        EmitContext { frame: &frame, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32, map: &map, names: &names };
+        EmitContext { block_at: &HashMap::new(), frame: &frame, address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32, map: &map, names: &names };
     let mut info = FunctionLoweringInfo::new(function);
     let mut out = Vec::new();
     for &block in function.layout() {
@@ -94,7 +94,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
         let emitted =
-            select_block(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &selector, &mut hooks(), &Info, &ctx)
+            select_block(&mut built.dag, &tli, &mut X86Lowering { cmov: false }, &selector, &mut hooks(), &Info, &ctx, &mut super::emit::EmitState::default(), 0)
                 .map_err(|r| format!("{r:?}\nbuilt:\n{before}\nafter:\n{}", built.dag.dump()))?;
         for b in emitted.blocks {
             out.push(

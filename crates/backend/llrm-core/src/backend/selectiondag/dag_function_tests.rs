@@ -8,15 +8,6 @@ entry:
 }
 ";
 
-const TWO_BLOCKS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-define i32 @f(i32 %a) {
-entry:
-  br label %next
-next:
-  ret i32 %a
-}
-";
-
 fn names(text: &str) -> Result<Vec<String>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32).map_err(|e| e.0)?;
@@ -35,10 +26,47 @@ fn a_function_of_one_block_is_selected_to_lir() {
     assert_eq!(names(SUM).unwrap(), ["mov", "add", "mov", "ret"]);
 }
 
-/// A function of several blocks needs the branches and phis (SD403): it is a
-/// refusal with its reason, which the shadow report counts.
+const LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %n) {
+entry:
+  br label %test
+test:
+  %s = phi i32 [ 0, %entry ], [ %s1, %body ]
+  %i = phi i32 [ 0, %entry ], [ %i1, %body ]
+  %more = icmp slt i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %s1 = add i32 %s, %i
+  %i1 = add i32 %i, 1
+  br label %test
+done:
+  ret i32 %s
+}
+";
+
+/// A counted loop is four LIR blocks: the header holds one phi per loop
+/// variable with an input from the entry and one from the body, the header
+/// branches to the body and falls into `done`, the body jumps back. A phi
+/// with one input, or a branch to a block that is not there, would be wrong
+/// code.
 #[test]
-fn a_function_of_several_blocks_is_refused_with_its_reason() {
-    let why = names(TWO_BLOCKS).unwrap_err();
-    assert!(why.contains("--isel=dag: a function of several blocks"), "{why}");
+fn a_loop_is_blocks_with_phis_and_branches() {
+    let module = llrm_mir::parse::module(LOOP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32).unwrap_or_else(|e| panic!("{}", e.0));
+    let blocks = &done.body.blocks;
+    assert_eq!(blocks.len(), 4, "{blocks:#?}");
+    let addresses: Vec<i64> = blocks.iter().map(|b| b.at).collect();
+    let header = &blocks[1];
+    assert_eq!(header.phis.len(), 2, "{header:#?}");
+    for phi in header.phis.iter() {
+        let mut from: Vec<i64> = phi.incoming.iter().map(|(at, _)| *at).collect();
+        from.sort();
+        assert_eq!(from, [addresses[0], addresses[2]], "entry and body feed the phi");
+    }
+    for block in blocks.iter() {
+        assert!(block.succ.iter().all(|at| addresses.contains(at)), "{block:#?}");
+    }
+    assert_eq!(header.succ.iter().copied().collect::<Vec<_>>(), [addresses[2], addresses[3]]);
+    assert_eq!(blocks[2].succ.iter().copied().collect::<Vec<_>>(), [addresses[1]]);
+    assert!(blocks[3].succ.is_empty());
 }

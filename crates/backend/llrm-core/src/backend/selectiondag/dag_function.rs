@@ -23,10 +23,9 @@
 //! # Runs
 //! `assemble::staged` when `--isel=dag`.
 //!
-//! DEVIATE SD403: one MIR block per function so far; no calls, locals or
-//! phis. Reason: multi-block needs the branch nodes mapped (`JCC_1`, `JMP_1`
-//! are unmapped opcodes) and the phis `PHINodesToUpdate` names. Exit: the
-//! next piece (D1d-2). Owner: sdag-d. Review 2026-12-03.
+//! DEVIATE SD403: no calls, locals, register arguments, switch lowering or
+//! multi-register phis yet. Reason: they need the call sequence and frame
+//! objects in the emitter (D1e). Exit: D1e. Owner: sdag-d. Review 2026-12-03.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -37,13 +36,13 @@ use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::Module;
+use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_target::Target;
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{EmitContext, FrameMap};
+use super::emit::{EmitBlock, EmitContext, EmitState, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -51,7 +50,7 @@ use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
 use crate::backend::isel::{Parameter, Selected, Unselected};
 use crate::model::ir::{Addr, Mem, Space};
-use crate::model::lir::{Block, LirBlock, LirBody};
+use crate::model::lir::{Block, LirBlock, LirBody, Phi};
 
 struct Info;
 
@@ -114,6 +113,35 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     .clone()
 }
 
+/// The addresses each LIR block can go to: the targets of its jumps and
+/// branches, and the next block if it does not end in a jump or a return.
+fn successors(emitted: &[EmitBlock]) -> Vec<Vec<i64>> {
+    use crate::model::ir::Operation;
+    emitted
+        .iter()
+        .enumerate()
+        .map(|(i, block)| {
+            let mut out: Vec<i64> = Vec::new();
+            for what in block.insns.iter().filter_map(|insn| insn.what.as_ref()) {
+                if let (Operation::Branch | Operation::Jump, Some(target)) = (what.op, what.target) {
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
+            }
+            let ends = block.insns.last().and_then(|insn| insn.what.as_ref()).is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
+            if !ends {
+                if let Some(next) = emitted.get(i + 1) {
+                    if !out.contains(&next.at) {
+                        out.push(next.at);
+                    }
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(format!("--isel=dag: {}", why.into())))
 }
@@ -133,32 +161,13 @@ pub fn selected(
     };
     let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(text).map_err(Unselected)?;
-    if function.layout().len() != 1 {
-        return refuse("a function of several blocks");
-    }
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
-    let mut built = build_block(
-        module,
-        function,
-        &layout,
-        &BuilderTarget::m32(),
-        arch,
-        &convention,
-        &mut info,
-        function.layout()[0],
-    )
-    .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let tables = tables(arch);
     let frame = Frame(
-        convention
-            .parameters
-            .iter()
-            .filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None })
-            .collect(),
+        convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None }).collect(),
     );
-    let ctx = EmitContext { frame: &frame, address_mode: AddrMode::Flat32, map: &tables.map, names: &tables.names };
     let mut hooks = X86Hooks::new(Options {
         cpu: Cpu::I486,
         opt_none: false,
@@ -167,26 +176,85 @@ pub fn selected(
         has_frame_pointer: true,
         address_mode: AddrMode::Flat32,
     });
-    let emitted = select_block(
-        &mut built.dag,
-        &tli,
-        &mut X86Lowering { cmov: false },
-        &Selector::new(TABLE),
-        &mut hooks,
-        &Info,
-        &ctx,
-    )
-    .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
-    let blocks: Vec<Block> = emitted
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(at, block)| -> Block {
-            let succ: Vec<i64> = match (at, emitted.blocks.len()) {
-                (0, 3) => vec![emitted.blocks[1].at, emitted.blocks[2].at],
-                (1, 3) => vec![emitted.blocks[2].at],
-                _ => Vec::new(),
+    let selector = Selector::new(TABLE);
+    let mut state = EmitState::default();
+    // A block's address is fixed before any block is emitted: a branch names
+    // the blocks after it.
+    let block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
+    let ctx = EmitContext {
+        block_at: &block_at,
+        frame: &frame,
+        address_mode: AddrMode::Flat32,
+        map: &tables.map,
+        names: &tables.names,
+    };
+    let mut emitted: Vec<EmitBlock> = Vec::new();
+    // The LIR blocks each MIR block became, and the phi inputs each exports.
+    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
+    let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
+    for &block in function.layout() {
+        let mut built = build_block(
+            module,
+            function,
+            &layout,
+            &BuilderTarget::m32(),
+            arch,
+            &convention,
+            &mut info,
+            block,
+        )
+        .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        if !built.live_ins.is_empty() || !built.extra.is_empty() {
+            return refuse("register arguments or a switch lowering");
+        }
+        let done = select_block(
+            &mut built.dag,
+            &tli,
+            &mut X86Lowering { cmov: false },
+            &selector,
+            &mut hooks,
+            &Info,
+            &ctx,
+            &mut state,
+            block_at[&block.0],
+        )
+        .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
+        let from = emitted.len();
+        emitted.extend(done.blocks);
+        made.insert(block.0, from..emitted.len());
+        exports.push((block, built.phi_updates));
+    }
+    let succ = successors(&emitted);
+    // Phis: the successor's phi takes, from each LIR block of the predecessor
+    // that leaves for it, the register the predecessor copied its value to.
+    for (pred, updates) in &exports {
+        for (phi, reg_in) in updates {
+            let ValueDef::Instruction(def) = function.value(*phi).def else {
+                return refuse("a phi that is not an instruction");
             };
+            let Some(phi_block) = function.parent(def) else { return refuse("a phi outside a block") };
+            let at = block_at[&phi_block.0];
+            let Some(reg_out) = info.value_regs.get(phi) else { return refuse("a phi with no register") };
+            let (result, incoming) = (state.vreg(*reg_out), state.vreg(*reg_in));
+            let edges: Vec<i64> = made[&pred.0].clone().filter(|i| succ[*i].contains(&at)).map(|i| emitted[i].at).collect();
+            let target = made[&phi_block.0].start;
+            for edge in edges {
+                let block = &mut emitted[target];
+                match block.phis.iter_mut().find(|p| p.result == result) {
+                    Some(p) => {
+                        if !p.incoming.iter().any(|(e, _)| *e == edge) {
+                            p.incoming.push((edge, incoming));
+                        }
+                    }
+                    None => block.phis.push(Phi { result, incoming: vec![(edge, incoming)] }),
+                }
+            }
+        }
+    }
+    let blocks: Vec<Block> = emitted
+        .iter()
+        .zip(succ)
+        .map(|(block, succ)| -> Block {
             LirBlock {
                 succ: succ.into(),
                 phis: block.phis.clone().into(),
@@ -195,7 +263,7 @@ pub fn selected(
             .into()
         })
         .collect();
-    let entry = emitted.blocks[0].at;
+    let entry = emitted[0].at;
     let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
     body.bits = arch.object().bitness;
     body.registers = Some(llrm_lir::registers::Regs(arch.registers()));

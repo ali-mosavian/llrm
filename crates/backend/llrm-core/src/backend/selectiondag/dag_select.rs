@@ -36,7 +36,7 @@ use llrm_dagisel::x86_select::select_node;
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineLevel, DagCombiner};
 use super::dagisel_adapter::DagisAdapter;
-use super::emit::{EmitContext, Emitted, emit};
+use super::emit::{EmitContext, EmitState, Emitted, emit_in};
 use super::isd::ISD;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
@@ -62,12 +62,14 @@ pub fn select_block(
     hooks: &mut X86Hooks,
     info: &dyn SchedInfo,
     ctx: &EmitContext<'_>,
+    state: &mut EmitState,
+    first_at: i64,
 ) -> Result<Emitted, Refusal> {
     legalized(dag, tli, lowering)?;
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
-    emit(dag, &units, ctx).map_err(Refusal::Emit)
+    emit_in(dag, &units, ctx, state, first_at).map_err(Refusal::Emit)
 }
 
 /// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels

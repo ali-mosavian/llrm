@@ -66,7 +66,8 @@ fn context_in(
     let target = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
-    f(&EmitContext { frame: &NoFrame, address_mode: mode, map: &map, names: &names });
+    let no_blocks = HashMap::new();
+    f(&EmitContext { block_at: &no_blocks, frame: &NoFrame, address_mode: mode, map: &map, names: &names });
 }
 
 fn text(insns: &[std::sync::Arc<crate::model::lir::Insn>]) -> Vec<String> {
