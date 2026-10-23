@@ -3,6 +3,7 @@
 //!
 //! # Example
 //! ```
+//! use llrm_mir::lowering::Lowering;
 //! use llrm_x86::lowering::X86;
 //! assert!(X86 { is_64bit: false }.is_mask_and_cmp0_folding_beneficial());
 //! assert!(X86 { is_64bit: false }.is_truncate_free(32, 16));
