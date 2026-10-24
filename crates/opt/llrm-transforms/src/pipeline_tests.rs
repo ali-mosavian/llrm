@@ -2815,13 +2815,6 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
         assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
-        assert_ne!(names.last(), Some(&"opened"), "the pin opens no exit phi after LSR: {names:?}");
-        let on = Applied {
-            options: pipeline::Options { loop_opened: true, ..applied.options.clone() },
-            ..Applied::default()
-        };
-        let names: Vec<&str> = pipeline::strength_slot(&on).iter().map(|one| one.name()).collect();
-        assert_eq!(names.last(), Some(&"opened"), "-fllrm-loop-opened: the exit phis go again: {names:?}");
     }
 }
 
