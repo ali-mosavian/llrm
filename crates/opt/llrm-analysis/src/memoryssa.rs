@@ -508,6 +508,9 @@ impl Accesses {
         unit: &Unit,
         calls: &Calls,
     ) -> Self {
+        if let Some(lazy) = unit.lazy {
+            lazy.make_all(unit);
+        }
         let references =
             unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))

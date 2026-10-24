@@ -935,15 +935,13 @@ impl PartialEq for References {
 }
 
 impl References {
-    /// `inst`'s reference, as `Annotated` holds it, over `host`'s body.
-    pub fn get(
+    /// The unit the references are annotated in: `Annotated`'s, over `host`'s
+    /// body.
+    fn annotating<R>(
         &self,
         host: &Unit,
-        inst: InstId,
-    ) -> Option<MemRef> {
-        if let Some(found) = self.made.borrow().get(&inst) {
-            return found.clone();
-        }
+        make: impl FnOnce(&Unit, &alias::PointValues) -> R,
+    ) -> Option<R> {
         let pointers = Result::as_ref(&*self.pointers).ok()?;
         let mut unit = Unit::within(host.context, host.layout, host.function, &self.outer)
             .with_shape(&self.shape)
@@ -955,19 +953,58 @@ impl References {
         if let Ok(edges) = &*self.edges {
             unit = unit.with_edges(edges);
         }
-        let made = alias::annotate_one(&unit, pointers, &self.registers, &self.annotation, inst);
+        Some(make(&unit, pointers))
+    }
+
+    fn annotate(
+        &self,
+        unit: &Unit,
+        pointers: &alias::PointValues,
+        inst: InstId,
+    ) -> Option<MemRef> {
+        let made = alias::annotate_one(unit, pointers, &self.registers, &self.annotation, inst);
         if llrm_support::env_flag!("LLRM_CHECK_LAZY") {
             let eager = self
                 .eager
-                .get_or_init(|| alias::annotated_with(&unit, pointers, &self.registers).expect("the eager references"));
+                .get_or_init(|| alias::annotated_with(unit, pointers, &self.registers).expect("the eager references"));
             assert_eq!(
                 made.as_ref(),
                 eager.get(&inst),
                 "LLRM_CHECK_LAZY: a reference made when asked differs from the one made up front"
             );
         }
+        made
+    }
+
+    /// `inst`'s reference, as `Annotated` holds it, over `host`'s body.
+    pub fn get(
+        &self,
+        host: &Unit,
+        inst: InstId,
+    ) -> Option<MemRef> {
+        if let Some(found) = self.made.borrow().get(&inst) {
+            return found.clone();
+        }
+        let made = self.annotating(host, |unit, pointers| self.annotate(unit, pointers, inst))?;
         self.made.borrow_mut().insert(inst, made.clone());
         made
+    }
+
+    /// Every instruction's reference made now, in one unit: a client that asks
+    /// of all of them (`Accesses::plain`) makes the unit once, not per access.
+    pub fn make_all(
+        &self,
+        host: &Unit,
+    ) {
+        self.annotating(host, |unit, pointers| {
+            for (_, inst) in host.function.walk() {
+                if self.made.borrow().contains_key(&inst) {
+                    continue;
+                }
+                let made = self.annotate(unit, pointers, inst);
+                self.made.borrow_mut().insert(inst, made);
+            }
+        });
     }
 }
 
@@ -1353,6 +1390,9 @@ impl Analysis for PlainAccesses {
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_lazy(Result::as_ref(&*references).ok()?)
             .with_exposed(&exposed);
+        if let Ok(references) = &*references {
+            references.make_all(&unit);
+        }
         let same = function.walk().all(|(_, inst)| unit.reference(inst).as_ref() == held.references.get(&inst));
         same.then(|| Ok(std::rc::Rc::new(held.carried(function))))
     }
