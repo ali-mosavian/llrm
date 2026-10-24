@@ -220,3 +220,34 @@ fn a_switch_on_poison_has_no_live_successor() {
         "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  switch i16 poison, label %d [\n    i16 1, label %c\n  ]\n\nc:\n  br label %j\n\nd:\n  br label %j\n\nj:\n  ret i16 poison\n}\n",
     );
 }
+
+/// `visit` asked the generic simplifier about every instruction with a value,
+/// and the visitor of an add, a shift or a compare asked again as its first
+/// step: the same question twice (d_faces -O2: 9,931 generic asks, 9.6 M Ir of
+/// them on compares). Those opcodes are asked once; a cast, whose visitor has
+/// tests before its own, is still asked by `visit`.
+#[test]
+fn an_instruction_whose_visitor_simplifies_is_not_simplified_before_it() {
+    let asks = |text: &str| {
+        let mut module = parsed(text);
+        super::GENERIC_SIMPLIFIES.with(|one| one.set(0));
+        combined(&mut module);
+        super::GENERIC_SIMPLIFIES.with(std::cell::Cell::get)
+    };
+    let own = "define i1 @f(i32 %x, i32 %y) {
+b0:
+  %a = add i32 %x, %y
+  %s = shl i32 %a, 3
+  %c = icmp slt i32 %s, %y
+  ret i1 %c
+}
+";
+    let cast = "define i64 @f(i32 %x) {
+b0:
+  %e = zext i32 %x to i64
+  ret i64 %e
+}
+";
+    assert_eq!(asks(own), 0, "an add, a shift and a compare ask for themselves");
+    assert_eq!(asks(cast), 1, "a cast is asked by `visit`");
+}

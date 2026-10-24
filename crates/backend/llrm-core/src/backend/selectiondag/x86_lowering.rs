@@ -143,6 +143,15 @@ impl CombineHooks for X86Lowering {
         }
     }
 
+    fn target_shrink_demanded_constant(
+        &mut self,
+        dag: &mut SelectionDAG,
+        op: SDValue,
+        demanded: u128,
+    ) -> Option<Option<SDValue>> {
+        x86_shrink_demanded_constant(dag, op, demanded)
+    }
+
     fn promote_type(
         &self,
         dag: &SelectionDAG,
@@ -151,6 +160,38 @@ impl CombineHooks for X86Lowering {
     ) -> Option<EVT> {
         is_desirable_to_promote_op(dag, tli, op)
     }
+}
+
+/// `X86TargetLowering::targetShrinkDemandedConstant`, scalar part: an `and`
+/// mask is not shrunk below what a `movzx` matches. The mask is rounded up to
+/// a byte, then a power of two; if that is the mask, it stays; if it only
+/// differs in undemanded bits, it becomes that.
+fn x86_shrink_demanded_constant(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+    demanded: u128,
+) -> Option<Option<SDValue>> {
+    if dag.opcode(op) != ISD::And {
+        return None;
+    }
+    let vt = dag.value_type(op);
+    let mask = dag.constant(dag.operand(op, 1))?;
+    let shrunk = mask & demanded;
+    let active = 128 - shrunk.leading_zeros();
+    if active == 0 {
+        return None;
+    }
+    let width = active.max(8).next_power_of_two().min(vt.size_in_bits());
+    let zero_extend = super::fold::mask(width);
+    if zero_extend == mask {
+        return Some(None);
+    }
+    if zero_extend & !(mask | !demanded) != 0 {
+        return None;
+    }
+    let new_mask = dag.get_constant(zero_extend, vt);
+    let x = dag.operand(op, 0);
+    Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
 }
 
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
