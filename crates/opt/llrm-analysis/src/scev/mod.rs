@@ -145,18 +145,71 @@ impl<'a> Cx<'a> {
 /// operands as pointers with their use bits, the type, and what else the kind
 /// holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Key {
+pub(super) struct Key<'a> {
     pub(super) tag: Type,
-    pub(super) ops: Vec<Use>,
+    pub(super) ops: std::borrow::Cow<'a, [Use]>,
     pub(super) ty: Option<Ty>,
     pub(super) constant: Option<Ap>,
     pub(super) value: Option<Operand>,
     pub(super) header: Option<BlockId>,
 }
 
+impl Key<'_> {
+    /// The key that owns its operands, for a node that is made.
+    fn into_owned(self) -> Key<'static> {
+        Key {
+            tag: self.tag,
+            ops: std::borrow::Cow::Owned(self.ops.into_owned()),
+            ty: self.ty,
+            constant: self.constant,
+            value: self.value,
+            header: self.header,
+        }
+    }
+}
+
+/// A key by what it holds, so that `UniqueSCEVs` is asked with operands
+/// borrowed from the caller (`FoldingSetNodeID` over a `SmallVector` the
+/// caller keeps): a lookup that finds its node builds nothing.
+pub(super) trait KeyLike {
+    fn key(&self) -> &Key<'_>;
+}
+
+impl KeyLike for Key<'_> {
+    fn key(&self) -> &Key<'_> {
+        self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn KeyLike + 'a> for Key<'static> {
+    fn borrow(&self) -> &(dyn KeyLike + 'a) {
+        self
+    }
+}
+
+impl std::hash::Hash for dyn KeyLike + '_ {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        std::hash::Hash::hash(self.key(), state);
+    }
+}
+
+impl PartialEq for dyn KeyLike + '_ {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for dyn KeyLike + '_ {}
+
 /// What `FoldingSetNodeID` does: the key goes into the hasher as a few words,
 /// the operands one word each, not the fields one write at a time.
-impl std::hash::Hash for Key {
+impl std::hash::Hash for Key<'_> {
     fn hash<H: std::hash::Hasher>(
         &self,
         state: &mut H,
@@ -167,7 +220,7 @@ impl std::hash::Hash for Key {
             Some(Ty::Ptr(space)) => 2 | u64::from(space) << 2,
         };
         state.write_u64(self.tag as u64 | (self.ops.len() as u64) << 8 | ty << 32);
-        for op in &self.ops {
+        for op in self.ops.iter() {
             state.write_u64(u64::from(op.scev.0) | u64::from(op.bits) << 32);
         }
         if let Some(constant) = self.constant {
@@ -201,7 +254,7 @@ impl Flags {
 pub struct ScalarEvolution {
     pub(super) nodes: Vec<Node>,
     /// `UniqueSCEVs`.
-    pub(super) unique: HashMap<Key, Scev>,
+    pub(super) unique: HashMap<Key<'static>, Scev>,
     /// `FoldCache`: the extensions already folded.
     pub(super) fold_cache: HashMap<(Type, Use, Ty), Scev>,
     /// `ProvingSplitPredicate`.
@@ -506,17 +559,17 @@ impl ScalarEvolution {
     /// place a node is made (`new (SCEVAllocator) ...; UniqueSCEVs.insert`).
     pub(super) fn intern(
         &mut self,
-        key: Key,
+        key: Key<'_>,
         kind: impl FnOnce() -> Kind,
         ty: Option<Ty>,
         size: u16,
     ) -> Scev {
         let at = Scev(self.nodes.len() as u32);
-        // One hash of the key for the find and the insert.
-        match self.unique.entry(key) {
-            std::collections::hash_map::Entry::Occupied(found) => return *found.get(),
-            std::collections::hash_map::Entry::Vacant(slot) => slot.insert(at),
-        };
+        // The find borrows the key's operands; a node that is made owns them.
+        if let Some(&found) = self.unique.get(&key as &dyn KeyLike) {
+            return found;
+        }
+        self.unique.insert(key.into_owned(), at);
         self.nodes.push(Node { kind: kind(), ty, size, flags: 0, canonical: at });
         // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
         // each constructor makes a node.
@@ -542,7 +595,7 @@ impl ScalarEvolution {
     ) -> Scev {
         let key = Key {
             tag: Type::Constant,
-            ops: Vec::new(),
+            ops: std::borrow::Cow::Borrowed(&[]),
             ty: Some(Ty::Int(value.width)),
             constant: Some(value),
             value: None,
@@ -587,8 +640,14 @@ impl ScalarEvolution {
         v: Operand,
     ) -> Scev {
         let ty = self.operand_ty(cx, v);
-        let key =
-            Key { tag: Type::Unknown, ops: Vec::new(), ty: Some(ty), constant: None, value: Some(v), header: None };
+        let key = Key {
+            tag: Type::Unknown,
+            ops: std::borrow::Cow::Borrowed(&[]),
+            ty: Some(ty),
+            constant: None,
+            value: Some(v),
+            header: None,
+        };
         self.intern(key, || Kind::Unknown(v), Some(ty), 1)
     }
 

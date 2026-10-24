@@ -1,10 +1,12 @@
 //! `getMinMaxExpr` and the `getSMaxExpr`... family.
 
+use std::borrow::Cow;
+
 use llrm_mir::opcode::IntPredicate;
 
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Type, Use};
-use super::{Cx, Key, ScalarEvolution};
+use super::{Cx, Key, KeyLike, ScalarEvolution};
 
 impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3888
@@ -74,8 +76,8 @@ impl ScalarEvolution {
         }
 
         // Check if we have created the same expression before.
-        let key = Key { tag: kind, ops: ops.clone(), ty: None, constant: None, value: None, header: None };
-        if let Some(&s) = self.unique.get(&key) {
+        let key = Key { tag: kind, ops: Cow::Borrowed(&ops), ty: None, constant: None, value: None, header: None };
+        if let Some(&s) = self.unique.get(&key as &dyn KeyLike) {
             return s;
         }
 
@@ -144,8 +146,8 @@ impl ScalarEvolution {
 
         // Okay, it looks like we really DO need an expr. Check to see if we
         // already have one, otherwise create a new one.
-        let key = Key { tag: kind, ops: ops.clone(), ty: None, constant: None, value: None, header: None };
-        if let Some(&existing) = self.unique.get(&key) {
+        let key = Key { tag: kind, ops: Cow::Borrowed(&ops), ty: None, constant: None, value: None, header: None };
+        if let Some(&existing) = self.unique.get(&key as &dyn KeyLike) {
             return existing;
         }
         let ty = self.type_of(ops[0].scev);
