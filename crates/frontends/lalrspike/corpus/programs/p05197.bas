@@ -1,0 +1,7 @@
+TYPE R
+a(3) AS INTEGER
+END TYPE
+SUB s
+STATIC r AS R
+r.a(1) = 1
+END SUB
