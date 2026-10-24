@@ -509,6 +509,12 @@ pub fn three_address(
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
+            // A word unit step stays `inc`: with the source in an address
+            // register the `lea` is three bytes against the INC's one, and
+            // with it elsewhere the copy it needs makes five against three.
+            if word && step.abs() == 1 {
+                return None;
+            }
             Mem { base: Some(*base), offset: step, ..Mem::new(None, width) }
         }
         (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {

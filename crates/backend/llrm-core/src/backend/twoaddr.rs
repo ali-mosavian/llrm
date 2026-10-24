@@ -147,6 +147,12 @@ pub fn tied(
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
                 && let Some(Loc::Held(base)) = one.what.as_ref().and_then(|what| what.sources.first())
+                // A word source copied out of a register it arrives in
+                // (`SrcRegMap`) is in ax, cx or dx, none of which is a 16-bit
+                // address base: the
+                // `lea` would need `mov bx,ax` first, and the peephole already
+                // makes `lea cx,[eax+k]` of the copy and the add.
+                && (base.width != 2 || walk.src_register(base.value).is_none())
                 && (!walk.killed_at(&work[place], base.value)
                     || profitable_to_convert(&walk, &one, base.value, body.regs()))
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits)
@@ -1227,6 +1233,10 @@ mod tests {
         let lea = |got: &LirBody| names_of(got).contains(&"lea".to_owned());
         assert!(lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSubWords)));
         assert!(!lea(&tied(&of(live_source_add_of(2, "add", 2)), AddSub)));
+        // A unit step keeps its INC (the regparm3 `_incs` listing at -Os).
+        for (step, name) in [(1, "add"), (1, "sub"), (-1, "add")] {
+            assert!(!lea(&tied(&of(live_source_add_of(step, name, 2)), AddSubWords)), "{name} {step}");
+        }
     }
 
     /// `v5 := lea [v1+4]`: reads `v1`, writes no flags, is no copy and no tied
