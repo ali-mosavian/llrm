@@ -1552,7 +1552,9 @@ impl<'a, 't> Body<'a, 't> {
 
     fn block(&mut self) -> usize {
         let id = self.blocks.len() as i64 + 1;
-        self.blocks.push(Open { id, instructions: Vec::new(), terminator: None });
+        // Room for a typical block: growing by doubling copied the large
+        // `Instruction`s 674 times (0.75 M Ir).
+        self.blocks.push(Open { id, instructions: Vec::with_capacity(16), terminator: None });
         self.blocks.len() - 1
     }
 
@@ -2100,17 +2102,20 @@ impl<'a, 't> Body<'a, 't> {
         Ok(got)
     }
 
+    /// The type name of a tree node, borrowed from the unit (a `String` was
+    /// copied for each of the 2,971 asks, 0.21 M Ir).
     fn type_of_node(
         &self,
         node: &str,
-    ) -> String {
-        let tree = &self.unit.nodes[&hir::handle(node)];
+    ) -> &'a str {
+        let unit: &'a hir::Unit = self.unit;
+        let tree = &unit.nodes[&hir::handle(node)];
         match tree.call.as_str() {
-            "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
+            "CGCall" => unit.calls[&hir::handle(&tree.args[0])].type_.as_str(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
             "CGFact" => self.type_of_node(&tree.args[1]),
-            "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
-            _ => tree.args.last().cloned().unwrap_or_default(),
+            "CGFlow" | "CGCompare" => "TY_BOOLEAN",
+            _ => tree.args.last().map_or("", String::as_str),
         }
     }
 
