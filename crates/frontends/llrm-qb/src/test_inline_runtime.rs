@@ -21,19 +21,19 @@ p = \"Oliver\"
 PRINT A&(p) + B&(p) + C&(p) + D&(p) + E&(p) + T%(p)
 
 FUNCTION A& (s AS STRING)
-    FOR i = 1 TO LEN(s): A& = A& + ASC(MID$(s, i, 1)): NEXT
+    FOR i = 1 TO LEN(s): acc& = acc& + ASC(MID$(s, i, 1)): NEXT: A& = acc&
 END FUNCTION
 FUNCTION B& (s AS STRING)
-    FOR i = 1 TO LEN(s): B& = B& + ASC(MID$(s, i, 1)) * 2: NEXT
+    FOR i = 1 TO LEN(s): acc& = acc& + ASC(MID$(s, i, 1)) * 2: NEXT: B& = acc&
 END FUNCTION
 FUNCTION C& (s AS STRING)
-    FOR i = 1 TO LEN(s): C& = C& + ASC(MID$(s, i, 1)) * 3: NEXT
+    FOR i = 1 TO LEN(s): acc& = acc& + ASC(MID$(s, i, 1)) * 3: NEXT: C& = acc&
 END FUNCTION
 FUNCTION D& (s AS STRING)
-    FOR i = 1 TO LEN(s): D& = D& + ASC(MID$(s, i, 1)) * 4: NEXT
+    FOR i = 1 TO LEN(s): acc& = acc& + ASC(MID$(s, i, 1)) * 4: NEXT: D& = acc&
 END FUNCTION
 FUNCTION E& (s AS STRING)
-    FOR i = 1 TO LEN(s): E& = E& + ASC(MID$(s, i, 1)) * 5: NEXT
+    FOR i = 1 TO LEN(s): acc& = acc& + ASC(MID$(s, i, 1)) * 5: NEXT: E& = acc&
 END FUNCTION
 FUNCTION T% (s AS STRING)
     T% = ASC(LEFT$(s, 2)) + ASC(s + \"x\")
@@ -202,7 +202,7 @@ DECLARE FUNCTION S& (n AS INTEGER)
 PRINT S&(5)
 
 FUNCTION S& (n AS INTEGER)
-    FOR i = 1 TO n: S& = S& + ASC(CHR$(i + 64)) + LEN(CHR$(i)): NEXT
+    FOR i = 1 TO n: acc& = acc& + ASC(CHR$(i + 64)) + LEN(CHR$(i)): NEXT: S& = acc&
 END FUNCTION
 ";
 
