@@ -17,6 +17,7 @@ path = "src/main.rs"
 buildprs = { path = "crates/buildprs" }
 llrm-hir = { path = "../../ir/llrm-hir" }
 llrm-qbruntime = { path = "../llrm-qbruntime" }
+logos = "0.16.1"
 llrm-core = { path = "../../backend/llrm-core" }
 llrm-driver = { path = "../../backend/llrm-driver" }
 
