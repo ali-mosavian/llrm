@@ -421,7 +421,11 @@ fn integer(
 /// when the scaled mode is legal and folding extends no live range
 /// (`isProfitableToFoldIntoAddressingMode`: `x` is already used in the
 /// access's block). DEVIATE SHL1: the pin also folds where every use of the
-/// `shl` is an access that folds it; that case is left unfolded.
+/// `shl` is an access that folds it; that case is left unfolded. DEVIATE SHL2:
+/// not where a scaled index costs instructions of its own
+/// (`scaled_index_insns`, real mode's prefix): each access would pay them,
+/// where the shift is made once (quicksort at m16 grew 21 bytes, a spill for
+/// the longer-lived index).
 fn shifted(
     unit: &passes::Unit,
     tti: &dyn Tti,
@@ -434,7 +438,7 @@ fn shifted(
     let Operand::Value(value) = index else { return None };
     let ValueDef::Instruction(shl) = unit.function.value(value).def else { return None };
     let one = unit.function.instruction(shl);
-    if one.opcode != Opcode::Binary(BinaryOp::Shl) {
+    if tti.scaled_index_insns() != 0 || one.opcode != Opcode::Binary(BinaryOp::Shl) {
         return None;
     }
     let &[x, amount] = &one.operands[..] else { return None };

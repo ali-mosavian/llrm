@@ -166,6 +166,82 @@ b2:
     assert!(after.contains("add i16 %next, 7"), "{after}");
 }
 
+/// The flat 32-bit target of x86: the pin's TTI with scaled indexes free.
+struct Flat;
+
+impl llrm_mir::target::Machine for Flat {
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::target::Neutral.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::Neutral.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        llrm_mir::target::Neutral.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        llrm_mir::target::Neutral.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86 {
+            sse1: false,
+            sse2: false,
+            macro_fusion: false,
+            quad: false,
+            real_mode: None,
+        }))
+    }
+}
+
+fn sunk_flat(text: &str) -> String {
+    let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\n{text}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(CgpAddr);
+    manager.run_module(&mut module, std::rc::Rc::new(Flat)).unwrap();
+    printed(&module)
+}
+
+const BUBBLE: &str = "@a = global [200 x i32] zeroinitializer
+
+define void @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %j = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %s = shl i32 %j, 2
+  %c = icmp sgt i32 %j, 3
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i32 %j, 1
+  %p = getelementptr i8, ptr @a, i32 %s
+  %q = getelementptr i8, ptr %p, i32 4
+  store i32 %next, ptr %q
+  br label %b1
+
+b3:
+  ret void
+}
+";
+
 /// x_bubble's swap block stored through `@a + 4 + (j << 2)` with the shift made
 /// in the loop header: the shifted index crossed the edge in a register and
 /// spilled in the inner loop (clocks x1.59 under dag). The pin folds the shift
@@ -173,33 +249,20 @@ b2:
 /// the address is made there from `j` and nothing but `j` crosses.
 #[test]
 fn test_a_shifted_index_is_the_scale_of_an_index_the_block_reads() {
-    let after = sunk(
-        "@a = global [200 x i16] zeroinitializer
-
-define void @f(i16 %n) {
-b0:
-  br label %b1
-
-b1:
-  %j = phi i16 [ 0, %b0 ], [ %next, %b2 ]
-  %s = shl i16 %j, 2
-  %c = icmp sgt i16 %j, 3
-  br i1 %c, label %b2, label %b3
-
-b2:
-  %next = add i16 %j, 1
-  %p = getelementptr i8, ptr @a, i16 %s
-  %q = getelementptr i8, ptr %p, i16 4
-  store i16 %next, ptr %q
-  br label %b1
-
-b3:
-  ret void
-}
-",
-    );
+    let after = sunk_flat(BUBBLE);
     let (_, rest) = after.split_once("b2:").expect("a block b2");
     let b2 = rest.split_once("b3:").expect("a block b3").0;
     assert!(!b2.contains("%s"), "the shifted index crosses the edge: {after}");
     assert!(b2.contains("%j"), "the store's block makes its address from j: {after}");
+}
+
+/// Real mode forms a scaled index with an address-size prefix and a stall of
+/// its own (`scaled_index_insns`): folding the shift would pay them at each
+/// access where the shift is made once (quicksort at m16 grew 21 bytes).
+#[test]
+fn test_a_shifted_index_stays_where_a_scaled_index_costs_instructions() {
+    let after = sunk(&BUBBLE.replace("i32", "i16").replace("[200 x i16]", "[200 x i16]"));
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(b2.contains("%s"), "the shifted index is folded in real mode: {after}");
 }
