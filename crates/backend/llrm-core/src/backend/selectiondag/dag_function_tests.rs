@@ -2055,3 +2055,29 @@ fn an_i1_freeze_is_selected() {
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
+define i32 @f() {
+entry:
+  %slot = alloca i16
+  %r = call i32 @llrm.ia16.code.89a60000.2p0(ptr %slot)
+  ret i32 %r
+}
+";
+
+/// Inline code (`llrm.ia16.code`) is laid down at its site, the frame place it
+/// names patched in as a displacement from BP: the emitter had no arm for the
+/// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
+#[test]
+fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
+    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
+    let (at, bytes) = done.inline.iter().next().unwrap();
+    assert_eq!(done.inline_places.get(at).map(Vec::len), Some(1));
+    assert!(!done.far.contains(at), "inline code is no far call");
+    let (_, disp, addend) = done.inline_places[at][0];
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
+}
