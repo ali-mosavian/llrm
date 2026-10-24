@@ -69,3 +69,6 @@ unterminated string|the string starting at `{text}` is not closed|add the closin
 missing exponent digits|`{text}` has an exponent mark but no exponent|write the exponent, for example `1E5`
 integer literal is out of range|`{text}` is too large for a whole number here|use a smaller number or a LONG or double
 based integer does not fit its type|`{text}` has more digits than a LONG holds|use fewer digits
+Must be first statement on the line|`{statement}` has to be the first statement on its line (only a line number or a label may come before it)|put it on a line of its own
+$Metacommand Error|the metacommand `{text}` is written wrong|an $INCLUDE needs `'$INCLUDE: 'file'`, a $LINESIZE needs a size
+Form variable already in use or illegal form name|the form name after `$FORM` is missing, already used, or not a name|write `'$FORM name`

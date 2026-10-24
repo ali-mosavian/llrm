@@ -1,0 +1,4 @@
+DIM x%
+REM '$DYNAMIC
+DIM a(10)
+a(1) = 1

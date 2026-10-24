@@ -1,0 +1,7 @@
+DIM x%, y%, i%
+SELECT CASE x%
+CASE 1
+FOR i% = 1 TO 2
+CASE 2
+NEXT
+END SELECT

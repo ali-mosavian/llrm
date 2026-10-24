@@ -415,7 +415,8 @@ impl Ast<'_> {
             }
             Some(Kw::IF | Kw::SELECT | Kw::TYPE) => self.fail(),
             _ => {
-                self.runtime("END", Vec::new(), self.span(keyword));
+                let arguments = if self.dialect.exit_codes() { self.optional_exp()? } else { Vec::new() };
+                self.runtime("END", arguments, self.span(keyword));
                 Ok(())
             }
         }

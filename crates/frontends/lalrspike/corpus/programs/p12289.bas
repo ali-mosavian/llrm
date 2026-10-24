@@ -1,0 +1,5 @@
+DIM x%
+DIM a(10)
+REM $DYNAMIC
+REDIM a(20)
+a(1) = 1

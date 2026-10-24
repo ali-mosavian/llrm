@@ -1,0 +1,4 @@
+SUB p
+'$DEBUG
+DIM a(10)
+END SUB

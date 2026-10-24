@@ -11755,3 +11755,1144 @@
 {"group": "fold", "why": "x% '(1.5)'", "id": 11754}
 {"group": "fold", "why": "l& '(1.5)'", "id": 11755}
 {"group": "fold", "why": "call '(1.5)'", "id": 11756}
+{"group": "select", "why": "'x%' 'CASE 1'", "id": 11757}
+{"group": "select", "why": "'x%' 'CASE 1, 2, 3'", "id": 11758}
+{"group": "select", "why": "'x%' 'CASE 1 TO 5'", "id": 11759}
+{"group": "select", "why": "'x%' 'CASE IS > 5'", "id": 11760}
+{"group": "select", "why": "'x%' 'CASE IS = x%'", "id": 11761}
+{"group": "select", "why": "'x%' 'CASE IS <> 3'", "id": 11762}
+{"group": "select", "why": "'x%' 'CASE IS < 2, IS > 8'", "id": 11763}
+{"group": "select", "why": "'x%' 'CASE \"a\"'", "id": 11764}
+{"group": "select", "why": "'x%' 'CASE \"a\", \"b\"'", "id": 11765}
+{"group": "select", "why": "'x%' 'CASE \"a\" TO \"z\"'", "id": 11766}
+{"group": "select", "why": "'x%' 'CASE IS > \"a\"'", "id": 11767}
+{"group": "select", "why": "'x%' 'CASE x%'", "id": 11768}
+{"group": "select", "why": "'x%' 'CASE x% + 1'", "id": 11769}
+{"group": "select", "why": "'x%' 'CASE 1.5'", "id": 11770}
+{"group": "select", "why": "'x%' 'CASE 70000'", "id": 11771}
+{"group": "select", "why": "'x%' 'CASE -1'", "id": 11772}
+{"group": "select", "why": "'x%' 'CASE 5 TO 1'", "id": 11773}
+{"group": "select", "why": "'x%' 'CASE 1 TO'", "id": 11774}
+{"group": "select", "why": "'x%' 'CASE TO 5'", "id": 11775}
+{"group": "select", "why": "'x%' 'CASE'", "id": 11776}
+{"group": "select", "why": "'x%' 'CASE IS'", "id": 11777}
+{"group": "select", "why": "'x%' 'CASE IS 5'", "id": 11778}
+{"group": "select", "why": "'x%' 'CASE 1; 2'", "id": 11779}
+{"group": "select", "why": "'x%' 'CASE 1 THEN'", "id": 11780}
+{"group": "select", "why": "'x%' 'CASE 1 TO 2 TO 3'", "id": 11781}
+{"group": "select", "why": "'x%' 'CASE 1 TO 5, 7, IS > 9'", "id": 11782}
+{"group": "select", "why": "'x%' 'CASE s$'", "id": 11783}
+{"group": "select", "why": "'x%' 'CASE s$ + \"a\"'", "id": 11784}
+{"group": "select", "why": "'x%' 'CASE LEN(s$)'", "id": 11785}
+{"group": "select", "why": "'x%' 'CASE 1 TO x%'", "id": 11786}
+{"group": "select", "why": "'x%' 'CASE x% TO 9'", "id": 11787}
+{"group": "select", "why": "'x%' 'CASE IS >= 1 AND 2'", "id": 11788}
+{"group": "select", "why": "'x%' 'CASE NOT 1'", "id": 11789}
+{"group": "select", "why": "'x%' 'CASE (1)'", "id": 11790}
+{"group": "select", "why": "'x%' 'CASE 1: y% = 1'", "id": 11791}
+{"group": "select", "why": "'x%' 'CASE 1 : y% = 1'", "id": 11792}
+{"group": "select", "why": "'x%' 'CASE ELSE'", "id": 11793}
+{"group": "select", "why": "'x%' 'CASE ELSE: y% = 1'", "id": 11794}
+{"group": "select", "why": "'x%' 'CASE ELSE, 1'", "id": 11795}
+{"group": "select", "why": "'x%' 'CASE IS = IS'", "id": 11796}
+{"group": "select", "why": "'x%' 'CASE 1,'", "id": 11797}
+{"group": "select", "why": "'x%' 'CASE ,1'", "id": 11798}
+{"group": "select", "why": "'x%' 'CASE 1 2'", "id": 11799}
+{"group": "select", "why": "'x%' 'CASE &H10'", "id": 11800}
+{"group": "select", "why": "'x%' 'CASE 1E3'", "id": 11801}
+{"group": "select", "why": "'x%' 'CASE 1D3'", "id": 11802}
+{"group": "select", "why": "'x%' 'CASE r.a'", "id": 11803}
+{"group": "select", "why": "'x%' 'CASE FNf%(1)'", "id": 11804}
+{"group": "select", "why": "'s$' 'CASE 1'", "id": 11805}
+{"group": "select", "why": "'s$' 'CASE 1, 2, 3'", "id": 11806}
+{"group": "select", "why": "'s$' 'CASE 1 TO 5'", "id": 11807}
+{"group": "select", "why": "'s$' 'CASE IS > 5'", "id": 11808}
+{"group": "select", "why": "'s$' 'CASE IS = x%'", "id": 11809}
+{"group": "select", "why": "'s$' 'CASE IS <> 3'", "id": 11810}
+{"group": "select", "why": "'s$' 'CASE IS < 2, IS > 8'", "id": 11811}
+{"group": "select", "why": "'s$' 'CASE \"a\"'", "id": 11812}
+{"group": "select", "why": "'s$' 'CASE \"a\", \"b\"'", "id": 11813}
+{"group": "select", "why": "'s$' 'CASE \"a\" TO \"z\"'", "id": 11814}
+{"group": "select", "why": "'s$' 'CASE IS > \"a\"'", "id": 11815}
+{"group": "select", "why": "'s$' 'CASE x%'", "id": 11816}
+{"group": "select", "why": "'s$' 'CASE x% + 1'", "id": 11817}
+{"group": "select", "why": "'s$' 'CASE 1.5'", "id": 11818}
+{"group": "select", "why": "'s$' 'CASE 70000'", "id": 11819}
+{"group": "select", "why": "'s$' 'CASE -1'", "id": 11820}
+{"group": "select", "why": "'s$' 'CASE 5 TO 1'", "id": 11821}
+{"group": "select", "why": "'s$' 'CASE 1 TO'", "id": 11822}
+{"group": "select", "why": "'s$' 'CASE TO 5'", "id": 11823}
+{"group": "select", "why": "'s$' 'CASE'", "id": 11824}
+{"group": "select", "why": "'s$' 'CASE IS'", "id": 11825}
+{"group": "select", "why": "'s$' 'CASE IS 5'", "id": 11826}
+{"group": "select", "why": "'s$' 'CASE 1; 2'", "id": 11827}
+{"group": "select", "why": "'s$' 'CASE 1 THEN'", "id": 11828}
+{"group": "select", "why": "'s$' 'CASE 1 TO 2 TO 3'", "id": 11829}
+{"group": "select", "why": "'s$' 'CASE 1 TO 5, 7, IS > 9'", "id": 11830}
+{"group": "select", "why": "'s$' 'CASE s$'", "id": 11831}
+{"group": "select", "why": "'s$' 'CASE s$ + \"a\"'", "id": 11832}
+{"group": "select", "why": "'s$' 'CASE LEN(s$)'", "id": 11833}
+{"group": "select", "why": "'s$' 'CASE 1 TO x%'", "id": 11834}
+{"group": "select", "why": "'s$' 'CASE x% TO 9'", "id": 11835}
+{"group": "select", "why": "'s$' 'CASE IS >= 1 AND 2'", "id": 11836}
+{"group": "select", "why": "'s$' 'CASE NOT 1'", "id": 11837}
+{"group": "select", "why": "'s$' 'CASE (1)'", "id": 11838}
+{"group": "select", "why": "'s$' 'CASE 1: y% = 1'", "id": 11839}
+{"group": "select", "why": "'s$' 'CASE 1 : y% = 1'", "id": 11840}
+{"group": "select", "why": "'s$' 'CASE ELSE'", "id": 11841}
+{"group": "select", "why": "'s$' 'CASE ELSE: y% = 1'", "id": 11842}
+{"group": "select", "why": "'s$' 'CASE ELSE, 1'", "id": 11843}
+{"group": "select", "why": "'s$' 'CASE IS = IS'", "id": 11844}
+{"group": "select", "why": "'s$' 'CASE 1,'", "id": 11845}
+{"group": "select", "why": "'s$' 'CASE ,1'", "id": 11846}
+{"group": "select", "why": "'s$' 'CASE 1 2'", "id": 11847}
+{"group": "select", "why": "'s$' 'CASE &H10'", "id": 11848}
+{"group": "select", "why": "'s$' 'CASE 1E3'", "id": 11849}
+{"group": "select", "why": "'s$' 'CASE 1D3'", "id": 11850}
+{"group": "select", "why": "'s$' 'CASE r.a'", "id": 11851}
+{"group": "select", "why": "'s$' 'CASE FNf%(1)'", "id": 11852}
+{"group": "select", "why": "'d#' 'CASE 1'", "id": 11853}
+{"group": "select", "why": "'d#' 'CASE 1, 2, 3'", "id": 11854}
+{"group": "select", "why": "'d#' 'CASE 1 TO 5'", "id": 11855}
+{"group": "select", "why": "'d#' 'CASE IS > 5'", "id": 11856}
+{"group": "select", "why": "'d#' 'CASE IS = x%'", "id": 11857}
+{"group": "select", "why": "'d#' 'CASE IS <> 3'", "id": 11858}
+{"group": "select", "why": "'d#' 'CASE IS < 2, IS > 8'", "id": 11859}
+{"group": "select", "why": "'d#' 'CASE \"a\"'", "id": 11860}
+{"group": "select", "why": "'d#' 'CASE \"a\", \"b\"'", "id": 11861}
+{"group": "select", "why": "'d#' 'CASE \"a\" TO \"z\"'", "id": 11862}
+{"group": "select", "why": "'d#' 'CASE IS > \"a\"'", "id": 11863}
+{"group": "select", "why": "'d#' 'CASE x%'", "id": 11864}
+{"group": "select", "why": "'d#' 'CASE x% + 1'", "id": 11865}
+{"group": "select", "why": "'d#' 'CASE 1.5'", "id": 11866}
+{"group": "select", "why": "'d#' 'CASE 70000'", "id": 11867}
+{"group": "select", "why": "'d#' 'CASE -1'", "id": 11868}
+{"group": "select", "why": "'d#' 'CASE 5 TO 1'", "id": 11869}
+{"group": "select", "why": "'d#' 'CASE 1 TO'", "id": 11870}
+{"group": "select", "why": "'d#' 'CASE TO 5'", "id": 11871}
+{"group": "select", "why": "'d#' 'CASE'", "id": 11872}
+{"group": "select", "why": "'d#' 'CASE IS'", "id": 11873}
+{"group": "select", "why": "'d#' 'CASE IS 5'", "id": 11874}
+{"group": "select", "why": "'d#' 'CASE 1; 2'", "id": 11875}
+{"group": "select", "why": "'d#' 'CASE 1 THEN'", "id": 11876}
+{"group": "select", "why": "'d#' 'CASE 1 TO 2 TO 3'", "id": 11877}
+{"group": "select", "why": "'d#' 'CASE 1 TO 5, 7, IS > 9'", "id": 11878}
+{"group": "select", "why": "'d#' 'CASE s$'", "id": 11879}
+{"group": "select", "why": "'d#' 'CASE s$ + \"a\"'", "id": 11880}
+{"group": "select", "why": "'d#' 'CASE LEN(s$)'", "id": 11881}
+{"group": "select", "why": "'d#' 'CASE 1 TO x%'", "id": 11882}
+{"group": "select", "why": "'d#' 'CASE x% TO 9'", "id": 11883}
+{"group": "select", "why": "'d#' 'CASE IS >= 1 AND 2'", "id": 11884}
+{"group": "select", "why": "'d#' 'CASE NOT 1'", "id": 11885}
+{"group": "select", "why": "'d#' 'CASE (1)'", "id": 11886}
+{"group": "select", "why": "'d#' 'CASE 1: y% = 1'", "id": 11887}
+{"group": "select", "why": "'d#' 'CASE 1 : y% = 1'", "id": 11888}
+{"group": "select", "why": "'d#' 'CASE ELSE'", "id": 11889}
+{"group": "select", "why": "'d#' 'CASE ELSE: y% = 1'", "id": 11890}
+{"group": "select", "why": "'d#' 'CASE ELSE, 1'", "id": 11891}
+{"group": "select", "why": "'d#' 'CASE IS = IS'", "id": 11892}
+{"group": "select", "why": "'d#' 'CASE 1,'", "id": 11893}
+{"group": "select", "why": "'d#' 'CASE ,1'", "id": 11894}
+{"group": "select", "why": "'d#' 'CASE 1 2'", "id": 11895}
+{"group": "select", "why": "'d#' 'CASE &H10'", "id": 11896}
+{"group": "select", "why": "'d#' 'CASE 1E3'", "id": 11897}
+{"group": "select", "why": "'d#' 'CASE 1D3'", "id": 11898}
+{"group": "select", "why": "'d#' 'CASE r.a'", "id": 11899}
+{"group": "select", "why": "'d#' 'CASE FNf%(1)'", "id": 11900}
+{"group": "select", "why": "'l&' 'CASE 1'", "id": 11901}
+{"group": "select", "why": "'l&' 'CASE 1, 2, 3'", "id": 11902}
+{"group": "select", "why": "'l&' 'CASE 1 TO 5'", "id": 11903}
+{"group": "select", "why": "'l&' 'CASE IS > 5'", "id": 11904}
+{"group": "select", "why": "'l&' 'CASE IS = x%'", "id": 11905}
+{"group": "select", "why": "'l&' 'CASE IS <> 3'", "id": 11906}
+{"group": "select", "why": "'l&' 'CASE IS < 2, IS > 8'", "id": 11907}
+{"group": "select", "why": "'l&' 'CASE \"a\"'", "id": 11908}
+{"group": "select", "why": "'l&' 'CASE \"a\", \"b\"'", "id": 11909}
+{"group": "select", "why": "'l&' 'CASE \"a\" TO \"z\"'", "id": 11910}
+{"group": "select", "why": "'l&' 'CASE IS > \"a\"'", "id": 11911}
+{"group": "select", "why": "'l&' 'CASE x%'", "id": 11912}
+{"group": "select", "why": "'l&' 'CASE x% + 1'", "id": 11913}
+{"group": "select", "why": "'l&' 'CASE 1.5'", "id": 11914}
+{"group": "select", "why": "'l&' 'CASE 70000'", "id": 11915}
+{"group": "select", "why": "'l&' 'CASE -1'", "id": 11916}
+{"group": "select", "why": "'l&' 'CASE 5 TO 1'", "id": 11917}
+{"group": "select", "why": "'l&' 'CASE 1 TO'", "id": 11918}
+{"group": "select", "why": "'l&' 'CASE TO 5'", "id": 11919}
+{"group": "select", "why": "'l&' 'CASE'", "id": 11920}
+{"group": "select", "why": "'l&' 'CASE IS'", "id": 11921}
+{"group": "select", "why": "'l&' 'CASE IS 5'", "id": 11922}
+{"group": "select", "why": "'l&' 'CASE 1; 2'", "id": 11923}
+{"group": "select", "why": "'l&' 'CASE 1 THEN'", "id": 11924}
+{"group": "select", "why": "'l&' 'CASE 1 TO 2 TO 3'", "id": 11925}
+{"group": "select", "why": "'l&' 'CASE 1 TO 5, 7, IS > 9'", "id": 11926}
+{"group": "select", "why": "'l&' 'CASE s$'", "id": 11927}
+{"group": "select", "why": "'l&' 'CASE s$ + \"a\"'", "id": 11928}
+{"group": "select", "why": "'l&' 'CASE LEN(s$)'", "id": 11929}
+{"group": "select", "why": "'l&' 'CASE 1 TO x%'", "id": 11930}
+{"group": "select", "why": "'l&' 'CASE x% TO 9'", "id": 11931}
+{"group": "select", "why": "'l&' 'CASE IS >= 1 AND 2'", "id": 11932}
+{"group": "select", "why": "'l&' 'CASE NOT 1'", "id": 11933}
+{"group": "select", "why": "'l&' 'CASE (1)'", "id": 11934}
+{"group": "select", "why": "'l&' 'CASE 1: y% = 1'", "id": 11935}
+{"group": "select", "why": "'l&' 'CASE 1 : y% = 1'", "id": 11936}
+{"group": "select", "why": "'l&' 'CASE ELSE'", "id": 11937}
+{"group": "select", "why": "'l&' 'CASE ELSE: y% = 1'", "id": 11938}
+{"group": "select", "why": "'l&' 'CASE ELSE, 1'", "id": 11939}
+{"group": "select", "why": "'l&' 'CASE IS = IS'", "id": 11940}
+{"group": "select", "why": "'l&' 'CASE 1,'", "id": 11941}
+{"group": "select", "why": "'l&' 'CASE ,1'", "id": 11942}
+{"group": "select", "why": "'l&' 'CASE 1 2'", "id": 11943}
+{"group": "select", "why": "'l&' 'CASE &H10'", "id": 11944}
+{"group": "select", "why": "'l&' 'CASE 1E3'", "id": 11945}
+{"group": "select", "why": "'l&' 'CASE 1D3'", "id": 11946}
+{"group": "select", "why": "'l&' 'CASE r.a'", "id": 11947}
+{"group": "select", "why": "'l&' 'CASE FNf%(1)'", "id": 11948}
+{"group": "select", "why": "'x% + 1' 'CASE 1'", "id": 11949}
+{"group": "select", "why": "'x% + 1' 'CASE 1, 2, 3'", "id": 11950}
+{"group": "select", "why": "'x% + 1' 'CASE 1 TO 5'", "id": 11951}
+{"group": "select", "why": "'x% + 1' 'CASE IS > 5'", "id": 11952}
+{"group": "select", "why": "'x% + 1' 'CASE IS = x%'", "id": 11953}
+{"group": "select", "why": "'x% + 1' 'CASE IS <> 3'", "id": 11954}
+{"group": "select", "why": "'x% + 1' 'CASE IS < 2, IS > 8'", "id": 11955}
+{"group": "select", "why": "'x% + 1' 'CASE \"a\"'", "id": 11956}
+{"group": "select", "why": "'x% + 1' 'CASE \"a\", \"b\"'", "id": 11957}
+{"group": "select", "why": "'x% + 1' 'CASE \"a\" TO \"z\"'", "id": 11958}
+{"group": "select", "why": "'x% + 1' 'CASE IS > \"a\"'", "id": 11959}
+{"group": "select", "why": "'x% + 1' 'CASE x%'", "id": 11960}
+{"group": "select", "why": "'x% + 1' 'CASE x% + 1'", "id": 11961}
+{"group": "select", "why": "'x% + 1' 'CASE 1.5'", "id": 11962}
+{"group": "select", "why": "'x% + 1' 'CASE 70000'", "id": 11963}
+{"group": "select", "why": "'x% + 1' 'CASE -1'", "id": 11964}
+{"group": "select", "why": "'x% + 1' 'CASE 5 TO 1'", "id": 11965}
+{"group": "select", "why": "'x% + 1' 'CASE 1 TO'", "id": 11966}
+{"group": "select", "why": "'x% + 1' 'CASE TO 5'", "id": 11967}
+{"group": "select", "why": "'x% + 1' 'CASE'", "id": 11968}
+{"group": "select", "why": "'x% + 1' 'CASE IS'", "id": 11969}
+{"group": "select", "why": "'x% + 1' 'CASE IS 5'", "id": 11970}
+{"group": "select", "why": "'x% + 1' 'CASE 1; 2'", "id": 11971}
+{"group": "select", "why": "'x% + 1' 'CASE 1 THEN'", "id": 11972}
+{"group": "select", "why": "'x% + 1' 'CASE 1 TO 2 TO 3'", "id": 11973}
+{"group": "select", "why": "'x% + 1' 'CASE 1 TO 5, 7, IS > 9'", "id": 11974}
+{"group": "select", "why": "'x% + 1' 'CASE s$'", "id": 11975}
+{"group": "select", "why": "'x% + 1' 'CASE s$ + \"a\"'", "id": 11976}
+{"group": "select", "why": "'x% + 1' 'CASE LEN(s$)'", "id": 11977}
+{"group": "select", "why": "'x% + 1' 'CASE 1 TO x%'", "id": 11978}
+{"group": "select", "why": "'x% + 1' 'CASE x% TO 9'", "id": 11979}
+{"group": "select", "why": "'x% + 1' 'CASE IS >= 1 AND 2'", "id": 11980}
+{"group": "select", "why": "'x% + 1' 'CASE NOT 1'", "id": 11981}
+{"group": "select", "why": "'x% + 1' 'CASE (1)'", "id": 11982}
+{"group": "select", "why": "'x% + 1' 'CASE 1: y% = 1'", "id": 11983}
+{"group": "select", "why": "'x% + 1' 'CASE 1 : y% = 1'", "id": 11984}
+{"group": "select", "why": "'x% + 1' 'CASE ELSE'", "id": 11985}
+{"group": "select", "why": "'x% + 1' 'CASE ELSE: y% = 1'", "id": 11986}
+{"group": "select", "why": "'x% + 1' 'CASE ELSE, 1'", "id": 11987}
+{"group": "select", "why": "'x% + 1' 'CASE IS = IS'", "id": 11988}
+{"group": "select", "why": "'x% + 1' 'CASE 1,'", "id": 11989}
+{"group": "select", "why": "'x% + 1' 'CASE ,1'", "id": 11990}
+{"group": "select", "why": "'x% + 1' 'CASE 1 2'", "id": 11991}
+{"group": "select", "why": "'x% + 1' 'CASE &H10'", "id": 11992}
+{"group": "select", "why": "'x% + 1' 'CASE 1E3'", "id": 11993}
+{"group": "select", "why": "'x% + 1' 'CASE 1D3'", "id": 11994}
+{"group": "select", "why": "'x% + 1' 'CASE r.a'", "id": 11995}
+{"group": "select", "why": "'x% + 1' 'CASE FNf%(1)'", "id": 11996}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1'", "id": 11997}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1, 2, 3'", "id": 11998}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 TO 5'", "id": 11999}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS > 5'", "id": 12000}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS = x%'", "id": 12001}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS <> 3'", "id": 12002}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS < 2, IS > 8'", "id": 12003}
+{"group": "select", "why": "'LEN(s$)' 'CASE \"a\"'", "id": 12004}
+{"group": "select", "why": "'LEN(s$)' 'CASE \"a\", \"b\"'", "id": 12005}
+{"group": "select", "why": "'LEN(s$)' 'CASE \"a\" TO \"z\"'", "id": 12006}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS > \"a\"'", "id": 12007}
+{"group": "select", "why": "'LEN(s$)' 'CASE x%'", "id": 12008}
+{"group": "select", "why": "'LEN(s$)' 'CASE x% + 1'", "id": 12009}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1.5'", "id": 12010}
+{"group": "select", "why": "'LEN(s$)' 'CASE 70000'", "id": 12011}
+{"group": "select", "why": "'LEN(s$)' 'CASE -1'", "id": 12012}
+{"group": "select", "why": "'LEN(s$)' 'CASE 5 TO 1'", "id": 12013}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 TO'", "id": 12014}
+{"group": "select", "why": "'LEN(s$)' 'CASE TO 5'", "id": 12015}
+{"group": "select", "why": "'LEN(s$)' 'CASE'", "id": 12016}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS'", "id": 12017}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS 5'", "id": 12018}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1; 2'", "id": 12019}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 THEN'", "id": 12020}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 TO 2 TO 3'", "id": 12021}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 TO 5, 7, IS > 9'", "id": 12022}
+{"group": "select", "why": "'LEN(s$)' 'CASE s$'", "id": 12023}
+{"group": "select", "why": "'LEN(s$)' 'CASE s$ + \"a\"'", "id": 12024}
+{"group": "select", "why": "'LEN(s$)' 'CASE LEN(s$)'", "id": 12025}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 TO x%'", "id": 12026}
+{"group": "select", "why": "'LEN(s$)' 'CASE x% TO 9'", "id": 12027}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS >= 1 AND 2'", "id": 12028}
+{"group": "select", "why": "'LEN(s$)' 'CASE NOT 1'", "id": 12029}
+{"group": "select", "why": "'LEN(s$)' 'CASE (1)'", "id": 12030}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1: y% = 1'", "id": 12031}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 : y% = 1'", "id": 12032}
+{"group": "select", "why": "'LEN(s$)' 'CASE ELSE'", "id": 12033}
+{"group": "select", "why": "'LEN(s$)' 'CASE ELSE: y% = 1'", "id": 12034}
+{"group": "select", "why": "'LEN(s$)' 'CASE ELSE, 1'", "id": 12035}
+{"group": "select", "why": "'LEN(s$)' 'CASE IS = IS'", "id": 12036}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1,'", "id": 12037}
+{"group": "select", "why": "'LEN(s$)' 'CASE ,1'", "id": 12038}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1 2'", "id": 12039}
+{"group": "select", "why": "'LEN(s$)' 'CASE &H10'", "id": 12040}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1E3'", "id": 12041}
+{"group": "select", "why": "'LEN(s$)' 'CASE 1D3'", "id": 12042}
+{"group": "select", "why": "'LEN(s$)' 'CASE r.a'", "id": 12043}
+{"group": "select", "why": "'LEN(s$)' 'CASE FNf%(1)'", "id": 12044}
+{"group": "select", "why": "'1' 'CASE 1'", "id": 12045}
+{"group": "select", "why": "'1' 'CASE 1, 2, 3'", "id": 12046}
+{"group": "select", "why": "'1' 'CASE 1 TO 5'", "id": 12047}
+{"group": "select", "why": "'1' 'CASE IS > 5'", "id": 12048}
+{"group": "select", "why": "'1' 'CASE IS = x%'", "id": 12049}
+{"group": "select", "why": "'1' 'CASE IS <> 3'", "id": 12050}
+{"group": "select", "why": "'1' 'CASE IS < 2, IS > 8'", "id": 12051}
+{"group": "select", "why": "'1' 'CASE \"a\"'", "id": 12052}
+{"group": "select", "why": "'1' 'CASE \"a\", \"b\"'", "id": 12053}
+{"group": "select", "why": "'1' 'CASE \"a\" TO \"z\"'", "id": 12054}
+{"group": "select", "why": "'1' 'CASE IS > \"a\"'", "id": 12055}
+{"group": "select", "why": "'1' 'CASE x%'", "id": 12056}
+{"group": "select", "why": "'1' 'CASE x% + 1'", "id": 12057}
+{"group": "select", "why": "'1' 'CASE 1.5'", "id": 12058}
+{"group": "select", "why": "'1' 'CASE 70000'", "id": 12059}
+{"group": "select", "why": "'1' 'CASE -1'", "id": 12060}
+{"group": "select", "why": "'1' 'CASE 5 TO 1'", "id": 12061}
+{"group": "select", "why": "'1' 'CASE 1 TO'", "id": 12062}
+{"group": "select", "why": "'1' 'CASE TO 5'", "id": 12063}
+{"group": "select", "why": "'1' 'CASE'", "id": 12064}
+{"group": "select", "why": "'1' 'CASE IS'", "id": 12065}
+{"group": "select", "why": "'1' 'CASE IS 5'", "id": 12066}
+{"group": "select", "why": "'1' 'CASE 1; 2'", "id": 12067}
+{"group": "select", "why": "'1' 'CASE 1 THEN'", "id": 12068}
+{"group": "select", "why": "'1' 'CASE 1 TO 2 TO 3'", "id": 12069}
+{"group": "select", "why": "'1' 'CASE 1 TO 5, 7, IS > 9'", "id": 12070}
+{"group": "select", "why": "'1' 'CASE s$'", "id": 12071}
+{"group": "select", "why": "'1' 'CASE s$ + \"a\"'", "id": 12072}
+{"group": "select", "why": "'1' 'CASE LEN(s$)'", "id": 12073}
+{"group": "select", "why": "'1' 'CASE 1 TO x%'", "id": 12074}
+{"group": "select", "why": "'1' 'CASE x% TO 9'", "id": 12075}
+{"group": "select", "why": "'1' 'CASE IS >= 1 AND 2'", "id": 12076}
+{"group": "select", "why": "'1' 'CASE NOT 1'", "id": 12077}
+{"group": "select", "why": "'1' 'CASE (1)'", "id": 12078}
+{"group": "select", "why": "'1' 'CASE 1: y% = 1'", "id": 12079}
+{"group": "select", "why": "'1' 'CASE 1 : y% = 1'", "id": 12080}
+{"group": "select", "why": "'1' 'CASE ELSE'", "id": 12081}
+{"group": "select", "why": "'1' 'CASE ELSE: y% = 1'", "id": 12082}
+{"group": "select", "why": "'1' 'CASE ELSE, 1'", "id": 12083}
+{"group": "select", "why": "'1' 'CASE IS = IS'", "id": 12084}
+{"group": "select", "why": "'1' 'CASE 1,'", "id": 12085}
+{"group": "select", "why": "'1' 'CASE ,1'", "id": 12086}
+{"group": "select", "why": "'1' 'CASE 1 2'", "id": 12087}
+{"group": "select", "why": "'1' 'CASE &H10'", "id": 12088}
+{"group": "select", "why": "'1' 'CASE 1E3'", "id": 12089}
+{"group": "select", "why": "'1' 'CASE 1D3'", "id": 12090}
+{"group": "select", "why": "'1' 'CASE r.a'", "id": 12091}
+{"group": "select", "why": "'1' 'CASE FNf%(1)'", "id": 12092}
+{"group": "select", "why": "'\"a\"' 'CASE 1'", "id": 12093}
+{"group": "select", "why": "'\"a\"' 'CASE 1, 2, 3'", "id": 12094}
+{"group": "select", "why": "'\"a\"' 'CASE 1 TO 5'", "id": 12095}
+{"group": "select", "why": "'\"a\"' 'CASE IS > 5'", "id": 12096}
+{"group": "select", "why": "'\"a\"' 'CASE IS = x%'", "id": 12097}
+{"group": "select", "why": "'\"a\"' 'CASE IS <> 3'", "id": 12098}
+{"group": "select", "why": "'\"a\"' 'CASE IS < 2, IS > 8'", "id": 12099}
+{"group": "select", "why": "'\"a\"' 'CASE \"a\"'", "id": 12100}
+{"group": "select", "why": "'\"a\"' 'CASE \"a\", \"b\"'", "id": 12101}
+{"group": "select", "why": "'\"a\"' 'CASE \"a\" TO \"z\"'", "id": 12102}
+{"group": "select", "why": "'\"a\"' 'CASE IS > \"a\"'", "id": 12103}
+{"group": "select", "why": "'\"a\"' 'CASE x%'", "id": 12104}
+{"group": "select", "why": "'\"a\"' 'CASE x% + 1'", "id": 12105}
+{"group": "select", "why": "'\"a\"' 'CASE 1.5'", "id": 12106}
+{"group": "select", "why": "'\"a\"' 'CASE 70000'", "id": 12107}
+{"group": "select", "why": "'\"a\"' 'CASE -1'", "id": 12108}
+{"group": "select", "why": "'\"a\"' 'CASE 5 TO 1'", "id": 12109}
+{"group": "select", "why": "'\"a\"' 'CASE 1 TO'", "id": 12110}
+{"group": "select", "why": "'\"a\"' 'CASE TO 5'", "id": 12111}
+{"group": "select", "why": "'\"a\"' 'CASE'", "id": 12112}
+{"group": "select", "why": "'\"a\"' 'CASE IS'", "id": 12113}
+{"group": "select", "why": "'\"a\"' 'CASE IS 5'", "id": 12114}
+{"group": "select", "why": "'\"a\"' 'CASE 1; 2'", "id": 12115}
+{"group": "select", "why": "'\"a\"' 'CASE 1 THEN'", "id": 12116}
+{"group": "select", "why": "'\"a\"' 'CASE 1 TO 2 TO 3'", "id": 12117}
+{"group": "select", "why": "'\"a\"' 'CASE 1 TO 5, 7, IS > 9'", "id": 12118}
+{"group": "select", "why": "'\"a\"' 'CASE s$'", "id": 12119}
+{"group": "select", "why": "'\"a\"' 'CASE s$ + \"a\"'", "id": 12120}
+{"group": "select", "why": "'\"a\"' 'CASE LEN(s$)'", "id": 12121}
+{"group": "select", "why": "'\"a\"' 'CASE 1 TO x%'", "id": 12122}
+{"group": "select", "why": "'\"a\"' 'CASE x% TO 9'", "id": 12123}
+{"group": "select", "why": "'\"a\"' 'CASE IS >= 1 AND 2'", "id": 12124}
+{"group": "select", "why": "'\"a\"' 'CASE NOT 1'", "id": 12125}
+{"group": "select", "why": "'\"a\"' 'CASE (1)'", "id": 12126}
+{"group": "select", "why": "'\"a\"' 'CASE 1: y% = 1'", "id": 12127}
+{"group": "select", "why": "'\"a\"' 'CASE 1 : y% = 1'", "id": 12128}
+{"group": "select", "why": "'\"a\"' 'CASE ELSE'", "id": 12129}
+{"group": "select", "why": "'\"a\"' 'CASE ELSE: y% = 1'", "id": 12130}
+{"group": "select", "why": "'\"a\"' 'CASE ELSE, 1'", "id": 12131}
+{"group": "select", "why": "'\"a\"' 'CASE IS = IS'", "id": 12132}
+{"group": "select", "why": "'\"a\"' 'CASE 1,'", "id": 12133}
+{"group": "select", "why": "'\"a\"' 'CASE ,1'", "id": 12134}
+{"group": "select", "why": "'\"a\"' 'CASE 1 2'", "id": 12135}
+{"group": "select", "why": "'\"a\"' 'CASE &H10'", "id": 12136}
+{"group": "select", "why": "'\"a\"' 'CASE 1E3'", "id": 12137}
+{"group": "select", "why": "'\"a\"' 'CASE 1D3'", "id": 12138}
+{"group": "select", "why": "'\"a\"' 'CASE r.a'", "id": 12139}
+{"group": "select", "why": "'\"a\"' 'CASE FNf%(1)'", "id": 12140}
+{"group": "select", "why": "'x%(1)' 'CASE 1'", "id": 12141}
+{"group": "select", "why": "'x%(1)' 'CASE 1, 2, 3'", "id": 12142}
+{"group": "select", "why": "'x%(1)' 'CASE 1 TO 5'", "id": 12143}
+{"group": "select", "why": "'x%(1)' 'CASE IS > 5'", "id": 12144}
+{"group": "select", "why": "'x%(1)' 'CASE IS = x%'", "id": 12145}
+{"group": "select", "why": "'x%(1)' 'CASE IS <> 3'", "id": 12146}
+{"group": "select", "why": "'x%(1)' 'CASE IS < 2, IS > 8'", "id": 12147}
+{"group": "select", "why": "'x%(1)' 'CASE \"a\"'", "id": 12148}
+{"group": "select", "why": "'x%(1)' 'CASE \"a\", \"b\"'", "id": 12149}
+{"group": "select", "why": "'x%(1)' 'CASE \"a\" TO \"z\"'", "id": 12150}
+{"group": "select", "why": "'x%(1)' 'CASE IS > \"a\"'", "id": 12151}
+{"group": "select", "why": "'x%(1)' 'CASE x%'", "id": 12152}
+{"group": "select", "why": "'x%(1)' 'CASE x% + 1'", "id": 12153}
+{"group": "select", "why": "'x%(1)' 'CASE 1.5'", "id": 12154}
+{"group": "select", "why": "'x%(1)' 'CASE 70000'", "id": 12155}
+{"group": "select", "why": "'x%(1)' 'CASE -1'", "id": 12156}
+{"group": "select", "why": "'x%(1)' 'CASE 5 TO 1'", "id": 12157}
+{"group": "select", "why": "'x%(1)' 'CASE 1 TO'", "id": 12158}
+{"group": "select", "why": "'x%(1)' 'CASE TO 5'", "id": 12159}
+{"group": "select", "why": "'x%(1)' 'CASE'", "id": 12160}
+{"group": "select", "why": "'x%(1)' 'CASE IS'", "id": 12161}
+{"group": "select", "why": "'x%(1)' 'CASE IS 5'", "id": 12162}
+{"group": "select", "why": "'x%(1)' 'CASE 1; 2'", "id": 12163}
+{"group": "select", "why": "'x%(1)' 'CASE 1 THEN'", "id": 12164}
+{"group": "select", "why": "'x%(1)' 'CASE 1 TO 2 TO 3'", "id": 12165}
+{"group": "select", "why": "'x%(1)' 'CASE 1 TO 5, 7, IS > 9'", "id": 12166}
+{"group": "select", "why": "'x%(1)' 'CASE s$'", "id": 12167}
+{"group": "select", "why": "'x%(1)' 'CASE s$ + \"a\"'", "id": 12168}
+{"group": "select", "why": "'x%(1)' 'CASE LEN(s$)'", "id": 12169}
+{"group": "select", "why": "'x%(1)' 'CASE 1 TO x%'", "id": 12170}
+{"group": "select", "why": "'x%(1)' 'CASE x% TO 9'", "id": 12171}
+{"group": "select", "why": "'x%(1)' 'CASE IS >= 1 AND 2'", "id": 12172}
+{"group": "select", "why": "'x%(1)' 'CASE NOT 1'", "id": 12173}
+{"group": "select", "why": "'x%(1)' 'CASE (1)'", "id": 12174}
+{"group": "select", "why": "'x%(1)' 'CASE 1: y% = 1'", "id": 12175}
+{"group": "select", "why": "'x%(1)' 'CASE 1 : y% = 1'", "id": 12176}
+{"group": "select", "why": "'x%(1)' 'CASE ELSE'", "id": 12177}
+{"group": "select", "why": "'x%(1)' 'CASE ELSE: y% = 1'", "id": 12178}
+{"group": "select", "why": "'x%(1)' 'CASE ELSE, 1'", "id": 12179}
+{"group": "select", "why": "'x%(1)' 'CASE IS = IS'", "id": 12180}
+{"group": "select", "why": "'x%(1)' 'CASE 1,'", "id": 12181}
+{"group": "select", "why": "'x%(1)' 'CASE ,1'", "id": 12182}
+{"group": "select", "why": "'x%(1)' 'CASE 1 2'", "id": 12183}
+{"group": "select", "why": "'x%(1)' 'CASE &H10'", "id": 12184}
+{"group": "select", "why": "'x%(1)' 'CASE 1E3'", "id": 12185}
+{"group": "select", "why": "'x%(1)' 'CASE 1D3'", "id": 12186}
+{"group": "select", "why": "'x%(1)' 'CASE r.a'", "id": 12187}
+{"group": "select", "why": "'x%(1)' 'CASE FNf%(1)'", "id": 12188}
+{"group": "select", "why": "'r.a' 'CASE 1'", "id": 12189}
+{"group": "select", "why": "'r.a' 'CASE 1, 2, 3'", "id": 12190}
+{"group": "select", "why": "'r.a' 'CASE 1 TO 5'", "id": 12191}
+{"group": "select", "why": "'r.a' 'CASE IS > 5'", "id": 12192}
+{"group": "select", "why": "'r.a' 'CASE IS = x%'", "id": 12193}
+{"group": "select", "why": "'r.a' 'CASE IS <> 3'", "id": 12194}
+{"group": "select", "why": "'r.a' 'CASE IS < 2, IS > 8'", "id": 12195}
+{"group": "select", "why": "'r.a' 'CASE \"a\"'", "id": 12196}
+{"group": "select", "why": "'r.a' 'CASE \"a\", \"b\"'", "id": 12197}
+{"group": "select", "why": "'r.a' 'CASE \"a\" TO \"z\"'", "id": 12198}
+{"group": "select", "why": "'r.a' 'CASE IS > \"a\"'", "id": 12199}
+{"group": "select", "why": "'r.a' 'CASE x%'", "id": 12200}
+{"group": "select", "why": "'r.a' 'CASE x% + 1'", "id": 12201}
+{"group": "select", "why": "'r.a' 'CASE 1.5'", "id": 12202}
+{"group": "select", "why": "'r.a' 'CASE 70000'", "id": 12203}
+{"group": "select", "why": "'r.a' 'CASE -1'", "id": 12204}
+{"group": "select", "why": "'r.a' 'CASE 5 TO 1'", "id": 12205}
+{"group": "select", "why": "'r.a' 'CASE 1 TO'", "id": 12206}
+{"group": "select", "why": "'r.a' 'CASE TO 5'", "id": 12207}
+{"group": "select", "why": "'r.a' 'CASE'", "id": 12208}
+{"group": "select", "why": "'r.a' 'CASE IS'", "id": 12209}
+{"group": "select", "why": "'r.a' 'CASE IS 5'", "id": 12210}
+{"group": "select", "why": "'r.a' 'CASE 1; 2'", "id": 12211}
+{"group": "select", "why": "'r.a' 'CASE 1 THEN'", "id": 12212}
+{"group": "select", "why": "'r.a' 'CASE 1 TO 2 TO 3'", "id": 12213}
+{"group": "select", "why": "'r.a' 'CASE 1 TO 5, 7, IS > 9'", "id": 12214}
+{"group": "select", "why": "'r.a' 'CASE s$'", "id": 12215}
+{"group": "select", "why": "'r.a' 'CASE s$ + \"a\"'", "id": 12216}
+{"group": "select", "why": "'r.a' 'CASE LEN(s$)'", "id": 12217}
+{"group": "select", "why": "'r.a' 'CASE 1 TO x%'", "id": 12218}
+{"group": "select", "why": "'r.a' 'CASE x% TO 9'", "id": 12219}
+{"group": "select", "why": "'r.a' 'CASE IS >= 1 AND 2'", "id": 12220}
+{"group": "select", "why": "'r.a' 'CASE NOT 1'", "id": 12221}
+{"group": "select", "why": "'r.a' 'CASE (1)'", "id": 12222}
+{"group": "select", "why": "'r.a' 'CASE 1: y% = 1'", "id": 12223}
+{"group": "select", "why": "'r.a' 'CASE 1 : y% = 1'", "id": 12224}
+{"group": "select", "why": "'r.a' 'CASE ELSE'", "id": 12225}
+{"group": "select", "why": "'r.a' 'CASE ELSE: y% = 1'", "id": 12226}
+{"group": "select", "why": "'r.a' 'CASE ELSE, 1'", "id": 12227}
+{"group": "select", "why": "'r.a' 'CASE IS = IS'", "id": 12228}
+{"group": "select", "why": "'r.a' 'CASE 1,'", "id": 12229}
+{"group": "select", "why": "'r.a' 'CASE ,1'", "id": 12230}
+{"group": "select", "why": "'r.a' 'CASE 1 2'", "id": 12231}
+{"group": "select", "why": "'r.a' 'CASE &H10'", "id": 12232}
+{"group": "select", "why": "'r.a' 'CASE 1E3'", "id": 12233}
+{"group": "select", "why": "'r.a' 'CASE 1D3'", "id": 12234}
+{"group": "select", "why": "'r.a' 'CASE r.a'", "id": 12235}
+{"group": "select", "why": "'r.a' 'CASE FNf%(1)'", "id": 12236}
+{"group": "select", "why": "structure 'SELECT CASE x%'", "id": 12237}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nEND SELECT'", "id": 12238}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nCASE 2\\nEND SELECT'", "id": 12239}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE ELSE\\nEND SELECT'", "id": 12240}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE ELSE\\nCASE ELSE\\nEND SELECT'", "id": 12241}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nCASE ELSE\\nCASE 2\\nEND SELECT'", "id": 12242}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nSELECT CASE y%\\nCASE 2\\nEND SELECT\\nEND SELECT'", "id": 12243}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nSELECT CASE y%\\nCASE 2\\nEND SELECT'", "id": 12244}
+{"group": "select", "why": "structure 'SELECT x%\\nCASE 1\\nEND SELECT'", "id": 12245}
+{"group": "select", "why": "structure 'SELECT CASE\\nCASE 1\\nEND SELECT'", "id": 12246}
+{"group": "select", "why": "structure 'SELECT CASE x%, y%\\nCASE 1\\nEND SELECT'", "id": 12247}
+{"group": "select", "why": "structure 'SELECT CASE x% CASE 1\\nEND SELECT'", "id": 12248}
+{"group": "select", "why": "structure 'SELECT CASE x%: CASE 1: y% = 1: END SELECT'", "id": 12249}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1: y% = 1\\nCASE 2: y% = 2\\nEND SELECT'", "id": 12250}
+{"group": "select", "why": "structure 'SELECT CASE x%\\ny% = 1\\nCASE 1\\nEND SELECT'", "id": 12251}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEXIT SELECT\\nEND SELECT'", "id": 12252}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEXIT DO\\nEND SELECT'", "id": 12253}
+{"group": "select", "why": "structure 'DO\\nSELECT CASE x%\\nCASE 1\\nEXIT DO\\nEND SELECT\\nLOOP'", "id": 12254}
+{"group": "select", "why": "structure 'FOR x% = 1 TO 2\\nSELECT CASE x%\\nCASE 1\\nEXIT FOR\\nEND SELECT\\nNEXT'", "id": 12255}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nGOTO a\\nEND SELECT\\na:'", "id": 12256}
+{"group": "select", "why": "structure 'a:\\nSELECT CASE x%\\nCASE 1\\nGOTO a\\nEND SELECT'", "id": 12257}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nIF y% THEN\\nEND IF\\nEND SELECT'", "id": 12258}
+{"group": "select", "why": "structure 'IF y% THEN\\nSELECT CASE x%\\nCASE 1\\nEND IF\\nEND SELECT'", "id": 12259}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nFOR i% = 1 TO 2\\nCASE 2\\nNEXT\\nEND SELECT'", "id": 12260}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nDIM z%\\nEND SELECT'", "id": 12261}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nDATA 1\\nEND SELECT'", "id": 12262}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nSUB q\\nEND SELECT'", "id": 12263}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEND\\nEND SELECT'", "id": 12264}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nRETURN\\nEND SELECT'", "id": 12265}
+{"group": "select", "why": "structure \"SELECT CASE x%\\nCASE 1\\nREM c\\n' c\\nCASE 2\\nEND SELECT\"", "id": 12266}
+{"group": "select", "why": "structure \"SELECT CASE x%\\n' c\\nCASE 1\\nEND SELECT\"", "id": 12267}
+{"group": "select", "why": "structure \"SELECT CASE x% ' c\\nCASE 1 ' c\\nEND SELECT ' c\"", "id": 12268}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\n10 PRINT\\nEND SELECT'", "id": 12269}
+{"group": "select", "why": "structure 'SELECT CASE x%\\n10 CASE 1\\nEND SELECT'", "id": 12270}
+{"group": "select", "why": "structure '10 SELECT CASE x%\\nCASE 1\\nEND SELECT'", "id": 12271}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEND SELECT\\nEND SELECT'", "id": 12272}
+{"group": "select", "why": "structure 'END SELECT'", "id": 12273}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEND  SELECT'", "id": 12274}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nENDSELECT'", "id": 12275}
+{"group": "select", "why": "structure 'SELECT CASE x%\\nCASE 1\\nEND\\nSELECT'", "id": 12276}
+{"group": "select", "why": "structure 'select case x%\\ncase 1\\nend select'", "id": 12277}
+{"group": "select", "why": "structure 'Select Case x%\\nCase Else\\nEnd Select'", "id": 12278}
+{"group": "meta", "why": "line \"'$STATIC\"", "id": 12279}
+{"group": "meta", "why": "line \"'$STATIC\" after dim", "id": 12280}
+{"group": "meta", "why": "line \"'$STATIC\" in sub", "id": 12281}
+{"group": "meta", "why": "line \"'$DYNAMIC\"", "id": 12282}
+{"group": "meta", "why": "line \"'$DYNAMIC\" after dim", "id": 12283}
+{"group": "meta", "why": "line \"'$DYNAMIC\" in sub", "id": 12284}
+{"group": "meta", "why": "line 'REM $STATIC'", "id": 12285}
+{"group": "meta", "why": "line 'REM $STATIC' after dim", "id": 12286}
+{"group": "meta", "why": "line 'REM $STATIC' in sub", "id": 12287}
+{"group": "meta", "why": "line 'REM $DYNAMIC'", "id": 12288}
+{"group": "meta", "why": "line 'REM $DYNAMIC' after dim", "id": 12289}
+{"group": "meta", "why": "line 'REM $DYNAMIC' in sub", "id": 12290}
+{"group": "meta", "why": "line \"' $DYNAMIC\"", "id": 12291}
+{"group": "meta", "why": "line \"' $DYNAMIC\" after dim", "id": 12292}
+{"group": "meta", "why": "line \"' $DYNAMIC\" in sub", "id": 12293}
+{"group": "meta", "why": "line \"'$ DYNAMIC\"", "id": 12294}
+{"group": "meta", "why": "line \"'$ DYNAMIC\" after dim", "id": 12295}
+{"group": "meta", "why": "line \"'$ DYNAMIC\" in sub", "id": 12296}
+{"group": "meta", "why": "line \"'$dynamic\"", "id": 12297}
+{"group": "meta", "why": "line \"'$dynamic\" after dim", "id": 12298}
+{"group": "meta", "why": "line \"'$dynamic\" in sub", "id": 12299}
+{"group": "meta", "why": "line \"'$Dynamic\"", "id": 12300}
+{"group": "meta", "why": "line \"'$Dynamic\" after dim", "id": 12301}
+{"group": "meta", "why": "line \"'$Dynamic\" in sub", "id": 12302}
+{"group": "meta", "why": "line \"'$DYNAMIC extra\"", "id": 12303}
+{"group": "meta", "why": "line \"'$DYNAMIC extra\" after dim", "id": 12304}
+{"group": "meta", "why": "line \"'$DYNAMIC extra\" in sub", "id": 12305}
+{"group": "meta", "why": "line \"'$DYNAMIC: PRINT\"", "id": 12306}
+{"group": "meta", "why": "line \"'$DYNAMIC: PRINT\" after dim", "id": 12307}
+{"group": "meta", "why": "line \"'$DYNAMIC: PRINT\" in sub", "id": 12308}
+{"group": "meta", "why": "line \"'$FOO\"", "id": 12309}
+{"group": "meta", "why": "line \"'$FOO\" after dim", "id": 12310}
+{"group": "meta", "why": "line \"'$FOO\" in sub", "id": 12311}
+{"group": "meta", "why": "line \"'$\"", "id": 12312}
+{"group": "meta", "why": "line \"'$\" after dim", "id": 12313}
+{"group": "meta", "why": "line \"'$\" in sub", "id": 12314}
+{"group": "meta", "why": "line \"'$INCLUDE\"", "id": 12315}
+{"group": "meta", "why": "line \"'$INCLUDE\" after dim", "id": 12316}
+{"group": "meta", "why": "line \"'$INCLUDE\" in sub", "id": 12317}
+{"group": "meta", "why": "line \"'$INCLUDE:\"", "id": 12318}
+{"group": "meta", "why": "line \"'$INCLUDE:\" after dim", "id": 12319}
+{"group": "meta", "why": "line \"'$INCLUDE:\" in sub", "id": 12320}
+{"group": "meta", "why": "line \"'$INCLUDE: ''\"", "id": 12321}
+{"group": "meta", "why": "line \"'$INCLUDE: ''\" after dim", "id": 12322}
+{"group": "meta", "why": "line \"'$INCLUDE: ''\" in sub", "id": 12323}
+{"group": "meta", "why": "line \"'$INCLUDE: 'nothere.bi'\"", "id": 12324}
+{"group": "meta", "why": "line \"'$INCLUDE: 'nothere.bi'\" after dim", "id": 12325}
+{"group": "meta", "why": "line \"'$INCLUDE: 'nothere.bi'\" in sub", "id": 12326}
+{"group": "meta", "why": "line \"'$INCLUDE: nothere.bi\"", "id": 12327}
+{"group": "meta", "why": "line \"'$INCLUDE: nothere.bi\" after dim", "id": 12328}
+{"group": "meta", "why": "line \"'$INCLUDE: nothere.bi\" in sub", "id": 12329}
+{"group": "meta", "why": "line \"'$LINES\"", "id": 12330}
+{"group": "meta", "why": "line \"'$LINES\" after dim", "id": 12331}
+{"group": "meta", "why": "line \"'$LINES\" in sub", "id": 12332}
+{"group": "meta", "why": "line \"'$LINESIZE\"", "id": 12333}
+{"group": "meta", "why": "line \"'$LINESIZE\" after dim", "id": 12334}
+{"group": "meta", "why": "line \"'$LINESIZE\" in sub", "id": 12335}
+{"group": "meta", "why": "line \"'$FORM\"", "id": 12336}
+{"group": "meta", "why": "line \"'$FORM\" after dim", "id": 12337}
+{"group": "meta", "why": "line \"'$FORM\" in sub", "id": 12338}
+{"group": "meta", "why": "line \"'$FORM frm\"", "id": 12339}
+{"group": "meta", "why": "line \"'$FORM frm\" after dim", "id": 12340}
+{"group": "meta", "why": "line \"'$FORM frm\" in sub", "id": 12341}
+{"group": "meta", "why": "line \"'$FORM frm.frm\"", "id": 12342}
+{"group": "meta", "why": "line \"'$FORM frm.frm\" after dim", "id": 12343}
+{"group": "meta", "why": "line \"'$FORM frm.frm\" in sub", "id": 12344}
+{"group": "meta", "why": "line \"'$CDECL\"", "id": 12345}
+{"group": "meta", "why": "line \"'$CDECL\" after dim", "id": 12346}
+{"group": "meta", "why": "line \"'$CDECL\" in sub", "id": 12347}
+{"group": "meta", "why": "line \"'$DEBUG\"", "id": 12348}
+{"group": "meta", "why": "line \"'$DEBUG\" after dim", "id": 12349}
+{"group": "meta", "why": "line \"'$DEBUG\" in sub", "id": 12350}
+{"group": "meta", "why": "line \"'$NODEBUG\"", "id": 12351}
+{"group": "meta", "why": "line \"'$NODEBUG\" after dim", "id": 12352}
+{"group": "meta", "why": "line \"'$NODEBUG\" in sub", "id": 12353}
+{"group": "meta", "why": "line \"'$PAGE\"", "id": 12354}
+{"group": "meta", "why": "line \"'$PAGE\" after dim", "id": 12355}
+{"group": "meta", "why": "line \"'$PAGE\" in sub", "id": 12356}
+{"group": "meta", "why": "line \"'$TITLE: 'x'\"", "id": 12357}
+{"group": "meta", "why": "line \"'$TITLE: 'x'\" after dim", "id": 12358}
+{"group": "meta", "why": "line \"'$TITLE: 'x'\" in sub", "id": 12359}
+{"group": "meta", "why": "line \"'$SUBTITLE: 'x'\"", "id": 12360}
+{"group": "meta", "why": "line \"'$SUBTITLE: 'x'\" after dim", "id": 12361}
+{"group": "meta", "why": "line \"'$SUBTITLE: 'x'\" in sub", "id": 12362}
+{"group": "meta", "why": "line '$DYNAMIC'", "id": 12363}
+{"group": "meta", "why": "line '$DYNAMIC' after dim", "id": 12364}
+{"group": "meta", "why": "line '$DYNAMIC' in sub", "id": 12365}
+{"group": "meta", "why": "line '$STATIC'", "id": 12366}
+{"group": "meta", "why": "line '$STATIC' after dim", "id": 12367}
+{"group": "meta", "why": "line '$STATIC' in sub", "id": 12368}
+{"group": "meta", "why": "line 'REM$DYNAMIC'", "id": 12369}
+{"group": "meta", "why": "line 'REM$DYNAMIC' after dim", "id": 12370}
+{"group": "meta", "why": "line 'REM$DYNAMIC' in sub", "id": 12371}
+{"group": "meta", "why": "line \"'$DYNAMIC\\t\"", "id": 12372}
+{"group": "meta", "why": "line \"'$DYNAMIC\\t\" after dim", "id": 12373}
+{"group": "meta", "why": "line \"'$DYNAMIC\\t\" in sub", "id": 12374}
+{"group": "meta", "why": "line \"  '$DYNAMIC\"", "id": 12375}
+{"group": "meta", "why": "line \"  '$DYNAMIC\" after dim", "id": 12376}
+{"group": "meta", "why": "line \"  '$DYNAMIC\" in sub", "id": 12377}
+{"group": "meta", "why": "line \"x% = 1 '$DYNAMIC\"", "id": 12378}
+{"group": "meta", "why": "line \"x% = 1 '$DYNAMIC\" after dim", "id": 12379}
+{"group": "meta", "why": "line \"x% = 1 '$DYNAMIC\" in sub", "id": 12380}
+{"group": "meta", "why": "line \"x% = 1: '$DYNAMIC\"", "id": 12381}
+{"group": "meta", "why": "line \"x% = 1: '$DYNAMIC\" after dim", "id": 12382}
+{"group": "meta", "why": "line \"x% = 1: '$DYNAMIC\" in sub", "id": 12383}
+{"group": "meta", "why": "line \"REM '$DYNAMIC\"", "id": 12384}
+{"group": "meta", "why": "line \"REM '$DYNAMIC\" after dim", "id": 12385}
+{"group": "meta", "why": "line \"REM '$DYNAMIC\" in sub", "id": 12386}
+{"group": "meta", "why": "'$STATIC then '$DYNAMIC", "id": 12387}
+{"group": "meta", "why": "'$DYNAMIC then '$STATIC", "id": 12388}
+{"group": "meta", "why": "'$DYNAMIC then '$DYNAMIC", "id": 12389}
+{"group": "meta", "why": "dynamic then redim small", "id": 12390}
+{"group": "meta", "why": "static then redim", "id": 12391}
+{"group": "meta", "why": "dynamic dim const bound", "id": 12392}
+{"group": "meta", "why": "dynamic big", "id": 12393}
+{"group": "forms", "why": "line 'x% = 1'", "id": 12394}
+{"group": "forms", "why": "in sub 'x% = 1'", "id": 12395}
+{"group": "forms", "why": "line 'x% = 1: y% = 2'", "id": 12396}
+{"group": "forms", "why": "in sub 'x% = 1: y% = 2'", "id": 12397}
+{"group": "forms", "why": "line 'x% = 1 : y% = 2'", "id": 12398}
+{"group": "forms", "why": "in sub 'x% = 1 : y% = 2'", "id": 12399}
+{"group": "forms", "why": "line ': x% = 1'", "id": 12400}
+{"group": "forms", "why": "in sub ': x% = 1'", "id": 12401}
+{"group": "forms", "why": "line 'x% = 1 :'", "id": 12402}
+{"group": "forms", "why": "in sub 'x% = 1 :'", "id": 12403}
+{"group": "forms", "why": "line 'x% = 1 ::'", "id": 12404}
+{"group": "forms", "why": "in sub 'x% = 1 ::'", "id": 12405}
+{"group": "forms", "why": "line ':: x% = 1'", "id": 12406}
+{"group": "forms", "why": "in sub ':: x% = 1'", "id": 12407}
+{"group": "forms", "why": "line 'x% = 1 : : y% = 2'", "id": 12408}
+{"group": "forms", "why": "in sub 'x% = 1 : : y% = 2'", "id": 12409}
+{"group": "forms", "why": "line ':'", "id": 12410}
+{"group": "forms", "why": "in sub ':'", "id": 12411}
+{"group": "forms", "why": "line '::'", "id": 12412}
+{"group": "forms", "why": "in sub '::'", "id": 12413}
+{"group": "forms", "why": "line '  '", "id": 12414}
+{"group": "forms", "why": "in sub '  '", "id": 12415}
+{"group": "forms", "why": "line '\\t'", "id": 12416}
+{"group": "forms", "why": "in sub '\\t'", "id": 12417}
+{"group": "forms", "why": "line '\\tx% = 1'", "id": 12418}
+{"group": "forms", "why": "in sub '\\tx% = 1'", "id": 12419}
+{"group": "forms", "why": "line 'x%\\t=\\t1'", "id": 12420}
+{"group": "forms", "why": "in sub 'x%\\t=\\t1'", "id": 12421}
+{"group": "forms", "why": "line 'x%=1'", "id": 12422}
+{"group": "forms", "why": "in sub 'x%=1'", "id": 12423}
+{"group": "forms", "why": "line 'x% =1'", "id": 12424}
+{"group": "forms", "why": "in sub 'x% =1'", "id": 12425}
+{"group": "forms", "why": "line 'x%= 1'", "id": 12426}
+{"group": "forms", "why": "in sub 'x%= 1'", "id": 12427}
+{"group": "forms", "why": "line 'X% = 1'", "id": 12428}
+{"group": "forms", "why": "in sub 'X% = 1'", "id": 12429}
+{"group": "forms", "why": "line 'x % = 1'", "id": 12430}
+{"group": "forms", "why": "in sub 'x % = 1'", "id": 12431}
+{"group": "forms", "why": "line 'x %= 1'", "id": 12432}
+{"group": "forms", "why": "in sub 'x %= 1'", "id": 12433}
+{"group": "forms", "why": "line \"x% = 1 ' c\"", "id": 12434}
+{"group": "forms", "why": "in sub \"x% = 1 ' c\"", "id": 12435}
+{"group": "forms", "why": "line 'x% = 1 REM c'", "id": 12436}
+{"group": "forms", "why": "in sub 'x% = 1 REM c'", "id": 12437}
+{"group": "forms", "why": "line 'x% = 1: REM c'", "id": 12438}
+{"group": "forms", "why": "in sub 'x% = 1: REM c'", "id": 12439}
+{"group": "forms", "why": "line 'x% = 1 :REM c'", "id": 12440}
+{"group": "forms", "why": "in sub 'x% = 1 :REM c'", "id": 12441}
+{"group": "forms", "why": "line 'REM'", "id": 12442}
+{"group": "forms", "why": "in sub 'REM'", "id": 12443}
+{"group": "forms", "why": "line 'REM c'", "id": 12444}
+{"group": "forms", "why": "in sub 'REM c'", "id": 12445}
+{"group": "forms", "why": "line 'REMc'", "id": 12446}
+{"group": "forms", "why": "in sub 'REMc'", "id": 12447}
+{"group": "forms", "why": "line 'REM: x% = 1'", "id": 12448}
+{"group": "forms", "why": "in sub 'REM: x% = 1'", "id": 12449}
+{"group": "forms", "why": "line \"' c: x% = 1\"", "id": 12450}
+{"group": "forms", "why": "in sub \"' c: x% = 1\"", "id": 12451}
+{"group": "forms", "why": "line \"'\"", "id": 12452}
+{"group": "forms", "why": "in sub \"'\"", "id": 12453}
+{"group": "forms", "why": "line \"'c\"", "id": 12454}
+{"group": "forms", "why": "in sub \"'c\"", "id": 12455}
+{"group": "forms", "why": "line \"'''\"", "id": 12456}
+{"group": "forms", "why": "in sub \"'''\"", "id": 12457}
+{"group": "forms", "why": "line 'x% = 1 _'", "id": 12458}
+{"group": "forms", "why": "in sub 'x% = 1 _'", "id": 12459}
+{"group": "forms", "why": "line 'x% = _\\n1'", "id": 12460}
+{"group": "forms", "why": "in sub 'x% = _\\n1'", "id": 12461}
+{"group": "forms", "why": "line 'x% = 1 + _\\n2'", "id": 12462}
+{"group": "forms", "why": "in sub 'x% = 1 + _\\n2'", "id": 12463}
+{"group": "forms", "why": "line 'x% _\\n= 1'", "id": 12464}
+{"group": "forms", "why": "in sub 'x% _\\n= 1'", "id": 12465}
+{"group": "forms", "why": "line 'x_\\n% = 1'", "id": 12466}
+{"group": "forms", "why": "in sub 'x_\\n% = 1'", "id": 12467}
+{"group": "forms", "why": "line 'PRINT _\\n1'", "id": 12468}
+{"group": "forms", "why": "in sub 'PRINT _\\n1'", "id": 12469}
+{"group": "forms", "why": "line 'PRINT \"a_\\nb\"'", "id": 12470}
+{"group": "forms", "why": "in sub 'PRINT \"a_\\nb\"'", "id": 12471}
+{"group": "forms", "why": "line 'PRINT \"a\" _\\n; \"b\"'", "id": 12472}
+{"group": "forms", "why": "in sub 'PRINT \"a\" _\\n; \"b\"'", "id": 12473}
+{"group": "forms", "why": "line \"' c _\\nx% = 1\"", "id": 12474}
+{"group": "forms", "why": "in sub \"' c _\\nx% = 1\"", "id": 12475}
+{"group": "forms", "why": "line 'REM c _\\nx% = 1'", "id": 12476}
+{"group": "forms", "why": "in sub 'REM c _\\nx% = 1'", "id": 12477}
+{"group": "forms", "why": "line \"x% = 1 _ ' c\\ny% = 2\"", "id": 12478}
+{"group": "forms", "why": "in sub \"x% = 1 _ ' c\\ny% = 2\"", "id": 12479}
+{"group": "forms", "why": "line '_'", "id": 12480}
+{"group": "forms", "why": "in sub '_'", "id": 12481}
+{"group": "forms", "why": "line '_\\nx% = 1'", "id": 12482}
+{"group": "forms", "why": "in sub '_\\nx% = 1'", "id": 12483}
+{"group": "forms", "why": "line 'x% = 1\\n_'", "id": 12484}
+{"group": "forms", "why": "in sub 'x% = 1\\n_'", "id": 12485}
+{"group": "forms", "why": "line 'x% = 1 _\\n\\ny% = 2'", "id": 12486}
+{"group": "forms", "why": "in sub 'x% = 1 _\\n\\ny% = 2'", "id": 12487}
+{"group": "forms", "why": "line 'x% = _ \\n1'", "id": 12488}
+{"group": "forms", "why": "in sub 'x% = _ \\n1'", "id": 12489}
+{"group": "forms", "why": "line '10 x% = 1'", "id": 12490}
+{"group": "forms", "why": "in sub '10 x% = 1'", "id": 12491}
+{"group": "forms", "why": "line '010 x% = 1'", "id": 12492}
+{"group": "forms", "why": "in sub '010 x% = 1'", "id": 12493}
+{"group": "forms", "why": "line '10x% = 1'", "id": 12494}
+{"group": "forms", "why": "in sub '10x% = 1'", "id": 12495}
+{"group": "forms", "why": "line '10: x% = 1'", "id": 12496}
+{"group": "forms", "why": "in sub '10: x% = 1'", "id": 12497}
+{"group": "forms", "why": "line '10 : x% = 1'", "id": 12498}
+{"group": "forms", "why": "in sub '10 : x% = 1'", "id": 12499}
+{"group": "forms", "why": "line '10\\nx% = 1'", "id": 12500}
+{"group": "forms", "why": "in sub '10\\nx% = 1'", "id": 12501}
+{"group": "forms", "why": "line '10 10 x% = 1'", "id": 12502}
+{"group": "forms", "why": "in sub '10 10 x% = 1'", "id": 12503}
+{"group": "forms", "why": "line '0 x% = 1'", "id": 12504}
+{"group": "forms", "why": "in sub '0 x% = 1'", "id": 12505}
+{"group": "forms", "why": "line '65535 x% = 1'", "id": 12506}
+{"group": "forms", "why": "in sub '65535 x% = 1'", "id": 12507}
+{"group": "forms", "why": "line '65536 x% = 1'", "id": 12508}
+{"group": "forms", "why": "in sub '65536 x% = 1'", "id": 12509}
+{"group": "forms", "why": "line '-1 x% = 1'", "id": 12510}
+{"group": "forms", "why": "in sub '-1 x% = 1'", "id": 12511}
+{"group": "forms", "why": "line '1.5 x% = 1'", "id": 12512}
+{"group": "forms", "why": "in sub '1.5 x% = 1'", "id": 12513}
+{"group": "forms", "why": "line '1E3 x% = 1'", "id": 12514}
+{"group": "forms", "why": "in sub '1E3 x% = 1'", "id": 12515}
+{"group": "forms", "why": "line '&H10 x% = 1'", "id": 12516}
+{"group": "forms", "why": "in sub '&H10 x% = 1'", "id": 12517}
+{"group": "forms", "why": "line \"10 'c\"", "id": 12518}
+{"group": "forms", "why": "in sub \"10 'c\"", "id": 12519}
+{"group": "forms", "why": "line '10 REM c'", "id": 12520}
+{"group": "forms", "why": "in sub '10 REM c'", "id": 12521}
+{"group": "forms", "why": "line \"10 ' c\\n10 x% = 1\"", "id": 12522}
+{"group": "forms", "why": "in sub \"10 ' c\\n10 x% = 1\"", "id": 12523}
+{"group": "forms", "why": "line '20 x% = 1\\n10 y% = 2'", "id": 12524}
+{"group": "forms", "why": "in sub '20 x% = 1\\n10 y% = 2'", "id": 12525}
+{"group": "forms", "why": "line '10 x% = 1\\n10 y% = 2'", "id": 12526}
+{"group": "forms", "why": "in sub '10 x% = 1\\n10 y% = 2'", "id": 12527}
+{"group": "forms", "why": "line 'a: x% = 1'", "id": 12528}
+{"group": "forms", "why": "in sub 'a: x% = 1'", "id": 12529}
+{"group": "forms", "why": "line 'a:x% = 1'", "id": 12530}
+{"group": "forms", "why": "in sub 'a:x% = 1'", "id": 12531}
+{"group": "forms", "why": "line 'a : x% = 1'", "id": 12532}
+{"group": "forms", "why": "in sub 'a : x% = 1'", "id": 12533}
+{"group": "forms", "why": "line 'a:\\nx% = 1'", "id": 12534}
+{"group": "forms", "why": "in sub 'a:\\nx% = 1'", "id": 12535}
+{"group": "forms", "why": "line 'a: a: x% = 1'", "id": 12536}
+{"group": "forms", "why": "in sub 'a: a: x% = 1'", "id": 12537}
+{"group": "forms", "why": "line 'a: b: x% = 1'", "id": 12538}
+{"group": "forms", "why": "in sub 'a: b: x% = 1'", "id": 12539}
+{"group": "forms", "why": "line 'A: x% = 1\\na: y% = 2'", "id": 12540}
+{"group": "forms", "why": "in sub 'A: x% = 1\\na: y% = 2'", "id": 12541}
+{"group": "forms", "why": "line 'a1: x% = 1'", "id": 12542}
+{"group": "forms", "why": "in sub 'a1: x% = 1'", "id": 12543}
+{"group": "forms", "why": "line 'a.b: x% = 1'", "id": 12544}
+{"group": "forms", "why": "in sub 'a.b: x% = 1'", "id": 12545}
+{"group": "forms", "why": "line 'a_b: x% = 1'", "id": 12546}
+{"group": "forms", "why": "in sub 'a_b: x% = 1'", "id": 12547}
+{"group": "forms", "why": "line 'a$: x% = 1'", "id": 12548}
+{"group": "forms", "why": "in sub 'a$: x% = 1'", "id": 12549}
+{"group": "forms", "why": "line 'a%: x% = 1'", "id": 12550}
+{"group": "forms", "why": "in sub 'a%: x% = 1'", "id": 12551}
+{"group": "forms", "why": "line '_a: x% = 1'", "id": 12552}
+{"group": "forms", "why": "in sub '_a: x% = 1'", "id": 12553}
+{"group": "forms", "why": "line '1a: x% = 1'", "id": 12554}
+{"group": "forms", "why": "in sub '1a: x% = 1'", "id": 12555}
+{"group": "forms", "why": "line 'ab12345678901234567890123456789012345678901234567890: x% = 1'", "id": 12556}
+{"group": "forms", "why": "in sub 'ab12345678901234567890123456789012345678901234567890: x% = 1'", "id": 12557}
+{"group": "forms", "why": "line 'GOTO a\\na: x% = 1'", "id": 12558}
+{"group": "forms", "why": "in sub 'GOTO a\\na: x% = 1'", "id": 12559}
+{"group": "forms", "why": "line 'GO TO a\\na: x% = 1'", "id": 12560}
+{"group": "forms", "why": "in sub 'GO TO a\\na: x% = 1'", "id": 12561}
+{"group": "forms", "why": "line 'GoTo a\\na:'", "id": 12562}
+{"group": "forms", "why": "in sub 'GoTo a\\na:'", "id": 12563}
+{"group": "forms", "why": "line 'GOTOa\\na:'", "id": 12564}
+{"group": "forms", "why": "in sub 'GOTOa\\na:'", "id": 12565}
+{"group": "forms", "why": "line 'GOSUB a\\nEND\\na: RETURN'", "id": 12566}
+{"group": "forms", "why": "in sub 'GOSUB a\\nEND\\na: RETURN'", "id": 12567}
+{"group": "forms", "why": "line 'GO SUB a\\nEND\\na: RETURN'", "id": 12568}
+{"group": "forms", "why": "in sub 'GO SUB a\\nEND\\na: RETURN'", "id": 12569}
+{"group": "forms", "why": "line 'ON x% GOTO a, b\\na:\\nb:'", "id": 12570}
+{"group": "forms", "why": "in sub 'ON x% GOTO a, b\\na:\\nb:'", "id": 12571}
+{"group": "forms", "why": "line 'ON x% GO TO a\\na:'", "id": 12572}
+{"group": "forms", "why": "in sub 'ON x% GO TO a\\na:'", "id": 12573}
+{"group": "forms", "why": "line 'ON x% GOTO a,\\na:'", "id": 12574}
+{"group": "forms", "why": "in sub 'ON x% GOTO a,\\na:'", "id": 12575}
+{"group": "forms", "why": "line 'ON x% GOTO ,a\\na:'", "id": 12576}
+{"group": "forms", "why": "in sub 'ON x% GOTO ,a\\na:'", "id": 12577}
+{"group": "forms", "why": "line 'ON x% GOTO\\na:'", "id": 12578}
+{"group": "forms", "why": "in sub 'ON x% GOTO\\na:'", "id": 12579}
+{"group": "forms", "why": "line 'ON x% GOTO a b\\na:\\nb:'", "id": 12580}
+{"group": "forms", "why": "in sub 'ON x% GOTO a b\\na:\\nb:'", "id": 12581}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1'", "id": 12582}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1'", "id": 12583}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 ELSE y% = 2'", "id": 12584}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 ELSE y% = 2'", "id": 12585}
+{"group": "forms", "why": "line 'IF x% THEN\\ny% = 1\\nEND IF'", "id": 12586}
+{"group": "forms", "why": "in sub 'IF x% THEN\\ny% = 1\\nEND IF'", "id": 12587}
+{"group": "forms", "why": "line 'IF x% THEN\\ny% = 1\\nENDIF'", "id": 12588}
+{"group": "forms", "why": "in sub 'IF x% THEN\\ny% = 1\\nENDIF'", "id": 12589}
+{"group": "forms", "why": "line 'IF x% THEN\\ny% = 1\\nEND  IF'", "id": 12590}
+{"group": "forms", "why": "in sub 'IF x% THEN\\ny% = 1\\nEND  IF'", "id": 12591}
+{"group": "forms", "why": "line 'IF x% THEN\\ny% = 1\\nELSE IF y% THEN\\ny% = 2\\nEND IF\\nEND IF'", "id": 12592}
+{"group": "forms", "why": "in sub 'IF x% THEN\\ny% = 1\\nELSE IF y% THEN\\ny% = 2\\nEND IF\\nEND IF'", "id": 12593}
+{"group": "forms", "why": "line 'IF x% THEN\\ny% = 1\\nELSEIF y% THEN\\ny% = 2\\nEND IF'", "id": 12594}
+{"group": "forms", "why": "in sub 'IF x% THEN\\ny% = 1\\nELSEIF y% THEN\\ny% = 2\\nEND IF'", "id": 12595}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1\\nELSE y% = 2'", "id": 12596}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1\\nELSE y% = 2'", "id": 12597}
+{"group": "forms", "why": "line 'IF x% THEN: y% = 1'", "id": 12598}
+{"group": "forms", "why": "in sub 'IF x% THEN: y% = 1'", "id": 12599}
+{"group": "forms", "why": "line 'IF x% THEN : y% = 1'", "id": 12600}
+{"group": "forms", "why": "in sub 'IF x% THEN : y% = 1'", "id": 12601}
+{"group": "forms", "why": "line 'IF x% THEN\\n: y% = 1\\nEND IF'", "id": 12602}
+{"group": "forms", "why": "in sub 'IF x% THEN\\n: y% = 1\\nEND IF'", "id": 12603}
+{"group": "forms", "why": "line 'IF x% THEN 10\\n10 y% = 1'", "id": 12604}
+{"group": "forms", "why": "in sub 'IF x% THEN 10\\n10 y% = 1'", "id": 12605}
+{"group": "forms", "why": "line 'IF x% GOTO 10\\n10 y% = 1'", "id": 12606}
+{"group": "forms", "why": "in sub 'IF x% GOTO 10\\n10 y% = 1'", "id": 12607}
+{"group": "forms", "why": "line 'IF x% THEN GOTO 10\\n10 y% = 1'", "id": 12608}
+{"group": "forms", "why": "in sub 'IF x% THEN GOTO 10\\n10 y% = 1'", "id": 12609}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 ELSE 10\\n10 y% = 1'", "id": 12610}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 ELSE 10\\n10 y% = 1'", "id": 12611}
+{"group": "forms", "why": "line 'IF x% THEN 10 ELSE 20\\n10 y% = 1\\n20 y% = 2'", "id": 12612}
+{"group": "forms", "why": "in sub 'IF x% THEN 10 ELSE 20\\n10 y% = 1\\n20 y% = 2'", "id": 12613}
+{"group": "forms", "why": "line 'IF x% THEN 10 ELSE y% = 2\\n10 y% = 1'", "id": 12614}
+{"group": "forms", "why": "in sub 'IF x% THEN 10 ELSE y% = 2\\n10 y% = 1'", "id": 12615}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 ELSE GOTO 10\\n10 y% = 1'", "id": 12616}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 ELSE GOTO 10\\n10 y% = 1'", "id": 12617}
+{"group": "forms", "why": "line 'IF x% THEN ELSE y% = 1'", "id": 12618}
+{"group": "forms", "why": "in sub 'IF x% THEN ELSE y% = 1'", "id": 12619}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 ELSE'", "id": 12620}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 ELSE'", "id": 12621}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 ELSE ELSE y% = 2'", "id": 12622}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 ELSE ELSE y% = 2'", "id": 12623}
+{"group": "forms", "why": "line 'IF x% THEN IF y% THEN i% = 1 ELSE i% = 2 ELSE i% = 3'", "id": 12624}
+{"group": "forms", "why": "in sub 'IF x% THEN IF y% THEN i% = 1 ELSE i% = 2 ELSE i% = 3'", "id": 12625}
+{"group": "forms", "why": "line 'IF x% THEN IF y% THEN i% = 1 ELSE i% = 2'", "id": 12626}
+{"group": "forms", "why": "in sub 'IF x% THEN IF y% THEN i% = 1 ELSE i% = 2'", "id": 12627}
+{"group": "forms", "why": "line 'IF x% = 1 THEN y% = 1: i% = 2 ELSE y% = 3: i% = 4'", "id": 12628}
+{"group": "forms", "why": "in sub 'IF x% = 1 THEN y% = 1: i% = 2 ELSE y% = 3: i% = 4'", "id": 12629}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1: ELSE y% = 2'", "id": 12630}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1: ELSE y% = 2'", "id": 12631}
+{"group": "forms", "why": "line 'IF x% THEN y% = 1 : ELSE y% = 2'", "id": 12632}
+{"group": "forms", "why": "in sub 'IF x% THEN y% = 1 : ELSE y% = 2'", "id": 12633}
+{"group": "forms", "why": "line 'IF (x%) THEN y% = 1'", "id": 12634}
+{"group": "forms", "why": "in sub 'IF (x%) THEN y% = 1'", "id": 12635}
+{"group": "forms", "why": "line 'IF x% THEN (y%) = 1'", "id": 12636}
+{"group": "forms", "why": "in sub 'IF x% THEN (y%) = 1'", "id": 12637}
+{"group": "forms", "why": "line 'IF x% THEN\\nELSE\\nEND IF'", "id": 12638}
+{"group": "forms", "why": "in sub 'IF x% THEN\\nELSE\\nEND IF'", "id": 12639}
+{"group": "forms", "why": "line 'IF x% THEN\\nELSEIF y% THEN\\nELSE\\nEND IF'", "id": 12640}
+{"group": "forms", "why": "in sub 'IF x% THEN\\nELSEIF y% THEN\\nELSE\\nEND IF'", "id": 12641}
+{"group": "forms", "why": "line 'IF THEN y% = 1'", "id": 12642}
+{"group": "forms", "why": "in sub 'IF THEN y% = 1'", "id": 12643}
+{"group": "forms", "why": "line 'IF x% y% = 1'", "id": 12644}
+{"group": "forms", "why": "in sub 'IF x% y% = 1'", "id": 12645}
+{"group": "forms", "why": "line 'IF x% THEN THEN y% = 1'", "id": 12646}
+{"group": "forms", "why": "in sub 'IF x% THEN THEN y% = 1'", "id": 12647}
+{"group": "forms", "why": "line 'WHILE x%\\nWEND'", "id": 12648}
+{"group": "forms", "why": "in sub 'WHILE x%\\nWEND'", "id": 12649}
+{"group": "forms", "why": "line 'WHILE x%: WEND'", "id": 12650}
+{"group": "forms", "why": "in sub 'WHILE x%: WEND'", "id": 12651}
+{"group": "forms", "why": "line 'WHILE x% : y% = 1 : WEND'", "id": 12652}
+{"group": "forms", "why": "in sub 'WHILE x% : y% = 1 : WEND'", "id": 12653}
+{"group": "forms", "why": "line 'WHILE\\nWEND'", "id": 12654}
+{"group": "forms", "why": "in sub 'WHILE\\nWEND'", "id": 12655}
+{"group": "forms", "why": "line 'WHILE x%\\nEND WHILE'", "id": 12656}
+{"group": "forms", "why": "in sub 'WHILE x%\\nEND WHILE'", "id": 12657}
+{"group": "forms", "why": "line 'DO\\nLOOP'", "id": 12658}
+{"group": "forms", "why": "in sub 'DO\\nLOOP'", "id": 12659}
+{"group": "forms", "why": "line 'DO: LOOP'", "id": 12660}
+{"group": "forms", "why": "in sub 'DO: LOOP'", "id": 12661}
+{"group": "forms", "why": "line 'DO WHILE x%\\nLOOP'", "id": 12662}
+{"group": "forms", "why": "in sub 'DO WHILE x%\\nLOOP'", "id": 12663}
+{"group": "forms", "why": "line 'DO UNTIL x%\\nLOOP'", "id": 12664}
+{"group": "forms", "why": "in sub 'DO UNTIL x%\\nLOOP'", "id": 12665}
+{"group": "forms", "why": "line 'DO\\nLOOP WHILE x%'", "id": 12666}
+{"group": "forms", "why": "in sub 'DO\\nLOOP WHILE x%'", "id": 12667}
+{"group": "forms", "why": "line 'DO\\nLOOP UNTIL x%'", "id": 12668}
+{"group": "forms", "why": "in sub 'DO\\nLOOP UNTIL x%'", "id": 12669}
+{"group": "forms", "why": "line 'DO WHILE x%\\nLOOP UNTIL y%'", "id": 12670}
+{"group": "forms", "why": "in sub 'DO WHILE x%\\nLOOP UNTIL y%'", "id": 12671}
+{"group": "forms", "why": "line 'DO\\nLOOP WHILE'", "id": 12672}
+{"group": "forms", "why": "in sub 'DO\\nLOOP WHILE'", "id": 12673}
+{"group": "forms", "why": "line 'DO WHILE\\nLOOP'", "id": 12674}
+{"group": "forms", "why": "in sub 'DO WHILE\\nLOOP'", "id": 12675}
+{"group": "forms", "why": "line 'DO x%\\nLOOP'", "id": 12676}
+{"group": "forms", "why": "in sub 'DO x%\\nLOOP'", "id": 12677}
+{"group": "forms", "why": "line 'LOOP'", "id": 12678}
+{"group": "forms", "why": "in sub 'LOOP'", "id": 12679}
+{"group": "forms", "why": "line 'DO\\nWEND'", "id": 12680}
+{"group": "forms", "why": "in sub 'DO\\nWEND'", "id": 12681}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT'", "id": 12682}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT'", "id": 12683}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2: NEXT'", "id": 12684}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2: NEXT'", "id": 12685}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT i%'", "id": 12686}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT i%'", "id": 12687}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT j%'", "id": 12688}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT j%'", "id": 12689}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT i%, j%'", "id": 12690}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT i%, j%'", "id": 12691}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT j%, i%'", "id": 12692}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT j%, i%'", "id": 12693}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT i%, j%'", "id": 12694}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT i%, j%'", "id": 12695}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT i%\\nNEXT j%'", "id": 12696}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nFOR j% = 1 TO 2\\nNEXT i%\\nNEXT j%'", "id": 12697}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2 STEP 2\\nNEXT'", "id": 12698}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2 STEP 2\\nNEXT'", "id": 12699}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2 STEP\\nNEXT'", "id": 12700}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2 STEP\\nNEXT'", "id": 12701}
+{"group": "forms", "why": "line 'FOR i% = 1 TO\\nNEXT'", "id": 12702}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO\\nNEXT'", "id": 12703}
+{"group": "forms", "why": "line 'FOR i% = 1\\nNEXT'", "id": 12704}
+{"group": "forms", "why": "in sub 'FOR i% = 1\\nNEXT'", "id": 12705}
+{"group": "forms", "why": "line 'FOR i% TO 2\\nNEXT'", "id": 12706}
+{"group": "forms", "why": "in sub 'FOR i% TO 2\\nNEXT'", "id": 12707}
+{"group": "forms", "why": "line 'FOR = 1 TO 2\\nNEXT'", "id": 12708}
+{"group": "forms", "why": "in sub 'FOR = 1 TO 2\\nNEXT'", "id": 12709}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT\\nNEXT'", "id": 12710}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT\\nNEXT'", "id": 12711}
+{"group": "forms", "why": "line 'NEXT'", "id": 12712}
+{"group": "forms", "why": "in sub 'NEXT'", "id": 12713}
+{"group": "forms", "why": "line 'FOR i = 1 TO 2\\nNEXT i%'", "id": 12714}
+{"group": "forms", "why": "in sub 'FOR i = 1 TO 2\\nNEXT i%'", "id": 12715}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2\\nNEXT i'", "id": 12716}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2\\nNEXT i'", "id": 12717}
+{"group": "forms", "why": "line 'FOR i$ = 1 TO 2\\nNEXT'", "id": 12718}
+{"group": "forms", "why": "in sub 'FOR i$ = 1 TO 2\\nNEXT'", "id": 12719}
+{"group": "forms", "why": "line 'FOR a(1) = 1 TO 2\\nNEXT'", "id": 12720}
+{"group": "forms", "why": "in sub 'FOR a(1) = 1 TO 2\\nNEXT'", "id": 12721}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2 STEP 0\\nNEXT'", "id": 12722}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2 STEP 0\\nNEXT'", "id": 12723}
+{"group": "forms", "why": "line 'FOR i% = 1.5 TO 2.5\\nNEXT'", "id": 12724}
+{"group": "forms", "why": "in sub 'FOR i% = 1.5 TO 2.5\\nNEXT'", "id": 12725}
+{"group": "forms", "why": "line 'FOR i% = \"a\" TO 2\\nNEXT'", "id": 12726}
+{"group": "forms", "why": "in sub 'FOR i% = \"a\" TO 2\\nNEXT'", "id": 12727}
+{"group": "forms", "why": "line 'FOR i% = 1 TO 2 STEP -1\\nNEXT'", "id": 12728}
+{"group": "forms", "why": "in sub 'FOR i% = 1 TO 2 STEP -1\\nNEXT'", "id": 12729}
+{"group": "forms", "why": "line 'FOR i# = 1 TO 2\\nNEXT i#'", "id": 12730}
+{"group": "forms", "why": "in sub 'FOR i# = 1 TO 2\\nNEXT i#'", "id": 12731}
+{"group": "forms", "why": "line 'FOR i& = 1 TO 2\\nNEXT i&'", "id": 12732}
+{"group": "forms", "why": "in sub 'FOR i& = 1 TO 2\\nNEXT i&'", "id": 12733}
+{"group": "forms", "why": "line 'END'", "id": 12734}
+{"group": "forms", "why": "in sub 'END'", "id": 12735}
+{"group": "forms", "why": "line 'END IF'", "id": 12736}
+{"group": "forms", "why": "in sub 'END IF'", "id": 12737}
+{"group": "forms", "why": "line 'END x%'", "id": 12738}
+{"group": "forms", "why": "in sub 'END x%'", "id": 12739}
+{"group": "forms", "why": "line 'STOP'", "id": 12740}
+{"group": "forms", "why": "in sub 'STOP'", "id": 12741}
+{"group": "forms", "why": "line 'SYSTEM'", "id": 12742}
+{"group": "forms", "why": "in sub 'SYSTEM'", "id": 12743}
+{"group": "forms", "why": "line 'SYSTEM x%'", "id": 12744}
+{"group": "forms", "why": "in sub 'SYSTEM x%'", "id": 12745}
+{"group": "forms", "why": "line 'END: y% = 1'", "id": 12746}
+{"group": "forms", "why": "in sub 'END: y% = 1'", "id": 12747}
+{"group": "forms", "why": "line 'END\\ny% = 1'", "id": 12748}
+{"group": "forms", "why": "in sub 'END\\ny% = 1'", "id": 12749}
+{"group": "forms", "why": "line 'RETURN'", "id": 12750}
+{"group": "forms", "why": "in sub 'RETURN'", "id": 12751}
+{"group": "forms", "why": "line 'RETURN a\\na:'", "id": 12752}
+{"group": "forms", "why": "in sub 'RETURN a\\na:'", "id": 12753}
+{"group": "forms", "why": "line 'RETURN 10\\n10 x% = 1'", "id": 12754}
+{"group": "forms", "why": "in sub 'RETURN 10\\n10 x% = 1'", "id": 12755}
+{"group": "forms", "why": "line 'EXIT'", "id": 12756}
+{"group": "forms", "why": "in sub 'EXIT'", "id": 12757}
+{"group": "forms", "why": "line 'EXIT SUB'", "id": 12758}
+{"group": "forms", "why": "in sub 'EXIT SUB'", "id": 12759}
+{"group": "forms", "why": "line 'EXIT FUNCTION'", "id": 12760}
+{"group": "forms", "why": "in sub 'EXIT FUNCTION'", "id": 12761}
+{"group": "forms", "why": "line 'EXIT DO'", "id": 12762}
+{"group": "forms", "why": "in sub 'EXIT DO'", "id": 12763}
+{"group": "forms", "why": "line 'EXIT FOR'", "id": 12764}
+{"group": "forms", "why": "in sub 'EXIT FOR'", "id": 12765}
+{"group": "forms", "why": "line 'EXIT WHILE'", "id": 12766}
+{"group": "forms", "why": "in sub 'EXIT WHILE'", "id": 12767}
+{"group": "forms", "why": "line 'EXIT SELECT'", "id": 12768}
+{"group": "forms", "why": "in sub 'EXIT SELECT'", "id": 12769}
+{"group": "forms", "why": "line 'EXIT DEF'", "id": 12770}
+{"group": "forms", "why": "in sub 'EXIT DEF'", "id": 12771}
+{"group": "forms", "why": "line 'EXIT x%'", "id": 12772}
+{"group": "forms", "why": "in sub 'EXIT x%'", "id": 12773}
+{"group": "forms", "why": "line 'x% = 1 REM c\\nREM d'", "id": 12774}
+{"group": "forms", "why": "in sub 'x% = 1 REM c\\nREM d'", "id": 12775}
+{"group": "forms", "why": "line 'PRINT'", "id": 12776}
+{"group": "forms", "why": "in sub 'PRINT'", "id": 12777}
+{"group": "forms", "why": "line 'PRINT;'", "id": 12778}
+{"group": "forms", "why": "in sub 'PRINT;'", "id": 12779}
+{"group": "forms", "why": "line 'PRINT ;'", "id": 12780}
+{"group": "forms", "why": "in sub 'PRINT ;'", "id": 12781}
+{"group": "forms", "why": "line 'PRINT,'", "id": 12782}
+{"group": "forms", "why": "in sub 'PRINT,'", "id": 12783}
+{"group": "forms", "why": "line 'PRINT ,'", "id": 12784}
+{"group": "forms", "why": "in sub 'PRINT ,'", "id": 12785}
+{"group": "forms", "why": "line 'PRINT ;;'", "id": 12786}
+{"group": "forms", "why": "in sub 'PRINT ;;'", "id": 12787}
+{"group": "forms", "why": "line 'PRINT 1;'", "id": 12788}
+{"group": "forms", "why": "in sub 'PRINT 1;'", "id": 12789}
+{"group": "forms", "why": "line 'PRINT 1,'", "id": 12790}
+{"group": "forms", "why": "in sub 'PRINT 1,'", "id": 12791}
+{"group": "forms", "why": "line 'PRINT 1;;2'", "id": 12792}
+{"group": "forms", "why": "in sub 'PRINT 1;;2'", "id": 12793}
+{"group": "forms", "why": "line 'PRINT 1,,2'", "id": 12794}
+{"group": "forms", "why": "in sub 'PRINT 1,,2'", "id": 12795}
+{"group": "forms", "why": "line 'PRINT 1 2'", "id": 12796}
+{"group": "forms", "why": "in sub 'PRINT 1 2'", "id": 12797}
+{"group": "forms", "why": "line 'PRINT 1 \"a\"'", "id": 12798}
+{"group": "forms", "why": "in sub 'PRINT 1 \"a\"'", "id": 12799}
+{"group": "forms", "why": "line 'PRINT \"a\" 1'", "id": 12800}
+{"group": "forms", "why": "in sub 'PRINT \"a\" 1'", "id": 12801}
+{"group": "forms", "why": "line 'PRINT \"a\" \"b\"'", "id": 12802}
+{"group": "forms", "why": "in sub 'PRINT \"a\" \"b\"'", "id": 12803}
+{"group": "forms", "why": "line 'PRINT x% y%'", "id": 12804}
+{"group": "forms", "why": "in sub 'PRINT x% y%'", "id": 12805}
+{"group": "forms", "why": "line 'PRINT x%(1) y%'", "id": 12806}
+{"group": "forms", "why": "in sub 'PRINT x%(1) y%'", "id": 12807}
+{"group": "forms", "why": "line 'PRINT (1) (2)'", "id": 12808}
+{"group": "forms", "why": "in sub 'PRINT (1) (2)'", "id": 12809}
+{"group": "forms", "why": "line 'PRINT (1)(2)'", "id": 12810}
+{"group": "forms", "why": "in sub 'PRINT (1)(2)'", "id": 12811}
+{"group": "forms", "why": "line 'PRINT 1 (2)'", "id": 12812}
+{"group": "forms", "why": "in sub 'PRINT 1 (2)'", "id": 12813}
+{"group": "forms", "why": "line 'PRINT TAB(5) 1'", "id": 12814}
+{"group": "forms", "why": "in sub 'PRINT TAB(5) 1'", "id": 12815}
+{"group": "forms", "why": "line 'PRINT TAB(5);'", "id": 12816}
+{"group": "forms", "why": "in sub 'PRINT TAB(5);'", "id": 12817}
+{"group": "forms", "why": "line 'PRINT SPC(5), 1'", "id": 12818}
+{"group": "forms", "why": "in sub 'PRINT SPC(5), 1'", "id": 12819}
+{"group": "forms", "why": "line 'PRINT TAB(5) TAB(6)'", "id": 12820}
+{"group": "forms", "why": "in sub 'PRINT TAB(5) TAB(6)'", "id": 12821}
+{"group": "forms", "why": "line 'PRINT TAB 5'", "id": 12822}
+{"group": "forms", "why": "in sub 'PRINT TAB 5'", "id": 12823}
+{"group": "forms", "why": "line 'PRINT TAB()'", "id": 12824}
+{"group": "forms", "why": "in sub 'PRINT TAB()'", "id": 12825}
+{"group": "forms", "why": "line 'PRINT TAB(1, 2)'", "id": 12826}
+{"group": "forms", "why": "in sub 'PRINT TAB(1, 2)'", "id": 12827}
+{"group": "forms", "why": "line 'PRINT USING \"#\"; 1'", "id": 12828}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\"; 1'", "id": 12829}
+{"group": "forms", "why": "line 'PRINT USING \"#\" 1'", "id": 12830}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\" 1'", "id": 12831}
+{"group": "forms", "why": "line 'PRINT USING \"#\", 1'", "id": 12832}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\", 1'", "id": 12833}
+{"group": "forms", "why": "line 'PRINT USING; 1'", "id": 12834}
+{"group": "forms", "why": "in sub 'PRINT USING; 1'", "id": 12835}
+{"group": "forms", "why": "line 'PRINT USING \"#\";'", "id": 12836}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\";'", "id": 12837}
+{"group": "forms", "why": "line 'PRINT USING x%; 1'", "id": 12838}
+{"group": "forms", "why": "in sub 'PRINT USING x%; 1'", "id": 12839}
+{"group": "forms", "why": "line 'PRINT USING s$; 1; 2'", "id": 12840}
+{"group": "forms", "why": "in sub 'PRINT USING s$; 1; 2'", "id": 12841}
+{"group": "forms", "why": "line 'PRINT USING \"#\"; 1, 2'", "id": 12842}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\"; 1, 2'", "id": 12843}
+{"group": "forms", "why": "line 'PRINT USING \"#\"; 1;'", "id": 12844}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\"; 1;'", "id": 12845}
+{"group": "forms", "why": "line 'PRINT USING \"#\"; 1 2'", "id": 12846}
+{"group": "forms", "why": "in sub 'PRINT USING \"#\"; 1 2'", "id": 12847}
+{"group": "forms", "why": "line 'PRINT #1, USING \"#\"; 1'", "id": 12848}
+{"group": "forms", "why": "in sub 'PRINT #1, USING \"#\"; 1'", "id": 12849}
+{"group": "forms", "why": "line 'PRINT #1,'", "id": 12850}
+{"group": "forms", "why": "in sub 'PRINT #1,'", "id": 12851}
+{"group": "forms", "why": "line 'PRINT #1'", "id": 12852}
+{"group": "forms", "why": "in sub 'PRINT #1'", "id": 12853}
+{"group": "forms", "why": "line 'PRINT #1;'", "id": 12854}
+{"group": "forms", "why": "in sub 'PRINT #1;'", "id": 12855}
+{"group": "forms", "why": "line 'PRINT #1, 1;'", "id": 12856}
+{"group": "forms", "why": "in sub 'PRINT #1, 1;'", "id": 12857}
+{"group": "forms", "why": "line 'PRINT #x%, 1'", "id": 12858}
+{"group": "forms", "why": "in sub 'PRINT #x%, 1'", "id": 12859}
+{"group": "forms", "why": "line 'PRINT # 1, 1'", "id": 12860}
+{"group": "forms", "why": "in sub 'PRINT # 1, 1'", "id": 12861}
+{"group": "forms", "why": "line 'PRINT #1 , 1'", "id": 12862}
+{"group": "forms", "why": "in sub 'PRINT #1 , 1'", "id": 12863}
+{"group": "forms", "why": "line 'PRINT #1,1'", "id": 12864}
+{"group": "forms", "why": "in sub 'PRINT #1,1'", "id": 12865}
+{"group": "forms", "why": "line '? 1'", "id": 12866}
+{"group": "forms", "why": "in sub '? 1'", "id": 12867}
+{"group": "forms", "why": "line '?'", "id": 12868}
+{"group": "forms", "why": "in sub '?'", "id": 12869}
+{"group": "forms", "why": "line 'PRINT 1 ? 2'", "id": 12870}
+{"group": "forms", "why": "in sub 'PRINT 1 ? 2'", "id": 12871}
+{"group": "forms", "why": "line 'LPRINT 1'", "id": 12872}
+{"group": "forms", "why": "in sub 'LPRINT 1'", "id": 12873}
+{"group": "forms", "why": "line 'LPRINT'", "id": 12874}
+{"group": "forms", "why": "in sub 'LPRINT'", "id": 12875}
+{"group": "forms", "why": "line 'LPRINT USING \"#\"; 1'", "id": 12876}
+{"group": "forms", "why": "in sub 'LPRINT USING \"#\"; 1'", "id": 12877}
+{"group": "forms", "why": "line 'LPRINT #1, 1'", "id": 12878}
+{"group": "forms", "why": "in sub 'LPRINT #1, 1'", "id": 12879}
+{"group": "forms", "why": "line 'WRITE'", "id": 12880}
+{"group": "forms", "why": "in sub 'WRITE'", "id": 12881}
+{"group": "forms", "why": "line 'WRITE 1'", "id": 12882}
+{"group": "forms", "why": "in sub 'WRITE 1'", "id": 12883}
+{"group": "forms", "why": "line 'WRITE 1,'", "id": 12884}
+{"group": "forms", "why": "in sub 'WRITE 1,'", "id": 12885}
+{"group": "forms", "why": "line 'WRITE 1; 2'", "id": 12886}
+{"group": "forms", "why": "in sub 'WRITE 1; 2'", "id": 12887}
+{"group": "forms", "why": "line 'WRITE #1, 1'", "id": 12888}
+{"group": "forms", "why": "in sub 'WRITE #1, 1'", "id": 12889}
+{"group": "forms", "why": "line 'WRITE #1'", "id": 12890}
+{"group": "forms", "why": "in sub 'WRITE #1'", "id": 12891}
+{"group": "forms", "why": "line 'WRITE #1,'", "id": 12892}
+{"group": "forms", "why": "in sub 'WRITE #1,'", "id": 12893}
+{"group": "forms", "why": "line 'WRITE x%, s$'", "id": 12894}
+{"group": "forms", "why": "in sub 'WRITE x%, s$'", "id": 12895}
+{"group": "forms", "why": "line 'WRITE USING \"#\"; 1'", "id": 12896}
+{"group": "forms", "why": "in sub 'WRITE USING \"#\"; 1'", "id": 12897}

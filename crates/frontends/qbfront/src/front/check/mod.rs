@@ -69,6 +69,9 @@ struct Checker {
     /// The counters of the FOR loops being read.
     for_counters: Vec<String>,
     labels: HashSet<String>,
+    /// The numeric labels that stand on a line with no statement: defined, but
+    /// never a duplicate of another.
+    weak_labels: HashSet<String>,
     /// The module level's labels, kept while a procedure's are the ones in use.
     module_labels: HashSet<String>,
     /// Every label of the file, module and procedures (RESTORE reaches any).
@@ -101,6 +104,7 @@ impl Checker {
             assigning: false,
             for_counters: Vec::new(),
             labels: HashSet::new(),
+            weak_labels: HashSet::new(),
             module_labels: HashSet::new(),
             all_labels: HashSet::new(),
             span: Span { line: 1, start: 0, end: 0 },
@@ -222,14 +226,24 @@ impl Checker {
         &mut self,
         statements: &[Statement],
     ) {
-        for statement in statements {
+        for (index, statement) in statements.iter().enumerate() {
             if let Statement::Label(name, span) = statement {
-                // a label in a procedure may not repeat one of the module's
-                if self.procedure.is_some() && self.module_labels.contains(name) {
-                    self.err(*span, "Duplicate label");
-                }
-                if !self.labels.insert(name.clone()) {
-                    self.err(*span, "Duplicate label");
+                // a line number alone on its line (or before a comment) is a
+                // target, and no duplicate
+                let numeric = name.chars().all(|c| c.is_ascii_digit() || c == '.');
+                let alone = statements.get(index + 1).is_none_or(|next| next.span().line != span.line);
+                // (the module's only: a procedure's line numbers all count)
+                if numeric && alone && self.procedure.is_none() {
+                    self.labels.insert(name.clone());
+                    self.weak_labels.insert(name.clone());
+                } else {
+                    // a label in a procedure may not repeat one of the module's
+                    if self.procedure.is_some() && self.module_labels.contains(name) {
+                        self.err(*span, "Duplicate label");
+                    }
+                    if !self.labels.insert(name.clone()) && !self.weak_labels.remove(name) {
+                        self.err(*span, "Duplicate label");
+                    }
                 }
             }
             for body in statement.bodies() {
@@ -527,6 +541,7 @@ impl Checker {
     ) {
         let saved_scope = std::mem::take(&mut self.scope);
         let saved_labels = std::mem::take(&mut self.labels);
+        let saved_weak = std::mem::take(&mut self.weak_labels);
         self.procedure = Some((procedure.kind, procedure.name.clone()));
         self.static_scope = procedure.is_static;
         if procedure.module_scope {
@@ -543,6 +558,7 @@ impl Checker {
         self.procedure = None;
         self.scope = saved_scope;
         self.labels = saved_labels;
+        self.weak_labels = saved_weak;
     }
 
     fn declare_parameter(

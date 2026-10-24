@@ -33,7 +33,7 @@ fn main() {
                     Err(message) => ("syntax", message),
                     Ok(module) => match compile_with_options(&module, "t", dialect, "llrm", &Options::default()) {
                         Ok(_) => ("ok", String::new()),
-                        Err(error) if error.message.contains("not supported") || error.message.contains("unsupported") => {
+                        Err(error) if error.message.contains("cannot generate code") || error.message.contains("unsupported") => {
                             ("unsupported", error.message)
                         }
                         Err(error) => ("semantic", error.message),

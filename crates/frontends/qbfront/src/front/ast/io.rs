@@ -30,7 +30,7 @@ impl Ast<'_> {
             Kw::WRITE => PrintKind::Write,
             _ => PrintKind::Print,
         };
-        let file = if self.eat(Kw::Lbs) {
+        let file = if k != Kw::LPRINT && self.eat(Kw::Lbs) {
             let channel = self.exp()?;
             self.expect(Kw::Comma)?;
             Some(channel)
@@ -94,6 +94,10 @@ impl Ast<'_> {
                 PrintSeparator::End
             };
             items.push(PrintItem { value, separator });
+        }
+        // WRITE takes values between commas: none may be left hanging
+        if kind == PrintKind::Write && items.last().is_some_and(|item| item.separator == PrintSeparator::Comma) {
+            return self.fail();
         }
         self.out.push(Statement::Print { kind, file, using, items, span });
         Ok(())

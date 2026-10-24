@@ -1,0 +1,4 @@
+SUB p
+x% = 1 '$DYNAMIC
+DIM a(10)
+END SUB

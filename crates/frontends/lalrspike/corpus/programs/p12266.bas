@@ -1,0 +1,7 @@
+DIM x%, y%, i%
+SELECT CASE x%
+CASE 1
+REM c
+' c
+CASE 2
+END SELECT

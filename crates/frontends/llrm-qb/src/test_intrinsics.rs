@@ -84,10 +84,10 @@ fn a_function_keyword_without_an_intrinsic_is_refused() {
     for dialect in DIALECTS {
         for (source, keyword) in [("x = LPOS(0)\n", "LPOS"), ("x = ERDEV\n", "ERDEV"), ("x = SETMEM(0)\n", "SETMEM")] {
             let error = parsed(source, dialect).expect_err(source);
-            assert!(error.contains(&format!("{keyword} is not supported")), "{dialect}: {error}");
+            assert!(error.contains(&format!("{keyword} is valid in this dialect")), "{dialect}: {error}");
         }
     }
     let error = parsed("x = STACK\n", "vbdos").expect_err("STACK is VBDOS's");
-    assert!(error.contains("STACK is not supported"), "{error}");
+    assert!(error.contains("STACK is valid in this dialect"), "{error}");
     parsed("STACK = 1\nPRINT STACK\n", "qb45").expect("QB 4.5 has no STACK keyword");
 }

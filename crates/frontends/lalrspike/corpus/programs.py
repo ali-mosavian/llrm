@@ -289,6 +289,11 @@ for operand in FOLD_OPERANDS:
             add("fold", f"{name} '{expr}'", "DIM x%, l&, a%(5)", "DECLARE SUB pp (z AS INTEGER)", template.format(expr), "END", "SUB pp (z AS INTEGER)", "END SUB")
 
 
+import more  # noqa: E402
+
+more.register(add)
+
+
 def write():
     out = HERE / "programs"
     out.mkdir(exist_ok=True)
