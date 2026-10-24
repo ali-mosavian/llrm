@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::{Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
+use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind};
 use llrm_lir::registers::RegId;
 use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
@@ -241,13 +241,11 @@ pub fn _assemble(
     if encoder.encode(made, at.ip).is_err() {
         return None;
     }
+    // The encoder records the field offsets as it writes them
+    // (`X86MCCodeEmitter` fixups); decoding the bytes again found the same
+    // ones.
+    let offsets = encoder.get_constant_offsets();
     let code = encoder.take_buffer();
-    let mut decoder = Decoder::with_ip(at.bits, &code, at.ip, DecoderOptions::NONE);
-    if !decoder.can_decode() {
-        return None;
-    }
-    let decoded = decoder.decode();
-    let offsets = decoder.get_constant_offsets(&decoded);
     // A displacement is a relocatable field only where the operand names a
     // symbol; a frame slot's displacement is an offset from bp.
     let absolute = offsets.has_displacement() && symbolic;
@@ -549,14 +547,123 @@ mod code_names {
     include!(concat!(env!("OUT_DIR"), "/code_names.rs"));
 }
 
-/// Two hashes of a name, 128 bits between them: `build.rs`'s.
-fn _name_hash(name: &str) -> (u64, u64) {
-    let (mut first, mut second) = (0xcbf2_9ce4_8422_2325_u64, 0x9e37_79b9_7f4a_7c15_u64);
-    for byte in name.bytes() {
-        first = (first ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-        second = (second.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+/// The two hashes of a name, 128 bits between them: `build.rs`'s, fed a byte at
+/// a time so that a name made of pieces is hashed without being built.
+#[derive(Clone, Copy)]
+pub struct NameHash(u64, u64);
+
+impl NameHash {
+    pub const fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325, 0x9e37_79b9_7f4a_7c15)
     }
-    (first, second)
+
+    fn byte(
+        &mut self,
+        byte: u8,
+    ) {
+        self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        self.1 = (self.1.rotate_left(5) ^ u64::from(byte)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+    }
+
+    /// iced's Code for the name hashed so far (`_code`).
+    pub fn code(self) -> Option<Code> {
+        debug_assert_eq!(Code::values().len(), code_names::CODE_COUNT, "the table of names is of another iced");
+        let hash = (self.0, self.1);
+        let at = code_names::CODE_NAMES.binary_search_by(|(first, second, _)| (*first, *second).cmp(&hash)).ok()?;
+        Code::try_from(usize::from(code_names::CODE_NAMES[at].2)).ok()
+    }
+}
+
+/// A piece of a Code name: text, upper-cased text, or a number in decimal.
+pub trait Piece {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    );
+}
+
+impl Piece for str {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    ) {
+        self.bytes().for_each(|byte| hash.byte(byte));
+    }
+}
+
+impl Piece for String {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    ) {
+        self.as_str().feed(hash);
+    }
+}
+
+impl<T: Piece + ?Sized> Piece for &T {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    ) {
+        (**self).feed(hash);
+    }
+}
+
+/// `name.to_uppercase()` of an ASCII name.
+pub struct Upper<'a>(pub &'a str);
+
+impl Piece for Upper<'_> {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    ) {
+        self.0.bytes().for_each(|byte| hash.byte(byte.to_ascii_uppercase()));
+    }
+}
+
+macro_rules! number_pieces {
+    ($($type:ty),*) => {$(
+        impl Piece for $type {
+            fn feed(&self, hash: &mut NameHash) {
+                let mut value = i128::from(*self);
+                if value < 0 {
+                    hash.byte(b'-');
+                    value = -value;
+                }
+                let mut digits = [0u8; 40];
+                let mut at = digits.len();
+                loop {
+                    at -= 1;
+                    digits[at] = b'0' + (value % 10) as u8;
+                    value /= 10;
+                    if value == 0 {
+                        break;
+                    }
+                }
+                digits[at..].iter().for_each(|digit| hash.byte(*digit));
+            }
+        }
+    )*};
+}
+number_pieces!(u8, u16, u32, u64, i8, i16, i32, i64);
+
+impl Piece for usize {
+    fn feed(
+        &self,
+        hash: &mut NameHash,
+    ) {
+        (*self as u64).feed(hash);
+    }
+}
+
+/// iced's Code whose name is the pieces one after another, as `_code` finds it
+/// for the same name written out, with no string made.
+macro_rules! code_of {
+    ($($piece:expr),+ $(,)?) => {{
+        let mut hash = NameHash::new();
+        $( Piece::feed(&$piece, &mut hash); )+
+        hash.code()
+    }};
 }
 
 /// iced's Code value by its own name, or None where there is no such form.
@@ -566,10 +673,9 @@ fn _name_hash(name: &str) -> (u64, u64) {
 /// names made at the first call cost five million instructions in every
 /// compile.
 pub fn _code(name: &str) -> Option<Code> {
-    debug_assert_eq!(Code::values().len(), code_names::CODE_COUNT, "the table of names is of another iced");
-    let hash = _name_hash(name);
-    let at = code_names::CODE_NAMES.binary_search_by(|(first, second, _)| (*first, *second).cmp(&hash)).ok()?;
-    Code::try_from(usize::from(code_names::CODE_NAMES[at].2)).ok()
+    let mut hash = NameHash::new();
+    name.feed(&mut hash);
+    hash.code()
 }
 
 pub fn _remapped(
@@ -733,7 +839,7 @@ pub fn load(
     if width == 8 {
         return load_quadword(into, value, at);
     }
-    let code = _code(&format!("MOV_R{}_IMM{}", width * 8, width * 8))?;
+    let code = code_of!("MOV_R", width * 8, "_IMM", width * 8)?;
     let made = create_reg_i32(code, into, _immediate(value, width)).ok()?;
     _assemble(&made, at, true)
 }
@@ -770,7 +876,7 @@ pub fn arith(
     if width_of(source) != Some(width) {
         return None; // a mixed-width operation is a different instruction
     }
-    let code = _code(&format!("{}_R{}_RM{}", name.to_uppercase(), width * 8, width * 8))?;
+    let code = code_of!(Upper(name), "_R", width * 8, "_RM", width * 8)?;
     _assemble(&raised(create_reg_reg(code, dest, source)), at, true)
 }
 
@@ -856,7 +962,7 @@ pub fn push(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(one)?;
-    let code = _code(&format!("PUSH_R{}", width * 8))?;
+    let code = code_of!("PUSH_R", width * 8)?;
     _assemble(&raised(create_reg(code, one)), at, true)
 }
 
@@ -928,7 +1034,7 @@ pub fn move_from(
             return made;
         }
     }
-    let code = _code(&format!("MOV_R{}_RM{}", width * 8, width * 8))?;
+    let code = code_of!("MOV_R", width * 8, "_RM", width * 8)?;
     _assemble(&raised(create_reg_mem(code, into, r#where)), at, relocated)
 }
 
@@ -952,7 +1058,7 @@ pub fn move_into(
             return made;
         }
     }
-    let code = _code(&format!("MOV_RM{}_R{}", width * 8, width * 8))?;
+    let code = code_of!("MOV_RM", width * 8, "_R", width * 8)?;
     _assemble(&raised(create_mem_reg(code, r#where, outof)), at, relocated)
 }
 
@@ -968,7 +1074,7 @@ pub fn store_imm(
     }
     let width = i64::from(cell.width);
     // A quadword store takes a sign-extended dword.
-    let code = _code(&format!("MOV_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
+    let code = code_of!("MOV_RM", width * 8, "_IMM", (width * 8).min(32))?;
     if width == 8 && i32::try_from(value).is_err() {
         return None;
     }
@@ -992,7 +1098,7 @@ pub fn arith_mem(
     if !TWO_OPERAND.contains(&name) || i64::from(cell.width) != width {
         return None;
     }
-    let code = _code(&format!("{}_R{}_RM{}", name.to_uppercase(), width * 8, width * 8))?;
+    let code = code_of!(Upper(name), "_R", width * 8, "_RM", width * 8)?;
     _assemble(&raised(create_reg_mem(code, dest, r#where)), at, relocated)
 }
 
@@ -1005,7 +1111,7 @@ pub fn push_mem(
     if built.is_none() || ![2, 4].contains(&cell.width) {
         return None;
     }
-    let code = _code(&format!("PUSH_RM{}", cell.width * 8))?;
+    let code = code_of!("PUSH_RM", cell.width * 8)?;
     let (r#where, relocated) = built?;
     _assemble(&raised(create_mem(code, r#where)), at, relocated)
 }
@@ -1050,7 +1156,7 @@ pub fn call_near(
     target: i64,
     at: At,
 ) -> Option<Emitted> {
-    let code = _code(&format!("CALL_{}", relative(at).1))?;
+    let code = code_of!("CALL_", relative(at).1)?;
     let made = create_branch(code, target).ok()?;
     _assemble(&made, at, true)
 }
@@ -1187,7 +1293,7 @@ pub fn pop(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(into)?;
-    let code = _code(&format!("POP_R{}", width * 8))?;
+    let code = code_of!("POP_R", width * 8)?;
     _assemble(&raised(create_reg(code, into)), at, true)
 }
 
@@ -1225,7 +1331,7 @@ pub fn test_immediate(
         return None;
     }
     let width = i64::from(width);
-    let code = _code(&format!("TEST_RM{}_IMM{}", width * 8, (width * 8).min(32)))?;
+    let code = code_of!("TEST_RM", width * 8, "_IMM", (width * 8).min(32))?;
     let value = _immediate(value, width);
     match dest {
         Loc::Reg(one) => _assemble(&raised(create_reg_i32(code, one.register, value)), at, true),
@@ -1287,7 +1393,7 @@ pub fn float_memory(
     let (Some((r#where, relocated)), Some(suffix)) = (built, suffix) else {
         return None;
     };
-    let code = _code(&format!("{}_{suffix}", name.to_uppercase()))?;
+    let code = code_of!(Upper(name), "_", suffix)?;
     _assemble(&raised(create_mem(code, r#where)), at, relocated)
 }
 
@@ -1306,7 +1412,7 @@ pub fn arith_into(
     if !TWO_OPERAND.contains(&name) || i64::from(cell.width) != width {
         return None;
     }
-    let code = _code(&format!("{}_RM{}_R{}", name.to_uppercase(), width * 8, width * 8))?;
+    let code = code_of!(Upper(name), "_RM", width * 8, "_R", width * 8)?;
     _assemble(&raised(create_mem_reg(code, r#where, source)), at, relocated)
 }
 
@@ -1339,7 +1445,7 @@ pub fn divide(
         return None;
     }
     let width = width_of(divisor)?;
-    let code = _code(&format!("{}_RM{}", name.to_uppercase(), width * 8))?;
+    let code = code_of!(Upper(name), "_RM", width * 8)?;
     _assemble(&raised(create_reg(code, divisor)), at, true)
 }
 
@@ -1350,7 +1456,7 @@ pub fn address_of(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(into)?;
-    let code = _code(&format!("LEA_R{}_M", width * 8))?;
+    let code = code_of!("LEA_R", width * 8, "_M")?;
     let (built, relocated) = address_operand(cell, at.bits)?;
     _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
 }
@@ -1398,7 +1504,7 @@ pub fn compare_registers(
     if width_of(other) != Some(width) {
         return None;
     }
-    let code = _code(&format!("TEST_RM{}_R{}", width * 8, width * 8))?;
+    let code = code_of!("TEST_RM", width * 8, "_R", width * 8)?;
     _assemble(&raised(create_reg_reg(code, one, other)), at, true)
 }
 
@@ -1431,7 +1537,7 @@ pub fn push_segment(
     at: At,
 ) -> Option<Emitted> {
     let named = SEGMENTS.get(&one)?;
-    let code = _code(&format!("PUSH{}_{named}", if width == 4 { "D" } else { "W" }))?;
+    let code = code_of!("PUSH", if width == 4 { "D" } else { "W" }, "_", named)?;
     // Named even though the opcode implies it: iced wants the operand.
     _assemble(&raised(create_reg(code, one)), at, true)
 }
@@ -1447,7 +1553,7 @@ pub fn pop_segment(
         // popping cs is not an instruction on anything after the 8086
         return None;
     }
-    let code = _code(&format!("POP{}_{named}", if width == 4 { "D" } else { "W" }))?;
+    let code = code_of!("POP", if width == 4 { "D" } else { "W" }, "_", named)?;
     _assemble(&raised(create_reg(code, one)), at, true)
 }
 
@@ -1501,10 +1607,10 @@ pub fn funnel(
     }
     let opcode = name.to_uppercase();
     let Some(count) = count else {
-        let code = _code(&format!("{opcode}_RM32_R32_CL"))?;
+        let code = code_of!(opcode, "_RM32_R32_CL")?;
         return _assemble(&raised(create_reg_reg_reg(code, dest, other, RegId::CL)), at, true);
     };
-    let code = _code(&format!("{opcode}_RM32_R32_IMM8"))?;
+    let code = code_of!(opcode, "_RM32_R32_IMM8")?;
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 
@@ -1535,7 +1641,7 @@ pub fn shift(
     let relocated = built.is_some_and(|(_, relocated)| relocated);
     let upper = name.to_uppercase();
     let Some(count) = count else {
-        let code = _code(&format!("{upper}_RM{}_CL", width * 8))?;
+        let code = code_of!(upper, "_RM", width * 8, "_CL")?;
         let instruction = match (dest, built) {
             (RegisterOrCell::Mem(_), Some((r#where, _))) => raised(create_mem_reg(code, r#where, RegId::CL)),
             (RegisterOrCell::Reg(register), _) => raised(create_reg_reg(code, register, RegId::CL)),
@@ -1583,7 +1689,7 @@ pub fn float_pop(
     if !FLOAT_POP.contains(&name) || (index as usize) >= STACK_REGISTERS.len() {
         return None;
     }
-    let code = _code(&format!("{}_STI_ST0", name.to_uppercase()))?;
+    let code = code_of!(Upper(name), "_STI_ST0")?;
     _assemble(&raised(create_reg_reg(code, stack_register(index), RegId::ST0)), at, true)
 }
 
@@ -1644,7 +1750,7 @@ pub fn float_stack(
             return None;
         }
         let form = if dest == 0 { "ST0_STI" } else { "STI_ST0" };
-        let code = _code(&format!("{}_{form}", name.to_uppercase()))?;
+        let code = code_of!(Upper(name), "_", form)?;
         return _assemble(&raised(create_reg_reg(code, stack_register(dest), stack_register(source))), at, true);
     }
     None
@@ -1664,7 +1770,7 @@ pub fn divide_mem(
         return None;
     }
     let (r#where, relocated) = built?;
-    let code = _code(&format!("{}_RM{}", name.to_uppercase(), cell.width * 8))?;
+    let code = code_of!(Upper(name), "_RM", cell.width * 8)?;
     _assemble(&raised(create_mem(code, r#where)), at, relocated)
 }
 
@@ -1685,12 +1791,12 @@ pub fn multiply(
                 return None;
             }
             let (r#where, relocated) = built?;
-            let code = _code(&format!("{upper}_RM{}", cell.width * 8))?;
+            let code = code_of!(upper, "_RM", cell.width * 8)?;
             _assemble(&raised(create_mem(code, r#where)), at, relocated)
         }
         RegisterOrCell::Reg(register) => {
             let width = width_of(register)?;
-            let code = _code(&format!("{upper}_RM{}", width * 8))?;
+            let code = code_of!(upper, "_RM", width * 8)?;
             _assemble(&raised(create_reg(code, register)), at, true)
         }
     }
@@ -1713,11 +1819,11 @@ pub fn multiply_into(
             }
             let (r#where, relocated) = built?;
             let Some(value) = value else {
-                let code = _code(&format!("IMUL_R{bits}_RM{bits}"))?;
+                let code = code_of!("IMUL_R", bits, "_RM", bits)?;
                 return _assemble(&raised(create_reg_mem(code, dest, r#where)), at, relocated);
             };
             let immediate = if fits_in_a_byte(value) { 8 } else { bits };
-            let code = _code(&format!("IMUL_R{bits}_RM{bits}_IMM{immediate}"))?;
+            let code = code_of!("IMUL_R", bits, "_RM", bits, "_IMM", immediate)?;
             return _assemble(&raised(create_reg_mem_i32(code, dest, r#where, value)), at, relocated);
         }
         RegisterOrCell::Reg(register) => register,
@@ -1726,11 +1832,11 @@ pub fn multiply_into(
         return None;
     }
     let Some(value) = value else {
-        let code = _code(&format!("IMUL_R{bits}_RM{bits}"))?;
+        let code = code_of!("IMUL_R", bits, "_RM", bits)?;
         return _assemble(&raised(create_reg_reg(code, dest, source)), at, true);
     };
     let immediate = if fits_in_a_byte(value) { 8 } else { bits };
-    let code = _code(&format!("IMUL_R{bits}_RM{bits}_IMM{immediate}"))?;
+    let code = code_of!("IMUL_R", bits, "_RM", bits, "_IMM", immediate)?;
     _assemble(&raised(create_reg_reg_i32(code, dest, source, value)), at, true)
 }
 
@@ -1876,7 +1982,7 @@ pub fn arith_into_imm(
     }
     let all: Vec<i64> = if fits_in_a_byte(value) && !relocated { vec![8, width * 8] } else { vec![width * 8] };
     for bits in all {
-        let Some(code) = _code(&format!("{}_RM{}_IMM{bits}", name.to_uppercase(), width * 8)) else {
+        let Some(code) = code_of!(Upper(name), "_RM", width * 8, "_IMM", bits) else {
             continue;
         };
         match create_mem_i32(code, r#where, value) {
@@ -1923,7 +2029,7 @@ pub fn exchange_mem(
     let Some((r#where, relocated)) = built.filter(|_| i64::from(cell.width) == width) else {
         return None;
     };
-    let code = _code(&format!("XCHG_RM{}_R{}", width * 8, width * 8))?;
+    let code = code_of!("XCHG_RM", width * 8, "_R", width * 8)?;
     _assemble(&raised(create_mem_reg(code, r#where, register)), at, relocated)
 }
 
@@ -1941,7 +2047,7 @@ pub fn unary_mem(
         return None;
     }
     let (r#where, relocated) = built?;
-    let code = _code(&format!("{}_RM{}", name.to_uppercase(), cell.width * 8))?;
+    let code = code_of!(Upper(name), "_RM", cell.width * 8)?;
     _assemble(&raised(create_mem(code, r#where)), at, relocated)
 }
 
@@ -2075,7 +2181,7 @@ pub fn emit_in(
                 if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
                     return Some(short);
                 }
-                let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, wide(outof.register) * 8));
+                let code = code_of!(upper, "_R", wide(into.register) * 8, "_RM", wide(outof.register) * 8);
                 if let Some(code) = code {
                     if crate::registers::WIDTHS[&into.register] > crate::registers::WIDTHS[&outof.register] {
                         return _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true);
@@ -2083,7 +2189,7 @@ pub fn emit_in(
                 }
             }
             (Loc::Reg(into), Loc::Mem(cell)) => {
-                let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, cell.width * 8));
+                let code = code_of!(upper, "_R", wide(into.register) * 8, "_RM", cell.width * 8);
                 let built = operand_of(cell, at.bits);
                 if let (Some(code), Some((r#where, relocated))) = (code, built) {
                     if crate::registers::WIDTHS[&into.register] > i64::from(cell.width) {
@@ -2151,7 +2257,7 @@ pub fn emit_in(
     if op == Operation::Select && dests.len() == 1 && sources.len() == 2 {
         let into = reg_of(&dests[0])?;
         let width = width_of(into)?;
-        let code = _code(&format!("{}_R{}_RM{}", name.to_uppercase(), width * 8, width * 8))?;
+        let code = code_of!(Upper(name), "_R", width * 8, "_RM", width * 8)?;
         return match &sources[1] {
             Loc::Reg(from) => _assemble(&raised(create_reg_reg(code, into, from.register)), at, true),
             Loc::Mem(cell) => {
@@ -2204,7 +2310,7 @@ pub fn emit_in(
     }
     // SETcc reads only the flags a compare left.
     if op == Operation::Unary && dests.len() == 1 && sources.is_empty() && name.starts_with("set") {
-        let code = _code(&format!("{}_RM8", name.to_uppercase()))?;
+        let code = code_of!(Upper(name), "_RM8")?;
         return match &dests[0] {
             Loc::Reg(into) if into.width == 1 => _assemble(&raised(create_reg(code, into.register)), at, true),
             Loc::Mem(cell) if cell.width == 1 => {
@@ -2463,7 +2569,7 @@ pub fn emit_in(
         return match (reg_of(&dests[0]), &sources[0]) {
             (Some(into), Loc::Address(cell)) => address_of(into, cell, at),
             (Some(into), Loc::Mem(cell)) => {
-                let code = _code(&format!("LEA_R{}_M", width_of(into)? * 8))?;
+                let code = code_of!("LEA_R", width_of(into)? * 8, "_M")?;
                 let (built, relocated) = operand_of(cell, at.bits)?;
                 _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
             }
@@ -2510,8 +2616,7 @@ pub fn emit_in(
             Loc::Reg(into) => pop(into.register, at),
             Loc::Mem(cell) => {
                 let built = operand_of(cell, at.bits);
-                let code =
-                    if [2, 4].contains(&cell.width) { _code(&format!("POP_RM{}", cell.width * 8)) } else { None };
+                let code = if [2, 4].contains(&cell.width) { code_of!("POP_RM", cell.width * 8) } else { None };
                 match (built, code) {
                     (Some((built, relocated)), Some(code)) => {
                         _assemble(&raised(create_mem(code, built)), at, relocated)
