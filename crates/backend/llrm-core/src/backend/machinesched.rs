@@ -781,4 +781,32 @@ mod tests {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
         assert_eq!(graph(&insns, regs, 32).preds[1], [0], "the set stays after the fcom");
     }
+
+    /// The audit of the two effects the re-land left unchecked. A shift by `cl`
+    /// writes the flags (the pin models it as a def), so a flag reader
+    /// after it stays after it; `fcmov` reads the flags, so it stays after
+    /// the compare that sets them.
+    #[test]
+    fn test_a_variable_shift_writes_flags_and_an_fcmov_reads_them() {
+        use super::{ARITHMETIC_FLAGS, liveness};
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
+        let cl = Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::CL, width: 1 });
+        let shift = insn(1, semantics(Operation::Binary, "shl", vec![held(3)], vec![held(3), cl]), vec![3], vec![3]);
+        let compare = insn(0, semantics(Operation::Compare, "cmp", vec![], vec![held(1), held(2)]), vec![], vec![1, 2]);
+        let carry =
+            insn(2, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(6)]), vec![5], vec![5, 6]);
+        let flags = crate::backend::peephole::Lanes::flags(ARITHMETIC_FLAGS);
+        let shift_effect = liveness::effect(regs, 32, &shift).expect("a shift by cl has a decoded effect");
+        assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
+        let g = graph(&[compare.clone(), shift, carry], regs, 32);
+        assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
+        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
+        let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
+        // Either its effect is unknown (a boundary) or it reads the flags the
+        // compare set.
+        let known = liveness::effect(regs, 32, &fcmov).map(|effect| !effect.all_reads().is_disjoint(&flags));
+        assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
+        let g = graph(&[compare, fcmov], regs, 32);
+        assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
+    }
 }
