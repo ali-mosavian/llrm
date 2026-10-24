@@ -50,9 +50,10 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
-    /// A `llrm.qb.` routine has a contract of its own (stack arguments, flags
-    /// results) that is not translated: a call of one is refused.
-    pub runtime_contracts: bool,
+    /// For a program whose ABI gives its runtime routines contracts: whether
+    /// the convention models each call of a `llrm.qb.` routine, by call. A call
+    /// not listed, or listed with a reason, is refused.
+    pub runtime_calls: Option<IdMap<InstId, Result<(), &'static str>>>,
 }
 
 impl BuilderTarget {
@@ -74,12 +75,12 @@ impl BuilderTarget {
         self
     }
 
-    /// This target refusing calls of `llrm.qb.` routines when `on`.
-    pub fn with_runtime_contracts(
+    /// This target with the verdict on each call of a runtime routine.
+    pub fn with_runtime_call_verdicts(
         mut self,
-        on: bool,
+        verdicts: Option<IdMap<InstId, Result<(), &'static str>>>,
     ) -> BuilderTarget {
-        self.runtime_contracts = on;
+        self.runtime_calls = verdicts;
         self
     }
 
@@ -111,7 +112,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
-            runtime_contracts: false,
+            runtime_calls: None,
         }
     }
 
@@ -125,7 +126,7 @@ impl BuilderTarget {
             libcalls: None,
             stack_align: None,
             float_store: false,
-            runtime_contracts: false,
+            runtime_calls: None,
         }
     }
 }
@@ -265,6 +266,7 @@ impl<'a> Builder<'a> {
         let name = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
         dag.block_names.resize(next_synthetic as usize, name);
         Builder {
+            current: None,
             module,
             function,
             layout,
@@ -290,6 +292,8 @@ impl<'a> Builder<'a> {
 }
 
 struct Builder<'a> {
+    /// The instruction being visited.
+    current: Option<InstId>,
     module: &'a Module,
     function: &'a Function,
     layout: &'a DataLayout,
@@ -707,12 +711,16 @@ impl Builder<'_> {
                     },
                 );
         }
-        if self.target.runtime_contracts
+        if let Some(verdicts) = &self.target.runtime_calls
             && direct
                 .and_then(|global| self.module.global(global).name.owned())
                 .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
         {
-            return Err(Refused("call of a QB runtime routine: its contract is not translated"));
+            match self.current.and_then(|inst| verdicts.get(&inst)) {
+                Some(Ok(())) => {}
+                Some(Err(why)) => return Err(Refused(why)),
+                None => return Err(Refused("call of a QB runtime routine nobody checked")),
+            }
         }
         let mut arg_types = Vec::new();
         for argument in arguments {
@@ -1225,6 +1233,7 @@ impl Builder<'_> {
         &mut self,
         inst: InstId,
     ) -> Result<(), Refused> {
+        self.current = Some(inst);
         let instruction = self.function.instruction(inst).clone();
         if instruction.opcode.is_terminator() {
             self.handle_phi_nodes_in_successor_blocks()?;
@@ -1431,34 +1440,50 @@ impl Builder<'_> {
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 (CastOp::AddrSpaceCast, Some(space)) if space == roles.near => {
-                    let (base, _) =
-                        llrm_mir::valuetracking::underlying(&self.module.context, self.layout, self.function, pointer);
-                    let framed = matches!(
-                        base,
-                        Operand::Value(value) if matches!(
-                            self.function.value(value).def,
-                            ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
-                        )
-                    );
-                    // a frame object is in SS; a global is in its own segment;
-                    // any other near pointer is into DGROUP
-                    let selector = match base {
-                        _ if framed => self.stack_selector(),
-                        Operand::Constant(id) => match self.module.context.get(id).kind {
-                            ConstantKind::Global(global) => self.segment_of(Some(global.0)),
-                            _ => self.segment_of(None),
-                        },
-                        _ => self.segment_of(None),
-                    };
+                    let selector = self.near_selector(pointer);
                     Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
                 }
                 _ => Err(Refused("cast to a far pointer")),
             };
         }
+        // a near pointer cast to the segment space (`VARSEG`) is the selector
+        // of its segment, not its offset
+        if op == CastOp::AddrSpaceCast
+            && roles.segment.is_some()
+            && to_space == roles.segment
+            && from_space.is_some_and(|space| space == roles.near || space == roles.stack)
+        {
+            return Ok(self.near_selector(pointer));
+        }
         // one word to one word: the near and stack spaces share their offsets
         match op {
             CastOp::AddrSpaceCast if from == dest => Ok(operand),
             _ => Err(Refused("cast between address spaces")),
+        }
+    }
+
+    /// The selector of the segment the near pointer `pointer` points into: a
+    /// frame object is in SS; a global is in its own segment; any other near
+    /// pointer is into DGROUP.
+    fn near_selector(
+        &mut self,
+        pointer: Operand,
+    ) -> SDValue {
+        let (base, _) = llrm_mir::valuetracking::underlying(&self.module.context, self.layout, self.function, pointer);
+        let framed = matches!(
+            base,
+            Operand::Value(value) if matches!(
+                self.function.value(value).def,
+                ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })
+            )
+        );
+        match base {
+            _ if framed => self.stack_selector(),
+            Operand::Constant(id) => match self.module.context.get(id).kind {
+                ConstantKind::Global(global) => self.segment_of(Some(global.0)),
+                _ => self.segment_of(None),
+            },
+            _ => self.segment_of(None),
         }
     }
 

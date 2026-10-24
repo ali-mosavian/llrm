@@ -39,6 +39,18 @@ impl Lowering for X86 {
         true
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.h#L243
+    // A float and an integer: two stores save two bitwise instructions and the
+    // float-to-int domain switch. Two integers are left out, as the pin does.
+    fn is_multi_stores_cheaper_than_bits_merge(
+        &self,
+        low: llrm_mir::lowering::Domain,
+        high: llrm_mir::lowering::Domain,
+    ) -> bool {
+        use llrm_mir::lowering::Domain::{Float, Integer};
+        matches!((low, high), (Float, Integer) | (Integer, Float))
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true
@@ -182,5 +194,18 @@ mod tests {
         assert!(!narrow.is_ext_free(Ext::ZExt, 32, 64) && wide.is_ext_free(Ext::ZExt, 32, 64));
         assert!(!wide.is_ext_free(Ext::ZExt, 16, 32) && !wide.is_ext_free(Ext::SExt, 32, 64));
         assert!(!wide.is_ext_free(Ext::FpExt, 32, 64));
+    }
+
+    /// Two stores beat the merge for a float and an integer, in either order;
+    /// two integers (or a vector) are left merged, as the pin does.
+    #[test]
+    fn test_x86_splits_a_merged_store_of_a_float_and_an_integer_only() {
+        use llrm_mir::lowering::Domain::{Float, Integer, Other};
+        let x86 = X86 { is_64bit: false };
+        assert!(x86.is_multi_stores_cheaper_than_bits_merge(Float, Integer));
+        assert!(x86.is_multi_stores_cheaper_than_bits_merge(Integer, Float));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Integer, Integer));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Float));
+        assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Other));
     }
 }
