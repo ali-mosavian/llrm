@@ -192,6 +192,14 @@ impl FunctionPass for CgpAddr {
             }
             None => false,
         };
+        // `optimizeInst`'s store case: a merged store is split before its
+        // address is sunk.
+        let split = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                crate::splitstore::merged_stores_split(unit.context, unit.layout, &*lowering, unit.function)
+            }
+            None => false,
+        };
         let addresses = match analyses.outer().target().tti() {
             Some(tti) => sunk(unit, &*tti),
             None => false,
@@ -199,7 +207,7 @@ impl FunctionPass for CgpAddr {
         if merged {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
-        } else if phis || branched || sunk_compares || masks || addresses || extended || sunk_casts {
+        } else if phis || branched || sunk_compares || masks || addresses || extended || sunk_casts || split {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and
