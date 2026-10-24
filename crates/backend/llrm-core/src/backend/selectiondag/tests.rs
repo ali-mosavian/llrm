@@ -26,6 +26,7 @@ mod div_by_constant;
 mod expand_node;
 mod ext_of_load;
 mod extract_element;
+mod setcc_i1_operands;
 mod extract_legal;
 mod far_access;
 mod far_call;
