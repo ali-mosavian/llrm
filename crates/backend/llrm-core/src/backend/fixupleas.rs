@@ -41,14 +41,21 @@ use crate::backend::peep::guards::{free_fields, lea_cell};
 use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, DeadAfter, id};
 use crate::backend::regthrash::_dead_after;
-use crate::model::ir::{Imm, Loc, Operation, Reg};
+use crate::model::ir::{AddressRef, Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// `INSTR_DISTANCE_THRESHOLD`: how far back a write still matters, in cycles.
 const INSTR_DISTANCE_THRESHOLD: u32 = 5;
 
-pub struct FixupLeas;
+/// The CPU inputs of `runOnMachineFunction`: `slow3OpsLEA`, `slowIncDec`, and
+/// whether the function is optimised for size.
+#[derive(Default)]
+pub struct FixupLeas {
+    pub slow_3ops: bool,
+    pub slow_incdec: bool,
+    pub size: bool,
+}
 
 impl LIRTransform for FixupLeas {
     fn class_name(&self) -> &'static str {
@@ -72,10 +79,16 @@ impl LIRTransform for FixupLeas {
             let mut at = 0;
             // `runOnMachineFunction`: every LEA of the block, in order.
             while at < current.insns.len() {
-                if is_lea(&current.insns[at])
-                    && let Some(rewritten) = opt_two_addr_lea(regs, &current, at, &dead)
-                {
-                    current = current.with_insns(rewritten);
+                if is_lea(&current.insns[at]) {
+                    let opt_inc_dec = !self.slow_incdec || self.size;
+                    let rewritten = opt_two_addr_lea(regs, &current, at, &dead, opt_inc_dec).or_else(|| {
+                        self.slow_3ops
+                            .then(|| process_instr_for_slow_3op_lea(regs, &current, at, &dead, opt_inc_dec))
+                            .flatten()
+                    });
+                    if let Some(rewritten) = rewritten {
+                        current = current.with_insns(rewritten);
+                    }
                 }
                 at += 1;
             }
@@ -155,13 +168,13 @@ pub fn search_alu_inst(
 /// `optTwoAddrLEA`: the block's instructions with the LEA at `at` made an
 /// `add`, `inc` or `dec` (cases 1 and 2) or, for case 3, `optLEAALU`'s two
 /// steps; `None` where the pin leaves it. No segment, scale above 1 or symbol
-/// displacement, and no flag read after it. `OptIncDec` is true on every
-/// target but `slow-incdec` ones, which row 100's x86-64 PR handles.
+/// displacement, and no flag read after it. `opt_inc_dec` is `OptIncDec`.
 pub fn opt_two_addr_lea(
     regs: Regs,
     block: &LirBlock,
     at: usize,
     dead: &DeadAfter,
+    opt_inc_dec: bool,
 ) -> Option<Vec<Arc<Insn>>> {
     let lea = &block.insns[at];
     let what = lea.what.as_ref()?;
@@ -187,7 +200,9 @@ pub fn opt_two_addr_lea(
     // Case 2: `lea r,[r+disp]` is `inc`, `dec` or `add r,disp`.
     if base == d.register && index == RegId::None {
         return match offset {
-            1 | -1 => made(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)]),
+            1 | -1 if opt_inc_dec => {
+                made(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)])
+            }
             _ => made(
                 Operation::Binary,
                 names.add,
@@ -200,6 +215,140 @@ pub fn opt_two_addr_lea(
         return opt_lea_alu(regs, block, at, dead);
     }
     None
+}
+
+/// `processInstrForSlow3OpLEA` (L752), for `slow-3ops-lea` CPUs (`x86-64`): a
+/// three-operand LEA, or one with an inefficient base, as one or two
+/// instructions; `None` where the pin leaves it. Deviations: no symbol
+/// displacement (the pin adds it as an immediate), and the flags are dead by
+/// the block's exact liveness where the pin scans four instructions
+/// (`computeRegisterLiveness(.., 4)`).
+pub fn process_instr_for_slow_3op_lea(
+    regs: Regs,
+    block: &LirBlock,
+    at: usize,
+    dead: &DeadAfter,
+    opt_inc_dec: bool,
+) -> Option<Vec<Arc<Insn>>> {
+    let lea = &block.insns[at];
+    let what = lea.what.as_ref()?;
+    let ([Loc::Reg(d)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    let (symbol, base, index, scale, offset) = lea_cell(source)?;
+    let three_ops = base != RegId::None && index != RegId::None && offset != 0;
+    if symbol
+        || !(three_ops || inefficient_lea_base(regs, base, index))
+        || !arithmetic_flags().is_subset(dead.get(&id(lea))?)
+        || !free_fields(lea, EXACT)
+    {
+        return None;
+    }
+    // LEA64_32r: 64-bit terms, a 32-bit result, added as the terms' low halves.
+    let wide = |register: RegId| register != RegId::None && regs.bytes(register) == Some(8);
+    let narrow = d.width == 4 && (wide(base) || wide(index));
+    let low = |register: RegId| if narrow { regs.view(regs.root(register), 32).unwrap_or(register) } else { register };
+    let term = |register: RegId| Loc::Reg(Reg { register: low(register), width: d.width });
+    let same = |a: RegId, b: RegId| a != RegId::None && regs.root(a) == regs.root(b);
+    let (is_scale1, ineff_base, ineff_index) =
+        (scale == 1, inefficient_lea_reg(regs, base), inefficient_lea_reg(regs, index));
+    let (dest_is_base, dest_is_index) = (same(d.register, base), same(d.register, index));
+    let base_or_index_is_dst = dest_is_base || dest_is_index;
+    if ineff_base && dest_is_base && !is_scale1 {
+        return None;
+    }
+    let names = alu_names();
+    let rebuilt =
+        |what_for: &dyn Fn(&Semantics) -> Semantics| Arc::new(Insn { what: Some(what_for(what)), ..(**lea).clone() });
+    let address = |through: RegId, index_through: RegId, scale: i64, offset: i64| {
+        Loc::Address(AddressRef { through, index_through, scale, offset, ..AddressRef::new(None) })
+    };
+    let lea_of = |through: RegId, index_through: RegId, scale: i64, offset: i64| {
+        rebuilt(&|what: &Semantics| Semantics {
+            sources: vec![address(through, index_through, scale, offset)],
+            ..what.clone()
+        })
+    };
+    let alu = |op: Operation, name: &'static str, sources: Vec<Loc>| {
+        rebuilt(&|what: &Semantics| Semantics {
+            op,
+            name: Some(name.into()),
+            dests: vec![Loc::Reg(*d)],
+            sources: sources.clone(),
+            ..what.clone()
+        })
+    };
+    // The add of the displacement the split LEA no longer carries.
+    let with_offset = |first: Arc<Insn>| {
+        let mut out = vec![first];
+        if offset != 0 {
+            out.push(match offset {
+                1 | -1 if opt_inc_dec => {
+                    alu(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)])
+                }
+                // ADD of +128 needs a 32-bit immediate, SUB of -128 fits the
+                // sign-extended byte.
+                128 => alu(
+                    Operation::Binary,
+                    names.sub,
+                    vec![Loc::Reg(*d), Loc::Imm(Imm { value: -128, width: d.width, address: None })],
+                ),
+                _ => alu(
+                    Operation::Binary,
+                    names.add,
+                    vec![Loc::Reg(*d), Loc::Imm(Imm { value: offset, width: d.width, address: None })],
+                ),
+            });
+        }
+        out
+    };
+    let steps: Vec<Arc<Insn>> =
+        if is_scale1 && same(base, index) && (offset != 0 || (ineff_base && !base_or_index_is_dst)) {
+            // `lea D(%base,%base)` is `lea D(,%base,2)`.
+            vec![lea_of(RegId::None, index, 2, offset)]
+        } else if is_scale1 && base_or_index_is_dst {
+            // `lea (%base,%index),%base` is `add %index,%base`.
+            let other = if dest_is_base { index } else { base };
+            with_offset(alu(Operation::Binary, names.add, vec![Loc::Reg(*d), term(other)]))
+        } else if !ineff_base || (!ineff_index && is_scale1) {
+            // An inefficient base trades places with the index; otherwise the
+            // offset is split off.
+            let (through, index_through) = if ineff_base { (index, base) } else { (base, index) };
+            with_offset(lea_of(through, index_through, scale, 0))
+        } else {
+            // The rest has an inefficient base that is not the destination.
+            if narrow {
+                return None;
+            }
+            if is_scale1 && offset == 0 {
+                // `lea (%base,%index),%dst` is `mov %base,%dst; add
+                // %index,%dst`.
+                vec![
+                    rebuilt(&|what: &Semantics| Semantics {
+                        op: Operation::Move,
+                        name: Some("mov".into()),
+                        dests: vec![Loc::Reg(*d)],
+                        sources: vec![Loc::Reg(Reg { register: base, width: d.width })],
+                        ..what.clone()
+                    }),
+                    alu(Operation::Binary, names.add, vec![Loc::Reg(*d), term(index)]),
+                ]
+            } else {
+                // `lea off(%base,%index,scale),%dst` is `lea
+                // off(,%index,scale),%dst; add %base,%dst`.
+                vec![
+                    lea_of(RegId::None, index, scale, offset),
+                    alu(Operation::Binary, names.add, vec![Loc::Reg(*d), term(base)]),
+                ]
+            }
+        };
+    let mut out = Vec::with_capacity(block.insns.len() + 1);
+    for (position, one) in block.insns.iter().enumerate() {
+        if position == at {
+            out.extend(steps.iter().cloned());
+        } else {
+            out.push(Arc::clone(one));
+        }
+    }
+    Some(out)
 }
 
 /// `optLEAALU`: the block's instructions with the LEA at `lea` and its add or
@@ -277,13 +426,21 @@ pub fn is_lea(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Address && what.name.as_deref() == Some("lea"))
 }
 
-/// `isInefficientLEAReg` with `hasInefficientLEABaseReg`: a base of EBP with an
-/// index register (`R13` has no counterpart before x86-64).
+/// `isInefficientLEAReg`: EBP and R13 in any width, by their roots.
+pub fn inefficient_lea_reg(
+    regs: Regs,
+    register: RegId,
+) -> bool {
+    register != RegId::None && [RegId::EBP, RegId::R13].iter().any(|bad| regs.root(register) == regs.root(*bad))
+}
+
+/// `hasInefficientLEABaseReg`: an inefficient base with an index register.
 pub fn inefficient_lea_base(
+    regs: Regs,
     base: RegId,
     index: RegId,
 ) -> bool {
-    base == RegId::EBP && index != RegId::None
+    inefficient_lea_reg(regs, base) && index != RegId::None
 }
 
 /// The mnemonics the opcode maps give for a LEA: `ADDrr`, `SUBrr`, `ADDri`,
@@ -589,7 +746,7 @@ mod tests {
     #[test]
     fn the_pass_leaves_a_body_alone() {
         let b = LirBody::new("f", 0, vec![block(vec![lea(0)], vec![]).into()], Default::default(), Default::default());
-        assert_eq!(FixupLeas.transform(b.clone()).unwrap(), b);
+        assert_eq!(FixupLeas::default().transform(b.clone()).unwrap(), b);
     }
 
     fn lea_of(
@@ -625,9 +782,9 @@ mod tests {
 
     #[test]
     fn an_ebp_base_with_an_index_is_inefficient() {
-        assert!(inefficient_lea_base(RegId::EBP, RegId::ECX));
-        assert!(!inefficient_lea_base(RegId::EBP, RegId::None));
-        assert!(!inefficient_lea_base(RegId::EAX, RegId::ECX));
+        assert!(inefficient_lea_base(regs(), RegId::EBP, RegId::ECX));
+        assert!(!inefficient_lea_base(regs(), RegId::EBP, RegId::None));
+        assert!(!inefficient_lea_base(regs(), RegId::EAX, RegId::ECX));
     }
 
     #[test]
@@ -675,5 +832,127 @@ mod tests {
         );
         let found = check_reg_usage(regs(), &b, 0, 2, &DeadAfter::default());
         assert!(found.alu_dest_ref && !found.base_index_def && found.killed_base.is_none());
+    }
+
+    /// The register file and a body of one block at x86-64.
+    fn regs64() -> Regs {
+        Regs(&llrm_x86_m64::REGISTER_INFO)
+    }
+
+    fn lea64(
+        dest: (RegId, u32),
+        through: RegId,
+        index_through: RegId,
+        scale: i64,
+        offset: i64,
+    ) -> Arc<Insn> {
+        let address = crate::model::ir::AddressRef {
+            through,
+            index_through,
+            scale,
+            offset,
+            ..crate::model::ir::AddressRef::new(None)
+        };
+        insn(0, Operation::Address, "lea", vec![reg(dest.0, dest.1)], vec![Loc::Address(address)])
+    }
+
+    /// The pass on one LEA at `-march=x86-64`: each result instruction as `name
+    /// dest, sources`.
+    fn split(lea: Arc<Insn>) -> Vec<String> {
+        // A compare that writes every flag, and a return that reads only rax:
+        // the rest is dead after the LEA.
+        let compare = insn(
+            1,
+            Operation::Compare,
+            "cmp",
+            vec![],
+            vec![reg(RegId::RDI, 8), Loc::Imm(Imm { value: 8, width: 8, address: None })],
+        );
+        let ret = Arc::new(Insn {
+            requires: vec![(crate::model::ir::Held { value: 7, width: 8 }, RegId::RAX)],
+            reads_complete: true,
+            ..Insn::new(2, Some((2, 2)), Some(Semantics::new(Operation::Return)), vec![], vec![7])
+        });
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![block(vec![lea, compare, ret], vec![]).into()],
+            Default::default(),
+            Default::default(),
+        );
+        body.registers = Some(regs64());
+        body.bits = 64;
+        let done = FixupLeas { slow_3ops: true, ..FixupLeas::default() }.transform(body).expect("the pass cannot fail");
+        let all = &done.blocks[0].insns;
+        all[..all.len() - 2]
+            .iter()
+            .map(|one| {
+                let what = one.what.as_ref().unwrap();
+                let show = |loc: &Loc| match loc {
+                    Loc::Reg(r) => regs64().name(r.register).unwrap_or("?").to_owned(),
+                    Loc::Imm(i) => i.value.to_string(),
+                    Loc::Address(a) => format!(
+                        "[{}+{}*{}{:+}]",
+                        regs64().name(a.through).unwrap_or("-"),
+                        regs64().name(a.index_through).unwrap_or("-"),
+                        a.scale,
+                        a.offset
+                    ),
+                    _ => "?".into(),
+                };
+                format!(
+                    "{} {}, {}",
+                    what.name.as_deref().unwrap(),
+                    what.dests.iter().map(show).collect::<Vec<_>>().join(","),
+                    what.sources.iter().map(show).collect::<Vec<_>>().join(",")
+                )
+            })
+            .collect()
+    }
+
+    /// The pinned clang at `-target x86_64-linux-gnu` (generic tuning) gives,
+    /// for `a + b*4 + 7`, `lea (%rdi,%rsi,4),%rax; add $7,%rax`: a
+    /// three-operand LEA takes three cycles. Without the case it stayed one
+    /// LEA.
+    #[test]
+    fn a_three_operand_lea_is_a_lea_and_an_add_at_x86_64() {
+        let (rax, rdi, rsi) = ((RegId::RAX, 8), RegId::RDI, RegId::RSI);
+        assert_eq!(split(lea64(rax, rdi, rsi, 4, 7)), ["lea rax, [rdi+rsi*4+0]", "add rax, rax,7"]);
+        assert_eq!(split(lea64(rax, rdi, rsi, 8, -3)), ["lea rax, [rdi+rsi*8+0]", "add rax, rax,-3"]);
+        assert_eq!(split(lea64(rax, rdi, rsi, 1, 1)), ["lea rax, [rdi+rsi*1+0]", "inc rax, rax"]);
+        assert_eq!(split(lea64(rax, rdi, rsi, 1, -1)), ["lea rax, [rdi+rsi*1+0]", "dec rax, rax"]);
+        // ADD of +128 needs a 32-bit immediate, SUB of -128 does not.
+        assert_eq!(split(lea64(rax, rdi, rsi, 1, 128)), ["lea rax, [rdi+rsi*1+0]", "sub rax, rax,-128"]);
+    }
+
+    /// `a + a + 5` is `lea 5(,%rdi,2),%rax`: one instruction, no base.
+    #[test]
+    fn a_lea_of_one_register_twice_is_a_scaled_index() {
+        assert_eq!(split(lea64((RegId::RAX, 8), RegId::RDI, RegId::RDI, 1, 5)), ["lea rax, [-+rdi*2+5]"]);
+    }
+
+    /// `lea (%rax,%rsi,1),%rax` is `add %rsi,%rax`, then the displacement.
+    #[test]
+    fn a_three_operand_lea_that_writes_its_base_is_adds() {
+        let (rax, rsi) = ((RegId::RAX, 8), RegId::RSI);
+        assert_eq!(split(lea64(rax, RegId::RAX, rsi, 1, 7)), ["add rax, rax,rsi", "add rax, rax,7"]);
+        assert_eq!(split(lea64(rax, rsi, RegId::RAX, 1, 7)), ["add rax, rax,rsi", "add rax, rax,7"]);
+    }
+
+    /// An RBP or R13 base takes a displacement byte: `lea (%rbp,%rsi),%rax` is
+    /// `mov %rbp,%rax; add %rsi,%rax`, and with a scale `lea (,%rsi,4),%rax;
+    /// add %rbp,%rax`.
+    #[test]
+    fn an_inefficient_base_is_moved_or_swapped() {
+        let rax = (RegId::RAX, 8);
+        assert_eq!(split(lea64(rax, RegId::RBP, RegId::RSI, 1, 0)), ["lea rax, [rsi+rbp*1+0]"]);
+        assert_eq!(split(lea64(rax, RegId::R13, RegId::RBP, 1, 0)), ["mov rax, r13", "add rax, rax,rbp"]);
+        assert_eq!(split(lea64(rax, RegId::R13, RegId::RBP, 4, 0)), ["lea rax, [-+rbp*4+0]", "add rax, rax,r13"]);
+    }
+
+    /// A two-operand LEA, or one with no flag free, is the pin's to leave.
+    #[test]
+    fn a_two_operand_lea_is_left_alone_at_x86_64() {
+        assert_eq!(split(lea64((RegId::RAX, 8), RegId::RDI, RegId::RSI, 4, 0)), ["lea rax, [rdi+rsi*4+0]"]);
     }
 }

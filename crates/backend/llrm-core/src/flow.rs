@@ -256,7 +256,11 @@ pub fn machine_with<'a>(
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
-        Box::new(crate::backend::fixupleas::FixupLeas),
+        Box::new(crate::backend::fixupleas::FixupLeas {
+            slow_3ops: target.slow_3ops_lea(),
+            size: target.size,
+            ..Default::default()
+        }),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.

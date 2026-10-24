@@ -57,5 +57,6 @@ fixtures = []
 llrm-core = { path = ".", features = ["fixtures"] }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
+llrm-x86-m64 = { workspace = true }
 llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }

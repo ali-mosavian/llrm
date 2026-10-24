@@ -35,14 +35,17 @@
 //! which fold an adjacent stack update into this one, are not translated: a
 //! function of the frame alone sees no neighbour.
 //!
-//! DEVIATE CG7 (slot table row 80): nothing calls this until frames carry
-//! frame indices (FI-1, docs/working/pei-plan.md).
+//! DEVIATE CG7 (slot table row 80): `masm::parts` calls this for the flat
+//! m32 frames built at entry (`saved_first`); every other frame (16-bit, the
+//! runtime's, interrupt, inline-code, shrink-wrapped) keeps `parts`' own
+//! sequence, and cells are not yet frame indices (FI-1,
+//! docs/working/pei-plan.md).
 //!
 //! # Example
 //! The unit test `a_frame_with_saved_registers_pushes_and_pops_them`.
 //!
 //! # Used by
-//! Nothing yet (CG7).
+//! `masm::lowered`, for `saved_first` frames.
 
 /// A register, by whatever number the caller gives it.
 pub type Reg = u32;
