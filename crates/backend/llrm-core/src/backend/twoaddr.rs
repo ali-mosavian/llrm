@@ -116,7 +116,7 @@ pub fn tied(
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
     for (at, block) in body.blocks.iter().enumerate() {
-        let mut walk = crate::twoaddress::Commuter::new(&facts, at);
+        let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;

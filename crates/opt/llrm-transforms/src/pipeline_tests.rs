@@ -2809,3 +2809,22 @@ fn lsr_runs_on_simplified_loops_in_lcssa_form() {
         assert_eq!(names.last(), Some(&"opened"), "the exit phis go again: {names:?}");
     }
 }
+
+/// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)
+/// and cost 16.4 M Ir at d_faces; the default pipeline ran both. They are off
+/// at every level until `-fllrm-spares` / `-fllrm-homes`
+/// (docs/working/homes-spares.md).
+#[test]
+fn the_llrm_only_module_passes_are_off_by_default_at_every_level() {
+    for level in [
+        pipeline::Options::none(),
+        pipeline::Options::basic(),
+        pipeline::Options::standard(),
+        pipeline::Options::speed(),
+        pipeline::Options::aggressive(),
+        pipeline::Options::size(),
+        pipeline::Options::min_size(),
+    ] {
+        assert!(!level.spare_loads && !level.stored_homes);
+    }
+}

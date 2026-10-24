@@ -181,14 +181,12 @@ fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
     );
 }
 
-/// matmul8: peeling left the outer counter's step behind `phi(x, x)`, and
-/// after unrolling an inner loop its exit phi stayed: no trip count through
-/// the one, no unrolling past the other, so both loop nests stayed rolled.
+/// LLVM's formLCSSA only adds phis; the one that names a single value is
+/// InstCombine's to remove. `closed` removed it, as did llrm's LCSSA before
+/// every loop pass: a step the pin's pass does not have.
 #[test]
-fn test_a_phi_naming_one_value_outside_a_loop_exit_is_that_value() {
-    assert_eq!(
-        closed_once(
-            "define i16 @f(i16 %x, i1 %c) {
+fn test_closing_a_loop_leaves_a_phi_naming_one_value_outside_its_exits() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
 
@@ -207,27 +205,8 @@ b4:
   %read = add i16 %copied, 1
   ret i16 %read
 }
-"
-        ),
-        "define i16 @f(i16 %x, i1 %c) {
-b0:
-  br i1 %c, label %b1, label %b2
-
-b1:
-  br label %b3
-
-b2:
-  br label %b3
-
-b3:
-  br label %b4
-
-b4:
-  %read = add i16 %x, 1
-  ret i16 %read
-}
-"
-    );
+";
+    assert_eq!(closed_once(text), text);
 }
 
 /// An inner loop closes first, so the outer loop's exit reads the inner

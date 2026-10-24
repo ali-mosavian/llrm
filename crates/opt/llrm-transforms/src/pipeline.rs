@@ -186,6 +186,14 @@ pub struct Options {
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
+    /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
+    /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
+    /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
+    pub spare_loads: bool,
+    /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
+    /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
+    /// (no number), 8.4 M Ir at d_faces.
+    pub stored_homes: bool,
     pub promote: bool,
     pub strength: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
@@ -287,6 +295,8 @@ impl Default for Options {
             pre: true,
             drop_stores: true,
             sink: true,
+            spare_loads: false,
+            stored_homes: false,
             promote: true,
             strength: true,
             lsr: true,
@@ -1177,8 +1187,12 @@ pub fn recorded(
         });
     }
     // Last: what it names are the instructions selection sees.
-    manager.add_module(crate::spares::Spares);
-    manager.add_module(crate::homes::Homes);
+    if applied.options.spare_loads {
+        manager.add_module(crate::spares::Spares);
+    }
+    if applied.options.stored_homes {
+        manager.add_module(crate::homes::Homes);
+    }
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
         for module in &program.modules {
