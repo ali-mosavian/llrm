@@ -122,11 +122,20 @@ impl Checker {
                     .get(&key)
                     .is_some_and(|vars| vars.iter().any(|v| v.rank.is_none() && v.shared)));
         if self.consts.contains_key(&key) {
-            self.err(span, "Duplicate definition");
+            self.err_because(
+                span,
+                "Duplicate definition",
+                Reason::headline("`{name}` is already defined as a CONST").help("give the constant a different name"),
+            );
             return;
         }
         if scalar_in_use {
-            self.err(span, "Syntax error");
+            self.err_because(
+                span,
+                "Syntax error",
+                Reason::headline("`{name}` is already used as a variable, so it cannot become a CONST")
+                    .help("give the CONST a name no variable has"),
+            );
             return;
         }
         let ty = match Ty::of_suffix(name) {

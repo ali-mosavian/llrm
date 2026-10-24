@@ -14,7 +14,12 @@ impl Checker {
             return None;
         }
         if typed.array.is_some() {
-            self.err(span, "Syntax error");
+            self.err_because(
+                span,
+                "Syntax error",
+                Reason::headline("`{text}` is a whole array, but a single value is needed here")
+                    .help("write an index, as in `name(1)`; a whole array is only passed as `name()` in a call"),
+            );
             return None;
         }
         Some(typed)
@@ -62,7 +67,12 @@ impl Checker {
     ) -> Option<Typed> {
         match expr {
             Expr::Omitted(span) => {
-                self.err(*span, "Syntax error");
+                self.err_because(
+                    *span,
+                    "Syntax error",
+                    Reason::headline("a value is missing here: an argument cannot be left empty")
+                        .help("give the argument a value, or remove the extra comma"),
+                );
                 None
             }
             Expr::Literal(literal, _) => Some(match literal {
@@ -83,7 +93,7 @@ impl Checker {
                 Literal::Real(text, _) => {
                     let constant = parse_real(text);
                     if constant.is_some_and(|c| c.abs() > f64::from(f32::MAX)) {
-                        self.err(expr.span(), "Math overflow");
+                        self.overflow(expr.span(), &Ty::Single, "number");
                     }
                     Typed { constant, ..Typed::value(Ty::Single) }
                 }
@@ -234,7 +244,12 @@ impl Checker {
         let value = match fold::binary(op, l, r) {
             Ok(value) => value,
             Err(()) => {
-                self.err(span, "Math overflow");
+                self.err_because(
+                    span,
+                    "Math overflow",
+                    Reason::headline("`{text}` overflows: BC works out the constant while compiling and the result does not fit")
+                        .help("widen an operand: `&` makes a number a LONG, `#` a double"),
+                );
                 return None;
             }
         };
@@ -293,9 +308,15 @@ impl Checker {
             return Some(Typed { ty: Ty::Variant, variable: true, constant: None, unfolded: None, array: None });
         }
         let Ty::Record(record) = &base_typed.ty else {
-            self.err(span, "Type mismatch");
+            let headline = format!("`{{text}}` has a `.{name}` after {}, which is not a record", base_typed.ty.label());
+            self.err_because(
+                span,
+                "Type mismatch",
+                Reason::headline(headline).help("a dot selects a field, and only a variable declared AS a TYPE has fields"),
+            );
             return None;
         };
+        let record_name = record.clone();
         let record = self.records.get(record).cloned().unwrap_or(Record { fields: Vec::new(), opaque: true, bytes: 0 });
         if record.opaque {
             return Some(Typed { ty: Ty::Variant, variable: true, constant: None, unfolded: None, array: None });
@@ -310,7 +331,12 @@ impl Checker {
                 Some(Typed { ty: ty.clone(), variable: true, constant: None, unfolded: None, array: *rank })
             }
             None => {
-                self.err(span, "Element not defined");
+                self.err_because(
+                    span,
+                    "Element not defined",
+                    Reason::headline(format!("`{{text}}` is not a field of the record type `{record_name}`"))
+                        .help("check the field names in its TYPE statement"),
+                );
                 None
             }
         }
@@ -461,7 +487,12 @@ impl Checker {
                 self.check_arguments(name, &procedure, arguments, span, false);
                 return procedure.result.map(Typed::value);
             }
-            self.err(span, "Type mismatch");
+            self.err_because(
+                span,
+                "Type mismatch",
+                Reason::headline("`{name}` is a SUB and returns no value, so it cannot be used in an expression")
+                    .help("use a FUNCTION, or call the SUB as a statement"),
+            );
             return None;
         }
         if sigs::function_unknown_but_named(name) {

@@ -37,7 +37,12 @@ impl Checker {
                     // a procedure's RETURN takes no label: it cannot leave a
                     // procedure
                     if name == "RETURN" && !arguments.is_empty() && self.procedure.is_some() {
-                        self.err(span, "Subprogram error");
+                        self.err_because(
+                            span,
+                            "Subprogram error",
+                            Reason::headline("`RETURN label` cannot be used inside a SUB or FUNCTION: it would leave the procedure")
+                                .help("use a plain `RETURN`, or move the GOSUB and its label into the procedure"),
+                        );
                         return;
                     }
                     self.spec(arguments, spec, span);

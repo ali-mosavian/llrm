@@ -128,6 +128,7 @@ impl Ast<'_> {
         let mut then_branch = Vec::new();
         let mut else_branch = Vec::new();
         let mut in_else = false;
+        self.blocks.push(Open { what: "block IF", closer: "END IF", span });
         loop {
             self.skip_separators();
             let closer = self.is(Kw::ELSE) || self.is(Kw::ELSEIF) || (self.is(Kw::END) && self.is_n(1, Kw::IF));
@@ -155,11 +156,13 @@ impl Ast<'_> {
                     return self.fail();
                 }
                 else_branch.push(nested.remove(0));
+                self.blocks.pop();
                 self.out.push(Statement::If { condition, then_branch, else_branch, span });
                 return Ok(());
             }
             if self.is(Kw::END) && self.is_n(1, Kw::IF) {
                 self.i += 2;
+                self.blocks.pop();
                 break;
             }
             if self.i >= self.tokens.len() {
@@ -195,7 +198,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
+        self.blocks.push(Open { what: "FOR loop", closer: "NEXT", span: self.span(keyword) });
         let body = self.collect_until(|ast| ast.is(Kw::NEXT))?;
+        self.blocks.pop();
         self.i += 1;
         let mut next_variable = None;
         if let (Some(Tok::Ident), TokenKind::Identifier(name)) = (self.tok_n(0), &self.tokens[self.i].kind) {
@@ -212,7 +217,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
+        self.blocks.push(Open { what: "WHILE loop", closer: "WEND", span: self.span(keyword) });
         let body = self.collect_until(|ast| ast.is(Kw::WEND))?;
+        self.blocks.pop();
         self.i += 1;
         self.out.push(Statement::While { condition, body, span: self.span(keyword) });
         Ok(())
@@ -230,7 +237,9 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
+        self.blocks.push(Open { what: "DO loop", closer: "LOOP", span: self.span(keyword) });
         let body = self.collect_until(|ast| ast.is(Kw::LOOP))?;
+        self.blocks.pop();
         self.i += 1;
         let post = if self.eat(Kw::WHILE) {
             Some((true, self.exp()?))
@@ -253,6 +262,7 @@ impl Ast<'_> {
         if !(self.eat(Kw::NewLine) || self.separator()) {
             return self.fail();
         }
+        self.blocks.push(Open { what: "SELECT CASE", closer: "END SELECT", span: self.span(keyword) });
         let mut arms = Vec::new();
         let mut otherwise = Vec::new();
         let mut otherwise_seen = false;
@@ -260,6 +270,7 @@ impl Ast<'_> {
             self.skip_separators();
             if self.at_end_select() {
                 self.i += 2;
+                self.blocks.pop();
                 break;
             }
             // nothing but END SELECT follows CASE ELSE

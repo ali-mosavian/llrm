@@ -86,7 +86,18 @@ struct Where {
     at_end: bool,
     /// The source on this line before the error, without trailing blanks.
     before: String,
+    /// The error is at the first word of its statement.
+    starts: bool,
+    /// The name the statement is about: the first word that is no statement
+    /// keyword (`p` in `SUB p (a%)`).
+    name: String,
 }
+
+/// Words that begin a statement and are followed by the name it is about.
+const LEADING: &[&str] = &[
+    "SUB", "FUNCTION", "TYPE", "DECLARE", "CALL", "STATIC", "SHARED", "DIM", "REDIM", "COMMON", "CONST", "DEF", "END",
+    "EXIT", "ERASE", "SELECT", "CASE", "GOTO", "GOSUB", "RETURN",
+];
 
 fn locate(
     source: &str,
@@ -114,10 +125,40 @@ fn locate(
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect();
-    let statement = if word.is_empty() || word.len() < 2 { String::new() } else { word.to_ascii_uppercase() };
+    let starts = word.is_empty();
+    let rest: String = chars[span.start.min(chars.len())..].iter().collect();
+    let rest = rest.trim();
+    let first_word = |s: &str| -> String { s.chars().take_while(|c| c.is_ascii_alphabetic()).collect() };
+    let statement = match (word.len() < 2, first_word(rest)) {
+        (true, first) if first.len() >= 2 && starts => first.to_ascii_uppercase(),
+        (true, _) => String::new(),
+        _ => word.to_ascii_uppercase(),
+    };
+    // the name: skip the statement keywords at the start of the rest
+    let mut name = String::new();
+    let mut words = rest.split_whitespace();
+    while let Some(candidate) = words.next() {
+        let bare = candidate.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+        if LEADING.contains(&bare.to_ascii_uppercase().as_str()) {
+            continue;
+        }
+        name = candidate
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '%' | '&' | '!' | '#' | '@'))
+            .collect();
+        break;
+    }
+    // a lone keyword stands for its whole statement
+    let mut shown = text.trim().to_owned();
+    if LEADING.contains(&shown.to_ascii_uppercase().as_str()) && !rest.is_empty() {
+        let end = rest.find(':').unwrap_or(rest.len());
+        shown = rest[..end].trim().chars().take(60).collect();
+    }
     let before: String = chars[..span.start.min(chars.len())].iter().collect();
     Where {
-        text: text.trim().to_owned(),
+        starts,
+        name,
+        text: shown,
         statement,
         at_end: span.start >= chars.len() || text.trim().is_empty(),
         before: before.trim_end().to_owned(),
@@ -151,11 +192,7 @@ fn fill(
     other: &str,
 ) -> String {
     let statement = if place.statement.is_empty() { "this".to_owned() } else { place.statement.clone() };
-    let name: String = place
-        .text
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '%' | '&' | '!' | '#' | '@'))
-        .collect();
+    let name = if place.name.is_empty() { place.text.clone() } else { place.name.clone() };
     template
         .replace("{text}", &place.text)
         .replace("{name}", &name)
@@ -170,7 +207,7 @@ fn syntax(
     place: &Where,
 ) -> (String, String) {
     // an error at the statement's own first word names that word
-    let first = place.statement.is_empty() && place.text.chars().all(|c| c.is_ascii_alphabetic()) && !place.text.is_empty();
+    let first = place.starts && place.text.chars().all(|c| c.is_ascii_alphabetic()) && !place.text.is_empty();
     let own = if first { place.text.to_ascii_uppercase() } else { place.statement.clone() };
     let statement = if own.is_empty() { "statement".to_owned() } else { format!("{own} statement") };
     let found = if place.at_end { "the end of the line".to_owned() } else { format!("`{}`", place.text) };
@@ -208,7 +245,13 @@ pub fn explain(
     // with no variable)
     let variant = format!("{} /end", error.code);
     let entry = place.at_end.then(|| table().get(variant.as_str())).flatten().or_else(|| table().get(error.code.as_str()));
-    let other = error.related.map(|span| locate(source, span).text).unwrap_or_default();
+    let other = error
+        .related
+        .map(|span| {
+            let place = locate(source, span);
+            if place.name.is_empty() { place.text } else { place.name }
+        })
+        .unwrap_or_default();
     let (summary, help) = match entry {
         Some((summary, help)) => (fill(summary, &place, &other), fill(help, &place, &other)),
         None if error.code == "Syntax error" => syntax(&error, &place),

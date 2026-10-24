@@ -82,7 +82,96 @@ pub fn parse(
         // what the parser wanted where it stopped, when it knew
         error.expected =
             ast.expected.filter(|(index, _)| *index == at).map(|(_, wanted)| crate::front::explain::describe(wanted));
+        // the end of the file inside a block or a procedure: it was never closed
+        if at >= tokens.len() && error.code == "Syntax error" {
+            if let Some(open) = ast.blocks.last() {
+                error.span = open.span;
+                error.headline = Some(format!("this {} is never closed", open.what));
+                error.detail = Some(format!("end it with `{}`", open.closer));
+            } else if let Some(procedure) = ast.open_procedure.and_then(|index| ast.procedures.get(index)) {
+                let (what, closer) = match procedure.kind {
+                    ProcedureKind::Function => ("FUNCTION", "END FUNCTION"),
+                    _ => ("SUB", "END SUB"),
+                };
+                error.span = procedure.span;
+                error.headline = Some(format!("this {what} is never closed"));
+                error.detail = Some(format!("end it with `{closer}`"));
+            }
+        }
+        // a closer with nothing to close, or with another block still open
+        if error.code == "Syntax error" && error.headline.is_none() {
+            if let Some((closer, opener)) = closer_at(&tokens, at) {
+                match ast.blocks.last().filter(|open| open.closer != closer) {
+                    Some(open) if open.what == "block IF" && matches!(closer.as_str(), "ELSE" | "ELSEIF") => {
+                        error.headline = Some(format!("`{closer}` comes after the ELSE of the same block IF"));
+                        error.detail = Some("a block IF has at most one ELSE, and every ELSEIF comes before it".into());
+                    }
+                    Some(open) => {
+                        error.headline = Some(format!("`{closer}` comes while the {} is still open", open.what));
+                        error.detail = Some(format!("close the {} with `{}` first", open.what, open.closer));
+                    }
+                    None if ast.blocks.is_empty() => {
+                        error.headline = Some(format!("`{closer}` belongs to a {opener}, but none is open here"));
+                        error.detail = Some(format!("remove the `{closer}`, or add the {opener} above it"));
+                    }
+                    None => {}
+                }
+            }
+        }
+        // inside a TYPE every line is `name AS type`
+        if error.code == "Syntax error" && error.headline.is_none() && ast.blocks.last().is_some_and(|open| open.what == "TYPE") {
+            error.headline = Some("this line is not a valid field of the TYPE".into());
+            error.detail = Some(
+                "write each field as `name AS type`; an array field as `name(bounds) AS type`; a fixed string as `name AS STRING * length`"
+                    .into(),
+            );
+        }
         error
+    })
+}
+
+/// The closing statement the parse stopped at, and the block it closes:
+/// `NEXT` (a FOR loop), `END IF` (a block IF). The index may name the second
+/// word of `END IF`.
+fn closer_at(
+    tokens: &[Token],
+    at: usize,
+) -> Option<(String, &'static str)> {
+    let word = |index: usize| match tokens.get(index).map(|token| &token.kind) {
+        Some(TokenKind::Reserved(word)) => Some(*word),
+        _ => None,
+    };
+    // `END SUB` at the end of a line: the index is at the line end
+    let at = match (word(at), at.checked_sub(1).and_then(word)) {
+        (None | Some(Kw::NewLine), Some(Kw::IF | Kw::SELECT | Kw::SUB | Kw::FUNCTION | Kw::DEF | Kw::TYPE)) => at - 1,
+        _ => at,
+    };
+    let (start, first) = match word(at)? {
+        Kw::IF | Kw::SELECT | Kw::SUB | Kw::FUNCTION | Kw::DEF | Kw::TYPE if at > 0 && word(at - 1) == Some(Kw::END) => {
+            (at - 1, Kw::END)
+        }
+        other => (at, other),
+    };
+    Some(match first {
+        Kw::NEXT => ("NEXT".into(), "FOR loop"),
+        Kw::WEND => ("WEND".into(), "WHILE loop"),
+        Kw::LOOP => ("LOOP".into(), "DO loop"),
+        Kw::CASE => ("CASE".into(), "SELECT CASE"),
+        Kw::ELSE => ("ELSE".into(), "block IF"),
+        Kw::ELSEIF => ("ELSEIF".into(), "block IF"),
+        Kw::END => {
+            let (second, opener) = match word(start + 1)? {
+                Kw::IF => ("IF", "block IF"),
+                Kw::SELECT => ("SELECT", "SELECT CASE"),
+                Kw::SUB => ("SUB", "SUB"),
+                Kw::FUNCTION => ("FUNCTION", "FUNCTION"),
+                Kw::DEF => ("DEF", "DEF FN"),
+                Kw::TYPE => ("TYPE", "TYPE"),
+                _ => return None,
+            };
+            (format!("END {second}"), opener)
+        }
+        _ => return None,
     })
 }
 
@@ -199,6 +288,17 @@ struct Ast<'a> {
     /// A QuickrBASIC slice or format string was read: the program needs the
     /// prelude.
     prelude: bool,
+    /// The block statements still open, innermost last: a parse that stops at
+    /// the end of the file names the one it was waiting to close.
+    blocks: Vec<Open>,
+}
+
+/// A block statement that has begun and not yet ended.
+#[derive(Clone, Copy)]
+struct Open {
+    what: &'static str,
+    closer: &'static str,
+    span: Span,
 }
 
 impl<'a> Ast<'a> {
@@ -224,6 +324,7 @@ impl<'a> Ast<'a> {
             expected: None,
             reason: None,
             prelude: false,
+            blocks: Vec::new(),
         }
     }
 }

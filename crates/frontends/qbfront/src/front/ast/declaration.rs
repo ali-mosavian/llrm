@@ -376,10 +376,12 @@ impl Ast<'_> {
             self.expect(Kw::NewLine)?;
         }
         let mut fields = Vec::new();
+        self.blocks.push(Open { what: "TYPE", closer: "END TYPE", span: self.span(keyword) });
         loop {
             self.skip_separators();
             if self.is(Kw::END) && self.is_n(1, Kw::TYPE) {
                 self.i += 2;
+                self.blocks.pop();
                 break;
             }
             let at = self.i;

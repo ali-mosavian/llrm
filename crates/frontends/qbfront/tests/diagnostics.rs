@@ -27,7 +27,7 @@ fn a_reserved_word_used_as_a_name_is_named_with_the_remedy() {
 fn an_array_used_before_it_is_dimensioned_names_the_array() {
     let (at, error) = refused("y% = z%(3)\r\n", Dialect::QuickBasic45);
     assert_eq!(at, "1:6");
-    assert!(error.message.contains("`z%` is used as an array before any DIM"), "{}", error.message);
+    assert!(error.message.contains("`z%` is followed by `(`, so BC reads it as an array"), "{}", error.message);
     assert!(error.help.as_deref().is_some_and(|help| help.contains("DIM z%(")), "{error:?}");
 }
 
@@ -128,4 +128,43 @@ fn every_error_the_corpus_raises_is_worded() {
         }
     }
     assert!(unworded.is_empty(), "errors with no words in messages.txt (code: an example): {unworded:#?}");
+}
+
+#[test]
+fn an_unclosed_block_names_the_block_and_its_closer() {
+    let (at, error) = refused("x% = 1\r\nIF x% THEN\r\n  y% = 2\r\n", Dialect::QuickBasic45);
+    assert_eq!(at, "2:1");
+    assert!(error.message.contains("this block IF is never closed"), "{}", error.message);
+    assert!(error.help.as_deref().is_some_and(|help| help.contains("END IF")), "{error:?}");
+}
+
+#[test]
+fn a_closer_with_nothing_to_close_or_the_wrong_block_open_says_so() {
+    let (_, error) = refused("NEXT\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("`NEXT` belongs to a FOR loop, but none is open here"), "{}", error.message);
+    let (_, error) = refused("IF 1 THEN\r\nFOR i% = 1 TO 2\r\nEND IF\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("`END IF` comes while the FOR loop is still open"), "{}", error.message);
+}
+
+#[test]
+fn a_constant_that_does_not_fit_says_the_type_and_range() {
+    let (_, error) = refused("x% = 32768\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("does not fit an INTEGER variable (-32768 to 32767)"), "{}", error.message);
+}
+
+#[test]
+fn a_parameter_mismatch_names_the_argument_and_both_types() {
+    let source = "DECLARE SUB p (a%)\r\ns$ = \"a\"\r\nCALL p(s$)\r\nSUB p (a%)\r\nEND SUB\r\n";
+    let (_, error) = refused(source, Dialect::QuickBasic45);
+    assert!(
+        error.message.contains("argument 1 of `p` is a string, but the parameter is declared as an INTEGER"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_bad_line_in_a_type_says_how_a_field_is_written() {
+    let (_, error) = refused("TYPE T\r\n  a% = 1\r\nEND TYPE\r\n", Dialect::QuickBasic45);
+    assert!(error.message.contains("not a valid field of the TYPE"), "{}", error.message);
 }

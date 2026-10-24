@@ -37,3 +37,9 @@ SWAP|SWAP variable1, variable2
 RANDOMIZE|RANDOMIZE [seed]
 SHARED|SHARED variable [, variable] ...
 COMMON|COMMON [SHARED] [/block/] variable [, variable] ...
+EXIT|EXIT FOR | DO | SUB | FUNCTION | DEF
+END|END [IF | SELECT | SUB | FUNCTION | DEF | TYPE]
+WRITE|WRITE [#file,] [expression [, expression] ...]
+LOOP|LOOP [WHILE | UNTIL condition]
+SELECT|SELECT CASE expression
+ERASE|ERASE array [, array] ...
