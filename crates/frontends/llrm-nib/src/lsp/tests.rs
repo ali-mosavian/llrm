@@ -299,7 +299,7 @@ fn completion_offers_the_locals_in_scope_at_the_cursor() {
 
 /// The editor checked every project as real mode's: `let n: usize = 70000` was
 /// an error on m32, where a word is 32 bits. The project's target comes with
-/// `initialize`; one no target declares is refused.
+/// `initialize`; one whose target has no Nib runtime (-m64) is refused.
 #[test]
 fn the_projects_target_decides_what_the_editor_checks() {
     let program = Program::new();
@@ -311,5 +311,5 @@ fn the_projects_target_decides_what_the_editor_checks() {
     // Nothing to report where nothing was reported before.
     assert!(flat.iter().all(|one| one["params"]["uri"] != program.uri("main").as_str()), "{flat:?}");
     let unknown = session_with(json!({"initializationOptions": {"mode": 64}}), &[]);
-    assert!(unknown[0]["error"]["message"].as_str().expect("an error").contains("no target for -m64"), "{unknown:?}");
+    assert!(unknown[0]["error"]["message"].as_str().expect("an error").contains("has no Nib runtime"), "{unknown:?}");
 }
