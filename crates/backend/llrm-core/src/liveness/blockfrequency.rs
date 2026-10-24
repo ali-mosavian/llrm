@@ -46,6 +46,13 @@ impl<'a> Graph<'a> {
     }
 }
 
+impl Graph<'_> {
+    /// `MachineCycleInfo` of this graph.
+    pub(crate) fn cycle_info(&self) -> CycleInfo {
+        CycleInfo::compute(self)
+    }
+}
+
 impl DomGraph for Graph<'_> {
     fn entry(&self) -> Option<BlockId> {
         (!self.blocks.is_empty()).then_some(BlockId(0))
@@ -113,12 +120,18 @@ impl EdgeProbabilities for Graph<'_> {
 /// `MachineBasicBlock`'s are). An edge isel gave no odds shares what the
 /// block's stated edges leave.
 pub struct MachineBranchProbabilityInfo<'a> {
-    graph: Graph<'a>,
+    graph: std::rc::Rc<Graph<'a>>,
 }
 
 impl<'a> MachineBranchProbabilityInfo<'a> {
     pub fn of(body: &'a LirBody) -> Self {
-        Self { graph: Graph::of(body) }
+        Self::of_with(std::rc::Rc::new(Graph::of(body)))
+    }
+
+    /// Over a graph already built: one build of a body feeds this, the
+    /// block frequencies and a caller that walks it too.
+    pub(crate) fn of_with(graph: std::rc::Rc<Graph<'a>>) -> Self {
+        Self { graph }
     }
 
     /// `getEdgeProbability(Src, SuccIdx)`: numerator over 2^31.
@@ -154,8 +167,15 @@ impl MachineBlockFrequencyInfo {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockFrequencyInfo.cpp#L224>
     pub fn of(body: &LirBody) -> Self {
         let graph = Graph::of(body);
-        let ci = CycleInfo::compute(&graph);
-        Self { bfi: BlockFrequencyInfo::calculate(&graph, &graph, &ci) }
+        Self::of_with(&graph, &graph.cycle_info())
+    }
+
+    /// Over a graph and its cycle info already built.
+    pub(crate) fn of_with(
+        graph: &Graph<'_>,
+        ci: &CycleInfo,
+    ) -> Self {
+        Self { bfi: BlockFrequencyInfo::calculate(graph, graph, ci) }
     }
 
     /// `getBlockFreq` of the block at `index` in `body.blocks`.
