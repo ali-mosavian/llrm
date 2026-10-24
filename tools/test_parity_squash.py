@@ -1098,3 +1098,44 @@ def test_a_pr_refused_for_its_own_head_is_held_until_its_head_changes(tmp_path):
     assert not ps.held_at("4150", "ccc", state) and not ps.held_at("4151", "ddd", state), "a conflict and a dropped batch are not the PR's own"
     ps.hold_own_refusals(["4142"], reasons, {"4142": "zzz"}, state)
     assert ps.held_at("4142", "zzz", state) and not ps.held_at("4142", "aaa", state), "one line per PR, the latest head"
+
+
+def _gh(outcomes):
+    """A gh whose successive `pr merge` calls end as `outcomes` (a stderr, or "" for success)."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        said = outcomes[len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) - 1] if command[:3] == ["gh", "pr", "merge"] else ""
+        return SimpleNamespace(returncode=1 if said else 0, stdout="", stderr=said)
+
+    return run, calls
+
+
+OUT_OF_DATE = "GraphQL: Head branch is out of date. Review and try the merge again. (mergePullRequest)"
+
+
+def test_a_head_that_is_only_out_of_date_gets_parity_merged_and_the_squash_retried_once(capsys):
+    """#3477 was refused twice with `Head branch is out of date`: another landing had moved feat/parity, the owner had done nothing."""
+    run, calls = _gh([OUT_OF_DATE, ""])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("3477", info, "body", run=run, settle=0, merge=lambda head, branch: "c" * 40) is True
+    merges = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert len(merges) == 2 and merges[1][merges[1].index("--match-head-commit") + 1] == "c" * 40
+    assert "#3477: head out of date: merged parity ccccccccc, retried" in capsys.readouterr().out
+
+
+def test_out_of_date_with_a_conflict_is_the_owners_and_a_second_out_of_date_is_refused(capsys):
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    run, calls = _gh([OUT_OF_DATE, ""])
+    assert ps.squash("1", info, "body", run=run, settle=0, merge=lambda head, branch: "") is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 1, "a conflict: no retry"
+    assert "does not merge into it cleanly" in capsys.readouterr().out
+    run, calls = _gh([OUT_OF_DATE, OUT_OF_DATE, ""])
+    assert ps.squash("2", info, "body", run=run, settle=0, merge=lambda head, branch: "d" * 40) is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "one merge and one retry, no more"
+
+
+def test_a_race_with_another_landing_is_not_held_as_the_prs_own():
+    assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Head branch is out of date. Review and try the merge again.")
+    assert not ps.own_refusal("head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
