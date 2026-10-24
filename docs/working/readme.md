@@ -6,8 +6,11 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 |---|---|
 | [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
+| [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
+| [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
+| [stable-loads](stable-loads.md) | D-I: stable-load rematerialization off by default; AM-DI rows, the argument rule, the exit |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -61,6 +64,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [ledger-command](ledger-command.md) | The ledger command |
 | [cost-centers](cost-centers.md) | Self Ir by symbol (hashing, memcpy, Vec growth, malloc), ours against the pin |
 | [qcport-o2-size](qcport-o2-size.md) | AM-QC-1: QCport -O2 size by cause (unrolling, inlining) and module |
+| [cleanup-bucket-by-pass](cleanup-bucket-by-pass.md) | The machine clean-up bucket (172.3 M vs the pin's 49.4) one row per pass, with a proposed owner |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
