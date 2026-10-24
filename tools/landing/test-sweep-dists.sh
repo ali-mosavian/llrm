@@ -4,9 +4,10 @@
 here=$(cd "$(dirname "$0")" && pwd); r=$(mktemp -d); live=
 trap '[ -n "$live" ] && kill "$live" 2>/dev/null; rm -rf "$r"' EXIT
 mkd() { mkdir -p "$r/$1/dist"; echo x > "$r/$1/dist/llrm-c"; head -c 1000 /dev/zero > "$r/$1/dist/big"; [ "$2" = ok ] && echo sums > "$r/$1/ok"; touch -d "${3:-5 hours ago}" "$r/$1/dist/llrm-c"; }
-mkd sbp-old ok; mkdir -p "$r/wt-pair-old"; mkd sbp-new ok "10 minutes ago"; mkd mine-nook no; mkd sbp-live ok
+mkd sbp-old ok; mkdir -p "$r/wt-pair-old"; mkd sbp-new ok "10 minutes ago"; mkd mine-nook no; mkd sbp-live ok; mkd sbp-854bb7efc4343d7c ok; mkd sbp-1234567890abcdef ok; mkd sbp-fedcba987654321 ok
 (cd "$r/sbp-live" && exec sleep 300) & live=$!
 sleep 0.3
+export TIP_SHA=1234567890abcdef1234567890abcdef12345678
 out=$(DRY=1 SWEEP_ROOTS=$r CAP_KB=99999999 "$here/sweep-targets.sh")
 echo "$out" | grep -q "would remove: $r/sbp-old " || { echo "FAIL: a dry run does not list the old dist: $out"; exit 1; }
 [ -e $r/sbp-old/dist/llrm-c ] || { echo "FAIL: a dry run removed the old dist"; exit 1; }
@@ -16,4 +17,8 @@ out=$(SWEEP_ROOTS=$r CAP_KB=99999999 "$here/sweep-targets.sh")
 [ -e $r/mine-nook/dist/llrm-c ] || { echo "FAIL: a dist with no ok marker (its owner's) was removed"; exit 1; }
 [ -e $r/sbp-live/dist/llrm-c ] || { echo "FAIL: a dist a live process works in was removed"; exit 1; }
 echo "$out" | grep -q "kept (in use): $r/sbp-live" || { echo "FAIL: the live dist was not reported: $out"; exit 1; }
+[ -e $r/sbp-854bb7efc4343d7c/dist/llrm-c ] || { echo "FAIL: the pinned base dist (sbp-854bb7efc*) was removed"; exit 1; }
+[ -e $r/sbp-1234567890abcdef/dist/llrm-c ] || { echo "FAIL: the dist of the last landed tip was removed"; exit 1; }
+[ ! -e $r/sbp-fedcba987654321 ] || { echo "FAIL: an old unrelated dist stayed"; exit 1; }
+echo "$out" | grep -q "kept (pinned base)" && echo "$out" | grep -q "kept (last landed tip)" || { echo "FAIL: the two exemptions are not reported: $out"; exit 1; }
 echo PASS

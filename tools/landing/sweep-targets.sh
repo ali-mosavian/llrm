@@ -19,11 +19,16 @@ done
 procs=$(mktemp); trap 'rm -f "$procs"' EXIT
 { for p in /proc/[0-9]*; do readlink "$p/cwd"; tr '\0' ' ' < "$p/cmdline"; echo; done; } > "$procs" 2>/dev/null
 in_use() { grep -qF -- "$1" "$procs"; }
+tip=${TIP_SHA:-$(git -C "$HERE" rev-parse --verify -q origin/feat/parity 2>/dev/null)}
 for root in $roots; do
   for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-c' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
     [ -e "$holder/ok" ] || { echo "kept (no ok marker): $holder"; continue; }
+    name=$(basename "$holder")
+    # Never the pinned base (every base-vs-new measure compares against it) nor the dist of the tip last landed (the next pair's base): TIP_SHA overrides the head read from origin/feat/parity.
+    case "$name" in sbp-${DIST_PINNED:-854bb7efc}*) echo "kept (pinned base): $holder"; continue;; esac
+    [ -n "$tip" ] && case "$name" in sbp-"$tip"*|sbp-"${tip:0:9}"*) echo "kept (last landed tip): $holder"; continue;; esac
     in_use "$holder" && { echo "kept (in use): $holder"; continue; }
-    name=$(basename "$holder"); pair="$(dirname "$holder")/wt-pair-${name#sbp-}"
+    pair="$(dirname "$holder")/wt-pair-${name#sbp-}"
     kb=$(du -sk "$holder" 2>/dev/null | cut -f1)
     if [ -n "${DRY:-}" ]; then echo "would remove: $holder ${kb} KB"; continue; fi
     rm -rf -- "$holder" && echo "dist: removed $holder ${kb} KB"
