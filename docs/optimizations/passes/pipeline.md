@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:9b897f374883fa1f2709c1caa040edfd0a3efd0529bf162f78b94d94c55173cb -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:136b55f15c567973a98fbc46063db90ce111f98e6a8fde9c750b36cbf951c8d5 -->
 
 # pipeline
 
@@ -121,7 +121,10 @@ LLVM counterpart of each limit, is
 ## Needs
 `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 up front, and frozen at the end of D so the passes of E read them without
-recomputing after each edit.
+recomputing after each edit. In LLVM's order `GlobalsAA` and
+`GlobalsModRefAnalysis` are made before the walk and again at the end of D
+alone (`RequireAnalysisPass`, `RecomputeGlobalsAAPass`), read cached
+between.
 
 ## See also
 gcc's pass lists, `passes.def`; LLVM's `PassBuilderPipelines.cpp`.

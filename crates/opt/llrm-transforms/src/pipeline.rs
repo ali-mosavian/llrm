@@ -116,7 +116,10 @@
 //! # Needs
 //! `Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 //! up front, and frozen at the end of D so the passes of E read them without
-//! recomputing after each edit.
+//! recomputing after each edit. In LLVM's order `GlobalsAA` and
+//! `GlobalsModRefAnalysis` are made before the walk and again at the end of D
+//! alone (`RequireAnalysisPass`, `RecomputeGlobalsAAPass`), read cached
+//! between.
 //!
 //! # See also
 //! gcc's pass lists, `passes.def`; LLVM's `PassBuilderPipelines.cpp`.
@@ -1000,10 +1003,18 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
-    // As LLVM's O2 requires GlobalsAA before the function pipeline.
-    manager.require::<GlobalsAA>();
+    let llvm_order = applied.options.llvm_order;
+    // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
+    // `RecomputeGlobalsAAPass` alone, read cached in between; the rounds make
+    // it before each function pass.
+    if llvm_order {
+        manager.require_cached::<GlobalsAA>();
+        manager.require_cached::<GlobalsModRefAnalysis>();
+    } else {
+        manager.require::<GlobalsAA>();
+        manager.require::<GlobalsModRefAnalysis>();
+    }
     manager.require::<Summaries>();
-    manager.require::<GlobalsModRefAnalysis>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
@@ -1013,13 +1024,6 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
-    // LLVM keeps GlobalsAA past every function pass
-    // (`GlobalsAAResult::invalidate`, GlobalsModRef.cpp:825, d1106deb71cc):
-    // made once, not again after each pass that changed a body. Only the
-    // order has it so; the rounds keep theirs.
-    if applied.options.llvm_order {
-        manager.hold::<GlobalsAA>();
-    }
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
         // The walk simplifies each body: not a module-wide stage.
@@ -1029,6 +1033,10 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 && applied.options.llvm_order {
+            // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
+            // d1106deb71cc).
+            manager.compute::<GlobalsAA>();
+            manager.compute::<GlobalsModRefAnalysis>();
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
@@ -1039,7 +1047,6 @@ pub fn recorded(
                     TRIGGER.with(|trigger| trigger.borrow_mut().clear());
                 }),
             });
-            manager.hold::<GlobalsAA>();
         }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
@@ -1055,8 +1062,6 @@ pub fn recorded(
             // Exit: `ModuleIpo` runs the solver over the program (owner:
             // funcattrs-port, the IPO analyses).
             manager.add(sccp::Sccp);
-            // A program pass abandons it.
-            manager.hold::<GlobalsAA>();
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1115,13 +1120,21 @@ pub fn recorded(
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
+    if llvm_order {
+        // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
+        // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
+        // LLVM runs after this point, abandoned it here.
+        manager.recompute::<GlobalsAA>();
+        manager.recompute::<GlobalsModRefAnalysis>();
+    } else {
+        manager.freeze::<GlobalsAA>();
+        manager.freeze::<GlobalsModRefAnalysis>();
+    }
     // The summaries are made. The passes below move and rewrite what a function
     // does and add nothing to it, so they read these and do not make them
     // again after each edit, as gcc's passes after IPA read the modref
     // summaries it made there.
     manager.freeze::<Summaries>();
-    manager.freeze::<GlobalsAA>();
-    manager.freeze::<GlobalsModRefAnalysis>();
     // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
     // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
     // The loops it guards are re-simplified for the passes that follow. Not at
@@ -1291,6 +1304,9 @@ fn rerun(
         preserved = preserved.preserve_module::<GlobalsAA>();
     }
     analyses.body_edited(id, &preserved);
+    if declared.tables_pending() {
+        analyses.abandon_stateless();
+    }
     if declared.place(module)? > 0 {
         let mut dropped = PreservedAnalyses::none();
         if globals_aa_held {

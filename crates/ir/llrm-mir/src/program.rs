@@ -401,6 +401,14 @@ impl ProgramAnalyses {
         self.carried.remove(&at)
     }
 
+    /// Drops each module's `M`, held or not: LLVM's `PA.abandon<M>()`, for a
+    /// pass after which the result no longer describes the module.
+    pub fn abandon<M: crate::passes::ModuleAnalysis>(&mut self) {
+        for carried in self.carried.values_mut() {
+            carried.abandon::<M>();
+        }
+    }
+
     /// Drops every result.
     pub fn invalidate(&mut self) {
         self.cache.clear();

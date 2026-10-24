@@ -112,6 +112,9 @@ pub struct Globals {
     bodies: BTreeSet<GlobalId>,
     /// The bodies outside code may call: not internal, or address-taken.
     entries: BTreeSet<String>,
+    /// How many globals the module had: a function at or past it was added
+    /// since (an ipa-cp copy), a body as LLVM's absent `FunctionInfo` is.
+    known: u32,
 }
 
 impl Globals {
@@ -126,7 +129,7 @@ impl Globals {
             && (self.forged || !fresh.forged)
             && self.named == fresh.named
             && self.writes == fresh.writes
-            && self.bodies == fresh.bodies
+            && fresh.bodies.iter().all(|one| self.bodies.contains(one) || one.0 >= self.known)
             && self.entries == fresh.entries
     }
 
@@ -160,7 +163,7 @@ impl Globals {
         &self,
         callee: Option<GlobalId>,
     ) -> (BTreeSet<GlobalId>, BTreeSet<GlobalId>) {
-        if callee.is_some_and(|one| self.bodies.contains(&one)) {
+        if callee.is_some_and(|one| self.bodies.contains(&one) || one.0 >= self.known) {
             return (self.tracked.clone(), self.tracked.clone());
         }
         let named = self.named.intersection(&self.tracked).copied().collect::<BTreeSet<_>>();
@@ -510,7 +513,7 @@ fn found_with(
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries })
+    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32 })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer

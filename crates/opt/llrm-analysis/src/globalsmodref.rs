@@ -153,6 +153,10 @@ pub struct GlobalsModRef {
     /// The variables no outside code reaches, taken as local (DEVIATE G8).
     unexported: BTreeSet<GlobalId>,
     functions: BTreeMap<GlobalId, FunctionInfo>,
+    /// The local variables the use scan calls escaped (it has no `phi` or
+    /// `select` case) that escape by no use but being joined: `covers` takes
+    /// one for what it was.
+    joined: BTreeSet<GlobalId>,
 }
 
 /// `isDefinitionExact`.
@@ -503,6 +507,7 @@ pub fn compute_with(
             }
         }
     }
+    let mut joins: Option<Analysis> = None;
     for (at, global) in module.globals.iter().enumerate() {
         let (id, GlobalKind::Variable(variable)) = (GlobalId(at as u32), &global.kind) else { continue };
         if !local(global.linkage) && !result.unexported.contains(&id) {
@@ -516,6 +521,17 @@ pub fn compute_with(
             analysis.escapes(Root::Global(id), &mut Some(&mut readers), &mut None)
         };
         if escaped {
+            let joins = joins.get_or_insert_with(|| Analysis {
+                module,
+                sites: Sites::of(module),
+                initializers_escape: true,
+                through_joins: true,
+                seen: Default::default(),
+            });
+            joins.seen.borrow_mut().clear();
+            if !joins.escapes(Root::Global(id), &mut None, &mut None) {
+                result.joined.insert(id);
+            }
             continue;
         }
         result.non_address_taken.insert(id);
@@ -642,22 +658,22 @@ pub fn compute_with(
 impl GlobalsModRef {
     /// Whether `self`, held past edits that add no memory operation, still
     /// bounds what `fresh` finds: it tracks no global `fresh` does not, and
-    /// each function it states something of is stated by `fresh` as no more.
+    /// each function it states something of is stated by `fresh` as no more,
+    /// of the globals it tracks (it answers `ModRef` for the rest).
     pub fn covers(
         &self,
         fresh: &Self,
     ) -> bool {
         let within = |stale: ModRefInfo, fresh: ModRefInfo| stale.union(fresh) == stale;
-        self.non_address_taken.is_subset(&fresh.non_address_taken)
+        self.non_address_taken.iter().all(|one| fresh.non_address_taken.contains(one) || fresh.joined.contains(one))
             && (self.unknown_functions_with_local_linkage || !fresh.unknown_functions_with_local_linkage)
             && self.functions.iter().all(|(id, stale)| {
                 fresh.functions.get(id).is_some_and(|now| {
                     within(stale.mod_ref(), now.mod_ref())
                         && (stale.may_read_any_global || !now.may_read_any_global)
-                        && now
-                            .globals
-                            .keys()
-                            .chain(stale.globals.keys())
+                        && self
+                            .non_address_taken
+                            .iter()
                             .all(|&global| within(stale.mod_ref_for_global(global), now.mod_ref_for_global(global)))
                 })
             })

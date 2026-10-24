@@ -2154,12 +2154,10 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 }
 
 /// GlobalsAA was made 9 times for one compile of d_faces -O2 (8 for the corpus
-/// module below): each of the order's three function stages started from a
-/// dropped one. LLVM keeps it past every function pass, so the stages add no
-/// computation. What is left are the program passes (the first ask, `ports`,
-/// `Stamp`, the interprocedural stage, and `ModuleIpo` between Early and the
-/// Simplify list, and `Walk` after Cleanup, module passes LLVM's GlobalsAA does
-/// not survive either); 10 here, which this holds at.
+/// module below): each program pass dropped it and the next function pass made
+/// it again. LLVM makes it twice, at `RequireAnalysisPass<GlobalsAA>` before
+/// the inliner and `RecomputeGlobalsAAPass`, and keeps it past every pass
+/// between.
 #[test]
 fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
     assert!(
@@ -2184,7 +2182,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     .and_then(|done| done)
     .unwrap_or_else(|error| panic!("{name}: {error}"));
     let made = llrm_mir::counts::analysed("globals-aa").1 - before;
-    assert!(made <= 10, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+    assert_eq!(made, 2, "{name}: globals-aa made other than at LLVM's two points");
 }
 
 /// The fixed point hashed the body before it ran even when its list runs once

@@ -91,6 +91,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::globalsaa::embedded;
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis};
 use llrm_mir::callgraph::Defined;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Operand};
@@ -120,6 +121,10 @@ impl ProgramPass for GlobalDce {
         }
         if changed {
             analyses.invalidate();
+            // Their ids are renumbered: LLVM's value handles drop what was
+            // deleted, these cannot be brought along.
+            analyses.abandon::<GlobalsAA>();
+            analyses.abandon::<GlobalsModRefAnalysis>();
         }
         Ok(())
     }
