@@ -1830,8 +1830,21 @@ fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
             procedure.find(&format!("{label}:\n")).filter(|at| *at < start).map(|at| &procedure[at..end])
         })
         .collect::<Vec<_>>();
-    // Call-free loops: the SQR fill and the POKE loop.
-    for one in loops.iter().filter(|one| !one.contains("call")) {
+    // Innermost call-free loops: the SQR fill and the POKE loop. The `f` loop
+    // holds the POKE loop and, with `Beat` inlined, no call: the selector is
+    // set once a trip of it, which is not per poke.
+    let span = |one: &&str| one.as_ptr() as usize..one.as_ptr() as usize + one.len();
+    let innermost = |one: &&&str| {
+        !loops
+            .iter()
+            .any(
+                |other| {
+                    let (outer, inner) = (span(&**one), span(other));
+                    inner != outer && inner.start >= outer.start && inner.end <= outer.end
+                },
+            )
+    };
+    for one in loops.iter().filter(innermost).filter(|one| !one.contains("call")) {
         assert!(!one.contains("push") && !one.contains("pop"), "{one}");
     }
 }
@@ -3069,6 +3082,52 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
     assert_eq!((loads, pokes), (0, 2), "{body:#?}");
+}
+
+/// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
+fn listing_of(
+    name: &str,
+    source: &str,
+) -> String {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join(format!("{name}.asm"));
+    let input = written(&directory, &format!("{name}.bas"), source.as_bytes());
+    let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// A POKE after a literal DEF SEG wrote memory no variable lives in, yet
+/// the loop below reloaded `b$seg` (and the segment register from it) before
+/// every byte: the volatile store was a barrier to every cell.
+#[test]
+fn a_poke_after_a_literal_def_seg_leaves_the_segment_cell_in_a_register() {
+    let text = listing_of(
+        "literal_segment",
+        "SUB Fill\r\nDEFINT A-Z\r\nDEF SEG = &HB800\r\nFOR i = 0 TO 3998 STEP 2\r\nPOKE i, 65\r\nNEXT i\r\nDEF SEG\r\nEND SUB\r\nFill\r\nEND\r\n",
+    );
+    let fill = between(&text, "FILL proc", "FILL endp").lines().map(str::trim).collect::<Vec<_>>();
+    let at = fill.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = fill
+        .iter()
+        .position(|one| *one == format!("{}:", fill[at].split_whitespace().nth(1).unwrap()))
+        .expect("its label");
+    let body = &fill[top..=at];
+    assert!(!body.iter().any(|one| one.contains("b$seg")), "{body:#?}");
+}
+
+/// DEF SEG = VARSEG(x) points the segment at the program's own data, so the
+/// POKE below changes `x`: PRINT must read it again, not print the 1 stored
+/// before. The absolute-memory tag is for literal segments only.
+#[test]
+fn a_poke_through_varseg_keeps_the_variable_it_can_write() {
+    let text = listing_of(
+        "varseg_poke",
+        "DEFINT A-Z\r\nDIM x AS INTEGER\r\nx = 1\r\nDEF SEG = VARSEG(x)\r\nPOKE VARPTR(x), 7\r\nPRINT x\r\nEND\r\n",
+    );
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let poke = lines.iter().position(|one| one.starts_with("mov byte ptr es:[")).expect("the POKE");
+    assert!(lines[poke..].iter().any(|one| one.contains("word ptr X%")), "{text}");
 }
 
 /// A WAIT's masks sat in two byte cells of the data group and were reloaded

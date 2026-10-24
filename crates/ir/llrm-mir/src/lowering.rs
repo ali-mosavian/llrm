@@ -10,6 +10,7 @@
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial());
 //! assert!(!Plain.is_mask_and_cmp0_folding_beneficial_for(Some(0x100)));
 //! assert!(!Plain.is_truncate_free(32, 16));
+//! assert!(!Plain.is_multi_stores_cheaper_than_bits_merge(llrm_mir::lowering::Domain::Float, llrm_mir::lowering::Domain::Integer));
 //! assert!(!Plain.is_operation_legal_or_custom(llrm_mir::lowering::Isd::Add, 32));
 //! assert!(Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 8));
 //! assert!(!Plain.is_load_ext_legal(llrm_mir::lowering::LoadExt::Zero, 32, 24));
@@ -57,6 +58,15 @@ pub enum LoadExt {
     Any,
     Zero,
     Sign,
+}
+
+/// What a value type is to `isMultiStoresCheaperThanBitsMerge`
+/// (`EVT::isInteger`, `EVT::isFloatingPoint`): a vector or pointer is neither.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Domain {
+    Integer,
+    Float,
+    Other,
 }
 
 /// Whether an integer of `bits` is a simple value type (`MVT`), the only ones
@@ -174,6 +184,19 @@ pub trait Lowering {
     /// of a value the block computes anyway. The base class says no; x86 says
     /// yes (X86ISelLowering.cpp L3805).
     fn prefer_zero_compare_branch(&self) -> bool {
+        false
+    }
+
+    /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h):
+    /// whether a store of two values merged into one wider integer is
+    /// better made two stores. The base class says no; x86 says yes for a
+    /// float and an integer (X86ISelLowering.h#L243).
+    fn is_multi_stores_cheaper_than_bits_merge(
+        &self,
+        low: Domain,
+        high: Domain,
+    ) -> bool {
+        let _ = (low, high);
         false
     }
 
