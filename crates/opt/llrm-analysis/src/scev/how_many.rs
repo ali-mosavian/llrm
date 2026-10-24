@@ -238,6 +238,7 @@ impl ScalarEvolution {
         a: Ap,
         b: Scev,
         header: BlockId,
+        predicates: Option<&mut Vec<super::wrap_predicate::Predicate>>,
     ) -> Scev {
         let bw = a.width;
         debug_assert!(bw == self.get_type_size_in_bits(cx, self.type_of(b)));
@@ -273,8 +274,13 @@ impl ScalarEvolution {
             let zero = self.get_zero(cx, self.type_of(b));
             if !self.is_known_predicate_scev(cx, IntPredicate::Eq, urem, zero) {
                 // Try to add a predicate ensuring B is a multiple of
-                // 1 << Mult2: predicates are DEVIATE 1.
-                return self.get_could_not_compute();
+                // 1 << Mult2.
+                let Some(predicates) = predicates else { return self.get_could_not_compute() };
+                // Avoid adding a predicate that is known to be false.
+                if self.is_known_predicate_scev(cx, IntPredicate::Ne, urem, zero) {
+                    return self.get_could_not_compute();
+                }
+                predicates.push(self.get_equal_predicate(urem, zero));
             }
         }
 
@@ -306,6 +312,7 @@ impl ScalarEvolution {
         v: Scev,
         header: BlockId,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         // This is only used for loops with a "x != y" exit test. The exit
         // condition is now expressed as a single expression, V = x-y. So the
@@ -324,7 +331,16 @@ impl ScalarEvolution {
             return ExitLimit::could_not_compute(self);
         }
 
-        let add_rec = self.strip_injective_functions(v);
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
+        let mut add_rec = self.strip_injective_functions(v);
+        if !self.is_add_rec_of(add_rec, header) && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            if let Some(converted) = self.convert_scev_to_add_rec_with_predicates(cx, v, header, &mut predicates) {
+                add_rec = converted;
+            }
+        }
         if !self.is_add_rec_of(add_rec, header) {
             return ExitLimit::could_not_compute(self);
         }
@@ -418,7 +434,7 @@ impl ScalarEvolution {
                 max_be_count = max_be_count.umin(max.sub(Ap::one(max.width)));
             }
             let constant_max = self.get_constant(max_be_count);
-            return ExitLimit::new(self, distance, constant_max, distance, false);
+            return ExitLimit::new(self, distance, constant_max, distance, false).with_predicates(predicates);
         }
 
         // If the condition controls loop exit (the loop exits only if the
@@ -450,7 +466,7 @@ impl ScalarEvolution {
                 constant_max = self.get_constant(max_int.umin(exact_max));
             }
             let symbolic_max = if exact == self.get_could_not_compute() { constant_max } else { exact };
-            return ExitLimit::new(self, exact, constant_max, symbolic_max, false);
+            return ExitLimit::new(self, exact, constant_max, symbolic_max, false).with_predicates(predicates);
         }
 
         // Solve the general equation.
@@ -459,7 +475,13 @@ impl ScalarEvolution {
             return ExitLimit::could_not_compute(self);
         }
         let negative_start = self.get_negative_scev(cx, start, 0);
-        let e = self.solve_lin_equation_with_overflow(cx, step_c, negative_start, header);
+        let e = self.solve_lin_equation_with_overflow(
+            cx,
+            step_c,
+            negative_start,
+            header,
+            allow_predicates.then_some(&mut predicates),
+        );
 
         let mut m = e;
         if e != self.get_could_not_compute() {
@@ -469,7 +491,7 @@ impl ScalarEvolution {
             m = self.get_constant(max_with_guards.umin(e_max));
         }
         let s = if e == self.get_could_not_compute() { m } else { e };
-        ExitLimit::new(self, e, m, s, false)
+        ExitLimit::new(self, e, m, s, false).with_predicates(predicates)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10921
@@ -513,7 +535,10 @@ impl ScalarEvolution {
         header: BlockId,
         is_signed: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
+        let mut predicated_iv = false;
         let mut iv = self.is_add_rec_of(lhs, header).then_some(lhs);
         if iv.is_none()
             && let Kind::ZeroExtend(zext) = self.node(lhs).kind
@@ -575,6 +600,14 @@ impl ScalarEvolution {
                     iv = self.is_add_rec_of(s, header).then_some(s);
                 }
             }
+        }
+
+        if iv.is_none() && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            iv = self.convert_scev_to_add_rec_with_predicates(cx, lhs, header, &mut predicates);
+            predicated_iv = true;
         }
 
         // Avoid weird loops
@@ -652,7 +685,8 @@ impl ScalarEvolution {
             //
             // The positive stride case is the same as isKnownPositive(Stride)
             // returning true (original behavior of the function).
-            if !no_wrap
+            if predicated_iv
+                || !no_wrap
                 || !self.loop_is_finite_by_assumption(cx, header)
                 || !self.loop_has_no_abnormal_exits(cx, header)
             {
@@ -957,6 +991,7 @@ impl ScalarEvolution {
 
         let symbolic_max_be_count = if be_count == unknown { constant_max_be_count } else { be_count };
         ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, max_or_zero)
+            .with_predicates(predicates)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L13849
@@ -970,17 +1005,26 @@ impl ScalarEvolution {
         header: BlockId,
         is_signed: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
         // We handle only IV > Invariant
         if !self.is_loop_invariant(cx, rhs, Some(header)) {
             return ExitLimit::could_not_compute(self);
         }
 
-        // Avoid weird loops
-        if !self.is_add_rec_of(lhs, header) || !self.is_affine(lhs) {
-            return ExitLimit::could_not_compute(self);
+        let mut iv = self.is_add_rec_of(lhs, header).then_some(lhs);
+        if iv.is_none() && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            iv = self.convert_scev_to_add_rec_with_predicates(cx, lhs, header, &mut predicates);
         }
-        let iv = lhs;
+
+        // Avoid weird loops
+        let Some(iv) = iv.filter(|&iv| self.is_add_rec_of(iv, header) && self.is_affine(iv)) else {
+            return ExitLimit::could_not_compute(self);
+        };
 
         let wrap_type = if is_signed { flags::NSW } else { flags::NUW };
         let no_wrap = controls_only_exit && self.get_no_wrap_flags(iv, wrap_type) != 0;
@@ -1079,7 +1123,7 @@ impl ScalarEvolution {
         let symbolic_max_be_count =
             if be_count == self.get_could_not_compute() { constant_max_be_count } else { be_count };
 
-        ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, false)
+        ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, false).with_predicates(predicates)
     }
 }
 

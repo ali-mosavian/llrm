@@ -2961,6 +2961,85 @@ fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = internal global i16 0
+define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %y = add i16 %x, 1
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
+next:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  store i16 %y, ptr @g
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+/// The runtime enters a landing pad with no register intact, so a value the
+/// entry block defined is not there. The DAG path took such a function and the
+/// verifier stopped the compile (`value is read but never defined`, qb
+/// `onerr` and `erlnum`): it is refused and the old selector takes it.
+#[test]
+fn a_landing_pad_reading_an_entry_value_is_refused() {
+    let refused = select_with_contracts(PAD_READS_THE_ENTRY).err().expect("refused");
+    assert!(refused.contains("read and not defined"), "{refused}");
+}
+
+const RUNTIME_CALL_MORE_ARGS_THAN_DECLARED: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f(i16 %a) addrspace(1) {
+entry:
+  call cc 1000 addrspace(1) void (i16, i16, i16) @llrm.qb.B$RDIM(i16 %a, i16 1, i16 2)
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
+";
+
+/// A runtime routine's declaration names no parameters (`B$RDIM()`), but its
+/// callers push their arguments and it pops them all. The builder took the
+/// declared count as what the callee pops and left 4 bytes to the caller:
+/// `add sp, 4` after the call, and qb `bounds.bas` (`LOCALS`) crashed once
+/// pads were selected.
+#[test]
+fn a_runtime_call_pops_every_argument_it_is_given() {
+    let module = llrm_mir::parse::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
+    let contracts =
+        super::dag_function::RuntimeContracts { abi: &Stub { flags: false }, segments: &crate::backend::target::BASIC };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let adjusts = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what
+                .as_ref()
+                .is_some_and(
+                    |w| w.name.as_deref() == Some("add")
+                        && w.dests.iter().any(|d| {
+                            matches!(
+                                d,
+                                crate::model::ir::Loc::Reg(r) if r.register == crate::model::ir::STACK
+                            )
+                        }),
+                )
+        })
+        .count();
+    assert_eq!(adjusts, 0, "the caller removes nothing");
+}
+
 const SMUL_FIX: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %b) {
 entry:

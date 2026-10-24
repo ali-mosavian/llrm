@@ -266,3 +266,36 @@ fn test_a_shifted_index_stays_where_a_scaled_index_costs_instructions() {
     let b2 = rest.split_once("b3:").expect("a block b3").0;
     assert!(b2.contains("%s"), "the shifted index is folded in real mode: {after}");
 }
+
+/// `optimizeExtUses` rewrites every reader of the source outside the
+/// extension's block, as the pin does. It once skipped a reader the extension's
+/// block did not dominate (DEVIATE CGP2); the pin's `llc` deletes such a block
+/// before this pass (an unreachable one is the only block the extension cannot
+/// reach), so the guard was a difference on no pin input. Here the dead block's
+/// reader is rewritten like any other.
+#[test]
+fn test_every_reader_of_an_extended_source_outside_its_block_reads_the_extension() {
+    let after = sunk(
+        "define i32 @f(i16 %a, i16 %b) {
+b0:
+  %s = add i16 %a, %b
+  %e = zext i16 %s to i32
+  br label %b1
+
+b1:
+  %u = add i16 %s, 5
+  %ue = zext i16 %u to i32
+  %r = add i32 %e, %ue
+  ret i32 %r
+
+dead:
+  %d = add i16 %s, 7
+  %de = zext i16 %d to i32
+  ret i32 %de
+}
+",
+    );
+    let (live, dead) = after.split_once("dead:").expect("a dead block");
+    assert!(live.contains("trunc i32 %e to i16"), "{after}");
+    assert!(dead.contains("trunc i32 %e to i16"), "{after}");
+}

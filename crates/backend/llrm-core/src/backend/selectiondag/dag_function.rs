@@ -817,7 +817,7 @@ fn selected_in(
     // Every value read is defined on every path to the read (a phi, an
     // instruction, an arrival): a LIR that reads one nothing defines on some
     // path stops the allocator's liveness, so it is a refusal here.
-    if let Some((value, name)) = read_before_defined(&emitted, &succ) {
+    if let Some((value, name)) = read_before_defined(&emitted, &succ, landing) {
         return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
     }
     // A floating value is a 10-byte register value: read at another width it is
@@ -1035,6 +1035,7 @@ fn landing_pad_insn(
 fn read_before_defined(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
+    landing: Option<i64>,
 ) -> Option<(u32, Option<String>)> {
     use std::collections::HashSet;
     let index: std::collections::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
@@ -1061,6 +1062,11 @@ fn read_before_defined(
     // path has reached it yet).
     let mut entry: Vec<Option<HashSet<u32>>> = vec![None; blocks.len()];
     entry[0] = Some(HashSet::new());
+    // The runtime enters a landing pad with no value defined: a root of its
+    // own.
+    if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
+        entry[pad] = Some(HashSet::new());
+    }
     let mut changed = true;
     while changed {
         changed = false;
