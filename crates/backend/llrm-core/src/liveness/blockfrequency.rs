@@ -27,8 +27,16 @@ pub(crate) struct Graph<'a> {
     preds: Vec<BlockList>,
 }
 
+thread_local! {
+    /// Graphs built, counted for the test that fixes one a round of the sink.
+    #[cfg(test)]
+    pub(crate) static GRAPH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl<'a> Graph<'a> {
     pub(crate) fn of(body: &'a LirBody) -> Self {
+        #[cfg(test)]
+        GRAPH_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let index: HashMap<i64, u32> =
             body.blocks.iter().enumerate().map(|(at, block)| (block.at, at as u32)).collect();
         let mut succs = vec![BlockList::new(); body.blocks.len()];
