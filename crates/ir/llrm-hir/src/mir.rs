@@ -339,7 +339,12 @@ impl Tags {
             MetadataOperand::Node(node) => *node,
             _ => return,
         };
+        // Each tag is a descriptor, a place: sized once for them all, not grown
+        // by doubling through hundreds of rehashes (`DenseMap::init`).
+        let places: usize = hir.functions.iter().map(|function| function.places.len()).sum();
+        self.arrays.reserve(places);
         let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::default();
+        identities.reserve(places);
         for function in &hir.functions {
             let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
             let described =
