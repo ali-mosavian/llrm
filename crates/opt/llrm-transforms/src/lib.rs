@@ -209,6 +209,7 @@ pub mod instworklist;
 mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
+pub mod ipsccp;
 pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
