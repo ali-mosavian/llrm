@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 71 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -44,7 +44,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undoc
 | guards | What the branches that dominate a block prove on entry to it. | Guard facts and the implication queries above. Consumers: `decide`, | [guards](guards.md) |
 | induction | Which values are affine functions of a loop's counter, and how many trips a loop makes. | `AffineOperand`, `Affine`, `CountedLoop`, `Counted`, `ExitCount`, `Scev`, | [induction](induction.md) |
 | initializes | `initializes(...)` of the pointer parameters of a function: the bytes it writes before anything reads them, as `inferInitializes` states them (FunctionAttrs.cpp:1118, <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L1118>). |  | [initializes](initializes.md) |
-| interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
+| interprocedural | Finds what the two sides of a direct call make certain: constant call actuals, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | ivdescriptors | `IVDescriptors`: the recurrences (reductions) and induction variables of a loop's header phis, `IVDescriptors.cpp` at `d1106deb71cc`. |  | [ivdescriptors](ivdescriptors.md) |
 | laa_testing | How `opt` writes the values `print<access-info>` lists, for the tests that compare with it: the instruction lines of the function as MIR prints them (the same text, in order, for the same names), and an argument as `ptr %x`. |  | [laa_testing](laa_testing.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
@@ -63,7 +63,6 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undoc
 | noreturn | Finds the bodies and blocks that cannot reach a normal return, and cuts a block after a call that cannot return, so the code after it and the paths into it fold away. | `terminal_sites`, `inferred`, `inferred_in`, `cold`, `stranded`, | [noreturn](noreturn.md) |
 | num | An integer that is a machine word until it must not be. | `Num`, for [`crate::ranges`](ranges.md) and [`crate::induction`](induction.md). | [num](num.md) |
 | occurrence | Walks a function's instructions as occurrences, operations and phis apart, so an analysis can key by identity and keep two equal instructions distinct. | The three walks. Consumers: [`crate::induction`](induction.md), [`crate::ssa`](ssa.md), and the | [occurrence](occurrence.md) |
-| parameter_ranges | Bounds each integer parameter of a body only the program calls by what its callers pass, so the body's own checks on it can be decided. | `stamp`: a `range` attribute on each integer parameter whose callers all | [parameter_ranges](parameter_ranges.md) |
 | peelsize | Decides whether a counted loop is worth copying out completely, from the size the copy would have once constants fold, before anything is cloned. | `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in | [peelsize](peelsize.md) |
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`. | [ranger](ranger.md) |

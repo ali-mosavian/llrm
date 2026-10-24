@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:136b55f15c567973a98fbc46063db90ce111f98e6a8fde9c750b36cbf951c8d5 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:a1d01da36d5492fbd110c1de1e297d115c6b62319e00ef0c6f0fd71e97a79628 -->
 
 # pipeline
 
@@ -110,7 +110,6 @@ LLVM counterpart of each limit, is
 | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
-| `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 

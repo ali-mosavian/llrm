@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:1240459891a9d704a32fe8e065d27f7ccf55a54c86338ff021e32df326487d5d -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:877c4649d3943e733993c72a35de2948ca69fba8550dc360a1e52db465466ce2 -->
 
 # ipsccp
 
@@ -86,11 +86,11 @@ unit test `test_a_callee_called_with_1_and_3_gets_the_range_1_to_4` in
 `crates/opt/llrm-transforms/src/ipsccp_tests.rs`.
 
 ## Runs
-On no pipeline yet: `run_ipsccp` is called by its tests. It is to replace
-`ipa-args` and `ipa-range` in [`crate::walk::ModuleIpo`](walk.md) (AM-BD-6).
+Once per compile at -O1 and up, first in [`crate::walk::ModuleIpo`](walk.md)
+(`run_ipsccp_with`): after the early function pipeline, before the
+CGSCC walk, where the pin's `buildModuleSimplificationPipeline` runs
+`IPSCCPPass`.
 
 ## See also
 - Uses: [`crate::sccpsolver`](sccpsolver.md), [`crate::sccp`](sccp.md)'s rewrites,
   [`crate::predicateinfo`](predicateinfo.md)
-- Stand-in it replaces: `llrm_analysis::parameter_ranges`,
-  `llrm_analysis::interprocedural::program_parameters`
