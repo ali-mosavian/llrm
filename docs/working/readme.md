@@ -16,6 +16,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [measurement](measurement/readme.md) | How we measure, the instruments, compile time, comparison with gcc |
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |
 | [figures](figures.md) | Drawing a figure as mermaid, and the generated pass pages |
+| [c1-lanes-plan](c1-lanes-plan.md) | C1: sub-register lanes in live intervals: what differs, the lane model, five steps |
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
 | [fold](fold.md) | What the Fold pass costs and carries, and the plan to remove it |
 | [fold-split](fold-split.md) | The plan splitting the fold work between valuetracking-port and fold-poc |
