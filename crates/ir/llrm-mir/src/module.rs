@@ -165,6 +165,31 @@ impl Block {
     }
 }
 
+/// `Function::iter_block`: the links from the head, its size hint the block's
+/// `len`, so a collect allocates once.
+struct BlockIter<'f> {
+    function: &'f Function,
+    at: u32,
+    left: usize,
+}
+
+impl Iterator for BlockIter<'_> {
+    type Item = InstId;
+
+    fn next(&mut self) -> Option<InstId> {
+        (self.at != 0).then(|| {
+            let inst = InstId(self.at - 1);
+            self.at = self.function.instructions[inst.0 as usize].link.1;
+            self.left = self.left.saturating_sub(1);
+            inst
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, None)
+    }
+}
+
 /// Each instruction's place in its block, numbered lazily like LLVM's
 /// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
 /// block invalidates it, the next ask renumbers the block once. Not part of
@@ -641,14 +666,8 @@ impl Function {
         &self,
         id: BlockId,
     ) -> impl Iterator<Item = InstId> + '_ {
-        let mut at = self.blocks[id.0 as usize].head;
-        std::iter::from_fn(move || {
-            (at != 0).then(|| {
-                let inst = InstId(at - 1);
-                at = self.instructions[inst.0 as usize].link.1;
-                inst
-            })
-        })
+        let block = &self.blocks[id.0 as usize];
+        BlockIter { function: self, at: block.head, left: block.len as usize }
     }
 
     /// `inst`'s number in its block, the block renumbered if an edit made its
@@ -879,7 +898,23 @@ impl Function {
 
     /// Instructions in layout order, with their block.
     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
-        self.layout.iter().flat_map(move |&block| self.iter_block(block).map(move |one| (block, one)))
+        self.layout.iter().flat_map(move |&block| self.links_of(block).map(move |one| (block, one)))
+    }
+
+    /// `iter_block` without its size: a walk of every block that collects none
+    /// pays no count per instruction.
+    fn links_of(
+        &self,
+        id: BlockId,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        let mut at = self.blocks[id.0 as usize].head;
+        std::iter::from_fn(move || {
+            (at != 0).then(|| {
+                let inst = InstId(at - 1);
+                at = self.instructions[inst.0 as usize].link.1;
+                inst
+            })
+        })
     }
 
     /// The log of changes since the last `take_changes`. They stay in the log,

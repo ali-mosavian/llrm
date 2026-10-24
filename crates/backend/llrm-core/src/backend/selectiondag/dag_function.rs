@@ -345,7 +345,10 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .iter()
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
-                    .chain([(llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR")])
+                    .chain([
+                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                    ])
                     .collect(),
             })
         })
@@ -648,6 +651,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut inline_places = IndexMap::default();
     // the call sites whose callee is far code (address space 1): a far call
     let mut far = std::collections::BTreeSet::new();
     // The LIR blocks each MIR block became, and the phi inputs each exports.
@@ -704,7 +708,8 @@ fn selected_in(
                 // the runtime's routines are far procedures where code is in
                 // segments
                 Callee::Named(name) => {
-                    if arch.object().bitness == 16 {
+                    // inline code is laid down at the site: no call
+                    if arch.object().bitness == 16 && llrm_mir::intrinsics::code(name).is_none() {
                         far.insert(*at);
                     }
                     name.clone()
@@ -712,6 +717,7 @@ fn selected_in(
             };
             (*at, name)
         }));
+        inline_places.extend(done.inline_places.iter().cloned());
         emitted.extend(done.blocks);
         let start = made.get(&parent.0).map_or(from, |range| range.start);
         made.insert(parent.0, start..emitted.len());
@@ -755,6 +761,9 @@ fn selected_in(
     if let Some((value, name)) = read_before_defined(&emitted, &succ) {
         return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
     }
+    if let Some(why) = float_across_call(&emitted, &succ) {
+        return refuse(format!("--isel=dag: {why}"));
+    }
     // A floating value is a 10-byte register value: read at another width it is
     // an integer's bits taken from an x87 register (`bitcast` of a double to
     // its words, reaching the matcher as a no-op), which no code can do.
@@ -785,9 +794,6 @@ fn selected_in(
     // The x87 stack is empty at a call: a floating value live across one is
     // spilled by the pin's allocator, which no pass here does for this LIR, so
     // the function is refused (the stackifier would fail the compile).
-    if let Some(why) = float_across_call(&emitted, &succ, llrm_lir::registers::Regs(arch.registers())) {
-        return refuse(format!("--isel=dag: {why}"));
-    }
     let blocks: Vec<Block> = emitted
         .iter()
         .zip(succ)
@@ -822,12 +828,24 @@ fn selected_in(
             }
         }
     }
+    // Inline code: its bytes with each frame place patched as a displacement
+    // from BP (the old route's `inline_code`).
+    for (at, name) in &calls {
+        if let Some((mut bytes, places)) = llrm_mir::intrinsics::code(name) {
+            for (offset, disp, addend) in inline_places.get(at).map_or(&[][..], |one: &Vec<(usize, i64, i64)>| &one[..])
+            {
+                bytes[*offset..*offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            }
+            let _ = places;
+            inline.insert(*at, bytes);
+        }
+    }
     Ok(Selected {
         body,
         convention,
         calls,
         inline,
-        inline_places: IndexMap::default(),
+        inline_places,
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
@@ -837,13 +855,14 @@ fn selected_in(
     })
 }
 
-/// Whether a floating value (a 10-byte `Held`) is live across a call: its
+/// Whether a floating value (a 10-byte `Held`) is live across a call that
+/// returns a float (its result arrives on a stack the stackifier needs empty,
+/// 'a call's floating result arrives on a stack that is not empty'): its
 /// liveness by the usual backward flow over the blocks, a phi's input read at
 /// the end of the predecessor it comes from.
 fn float_across_call(
     blocks: &[EmitBlock],
     succ: &[Vec<i64>],
-    regs: llrm_lir::registers::Regs,
 ) -> Option<&'static str> {
     use std::collections::{BTreeSet, HashMap};
     let mut floating: BTreeSet<u32> = blocks
@@ -917,7 +936,8 @@ fn float_across_call(
                 live.extend(live_in[to].difference(&phi_results[to]).copied());
             }
         }
-        for insn in block.insns.iter().rev() {
+        for (place, insn) in block.insns.iter().enumerate().rev() {
+            let after = &block.insns[place + 1..];
             for def in &insn.defines {
                 live.remove(def);
             }
@@ -937,13 +957,27 @@ fn float_across_call(
                             ),
                         ),
                 );
-            if (far || crate::backend::floatregions::clears_stack(regs, insn)) && !live.is_empty() {
+            let returns_float = insn.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call)
+                && after
+                    .iter()
+                    .take_while(|next| {
+                        next.what.as_ref().is_none_or(|what| what.op != crate::model::ir::Operation::Call)
+                    })
+                    .any(|next| is_stack_top_load(next));
+            if (far || returns_float) && !live.is_empty() {
                 return Some("a floating value is live across an instruction that empties the x87 stack");
             }
             live.extend(insn.uses.iter().copied().filter(|value| floating.contains(value)));
         }
     }
     None
+}
+
+/// The unnamed load of the x87 stack top that takes a call's float result.
+fn is_stack_top_load(insn: &Insn) -> bool {
+    insn.what.as_ref().is_some_and(|what| {
+        what.op == crate::model::ir::Operation::FloatLoad && what.name.as_deref() == Some("") && what.sources.is_empty()
+    })
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).
