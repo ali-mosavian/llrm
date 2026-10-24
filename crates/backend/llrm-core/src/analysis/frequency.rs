@@ -302,7 +302,12 @@ impl Frequency {
                 entry.2 = Some(one.at).filter(|_| list.len() == 1);
             }
         }
-        for one in body.blocks.iter().filter(|one| one.at != body.entry) {
+        // BlockFrequencyInfoImpl has "limited support" for a cycle entered at
+        // more than one block (BlockFrequencyInfoImpl.h:650): its members get
+        // mass by power iteration, not by the flow into each. A block in such a
+        // cycle is not held to its inflow.
+        let loose = Self::irreducible_cycles(body);
+        for one in body.blocks.iter().filter(|one| one.at != body.entry && !loose.contains(&one.at)) {
             let Some((sum, count, only)) = inflow.get(&one.at).copied() else { continue };
             let runs = now.block(one.at);
             // The estimate is not conservative where proven trips are nested:
@@ -320,6 +325,35 @@ impl Frequency {
             }
         }
         out
+    }
+
+    /// The blocks in a strongly connected component that has a block of an
+    /// irreducible cycle (`loops::irreducible`).
+    fn irreducible_cycles(body: &LirBody) -> std::collections::BTreeSet<i64> {
+        let start = loops::irreducible(&body.blocks, Some(body.entry));
+        if start.is_empty() {
+            return start;
+        }
+        let reach = |edges: &IndexMap<i64, Vec<i64>>| {
+            let mut seen: std::collections::BTreeSet<i64> = start.clone();
+            let mut work: Vec<i64> = start.iter().copied().collect();
+            while let Some(at) = work.pop() {
+                for next in edges.get(&at).into_iter().flatten() {
+                    if seen.insert(*next) {
+                        work.push(*next);
+                    }
+                }
+            }
+            seen
+        };
+        let (mut forward, mut backward): (IndexMap<i64, Vec<i64>>, IndexMap<i64, Vec<i64>>) = Default::default();
+        for one in &body.blocks {
+            for to in one.succ.iter() {
+                forward.entry(one.at).or_default().push(*to);
+                backward.entry(*to).or_default().push(one.at);
+            }
+        }
+        reach(&forward).intersection(&reach(&backward)).copied().collect()
     }
 
     /// Every block's frequency, to keep on the body.
@@ -636,7 +670,7 @@ mod tests {
         op: Operation,
         name: &str,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
     }
 
@@ -1021,6 +1055,106 @@ mod tests {
     /// A table left as it was after an edge moved (block 3 reached only through
     /// a rare edge now) ran the block as often as before: nothing said so.
     /// The invariant every honest table keeps catches it under LLRM_VERIFY.
+    /// A cycle entered at two blocks (QB's ON ERROR pad switching back into a
+    /// loop, a state machine's dispatch) gets the frequencies
+    /// BlockFrequencyInfoImpl gives an irreducible SCC
+    /// (BlockFrequencyInfoImpl.h:650, "limited support", power iteration),
+    /// which are not the flow in: `violations` said "block runs 1.551
+    /// times, its predecessors 0.582" of a table nothing had
+    /// broken (LLRM_VERIFY failed on a QB program of eight lines). The blocks
+    /// are that program's.
+    #[test]
+    fn test_an_irreducible_cycle_is_not_held_to_the_flow_into_its_blocks() {
+        type Shape<'a> = &'a [(i64, &'a str, Operation, &'a [(i64, f64)])];
+        let made = |shape: Shape| {
+            let mut body = LirBody::new(
+                "f",
+                0x31,
+                shape
+                    .iter()
+                    .map(|(at, text, what, to)| -> crate::model::lir::Block {
+                        // Every block but 0x2b does something, so none else is
+                        // a bridge (0x2b being one is
+                        // what made isel's table read as it did).
+                        LirBlock {
+                            succ: to.iter().map(|(to, _)| *to).collect::<Vec<i64>>().into(),
+                            ..LirBlock::new(
+                                *at,
+                                if *at == 0x2b {
+                                    vec![insn(*at, *what, text)]
+                                } else {
+                                    vec![insn(*at, Operation::Nothing, "mov"), insn(*at, *what, text)]
+                                },
+                            )
+                        }
+                        .into()
+                    })
+                    .collect::<Vec<crate::model::lir::Block>>(),
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            for (at, _, _, to) in shape {
+                for (to, probability) in *to {
+                    body.odds.taken.insert((*at, *to), (probability * BlockOdds::CERTAIN).round() as u32);
+                }
+            }
+            body
+        };
+        let before: Shape = &[
+            (0x31, "jne", Operation::Branch, &[(0x19, 0.5), (0x0, 0.5)]),
+            (0x0, "jmp", Operation::Jump, &[(0x8, 1.0)]),
+            (0x8, "jmp", Operation::Jump, &[(0x9, 1.0)]),
+            (0x9, "jne", Operation::Branch, &[(0xc, 0.375), (0xe, 0.625)]),
+            (0xc, "jmp", Operation::Jump, &[(0x29, 1.0)]),
+            (0xe, "jne", Operation::Branch, &[(0x14, 0.96875), (0x16, 0.03125)]),
+            (0x14, "jmp", Operation::Jump, &[(0x28, 1.0)]),
+            (0x16, "jmp", Operation::Jump, &[(0x17, 1.0)]),
+            (0x17, "ret", Operation::Return, &[]),
+            (0x19, "jne", Operation::Branch, &[(0x23, 0.96875), (0x25, 0.03125)]),
+            (0x23, "jne", Operation::Branch, &[(0xc, 0.96875), (0x14, 0.03125)]),
+            (0x25, "jne", Operation::Branch, &[(0xe, 0.96875), (0x17, 0.03125)]),
+            (0x28, "jmp", Operation::Jump, &[(0x17, 1.0)]),
+            (0x29, "jmp", Operation::Jump, &[(0x2b, 1.0)]),
+            (0x2b, "jmp", Operation::Jump, &[(0x9, 1.0)]),
+        ];
+        let table = Frequency::over(&made(before), &made(before).blocks).table();
+        // The edges 19 -> 25, 23 -> 14 and 25 -> 17 each got a block since, a
+        // jump on that also reaches a block that returns (odds 0).
+        let after: Shape = &[
+            (0x31, "jne", Operation::Branch, &[(0x19, 0.5), (0x0, 0.5)]),
+            (0x0, "jmp", Operation::Jump, &[(0x8, 1.0)]),
+            (0x8, "jmp", Operation::Jump, &[(0x9, 1.0)]),
+            (0x9, "jne", Operation::Branch, &[(0xc, 0.375), (0xe, 0.625)]),
+            (0xc, "jmp", Operation::Jump, &[(0x29, 1.0)]),
+            (0xe, "jne", Operation::Branch, &[(0x14, 0.96875), (0x16, 0.03125)]),
+            (0x14, "jmp", Operation::Jump, &[(0x28, 1.0)]),
+            (0x16, "jmp", Operation::Jump, &[(0x17, 1.0)]),
+            (0x17, "ret", Operation::Return, &[]),
+            (0x19, "jne", Operation::Branch, &[(0x23, 0.96875), (0x2e, 0.03125)]),
+            (0x2e, "jne", Operation::Branch, &[(0x25, 1.0), (0x27, 0.0)]),
+            (0x23, "jne", Operation::Branch, &[(0xc, 0.96875), (0x2f, 0.03125)]),
+            (0x2f, "jne", Operation::Branch, &[(0x14, 1.0), (0x2c, 0.0)]),
+            (0x25, "jne", Operation::Branch, &[(0xe, 0.96875), (0x30, 0.03125)]),
+            (0x30, "jne", Operation::Branch, &[(0x17, 1.0), (0x2d, 0.0)]),
+            (0x27, "ret", Operation::Return, &[]),
+            (0x28, "jmp", Operation::Jump, &[(0x17, 1.0)]),
+            (0x29, "jmp", Operation::Jump, &[(0x2b, 1.0)]),
+            (0x2b, "jmp", Operation::Jump, &[(0x9, 1.0)]),
+            (0x2c, "ret", Operation::Return, &[]),
+            (0x2d, "ret", Operation::Return, &[]),
+        ];
+        let mut body = made(after);
+        body.frequencies = Some(table);
+        assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
+        // The exemption is the cycle's: a block outside it that runs ten times
+        // as often as the only block that reaches it is still said.
+        let mut stale = body.frequencies.as_ref().expect("a table").0.clone();
+        *stale.get_mut(&0x28).expect("a block outside the cycle") *= 10.0;
+        body.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(stale)));
+        let said = Frequency::violations(&body);
+        assert!(said.iter().any(|one| one.contains("block 0x28 runs")), "{said:?}");
+    }
+
     #[test]
     fn test_a_table_left_stale_by_a_moved_edge_is_caught() {
         let mut body = LirBody::new(

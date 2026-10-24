@@ -14,7 +14,7 @@ register, an address base or index, a selector) or the x87 stack, and loads
 of different classes differ in nothing but those sets.
 
 A call is no float-region boundary when x87 values live in registers the
-allocator spills (`rfp_on`): a float argument is read after the call
+allocator spills: a float argument is read after the call
 instead of spilled across it.
 
 Within a block, from the last instruction up, a load `d = load [a]` is a

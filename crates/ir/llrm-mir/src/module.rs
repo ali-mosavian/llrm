@@ -604,6 +604,12 @@ impl Function {
         self.instructions.len()
     }
 
+    /// The instructions in the layout (`Function::getInstructionCount`): the
+    /// erased and unplaced are not counted.
+    pub fn live_instructions(&self) -> usize {
+        self.layout.iter().map(|&block| self.iter_block(block).count()).sum()
+    }
+
     /// Each instruction's index in its block, by id; erased and unplaced ones
     /// are zero.
     pub fn positions(&self) -> Vec<u32> {
@@ -800,21 +806,43 @@ impl Function {
         &self,
         block: BlockId,
     ) -> crate::blocklist::BlockList {
-        let users = self.block_users(block);
-        if users.has_n_uses_or_more(SCAN + 1) {
-            return self.parents_once(users);
-        }
         let mut out = crate::blocklist::BlockList::new();
-        for one in users {
+        for one in self.block_users(block) {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
                 && let Some(parent) = self.parent(user)
                 && !out.contains(&parent)
             {
+                // Past `SCAN` blocks the repeats are found by a set.
+                if out.len() == SCAN {
+                    return self.parents_once(self.block_users(block));
+                }
                 out.push(parent);
             }
         }
         out
+    }
+
+    /// The one block whose terminators name `block`, if there is exactly one:
+    /// `predecessors(block)` of one block, without the list.
+    pub fn sole_predecessor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let mut found = None;
+        for one in self.block_users(block) {
+            let user = one.user;
+            if self.instruction(user).opcode.is_terminator()
+                && let Some(parent) = self.parent(user)
+            {
+                match found {
+                    None => found = Some(parent),
+                    Some(earlier) if earlier == parent => {}
+                    Some(_) => return None,
+                }
+            }
+        }
+        found
     }
 
     /// LLVM's `predecessors(block)`: the blocks whose terminators name
@@ -1024,12 +1052,16 @@ pub enum GlobalKind {
 pub struct GlobalName {
     text: Option<String>,
     intrinsic: Option<crate::intrinsics::Intrinsic>,
+    /// `pattern::intrinsic_id_of_name` of the text, found once with it: the
+    /// combiner asked it of every call it visited.
+    intrinsic_id: Option<crate::valuetracking::pattern::IntrinsicId>,
 }
 
 impl From<Option<String>> for GlobalName {
     fn from(text: Option<String>) -> Self {
         let intrinsic = text.as_deref().and_then(crate::intrinsics::Intrinsic::named);
-        GlobalName { text, intrinsic }
+        let intrinsic_id = text.as_deref().and_then(crate::valuetracking::pattern::intrinsic_id_of_name);
+        GlobalName { text, intrinsic, intrinsic_id }
     }
 }
 
@@ -1043,6 +1075,11 @@ impl GlobalName {
     /// The name as an owned `Option<String>`.
     pub fn owned(&self) -> Option<String> {
         self.text.clone()
+    }
+
+    /// `Function::getIntrinsicID` for the intrinsics of `pattern::IntrinsicId`.
+    pub fn intrinsic_id(&self) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.intrinsic_id
     }
 }
 

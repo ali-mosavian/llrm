@@ -1,0 +1,37 @@
+== -loop-interchange-profitabilities=ignore
+@t
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v11, %B9 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  br label %B3
+B3:
+  %v1 = phi i64 [ %v9, %B8 ], [ 0, %B2 ]
+  br label %B4
+B4:
+  br label %B5
+B5:
+  %v2 = phi i64 [ %v6, %B7 ], [ 0, %B4 ]
+  %v3 = zext i32 %b to i64
+  br label %B6
+B6:
+  %v4 = add nsw i64 %v1, 1
+  %v5 = icmp eq i64 %v4, %v3
+  br label %B7
+B7:
+  %v6 = add nsw i64 %v2, 1
+  %v7 = icmp eq i64 %v6, 100
+  br i1 %v7, label %B8, label %B5
+B8:
+  %v8 = phi i64 [ %v3, %B7 ]
+  %v9 = add nsw i64 %v1, 1
+  %v10 = icmp eq i64 %v9, %v8
+  br i1 %v10, label %B9, label %B3
+B9:
+  %v11 = add nsw i64 %v0, 1
+  %v12 = icmp eq i64 %v11, 100
+  br i1 %v12, label %B10, label %B1
+B10:
+  ret void

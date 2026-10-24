@@ -341,7 +341,7 @@ impl llrm_target::Target for M32 {
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
-                Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
+                Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }
     }
@@ -556,7 +556,10 @@ mod tests {
     #[test]
     fn test_calling_toml_states_watcall32_at_the_top_of_its_table() {
         let one = CALLING.native();
-        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("watcall32", &["watcall32", "cdecl32", "sysv32"][..]));
+        assert_eq!(
+            (one.name.as_str(), CONVENTIONS.as_slice()),
+            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..])
+        );
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!(
             (one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()),

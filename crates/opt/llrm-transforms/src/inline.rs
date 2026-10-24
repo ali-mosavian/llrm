@@ -183,11 +183,17 @@ pub struct Threshold {
     /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
     /// callers pass though the unit grows (`ipacp`).
     pub cp_clone: bool,
+    /// `-finline-recursive`: gcc's recursive inlining and peeling (a recursive
+    /// function copied into itself to depth 3, a recursive callee's own calls
+    /// inlined in the copy, its tail-call elimination deferred until the
+    /// copies are made). Off: the pin's inliner, which copies a recursive
+    /// callee once (DEVIATE (recursion), docs/architecture/recursion-rows.md).
+    pub recursive: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false, recursive: false }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -719,9 +725,10 @@ impl<'a> Plan<'a, '_> {
             }
             self.insns += grown;
         } else if self.caller.peeling && depth > 1 {
-            // Peeling (`want_inline_self_recursive_call_p`, ipa-inline.cc:1033):
-            // the copy's own call, `depth - 1` copies deep, is inlined while
-            // the probability of recursing is below 1 - 1/8, squared once for
+            // Peeling (`want_inline_self_recursive_call_p`,
+            // ipa-inline.cc:1033): the copy's own call, `depth - 1`
+            // copies deep, is inlined while the probability of
+            // recursing is below 1 - 1/8, squared once for
             // each copy before it, and the copy adds a small function's
             // growth. DEVIATE: gcc reads the probability of the one call's
             // edge; here it is the calls of the function to itself per call,
@@ -990,7 +997,12 @@ fn executed(
         placed.copies.insert(seq, copy);
     }
     let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
+    let site = match &function.instruction(call).opcode {
+        Opcode::Call(info) => info.tail,
+        _ => llrm_mir::opcode::Tail::None,
+    };
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    narrow_tail_calls(function, &made.copies, site);
     placed.lifetimes.push(unmarked_allocas(context, layout, &planned.candidate.body, &made, declared));
     let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
@@ -1010,6 +1022,36 @@ fn executed(
         executed(context, function, layout, copies[*place], nested, declared, placed)?;
     }
     Ok(())
+}
+
+/// The `tail` markers of the calls a body brings, as `InlineFunction` leaves
+/// them: a call is no more `tail` than the site it was inlined at
+/// (`ChildTCK = std::min(CallSiteTailKind, ChildTCK)` unless the child is
+/// `notail`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3136>);
+/// the body's `tail` rested on its own frame, not on the caller's. `notail`
+/// at the site is no marker.
+fn narrow_tail_calls(
+    function: &mut Function,
+    copies: &[InstId],
+    site: llrm_mir::opcode::Tail,
+) {
+    use llrm_mir::opcode::Tail;
+    let rank = |kind: Tail| match kind {
+        Tail::None => 0,
+        Tail::Tail => 1,
+        Tail::MustTail => 2,
+        Tail::NoTail => 3,
+    };
+    let site = if site == Tail::NoTail { Tail::None } else { site };
+    for &copy in copies {
+        let Opcode::Call(info) = &function.instruction(copy).opcode else { continue };
+        if info.tail != Tail::NoTail && rank(site) < rank(info.tail) {
+            let mut info = info.clone();
+            info.tail = site;
+            function.set_opcode(copy, Opcode::Call(info));
+        }
+    }
 }
 
 /// Every legal call site in `function` inlined, as `expanded` called until it

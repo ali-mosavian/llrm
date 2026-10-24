@@ -119,7 +119,7 @@ mod tests {
         // No Python test covers this module; expected text is Python's repr
         // of the same input.
         let semantics = |op, dests, sources| Semantics {
-            name: Some(if op == Operation::Address { "lea" } else { "mov" }.to_owned()),
+            name: Some(if op == Operation::Address { "lea" } else { "mov" }.into()),
             dests,
             sources,
             ..Semantics::new(op)

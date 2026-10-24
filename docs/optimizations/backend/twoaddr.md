@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/twoaddr.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:d33061bf64c584db96365de450c486704c2ce19b7315c2f31e8a32f7fc6d42bf -->
+<!-- src: crates/backend/llrm-core/src/backend/twoaddr.rs sha256:7cff574150f7c14db1364769cbf68b40318fe256c6fd5f9ab1b43d8f938c425c -->
 
 # twoaddr
 
@@ -21,15 +21,13 @@ Three things happen first so the copy is less often needed.
 - Update in place: `c := a + b` followed by the copy `a := c`, with `a` dead
   between, and `c` defined once and read only by that copy, becomes `a := a
   + b`. No interval grows and the copy the coalescer might refuse is gone.
-- Commuting: for `add`, `and`, `or`, `xor` and `imul` the sources are
-  swapped when that lets the destination reuse a source that dies. A swap is
-  chosen when the second source is the destination already, when only the
-  second source dies, or when neither lives on and the second is less
-  blocked (by interference with the destination's copy neighbours) and
-  closer by copies. Interference is computed only among the values a swap
-  asks about. Before those, a sum that ends in a register (`requires`) keeps
-  the operand delivered in it as the tied one (LLVM's physical-register rule
-  in `isProfitableToCommute`), so `a + b` returned in EAX is `add eax, edx`.
+- Commuting (`twoaddress::Commuter`, `tryInstructionCommute`): for `add`,
+  `and`, `or`, `xor` and `imul` the sources are swapped when the second dies
+  here and the first does not, or when `isProfitableToCommute` says so: a
+  register the sum is to end in, a use of the first between its definition
+  and here, a copy chain, or the second defined later. A sum that ends in a
+  register (`requires`) keeps the operand delivered in it as the tied one,
+  so `a + b` returned in EAX is `add eax, edx`.
 - A memory destination whose cell is not the first source (`[m] := a + b`)
   is computed in a fresh register: load, operate, store.
 
@@ -59,4 +57,6 @@ copies the allocator can share a register across.
 
 ## See also
 LLVM's
-[`TwoAddressInstructionPass`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp).
+[`TwoAddressInstructionPass`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp),
+translated in `twoaddress.rs` for the commuting; the rest is this file's
+own.

@@ -18,7 +18,7 @@ def load(name: str):
 
 def fake_llrm(path: Path, body: str) -> str:
     """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
-    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
     path.chmod(0o755)
     return str(path)
 
@@ -33,6 +33,19 @@ def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path):
     assert done.returncode == 1
     assert "1 objects changed" in done.stdout and "changed same m32 -O2" in done.stdout
     assert "failed on both sides" in done.stdout and "1 failed on both sides" in done.stdout
+
+
+def test_objsweep_measures_the_object_not_the_assembly_text(tmp_path):
+    """objsweep wrote to `x.old`: llrm-c wrote assembly text there, so x_fir m16 read +350 B (text) where the object grew 21 B."""
+    src = tmp_path / "b"
+    src.mkdir()
+    (src / "p.c").write_text("int a;")
+    for name, obj in (("old", "A"), ("new", "B")):
+        pad = "#" * (5000 if name == "old" else 9000)  # two builds, not one relinked
+        (tmp_path / name).write_text(f'#!/bin/bash\n# {pad}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ncase "$o" in *.o|*.obj) echo {obj} > "$o";; *) echo TEXT > "$o";; esac\n')
+        (tmp_path / name).chmod(0o755)
+    done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(tmp_path / "old"), str(tmp_path / "new"), "--src", str(src), "--levels", "O2", "--targets", "m32"], capture_output=True, text=True)
+    assert "changed p m32 -O2" in done.stdout, done.stdout + done.stderr
 
 
 def test_rowdiff_counts_rows_above_a_and_names_a_row_on_one_side():
@@ -59,9 +72,12 @@ def test_a_pair_of_one_build_relinked_is_void(tmp_path):
     voidpair = load("voidpair")
     base = bytes(range(256)) * 1024
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
-    a.write_bytes(base)
-    b.write_bytes(base[:100] + b"x" * 83 + base[183:])
-    c.write_bytes(bytes(reversed(base)))
+    stamp = b'#!/bin/sh\necho "llrm-c abc123"\nexit 0\n'  # the binaries must answer --version; the rest is never run
+    a.write_bytes(stamp + base)
+    b.write_bytes(stamp + base[:100] + b"x" * 83 + base[183:])
+    c.write_bytes(stamp + bytes(reversed(base)))
+    for one in (a, b, c):
+        one.chmod(0o755)
     assert voidpair.void(str(a), str(b)).startswith("VOID PAIR")
     assert voidpair.void(str(a), str(c)) == ""
     done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(a), str(b), "--src", str(tmp_path)], capture_output=True, text=True)
@@ -101,3 +117,58 @@ def test_board_and_cbisect_say_what_they_need_instead_of_running():
     for script in ("board.py", "cbisect.py"):
         done = subprocess.run([sys.executable, str(HERE / script)], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         assert done.returncode == 2, (script, done.stderr)
+
+
+def fake_selector(path: Path, extra: int = 0, refuse: bool = False) -> str:
+    """A stand-in llrm-c with two functions on the `isel` channel; `--isel=dag` gives `g` EXTRA more instructions, or is refused."""
+    path.write_text(
+        '#!/bin/bash\n[ "$1" = --version ] && { echo "llrm-c abc1234"; exit 0; }\n'
+        'for a; do case $a in --isel=*) s=${a#--isel=};; esac; [ "$p" = -o ] && o=$a; p=$a; done\n'
+        f'[ "$s" = dag -o "$s" = shadow ] && {{ [ {int(refuse)} = 1 ] && {{ echo "@f: --isel=dag: cannot select" >&2; exit 1; }}; n={extra}; }} || n=0\n'
+        'echo x > "$o"\necho "[isel] f selector=$s instructions=4 copies=1 executed=9 memory=2" >&2\n'
+        'echo "[isel] g selector=$s instructions=$((7+n)) copies=0 executed=20 memory=5" >&2\n'
+    )
+    path.chmod(0o755)
+    return str(path)
+
+
+def shadow(tmp_path, binary: str, *extra: str):
+    src = tmp_path / "b"
+    src.mkdir(exist_ok=True)
+    (src / "p.c").write_text("int a;")
+    return subprocess.run([sys.executable, str(HERE / "isel_shadow.py"), binary, "--src", str(src), "--levels", "O2", "--targets", "m32", *extra], capture_output=True, text=True)
+
+
+def test_isel_shadow_old_against_old_is_empty(tmp_path):
+    """The premise: a harness that reports a difference between a selector and itself reports nothing true."""
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm"), "--new-isel", "old")
+    assert done.returncode == 0, done.stdout
+    assert "0 functions differ of 2; 1 of 1 cells identical, 0 refused" in done.stdout
+
+
+def test_isel_shadow_shows_a_seeded_one_instruction_difference_as_one_function(tmp_path):
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm", extra=1))
+    assert done.returncode == 1
+    assert "1 functions differ of 2" in done.stdout
+    assert "p m32 -O2 g: instructions 7 -> 8" in done.stdout and " f:" not in done.stdout
+
+
+def test_isel_shadow_counts_a_refused_compile_and_never_as_equal(tmp_path):
+    done = shadow(tmp_path, fake_selector(tmp_path / "llrm", refuse=True))
+    assert done.returncode == 1
+    assert "1 refused" in done.stdout and "REFUSED p m32 -O2: old: ok; new: @f: --isel=dag: cannot select" in done.stdout
+
+
+def test_isel_shadow_reads_m16_function_bytes_from_a_jwasm_listing():
+    """m16 bytes were the object's total: a function that grew by one byte moved nothing the report named."""
+    shadow = load("isel_shadow")
+    listing = "00000000                        _id@3 proc far\n00000001                        _id@3 endp\n00000001                        _sum@3 proc far\n00000015                        _sum@3 endp\n"
+    assert shadow.parse_listing(listing) == {"id": "1", "sum": "20"}
+
+
+def test_isel_shadow_lists_a_function_the_dag_path_refused_and_never_as_equal():
+    """`--isel=shadow` falls back to the old selector for a refused function: its row then equals the old one, and the report read zero."""
+    shadow = load("isel_shadow")
+    old = shadow.parse_rows("[isel] f selector=old instructions=4 copies=1 executed=9 memory=2\n")
+    new = shadow.parse_rows("[isel] f selector=shadow instructions=4 copies=1 executed=9 memory=2\n[isel] f refused: --isel=dag: a function of several blocks\n")
+    assert shadow.differences(old, new) == ["f: REFUSED --isel=dag: a function of several blocks"]

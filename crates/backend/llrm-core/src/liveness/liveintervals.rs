@@ -35,6 +35,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod handlemove;
+
 use super::cfg::{Cfg, DomTree};
 use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
@@ -42,6 +44,44 @@ use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet};
+
+// How many `LiveIntervals` this thread has built, for a test that a phase that
+// does not need the intervals builds none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// The `LiveIntervals` a pass leaves for the next one (the pin's analysis,
+// preserved across TwoAddress and the register coalescer), with the
+// instructions of the body it was made for: the next pass takes it only for
+// that body. One per thread, since the slot indexes of a thread share an arena.
+thread_local! {
+    static HANDED_OVER: std::cell::RefCell<Option<(Vec<Vec<InstrKey>>, u64, LiveIntervals)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn instructions_of(body: &LirBody) -> Vec<Vec<InstrKey>> {
+    body.blocks.iter().map(|block| block.insns.iter().map(|one| one.id()).collect()).collect()
+}
+
+/// `lis` is left for the next pass, which has `body`.
+pub fn hand_over(
+    lis: LiveIntervals,
+    body: &LirBody,
+) {
+    HANDED_OVER.with(|slot| *slot.borrow_mut() = Some((instructions_of(body), super::slotindex::analysed(), lis)));
+}
+
+/// The `LiveIntervals` handed over for exactly this `body`, if there is one.
+pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
+    HANDED_OVER.with(|slot| {
+        let held = slot.borrow_mut().take()?;
+        // Taken only if no other body was numbered since: its entries are the
+        // arena's.
+        (held.0 == instructions_of(body) && held.1 == super::slotindex::analysed()).then_some(held.2)
+    })
+}
 
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
@@ -66,6 +106,8 @@ pub struct LiveIntervals {
 
 impl LiveIntervals {
     pub fn new(body: &LirBody) -> Self {
+        #[cfg(test)]
+        BUILT.with(|one| one.set(one.get() + 1));
         assert!(body.blocks.iter().all(|block| block.phis.is_empty()), "phis are eliminated before allocation");
         let indexes = SlotIndexes::new(body);
         let cfg = Cfg::of(body);
@@ -107,6 +149,11 @@ impl LiveIntervals {
         for &value in &one.uses {
             self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false });
         }
+        // An operand flagged undef names the register and reads nothing
+        // (`MachineOperand::isUndef`): it starts and extends no live range.
+        for &value in &one.undefs {
+            self.push_operand(value, Operand { instr, is_def: false, reads_reg: false, early_clobber: false });
+        }
     }
 
     fn push_operand(
@@ -124,7 +171,7 @@ impl LiveIntervals {
         one: &Insn,
     ) {
         let instr = one.id();
-        for &value in one.defines.iter().chain(&one.uses) {
+        for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
             let Some(mut mine) = self.slots.remove(&(value, instr)) else { continue };
             let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
@@ -461,6 +508,37 @@ impl LiveIntervals {
             .map(|run| first + run)
             .or_else(|| insns.iter().position(|one| one.id() == key))
             .expect("an instruction of the block")
+    }
+
+    /// The LiveIntervals update of `processTiedPairs`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1666>):
+    /// the copy `into := source` was put before `mi`, which now reads `into`.
+    /// `into` is live from the copy to `mi`, as a value of its own; `source`,
+    /// if `mi` ended its range and no longer reads it, ends at the copy. An
+    /// interval not held is made from the body as it is.
+    pub fn tied_copy_inserted(
+        &mut self,
+        copy: InstrKey,
+        mi: InstrKey,
+        into: u32,
+        source: u32,
+        mi_reads_source: bool,
+    ) {
+        let copy_at = self.indexes.get_instruction_index(copy).get_reg_slot(false);
+        let mi_at = self.indexes.get_instruction_index(mi);
+        if self.has_interval(into) {
+            let li = self.interval_mut(into);
+            let value = li.get_next_value(copy_at.clone());
+            li.add_segment(Segment::new(copy_at.clone(), mi_at.get_reg_slot(false), Some(value)));
+        }
+        if !mi_reads_source && self.has_interval(source) {
+            let base = mi_at.get_base_index();
+            let li = self.interval_mut(source);
+            let at = li.find_segment_containing(&copy_at);
+            if at != li.segments.len() && li.segments[at].end.get_base_index() == base {
+                li.segments[at].end = copy_at;
+            }
+        }
     }
 
     /// `insertMachineInstrInMaps` for an instruction put immediately before
@@ -1050,6 +1128,51 @@ mod tests {
         uses: &[u32],
     ) -> Arc<Insn> {
         Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    fn undef_reader(
+        defines: &[u32],
+        undefs: &[u32],
+    ) -> Arc<Insn> {
+        let mut one = Insn::new(0, None, None, defines.to_vec(), Vec::new());
+        one.undefs = undefs.to_vec();
+        Arc::new(one)
+    }
+
+    /// An instruction taken out of the maps took its undef operands with it:
+    /// the operand of a value read as undef stayed listed, and the
+    /// coalescer asked the maps for an instruction that was gone
+    /// ("Instruction not found in maps").
+    #[test]
+    fn test_removing_an_instruction_removes_its_undef_operands() {
+        let (def, reader) = (insn(&[1], &[]), undef_reader(&[2], &[9]));
+        let mut lis = LiveIntervals::new(&body(&[Arc::clone(&def), Arc::clone(&reader)]));
+        assert_eq!(lis.operands(9).len(), 1);
+        lis.remove_instr(0, reader.id());
+        assert!(lis.operands(9).is_empty(), "an operand of a removed instruction is still listed");
+    }
+
+    /// A value an operand reads as undef (`ProcessImplicitDefs`) has no def and
+    /// none is needed: no segment is made for it, where a plain read of a
+    /// value nothing defines stops the calculation ("a unique value"),
+    /// and the values around it keep theirs.
+    #[test]
+    fn test_a_value_read_as_undef_has_no_live_range_and_costs_its_reader_nothing() {
+        let insns = [insn(&[1], &[]), undef_reader(&[2], &[9]), insn(&[], &[1, 2])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        assert!(lis.interval(9).empty(), "an undef read starts no range");
+        assert!(!lis.interval(1).empty() && !lis.interval(2).empty());
+        assert_eq!(lis.operands(9).len(), 1, "the operand is there for the register rewrite to find");
+        assert!(!lis.operands(9)[0].reads_reg);
+    }
+
+    /// A join that renames a value renames the one an operand reads as undef
+    /// too: left alone, the operand would name a value nothing places.
+    #[test]
+    fn test_renaming_a_value_renames_the_undef_reads_of_it() {
+        let one = undef_reader(&[2], &[9]);
+        let renamed = one.renamed(&|value| if value == 9 { 4 } else { value });
+        assert_eq!(renamed.undefs, vec![4]);
     }
 
     /// An instruction put after the last use of `%1` that reads it, without

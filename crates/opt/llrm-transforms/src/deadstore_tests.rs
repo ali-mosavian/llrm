@@ -27,6 +27,17 @@ fn an_overwritten_store_goes() {
     assert!(!after.contains("store i16 1"), "{after}");
 }
 
+/// `isInstructionTriviallyDead` named four opcodes: the call whose value only
+/// the overwritten store held stayed.
+#[test]
+fn the_pure_call_only_a_dead_store_held_goes_with_it() {
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine internal i16 @pure(i16 %a) memory(none) nounwind willreturn {\nb0:\n  %r = add i16 %a, 1\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %x) {\nb0:\n  %v = call i16 @pure(i16 %x)\n  store i16 %v, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("call i16 @pure"), "{after}");
+}
+
 /// A load between the stores reads the first.
 #[test]
 fn a_store_that_is_read_stays() {

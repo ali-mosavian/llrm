@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cpu.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cpu.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:216c86c8a60e92bf91055d32aa3ebaffa8f1d3f7f80243b9f8efcfc5f78ed7eb -->
+<!-- src: crates/backend/llrm-core/src/backend/cpu.rs sha256:8d52b4f29ebb3023e3f348732d1182e6be67173ef150b7f003bd542e16ffd2ec -->
 
 # cpu
 
@@ -24,7 +24,7 @@ flowchart LR
   linkStyle default stroke:#64748b,stroke-width:2.2px
   tab["<b>Target::cpu_table(name)</b>"]:::src
   tgt["<b>Target</b><br/><small>registers, spaces,<br/>calling, cost model</small>"]:::src
-  drv["<b>driver</b><br/><small>size, search,<br/>exhaustive, routes</small>"]:::src
+  drv["<b>driver</b><br/><small>size, search,<br/>exhaustive</small>"]:::src
   prof["<b>Profile</b>"]:::opt
   q["<b>cost(alu_rr), latency(..)</b><br/><small>doubling()<br/>clears_before_byte_load()<br/>pops_arguments(n), ...</small>"]:::mid
   mir["<b>target()</b><br/><small>the MIR cost model</small>"]:::mid
@@ -42,7 +42,7 @@ broken by the shorter encoding), `search` (the allocator tries other
 shapes of a body), `exhaustive` (every shape) and `routes` (both the
 allocator alone and the spiller route are made and the cheaper kept).
 They are part of the profile so that every phase reads one value.
-`tuned_routing` builds a profile once per (target, CPU, size, search,
+`tuned_optimizing` builds a profile once per (target, CPU, size, search,
 exhaustive, routes) and leaks it, so a profile is a `&'static` reference
 that passes hold freely. An unknown CPU is an error that lists the
 target's CPUs.

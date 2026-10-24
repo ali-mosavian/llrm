@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b49fc9fb50d5170d912da80e9cc15317b456d8d7dd4adaa087c263a3eb29be57 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:9b897f374883fa1f2709c1caa040edfd0a3efd0529bf162f78b94d94c55173cb -->
 
 # pipeline
 
@@ -32,12 +32,12 @@ flowchart TB
     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>licm<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>simple-loop-unswitch,<br/>non-trivial</small>"]:::mid
-    swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
+    swap["<b>interchange (rounds only)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -78,8 +78,8 @@ choose a loop's counters again; `rotate{proven}` is last of the loop
 passes; `hoist`
 runs again to lift what a rotated loop (run at least once) may now leave;
 `gepoffset` follows it because it would move a constant `gep` out of its
-loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
-`sink` follows `addresssink`, once the passes that move work up have run.
+loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
+`sink` follows `cgpaddr`, once the passes that move work up have run.
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
@@ -107,21 +107,19 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `interchange` | the passes of that name (off by default; on at -O3 and -Omax) |
+| `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
-`calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-the intervals of counted loops. `limits` are the copy budgets of the
-unroller.
+`calleepop` in bytes. `limits` are the copy budgets of the unroller.
 
 ## Needs
-`Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+`Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 up front, and frozen at the end of D so the passes of E read them without
 recomputing after each edit.
 

@@ -195,21 +195,21 @@ fn backward_loop(procedure: &str) -> String {
 }
 
 #[test]
-fn test_a_counter_whose_start_seeds_pointers_still_counts_to_zero() {
-    // Its start, `LBOUND`, also seeded the three pointers, so the counter was
-    // refused and a pointer took control at a symbolic bias: `[bx+di]` with
-    // `di` and another pointer reloaded from [bp] every trip.
+fn test_a_counter_whose_start_seeds_pointers_counts_up_to_its_symbolic_bound() {
+    // The pin's loop-reduce leaves this up-counter too (its bound is `UBOUND`,
+    // not a constant), and its i486 loop is no tighter (11 instructions, two
+    // reloads, `incl; addl; cmpw; jle`): ours is 10 with two reloads from [bp].
     let loop_ = backward_loop(&sum_three(false));
-    assert!(!loop_.contains("[bp"), "{loop_}");
-    assert!(regex::Regex::new(r"\n    (inc|dec) \w+\n    jne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
+    assert_eq!(loop_.matches("[bp").count(), 2, "{loop_}");
+    assert!(regex::Regex::new(r"\n    inc \w+\n    cmp \w+, \w+\n    jle \w+\n$").unwrap().is_match(&loop_), "{loop_}");
 }
 
 #[test]
 fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
     // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and
-    // `jmp` back.
+    // `jmp` back. The loop closes on `jle`, the pin's form for this bound.
     let loop_ = backward_loop(&sum_three(false));
-    assert!(regex::Regex::new(r"\bjne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
+    assert!(regex::Regex::new(r"\bjle \w+\n$").unwrap().is_match(&loop_), "{loop_}");
     assert!(!loop_.contains("jmp"), "{loop_}");
 }
 
@@ -844,7 +844,7 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     let returned = lir::Insn::new(
         1,
         Some((1, 1)),
-        Some(ir::Semantics { name: Some(String::new()), ..ir::Semantics::new(Operation::Return) }),
+        Some(ir::Semantics { name: Some("".into()), ..ir::Semantics::new(Operation::Return) }),
         vec![],
         vec![],
     );
@@ -1355,6 +1355,33 @@ fn invariant_loads(function: &str) -> Vec<String> {
 fn test_a_poke_does_not_reach_a_local_whose_address_is_never_taken() {
     let text = optimized_blit(ROW_LOOP);
     assert!(!text.contains("alloca"), "{text}");
+}
+
+/// The range check of EXP and LOG kept its operand in a cell of the operand's
+/// own type, rounding an 80-bit chain to 64 bits before FEXP/FLN:
+/// log_exp_digits printed .9048374180359595 for BC's ...596 (D-RFP5 again). The
+/// operand goes from its arithmetic to FEXP/FLN, past the check, without a
+/// cell.
+#[test]
+fn test_a_range_checked_operand_is_not_kept_in_a_cell() {
+    use llrm_core::hir::model::{Op, Operand};
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "CHAIN.BAS",
+        b"DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\r\nREAD a, b, c\r\nPRINT EXP(a * b + c); LOG(a * b + c)\r\nDATA 1.5, 2.5, 0.25\r\n",
+    );
+    let program = parsed_as(&basic, "qb45", "qb45");
+    let function = program.modules[0].functions.iter().find(|one| one.name == "__main").expect("the main code");
+    let instructions: Vec<_> = function.blocks.iter().flat_map(|block| &block.instructions).collect();
+    let mut checked = 0;
+    for one in instructions.iter().filter(|one| matches!(one.op, Op::Fexp | Op::Fln)) {
+        let Some(Operand::ValueRef(argument)) = one.operands.first() else { panic!("FEXP/FLN of a value") };
+        let made = instructions.iter().find(|other| other.results.contains(&argument.value)).expect("its definition");
+        assert_eq!(made.op, Op::Fadd, "the operand was kept in a cell: {made:?}");
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
 }
 
 /// Rotation panicked ("stepping is not in list") on a loop whose counter
@@ -1895,37 +1922,38 @@ fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
 }
 
 #[test]
-fn test_a_pointer_takes_control_of_a_loop_to_a_symbolic_bound() {
-    // With the FOR promise, `-n TO n` was bounded by the whole width, too
-    // many trips for a step-2 pointer, so the counter kept its own `dec`
-    // beside the pointer's `add`: 12 instructions for 11.
+fn test_a_loop_to_a_symbolic_bound_keeps_its_counter_and_compare() {
+    // `-n TO n` is not a constant bound, so no pointer takes over: the pin's
+    // loop-reduce leaves ADVANCE's `icmp sle` up-counter, and its i486 loop is
+    // longer (17 instructions, four reloads) than ours (13).
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/particle.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("ADVANCE proc").expect("ADVANCE proc");
     let end = text.find("ADVANCE endp").expect("ADVANCE endp");
     let body = backward_loop(&text[start..end]);
-    assert!(!body.contains("dec ") && !body.contains("cmp "), "{body}");
+    assert!(body.contains("inc cx") && body.contains("cmp cx, ax"), "{body}");
 }
 
 #[test]
-fn test_a_masked_use_moves_with_a_counter_to_zero() {
-    // `POKE o, ch + (o AND 15)` read the counter through a mask, so FILL kept
-    // `cmp si, 0F9Eh` every trip. The bias 4000 is a multiple of 16: the mask
-    // reads the same bits of the rebased counter.
+fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
+    // `POKE o, ch + (o AND 15)` reads the counter through a mask, so FILL
+    // keeps `cmp bx, 3999` every trip. The pin's loop-reduce leaves the loop
+    // as it is too (its i486 loop is 9 instructions to ours 8).
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/textfill.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("FILL proc").expect("FILL proc");
     let end = text.find("FILL endp").expect("FILL endp");
     let body = backward_loop(&text[start..end]);
-    assert!(!body.contains("cmp ") && body.contains("and "), "{body}");
+    assert!(body.contains("cmp bx, 3999") && body.contains("and "), "{body}");
 }
 
 #[test]
-fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
-    // rcflip's third RAMP loop stepped `inc ax` before `add bx, 2`, which
-    // overwrote its flags, so the header kept `or ax, ax` every trip.
+fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
+    // rcflip's third RAMP loop ends `inc ax; cmp ax, 357; jne`: the pin's
+    // loop-reduce compares this loop against 357 too, and its i486 loop is as
+    // long (8 instructions).
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -1940,7 +1968,7 @@ fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
         })
         .find(|body| body.contains("imul"))
         .expect("the multiplying loop");
-    assert!(!body.contains("or ax, ax") && !body.contains("cmp "), "{body}");
+    assert!(body.contains("cmp ax, 357") && !body.contains("or ax, ax"), "{body}");
 }
 
 #[test]
@@ -2693,12 +2721,13 @@ fn checked_division_raises_error_11_where_bcs_divide_traps() {
         })
         .count();
     assert!(divisions >= 3, "{divisions}");
-    // Where errors land the narrow overflow is code anyway (BC's 16-bit divide
-    // traps on it), the zero divisor the IR's own; the option adds the zeros.
+    // The zero divisor is code with and without the option (MIR's sdiv by zero
+    // is undefined: -O2 deleted an unused quotient and no error 11 was raised,
+    // QB-DIVZERO-1); the option no longer adds the zeros.
     let raised =
         |program: &llrm_core::hir::model::Program| instructions(program).iter().filter(|one| raises(one, 11)).count();
     let checked = hir(true);
-    assert!(raised(&plain) < raised(&checked), "{} {}", raised(&plain), raised(&checked));
+    assert!(raised(&plain) >= divisions, "{} {divisions}", raised(&plain));
     assert!(raised(&checked) >= divisions, "{checked:?}");
 }
 
@@ -2708,11 +2737,12 @@ fn test_checked_division_raises_on_the_rich_route() {
     let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let text = listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
     assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
-    // Without the option a division where errors land is raised as code too
-    // (the next test); with no handler it stays the processor's.
+    // Without the option a division by a variable is raised as code too, with
+    // or without a handler (QB-DIVZERO-1: the processor's trap is undefined in
+    // MIR and -O2 deleted it).
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "plain.bas", b"DEFINT A-Z\nINPUT d\nPRINT 10 \\ d\n");
-    assert!(!listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
+    assert!(listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
 }
 
 /// An error raised in a FUNCTION called from a SUB, with the handler in the
@@ -3159,4 +3189,44 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
         .filter(|one| one.contains("addrspace(1)") && (one.contains("store i16") || one.contains("load i16")))
         .collect::<Vec<_>>();
     assert!(!far.is_empty() && far.iter().all(|one| !one.contains("!tbaa")), "{sub}");
+}
+
+/// The `llrm.qb.frame` calls (the variables handed to the handler) of `name`.
+fn handed_variables(
+    source: &[u8],
+    name: &str,
+) -> usize {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "HANDED.BAS", source);
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    let start = text
+        .find(&format!("define "))
+        .and_then(
+            |_| text.match_indices("define ")
+                .map(|(at, _)| at)
+                .find(|at| text[*at..].lines().next().is_some_and(|line| line.contains(&format!("@{name}(")))),
+        );
+    let start = start.expect("the function");
+    let body = &text[start..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    body.matches("@llrm.qb.frame(").count()
+}
+
+/// A local read only at a label that only RESUME reaches is handed to the
+/// handler; one not read after any statement is not (premise: the same SUB
+/// without the read of `c%` hands one fewer).
+#[test]
+fn test_a_local_read_at_a_resume_label_is_handed_to_the_handler() {
+    let reads = handed_variables(
+        b"DECLARE SUB Lab ()\nLab\nEND\nSUB Lab\nON LOCAL ERROR GOTO lh\nc% = 41 + INT(RND * 0)\nERROR 7\nEXIT SUB\ndone:\nPRINT c%\nEXIT SUB\nlh:\nRESUME done\nEND SUB\n",
+        "LAB",
+    );
+    let unread = handed_variables(
+        b"DECLARE SUB Lab ()\nLab\nEND\nSUB Lab\nON LOCAL ERROR GOTO lh\nc% = 41 + INT(RND * 0)\nERROR 7\nEXIT SUB\ndone:\nPRINT 0\nEXIT SUB\nlh:\nRESUME done\nEND SUB\n",
+        "LAB",
+    );
+    assert_eq!(reads, unread + 1, "handed with the read {reads}, without it {unread}");
 }

@@ -77,6 +77,9 @@ thread_local! {
     /// copyable (entry, slot) pair whose number is read here, so renumbering
     /// the list moves every index held anywhere without touching them.
     static ARENA: RefCell<Arena> = RefCell::new(Arena::default());
+    /// How many bodies this thread has numbered: a `SlotIndexes` kept across
+    /// another's numbering has lost its entries.
+    static ANALYSED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl Arena {
@@ -313,6 +316,7 @@ impl SlotIndex {
 }
 
 impl PartialEq for SlotIndex {
+    #[inline(always)]
     fn eq(
         &self,
         other: &Self,
@@ -324,6 +328,7 @@ impl PartialEq for SlotIndex {
 impl Eq for SlotIndex {}
 
 impl PartialOrd for SlotIndex {
+    #[inline(always)]
     fn partial_cmp(
         &self,
         other: &Self,
@@ -333,6 +338,9 @@ impl PartialOrd for SlotIndex {
 }
 
 impl Ord for SlotIndex {
+    /// Two indexes of one epoch compare by the numbers they carry, inline like
+    /// `SlotIndex::operator<`'s two loads; a stale one goes to the arena.
+    #[inline(always)]
     fn cmp(
         &self,
         other: &Self,
@@ -341,7 +349,18 @@ impl Ord for SlotIndex {
         if self.epoch == other.epoch {
             return (self.number | u32::from(self.slot)).cmp(&(other.number | u32::from(other.slot)));
         }
-        // One borrow of the arena for both numbers.
+        self.cmp_stale(other)
+    }
+}
+
+impl SlotIndex {
+    /// `cmp` after a renumbering: one borrow of the arena for both numbers.
+    #[cold]
+    #[inline(never)]
+    fn cmp_stale(
+        &self,
+        other: &Self,
+    ) -> Ordering {
         ARENA.with(|arena| {
             let arena = arena.borrow();
             let a = arena.index[self.list_entry() as usize] | u32::from(self.slot);
@@ -411,6 +430,11 @@ impl Drop for SlotIndexes {
     }
 }
 
+/// How many bodies this thread has numbered (`analyze`).
+pub fn analysed() -> u64 {
+    ANALYSED.with(std::cell::Cell::get)
+}
+
 impl SlotIndexes {
     /// `SlotIndexes(MachineFunction&)` / `analyze` (SlotIndexes.cpp#L66): the
     /// numbering of `body`, a block's start sharing the entry that ends the
@@ -472,6 +496,7 @@ impl SlotIndexes {
         body: &LirBody,
     ) {
         assert!(!self.live, "Index list non-empty at initial numbering?");
+        ANALYSED.with(|count| count.set(count.get() + 1));
         let mut index = 0u32;
         self.mbb_ranges = vec![(SlotIndex::default(), SlotIndex::default()); body.blocks.len()];
         self.push_back(None, index);

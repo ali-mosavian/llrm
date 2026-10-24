@@ -21,6 +21,11 @@
 //! narrow only where every value they join narrows to one space; a join of two
 //! spaces stays far.
 //!
+//! DEVIATE LP-5 (no pin pass on x86: infer-address-spaces is a target pass
+//! (none for x86); the near pointer under a far cast matters at m16 only; exit:
+//! deleted if the m16 rows do not lose without it, else folded into LP-4; owner
+//! w-6; review 2026-11-13).
+//!
 //! # Example
 //! Before:
 //!

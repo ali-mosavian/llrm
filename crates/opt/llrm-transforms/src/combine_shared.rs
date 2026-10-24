@@ -17,10 +17,9 @@
 //! family, whose helpers the `combine_phi` translation owns. Until it lands a
 //! pair of phis is no pair.
 //!
-//! DEVIATE 2: only the integer operations (`add`, `mul`, `and`, `or`, `xor`)
-//! are associative here. LLVM's float `isAssociative` needs `reassoc nsz` on
-//! the instruction; the float families bring it. `fadd` and `fmul` are
-//! commutative and are ordered by complexity.
+//! MIRROR: `Instruction::isAssociative` is the integer operations and `fadd`
+//! and `fmul` with `reassoc` and `nsz` (`combine_phi::is_associative`); `fadd`
+//! and `fmul` are commutative and ordered by complexity.
 //!
 //! DEVIATE 3: a new instruction does not take the name of the one it stands
 //! for (`takeName`): MIR names are not read by any pass.
@@ -58,6 +57,7 @@ use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::{Combiner, Visit, handle_use_count_decrement};
+use crate::combine_phi::is_associative;
 
 /// A ValueTracking query over the body being combined, asked at `cxt`
 /// (`SQ.getWithInstruction`).
@@ -173,14 +173,6 @@ pub fn is_commutative(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul
-    )
-}
-
-/// `Instruction::isAssociative`, DEVIATE 2: the integer operations.
-fn is_associative(op: BinaryOp) -> bool {
-    matches!(
-        op,
-        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
     )
 }
 
@@ -393,7 +385,7 @@ pub fn drop_poison_generating_flags(
 
 /// Sets `flag` on `inst` to `on` (`setHasNoUnsignedWrap`,
 /// `setHasNoSignedWrap`).
-fn set_flag(
+pub(crate) fn set_flag(
     c: &mut Combiner,
     inst: InstId,
     flag: Flags,
@@ -412,7 +404,7 @@ fn set_flag(
 }
 
 /// `simplifyBinOp(Opcode, L, R, SQ.getWithInstruction(&I))`.
-fn simplify_binop(
+pub(crate) fn simplify_binop(
     c: &Combiner,
     inst: InstId,
     op: BinaryOp,
@@ -456,7 +448,7 @@ pub fn simplify_associative_or_commutative(
         let [lhs, rhs] = c.function.instruction(inst).operands[..] else { return changed };
         let op0 = binary_operator(c, lhs);
         let op1 = binary_operator(c, rhs);
-        if is_associative(opcode) {
+        if is_associative(opcode, flags) {
             // "(A op B) op C" ==> "A op (B op C)" if "B op C" simplifies.
             if let Some((_, op, [a, b], op0_flags)) = op0
                 && op == opcode
@@ -489,7 +481,7 @@ pub fn simplify_associative_or_commutative(
                 continue;
             }
         }
-        if is_associative(opcode) && is_commutative(opcode) {
+        if is_associative(opcode, flags) && is_commutative(opcode) {
             if simplify_assoc_cast_assoc(c, inst) {
                 changed = true;
                 continue;

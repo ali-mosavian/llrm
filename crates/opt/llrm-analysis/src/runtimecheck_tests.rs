@@ -9,11 +9,10 @@ use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
 
+use super::{AccessOrder, DepCandidates, RuntimePointerChecking, VectorizerParams};
 use crate::scev::backedge::ExitCountKind;
 use crate::scev::print::Labels;
 use crate::scev::{Cx, ScalarEvolution};
-
-use super::{AccessOrder, DepCandidates, RuntimePointerChecking, VectorizerParams};
 
 const DATALAYOUT: &str = "target datalayout = \"e-m:e-p:64:64-i64:64-n8:16:32:64\"\n\n";
 
@@ -116,7 +115,8 @@ fn analysed(
         tree: &tree,
         assumptions: &assumptions,
     };
-    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("loop")).expect("loop");
+    let header =
+        *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("loop")).expect("loop");
     let mut se = ScalarEvolution::new();
     let btc = se.get_backedge_taken_count(&cx, header, ExitCountKind::Exact);
     let max_btc = se.get_backedge_taken_count(&cx, header, ExitCountKind::SymbolicMaximum);

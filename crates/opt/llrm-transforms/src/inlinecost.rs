@@ -63,12 +63,14 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
-//! - D11: at -Os a callee that stays is inlined only if the target's bound
-//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target)
-//!   holds the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth.
-//!   The pin's threshold cannot say it: its verdict is `cost < max(1,
-//!   threshold)` and the walk stops at cost 0, so a threshold of 0 inlines a
-//!   callee whose walk ends there. No shape of callee is tested.
+//! - D11: at -Os a callee that stays is inlined only if it does not grow the
+//!   code (`Tti::opt_size_inline_by_code_size`, X86: yes): the target's
+//!   `CodeSize` of the callee's instructions that the walk did not fold must
+//!   not exceed the `CodeSize` of the call and the pushes of its arguments.
+//!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
+//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
+//!   of a local callee, which goes with it, is the pin's. No shape of callee
+//!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot the caller stored a constant to and whose callee
 //!   loads through that parameter, is inlined if the caller, simplified again
@@ -81,9 +83,10 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
-//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+//!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+//!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
 //!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
 //!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
 //!   10%; none at -Os; calls of a function that reads and writes nothing with
@@ -173,6 +176,9 @@ pub struct InlineParams {
     /// `ComputeFullInlineCost`: the whole cost, past the threshold too (an
     /// optimisation remark asks for it).
     pub compute_full_inline_cost: bool,
+    /// `AllowRecursiveCall`: a callee that calls itself is priced, not
+    /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
+    pub allow_recursive_call: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -201,6 +207,7 @@ impl InlineParams {
             opt_min_size_threshold: OPT_MIN_SIZE_THRESHOLD,
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
+            allow_recursive_call: false,
             tti: Tti::Generic,
         }
     }
@@ -437,6 +444,7 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
+    is_recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -447,6 +455,9 @@ struct Analyzer<'a> {
     allocated_size: u64,
     instructions: u64,
     vector_instructions: u64,
+    /// D11: the target's code size of the callee's instructions that cost
+    /// (the ones the walk did not fold), in `CostKind::CodeSize` units.
+    size_units: i64,
     // InlineCostCallAnalyzer state.
     load_elimination_cost: i64,
     vector_bonus: i64,
@@ -478,6 +489,7 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
+            is_recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -488,6 +500,7 @@ impl<'a> Analyzer<'a> {
             allocated_size: 0,
             instructions: 0,
             vector_instructions: 0,
+            size_units: 0,
             load_elimination_cost: 0,
             vector_bonus: 0,
             single_bb_bonus: 0,
@@ -641,7 +654,11 @@ impl<'a> Analyzer<'a> {
         // it is a global), else the generic one: no global, no offset,
         // scale 0 or 1.
         let legal = |scale: i64| match self.site.tti {
-            Some(tti) => tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale),
+            // A scaled index with instructions of its own is not free.
+            Some(tti) => {
+                (scale <= 1 || tti.scaled_index_insns() == 0)
+                    && tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale)
+            }
             None => !global_base && offset == 0 && scale <= 1,
         };
         match variable[..] {
@@ -1413,6 +1430,12 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         };
+        // `F == Call.getCalledFunction()`: "This flag will fully abort the
+        // analysis" unless the params allow a recursive call (:2481).
+        if target == self.site.callee_id && !self.params.allow_recursive_call {
+            self.is_recursive_call = true;
+            return false;
+        }
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
         // A declaration flagged `frame_bound` (the QB error-handler
@@ -1461,10 +1484,6 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
-        // an ordinary call here, not the refusal "recursive": a recursive
-        // callee is inlined into another caller as gcc does, and into itself
-        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1650,6 +1669,7 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -1665,7 +1685,9 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.exposes_returns_twice {
+            if self.is_recursive_call {
+                return Err("recursive".into());
+            } else if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -1902,6 +1924,42 @@ impl<'a> Analyzer<'a> {
         self.finalize()
     }
 
+    /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    fn code_size_of(
+        &self,
+        inst: InstId,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.callee,
+            inst,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value
+    }
+
+    /// The target's code size of the call and the pushes of its arguments,
+    /// where the target says a call is bigger than the instruction it is
+    /// counted as.
+    fn call_size(&self) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let size = llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.site.caller,
+            self.site.call,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value;
+        (size * tti.call_code_size_percent() + 50) / 100
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -1912,18 +1970,20 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
-        // D11: the analysis above stops at LLVM's threshold; the verdict is
-        // held to the target's.
+        // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
+        // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        if self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size == CallerSize::OptSize
             && !self.site.sole_call_to_local
-            && let Some(bound) = self.site.tti.and_then(|tti| tti.opt_size_inline_threshold())
-        {
-            self.threshold = self.threshold.min(bound);
+            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
+            && self.size_units > self.call_size();
+        self.blocked_by_bound = grows && self.cost < pin;
+        if grows {
+            // The verdict is `cost < threshold`: the call stays.
+            self.threshold = self.threshold.min(self.cost);
         }
-        self.blocked_by_bound = self.cost < pin && self.cost >= self.threshold.max(1);
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
 }
 

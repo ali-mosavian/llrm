@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:4ac137de4c0ff081e55fcf667bebc380f256ede770dffa47dc61f07c0f15a1e3 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinesink.rs sha256:d31ead3b1b5a49c5359735c096c1e4bb2bdbad931a9fb4d0bc3b04af7e18a9e4 -->
 
 # machinesink
 
@@ -33,24 +33,35 @@ block, which is its successor's only predecessor.
  b4: r = phi [b1: v] [b2: x]
 ```
 
-DEVIATE M1 (#2903): a load is sunk only into a successor with no other
-predecessor, or a block made for the edge. LLVM also sinks it along a
-critical edge when `hasStoreBetween` finds no store on any path between.
-Exit: that function translated.
+DEVIATE M7 (row 44): `hasStoreBetween` counts every store, call and
+ordered access as one that may alias the load: no alias analysis reaches
+LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
+along a critical edge. Exit: memory operands with an alias query on LIR.
 
 DEVIATE M2 (#2903): `isProfitableToSinkTo` ends by asking the register
 pressure of the target (`registerPressureSetExceedsLimit`) for an
 instruction inside a cycle; no instruction here sinks on that ground.
 Exit: the target description's pressure limits.
 
-DEVIATE M4 (#2903): in a build for size only an instruction that reads no
-value moves (a constant). LLVM moves any, and its allocator splits the
-operands' ranges around the stretch. Rows with every instruction movable
-at -Os: `bench/jpeg_single` m16 +61 bytes, `jpeg_fixed` m16 +50, `huge_runs`
-+29 (all 36 -Os objects that differ: 8 larger, +163, 21 smaller, -998).
-Otherwise (-O1 to -O3) every safe instruction moves; `bench/quicksort`
--O2 m16 costs +985 clocks (+0.3%, a reload more per trip). Exit: the
-greedy allocator with SplitKit as the default allocator (target 2026-11-05).
+DEVIATE M4 (#2903): in a build for size an instruction with operands moves
+only if each operand is live out of its block already (nothing is
+lengthened over the edge: an `fsub` whose operands died there made the x87
+stackifier hold them in memory, qcport `pl_trace` +125 bytes) and is read
+by nothing below in the arm (the two-address form needs no copy: `x > C ?
+x - C : x`, the `add` in the arm is in place). The pin's MachineSink has no
+optsize rule; it moves any and its allocator splits the ranges around the
+stretch. The gain and the loss come from one shape: a `lea` sunk into an
+arm whose result a phi takes becomes `add; mov` plus a copy block on the
+join edge. Rows (head 9e3c893585, base 47978c1a46; tools/rows/qcport.py, no
+flags): QCport -Os 265956 -> 265871 (-85 bytes, 13 modules; larger: `sc` +2
+of 11041, 0.018%, `d_alias` +1 of 12363, 0.008%); objects -Os m16 5 changed
+-327 bytes, larger `bench/jpeg_fixed` +3 of 2958 (0.10%) and `jpeg_single`
++3 of 2826 (0.11%), m32 8 changed -244, none larger; x_adler -10.8%,
+x_crc32 -6.7%, x_fixmul -6.1% clocks. Otherwise (-O1 to -O3) every safe
+instruction moves; `bench/quicksort` -O2 m16 costs +985 clocks (+0.3%, a
+reload more per trip). Exit: a test of the sink that prices the phi copy
+from the target description (general, not a shape rule), 2026-11-04;
+review 2026-11-05 with the greedy allocator and SplitKit as the default.
 
 DEVIATE M5 (#2903): in a build for size no edge is broken. The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the

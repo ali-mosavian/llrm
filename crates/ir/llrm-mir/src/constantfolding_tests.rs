@@ -119,3 +119,110 @@ fn a_gep_in_a_non_integral_address_space_is_not_an_inttoptr() {
     assert!(!out.contains("addrspace(4) inttoptr"), "{out}");
     assert!(out.contains("inttoptr (i64 50"), "{out}");
 }
+
+/// far3.bas (a PEEK/POKE loop on `SADD(a$)` after `DEF SEG = VARSEG(a$)`)
+/// printed the string unchanged and n = 0 at -O1: the pair near -> selector ->
+/// far was folded to near -> far, which keeps the offset of the global (the
+/// selector drops it, the far pointer back has segment:0), so every address was
+/// off by the global's own. A pair through a space the datalayout marks
+/// non-integral (`ni:2`, the target's selector space) stays two casts.
+#[test]
+fn a_pair_of_casts_through_a_non_integral_space_is_not_one_cast() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@g = global i16 0
+
+define ptr addrspace(1) @f() {{
+b0:
+  %far = addrspacecast ptr addrspace(2) addrspacecast (ptr @g to ptr addrspace(2)) to ptr addrspace(1)
+  ret ptr addrspace(1) %far
+}}
+"
+        )
+    };
+    let folded = dump(&text("e-p:16:16-p1:32:16:16:16-p2:16:16")).expect("parses");
+    let kept = dump(&text("e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2")).expect("parses");
+    assert_ne!(folded, kept, "the selector space composed as an integral one");
+}
+
+/// A far pointer is non-integral by its width (bits beyond its index), and
+/// the gate of the pair fold named that: a pair through a far middle, near ->
+/// far -> huge, stopped folding (25 objects of the sweep moved with it). Only
+/// a space `ni:` names, the selector alone, is no point on the way.
+#[test]
+fn a_pair_through_a_far_middle_still_folds_when_the_selector_space_is_ni() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@g = global i16 0
+
+define ptr addrspace(3) @f() {{
+b0:
+  %huge = addrspacecast ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)) to ptr addrspace(3)
+  ret ptr addrspace(3) %huge
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32";
+    let marked = dump(&text(&format!("{base}-ni:2"))).expect("parses");
+    assert!(!marked.contains("addrspace(1)"), "the far middle stayed: {marked}");
+}
+
+/// A load through `segment:0` of a global's selector read the global's own
+/// initializer at the offset (`@k[3]`, 100) where the address is DS:3.
+#[test]
+fn a_load_through_a_selector_cast_is_not_folded_from_the_global_it_came_from() {
+    let text = |datalayout: &str| {
+        format!(
+            "target datalayout = \"{datalayout}\"
+
+@k = constant [4 x i8] c\"abcd\"
+
+define i8 @f() {{
+b0:
+  %v = load i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) addrspacecast (ptr @k to ptr addrspace(2)) to ptr addrspace(1)), i16 3)
+  ret i8 %v
+}}
+"
+        )
+    };
+    let base = "e-p:16:16-p1:32:16:16:16-p2:16:16";
+    assert!(dump(&text(base)).expect("parses").contains("100"), "premise: an integral middle space folds");
+    assert!(!dump(&text(&format!("{base}-ni:2"))).expect("parses").contains("100"));
+}
+
+/// What `dump` answers for each instruction of `@f`, in order.
+fn answers_of(text: &str) -> Vec<String> {
+    dump(text).expect("parses").lines().map(|line| answer(line).to_owned()).collect()
+}
+
+/// An FP binary fold is exact or refused
+/// (docs/working/fp-constant-fold-plan.md): `0.1 + 0.2` rounds, and x87
+/// evaluates it wider than f32 or f64 do, so a fold in the format could print a
+/// different number than the target computes.
+#[test]
+fn an_fp_binary_op_folds_only_when_its_result_is_exact_in_the_format() {
+    let got = answers_of(
+        "define void @f() {
+  %a = fadd double 1.0, 2.0
+  %b = fadd double 0.1, 0.2
+  %c = fadd float 1.5, 2.25
+  %d = fadd float 0x3FB99999A0000000, 0x3FC99999A0000000
+  %e = fmul double 1.5, 4.0
+  %g = fdiv double 1.0, 4.0
+  %h = fdiv double 1.0, 3.0
+  %i = frem double 7.5, 2.0
+  %j = fsub float 1.0, 1.0
+  %k = fadd nsz double 1.0, 2.0
+  %l = fdiv double 1.0, 0.0
+  ret void
+}
+",
+    );
+    let folds: Vec<bool> = got.iter().map(|one| one != "-").collect();
+    assert_eq!(folds, [true, false, true, false, true, true, false, true, true, false, false], "{got:?}");
+}

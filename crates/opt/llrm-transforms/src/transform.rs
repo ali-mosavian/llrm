@@ -166,6 +166,13 @@ pub fn _trivial_phis_in(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many blocks `duplicate_phis_in` walked, for the test that a block of
+    /// fewer than two phis is not.
+    pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Each phi whose arms, edge for edge, are an earlier phi's in `block`
 /// replaced by that phi: LLVM's `EliminateDuplicatePHINodes(BB)`. Whether any
 /// was.
@@ -173,6 +180,13 @@ pub fn duplicate_phis_in(
     function: &mut Function,
     block: BlockId,
 ) -> Result<bool, String> {
+    // Two phis at least make a duplicate: most blocks have none or one, and
+    // are not walked (d_faces -O2: 581 Ir a block visit against the pin's 142).
+    if !edges::has_two_phis(function, block) {
+        return Ok(false);
+    }
+    #[cfg(test)]
+    WALKED.with(|walked| walked.set(walked.get() + 1));
     let mut changed = false;
     let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
     for phi in edges::phis(function, block) {

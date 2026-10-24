@@ -150,7 +150,7 @@ mod tests {
         defines: Vec<u32>,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
@@ -215,7 +215,10 @@ mod tests {
     }
 
     fn names(insns: &[Arc<Insn>]) -> Vec<String> {
-        insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect()
+        insns
+            .iter()
+            .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
+            .collect()
     }
 
     /// `n - 1` and `n <= 1` were a `lea` and a `cmp` of the same value, so the

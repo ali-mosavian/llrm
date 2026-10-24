@@ -798,6 +798,16 @@ impl Splitter<'_> {
         new_vregs.extend_from_slice(se.edit().new_regs());
     }
 
+    /// A frequency as the pin prints it (`MBFI->printBlockFreq`): relative to
+    /// the entry block, for `LLRM_GREEDY_DECISIONS`.
+    fn shown(
+        &self,
+        cost: BlockFrequency,
+    ) -> String {
+        let entry = self.ss.mbfi.get_entry_freq().get_frequency().max(1);
+        format!("{:.8}", cost.get_frequency() as f64 / entry as f64)
+    }
+
     /// `tryRegionSplit`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1206>).
     fn try_region_split(
@@ -878,15 +888,31 @@ impl Splitter<'_> {
             self.ss.global_cand[cand].reset(&mut self.ss.cache, &env, Some(phys));
         }
 
+        let trace = llrm_support::env_flag!("LLRM_GREEDY_DECISIONS");
         self.ss.placer.prepare();
         let mut cost = BlockFrequency(0);
         if !self.add_split_constraints(cand, &mut cost) {
+            if trace {
+                eprintln!("{phys:?}\tno positive bundles");
+            }
             return;
         }
+        if trace {
+            eprint!("{phys:?}\tstatic = {}", self.shown(cost));
+        }
         if cost >= *best_cost {
+            if trace {
+                match *best_cand {
+                    NO_CAND => eprintln!(" worse than no bundles"),
+                    best => eprintln!(" worse than {:?}", self.ss.global_cand[best].phys_reg),
+                }
+            }
             return;
         }
         if !self.grow_region(cand) {
+            if trace {
+                eprintln!(", cannot spill all interferences.");
+            }
             return;
         }
 
@@ -894,10 +920,17 @@ impl Splitter<'_> {
 
         // No live bundles, defer to splitSingleBlocks().
         if self.ss.global_cand[cand].live_count() == 0 {
+            if trace {
+                eprintln!(" no bundles.");
+            }
             return;
         }
 
         cost = cost + self.calc_global_split_cost(cand);
+        if trace {
+            let bundles = bundles_shown(&self.ss.global_cand[cand].live_bundles);
+            eprintln!(", total = {} with bundles{bundles}.", self.shown(cost));
+        }
         if cost < *best_cost {
             *best_cand = *num_cands;
             *best_cost = cost;
@@ -945,6 +978,9 @@ impl Splitter<'_> {
             let mut bc = std::mem::take(&mut self.ss.bundle_cand);
             let b = self.ss.global_cand[best_cand].get_bundles(&mut bc, best_cand);
             self.ss.bundle_cand = bc;
+            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+                eprintln!("Split for {:?} in {b} bundles", self.ss.global_cand[best_cand].phys_reg);
+            }
             if b != 0 {
                 used_cands.push(best_cand);
                 let idx = se.open_intv(&mut self.cx());
@@ -1132,7 +1168,7 @@ impl Splitter<'_> {
         let crosses_mask = self.matrix_crosses_reg_mask(virt);
         if crosses_mask {
             let (bstart, bend) = *self.lis.indexes.get_mbb_range(bi.mbb);
-            let masks = self.matrix.fixed().reg_mask_range(bstart, bend);
+            let masks = self.matrix.fixed().reg_mask_range_in_block(bi.mbb, bstart, bend);
             // Only the instructions that destroy registers are regmasks
             // (`getRegMaskSlotsInBlock`).
             let fixed = self.matrix.fixed();
@@ -1324,5 +1360,21 @@ impl Splitter<'_> {
         virt: &Rc<LiveInterval>,
     ) -> bool {
         self.matrix.crosses_reg_mask(virt)
+    }
+}
+
+/// The live bundles of a candidate as the pin prints them: ` EB#1 EB#14`.
+fn bundles_shown(live: &[bool]) -> String {
+    live.iter().enumerate().filter(|(_, live)| **live).map(|(at, _)| format!(" EB#{at}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The candidate line of `LLRM_GREEDY_DECISIONS` names the live bundles as
+    /// the pin does (`with bundles EB#1 EB#14`), so two builds' lines diff.
+    #[test]
+    fn test_a_candidates_live_bundles_are_shown_as_the_pin_prints_them() {
+        assert_eq!(super::bundles_shown(&[false, true, false, true]), " EB#1 EB#3");
+        assert_eq!(super::bundles_shown(&[false, false]), "");
     }
 }

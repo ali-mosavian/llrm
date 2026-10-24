@@ -10,8 +10,9 @@
 //!
 //! DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
 //! no logical `select` pattern here yet), the `fcmp` predicate canonical form
-//! (`isCanonicalPredicate`), the undef and constant conditions (the driver
-//! folds a branch on a number, `combine.rs`), and the replacement of the uses
+//! (`isCanonicalPredicate`), the constant condition at visit time (the driver
+//! folds a branch on a number, and `combine::prepare` kills the edges of an
+//! undef or poison one, `combine.rs`), and the replacement of the uses
 //! of the condition dominated by an edge with true or false.
 //!
 //! DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
@@ -40,7 +41,8 @@ impl Combiner<'_> {
         if branch.opcode != Opcode::Br || matches!(cond, Operand::Constant(_)) {
             return Visit::None;
         }
-        // Change br (not X), label True, label False to: br X, label False, True
+        // Change br (not X), label True, label False to: br X, label False,
+        // True
         if let Some(x) = pattern::not(&query(self, Some(inst)), cond)
             && !matches!(x, Operand::Constant(_))
         {

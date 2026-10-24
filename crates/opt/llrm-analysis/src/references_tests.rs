@@ -232,3 +232,36 @@ fn test_two_forks_edited_apart_do_not_share_their_accesses() {
     assert_eq!(asked(&to_q), Some(Operand::Value(value(function, "q"))));
     assert_eq!(asked(&to_r), Some(Operand::Value(value(function, "r"))), "the other fork's access was returned");
 }
+
+/// LLRM_CHECK_ACCESSES said `the held access of InstId(133) is not what
+/// deriving it again gives` of static_pointers: the access held for a version
+/// of a function was the one made by a unit listing no globals (`object`
+/// false for a global variable), served to a unit that lists them.
+#[test]
+fn an_access_made_with_no_globals_listed_is_not_served_to_a_unit_that_lists_them() {
+    let module = parsed(&format!(
+        "{DOS}@g = global i16 0
+
+define i16 @f() {{
+b0:
+  %x = load i16, ptr @g
+  ret i16 %x
+}}
+"
+    ));
+    let layout = layout(&module);
+    let f = function(&module, "f");
+    let load = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            f.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ));
+    let load = load.expect("the load");
+    let bare = Unit::over(&module.context, &layout, &module.metadata, &[], f);
+    assert!(!MemRef::of(&bare, load).expect("an access").object);
+    let full = Unit::of(&module, &layout, f);
+    let made = MemRef::of(&full, load).expect("an access");
+    assert!(made.object, "served the access made with no globals");
+}

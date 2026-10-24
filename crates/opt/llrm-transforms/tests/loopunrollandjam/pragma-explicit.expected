@@ -1,0 +1,694 @@
+== -unroll-runtime -unroll-partial-threshold=60
+@function
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B9
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B9
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  %v6 = add i32 %height, -1
+  %v7 = and i32 %height, 3
+  %v8 = icmp ult i32 %v6, 3
+  br i1 %v8, label %B3, label %B10
+B3:
+  %v9 = phi i8 [ %v164, %B14 ], [ %v4, %B2 ]
+  %v10 = phi ptr [ %src, %B2 ], [ %v165, %B14 ]
+  %v11 = phi i32 [ %v166, %B14 ], [ 0, %B2 ]
+  %v12 = phi ptr [ %dst, %B2 ], [ %v167, %B14 ]
+  %v13 = icmp ne i32 %v7, 0
+  call void @llvm.assume(i1 %v13)
+  br label %B4
+B4:
+  %v14 = phi i8 [ %v20, %B6 ], [ %v9, %B3 ]
+  %v15 = phi ptr [ %v10, %B3 ], [ %v19, %B6 ]
+  %v16 = phi i32 [ %v11, %B3 ], [ %v46, %B6 ]
+  %v17 = phi ptr [ %v12, %B3 ], [ %v45, %B6 ]
+  %v18 = phi i32 [ %v48, %B6 ], [ 0, %B3 ]
+  %v19 = getelementptr inbounds i8, ptr %v15, i64 %v0
+  %v20 = load i8, ptr %v19
+  br label %B5
+B5:
+  %v21 = phi i8 [ %v20, %B4 ], [ %v34, %B5 ]
+  %v22 = phi i8 [ %v14, %B4 ], [ %v28, %B5 ]
+  %v23 = phi i64 [ %v26, %B5 ], [ 0, %B4 ]
+  %v24 = zext i8 %v22 to i32
+  %v25 = mul nsw i32 %v24, %A
+  %v26 = add nuw nsw i64 %v23, 1
+  %v27 = getelementptr inbounds i8, ptr %v15, i64 %v26
+  %v28 = load i8, ptr %v27
+  %v29 = zext i8 %v28 to i32
+  %v30 = mul nsw i32 %v29, %B
+  %v31 = zext i8 %v21 to i32
+  %v32 = mul nsw i32 %v31, %C
+  %v33 = getelementptr inbounds i8, ptr %v19, i64 %v26
+  %v34 = load i8, ptr %v33
+  %v35 = zext i8 %v34 to i32
+  %v36 = mul nsw i32 %v35, %D
+  %v37 = add i32 %v25, 32
+  %v38 = add i32 %v37, %v30
+  %v39 = add i32 %v38, %v32
+  %v40 = add i32 %v39, %v36
+  %v41 = lshr i32 %v40, 6
+  %v42 = trunc i32 %v41 to i8
+  %v43 = getelementptr inbounds i8, ptr %v17, i64 %v23
+  store i8 %v42, ptr %v43
+  %v44 = icmp eq i64 %v26, %v5
+  br i1 %v44, label %B6, label %B5
+B6:
+  %v45 = getelementptr inbounds i8, ptr %v17, i64 %v3
+  %v46 = add nuw nsw i32 %v16, 1
+  %v47 = icmp eq i32 %v46, %height
+  %v48 = add i32 %v18, 1
+  %v49 = icmp ne i32 %v48, %v7
+  br i1 %v49, label %B4, label %B7
+B7:
+  br label %B8
+B8:
+  br label %B9
+B9:
+  ret void
+B10:
+  %v50 = sub i32 %height, %v7
+  br label %B11
+B11:
+  %v51 = phi i8 [ %v4, %B10 ], [ %v66, %B13 ]
+  %v52 = phi ptr [ %src, %B10 ], [ %v65, %B13 ]
+  %v53 = phi i32 [ %v67, %B13 ], [ 0, %B10 ]
+  %v54 = phi ptr [ %dst, %B10 ], [ %v68, %B13 ]
+  %v55 = phi i32 [ %v69, %B13 ], [ 0, %B10 ]
+  %v56 = getelementptr inbounds i8, ptr %v52, i64 %v0
+  %v57 = load i8, ptr %v56
+  %v58 = getelementptr inbounds i8, ptr %v54, i64 %v3
+  %v59 = getelementptr inbounds i8, ptr %v56, i64 %v0
+  %v60 = load i8, ptr %v59
+  %v61 = getelementptr inbounds i8, ptr %v58, i64 %v3
+  %v62 = getelementptr inbounds i8, ptr %v59, i64 %v0
+  %v63 = load i8, ptr %v62
+  %v64 = getelementptr inbounds i8, ptr %v61, i64 %v3
+  %v65 = getelementptr inbounds i8, ptr %v62, i64 %v0
+  %v66 = load i8, ptr %v65
+  %v67 = add nuw nsw i32 %v53, 4
+  %v68 = getelementptr inbounds i8, ptr %v64, i64 %v3
+  %v69 = add nuw nsw i32 %v55, 4
+  br label %B12
+B12:
+  %v70 = phi i8 [ %v57, %B11 ], [ %v92, %B12 ]
+  %v71 = phi i8 [ %v51, %B11 ], [ %v86, %B12 ]
+  %v72 = phi i64 [ %v84, %B12 ], [ 0, %B11 ]
+  %v73 = phi i8 [ %v112, %B12 ], [ %v60, %B11 ]
+  %v74 = phi i8 [ %v106, %B12 ], [ %v57, %B11 ]
+  %v75 = phi i64 [ %v104, %B12 ], [ 0, %B11 ]
+  %v76 = phi i8 [ %v132, %B12 ], [ %v63, %B11 ]
+  %v77 = phi i8 [ %v126, %B12 ], [ %v60, %B11 ]
+  %v78 = phi i64 [ %v124, %B12 ], [ 0, %B11 ]
+  %v79 = phi i8 [ %v152, %B12 ], [ %v66, %B11 ]
+  %v80 = phi i8 [ %v146, %B12 ], [ %v63, %B11 ]
+  %v81 = phi i64 [ %v144, %B12 ], [ 0, %B11 ]
+  %v82 = zext i8 %v71 to i32
+  %v83 = mul nsw i32 %v82, %A
+  %v84 = add nuw nsw i64 %v72, 1
+  %v85 = getelementptr inbounds i8, ptr %v52, i64 %v84
+  %v86 = load i8, ptr %v85
+  %v87 = zext i8 %v86 to i32
+  %v88 = mul nsw i32 %v87, %B
+  %v89 = zext i8 %v70 to i32
+  %v90 = mul nsw i32 %v89, %C
+  %v91 = getelementptr inbounds i8, ptr %v56, i64 %v84
+  %v92 = load i8, ptr %v91
+  %v93 = zext i8 %v92 to i32
+  %v94 = mul nsw i32 %v93, %D
+  %v95 = add i32 %v83, 32
+  %v96 = add i32 %v95, %v88
+  %v97 = add i32 %v96, %v90
+  %v98 = add i32 %v97, %v94
+  %v99 = lshr i32 %v98, 6
+  %v100 = trunc i32 %v99 to i8
+  %v101 = getelementptr inbounds i8, ptr %v54, i64 %v72
+  store i8 %v100, ptr %v101
+  %v102 = zext i8 %v74 to i32
+  %v103 = mul nsw i32 %v102, %A
+  %v104 = add nuw nsw i64 %v75, 1
+  %v105 = getelementptr inbounds i8, ptr %v56, i64 %v104
+  %v106 = load i8, ptr %v105
+  %v107 = zext i8 %v106 to i32
+  %v108 = mul nsw i32 %v107, %B
+  %v109 = zext i8 %v73 to i32
+  %v110 = mul nsw i32 %v109, %C
+  %v111 = getelementptr inbounds i8, ptr %v59, i64 %v104
+  %v112 = load i8, ptr %v111
+  %v113 = zext i8 %v112 to i32
+  %v114 = mul nsw i32 %v113, %D
+  %v115 = add i32 %v103, 32
+  %v116 = add i32 %v115, %v108
+  %v117 = add i32 %v116, %v110
+  %v118 = add i32 %v117, %v114
+  %v119 = lshr i32 %v118, 6
+  %v120 = trunc i32 %v119 to i8
+  %v121 = getelementptr inbounds i8, ptr %v58, i64 %v75
+  store i8 %v120, ptr %v121
+  %v122 = zext i8 %v77 to i32
+  %v123 = mul nsw i32 %v122, %A
+  %v124 = add nuw nsw i64 %v78, 1
+  %v125 = getelementptr inbounds i8, ptr %v59, i64 %v124
+  %v126 = load i8, ptr %v125
+  %v127 = zext i8 %v126 to i32
+  %v128 = mul nsw i32 %v127, %B
+  %v129 = zext i8 %v76 to i32
+  %v130 = mul nsw i32 %v129, %C
+  %v131 = getelementptr inbounds i8, ptr %v62, i64 %v124
+  %v132 = load i8, ptr %v131
+  %v133 = zext i8 %v132 to i32
+  %v134 = mul nsw i32 %v133, %D
+  %v135 = add i32 %v123, 32
+  %v136 = add i32 %v135, %v128
+  %v137 = add i32 %v136, %v130
+  %v138 = add i32 %v137, %v134
+  %v139 = lshr i32 %v138, 6
+  %v140 = trunc i32 %v139 to i8
+  %v141 = getelementptr inbounds i8, ptr %v61, i64 %v78
+  store i8 %v140, ptr %v141
+  %v142 = zext i8 %v80 to i32
+  %v143 = mul nsw i32 %v142, %A
+  %v144 = add nuw nsw i64 %v81, 1
+  %v145 = getelementptr inbounds i8, ptr %v62, i64 %v144
+  %v146 = load i8, ptr %v145
+  %v147 = zext i8 %v146 to i32
+  %v148 = mul nsw i32 %v147, %B
+  %v149 = zext i8 %v79 to i32
+  %v150 = mul nsw i32 %v149, %C
+  %v151 = getelementptr inbounds i8, ptr %v65, i64 %v144
+  %v152 = load i8, ptr %v151
+  %v153 = zext i8 %v152 to i32
+  %v154 = mul nsw i32 %v153, %D
+  %v155 = add i32 %v143, 32
+  %v156 = add i32 %v155, %v148
+  %v157 = add i32 %v156, %v150
+  %v158 = add i32 %v157, %v154
+  %v159 = lshr i32 %v158, 6
+  %v160 = trunc i32 %v159 to i8
+  %v161 = getelementptr inbounds i8, ptr %v64, i64 %v81
+  store i8 %v160, ptr %v161
+  %v162 = icmp eq i64 %v144, %v5
+  br i1 %v162, label %B13, label %B12
+B13:
+  %v163 = icmp eq i32 %v69, %v50
+  br i1 %v163, label %B14, label %B11
+B14:
+  %v164 = phi i8 [ %v66, %B13 ]
+  %v165 = phi ptr [ %v65, %B13 ]
+  %v166 = phi i32 [ %v67, %B13 ]
+  %v167 = phi ptr [ %v68, %B13 ]
+  %v168 = icmp ne i32 %v7, 0
+  br i1 %v168, label %B3, label %B8
+@function2
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B8
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B8
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  %v6 = add i32 %height, -1
+  %v7 = and i32 %height, 1
+  %v8 = icmp ult i32 %v6, 1
+  br i1 %v8, label %B3, label %B9
+B3:
+  %v9 = phi i8 [ %v102, %B13 ], [ %v4, %B2 ]
+  %v10 = phi ptr [ %src, %B2 ], [ %v103, %B13 ]
+  %v11 = phi i32 [ %v104, %B13 ], [ 0, %B2 ]
+  %v12 = phi ptr [ %dst, %B2 ], [ %v105, %B13 ]
+  %v13 = icmp ne i32 %v7, 0
+  call void @llvm.assume(i1 %v13)
+  br label %B4
+B4:
+  %v14 = getelementptr inbounds i8, ptr %v10, i64 %v0
+  %v15 = load i8, ptr %v14
+  br label %B5
+B5:
+  %v16 = phi i8 [ %v15, %B4 ], [ %v29, %B5 ]
+  %v17 = phi i8 [ %v23, %B5 ], [ %v9, %B4 ]
+  %v18 = phi i64 [ %v21, %B5 ], [ 0, %B4 ]
+  %v19 = zext i8 %v17 to i32
+  %v20 = mul nsw i32 %v19, %A
+  %v21 = add nuw nsw i64 %v18, 1
+  %v22 = getelementptr inbounds i8, ptr %v10, i64 %v21
+  %v23 = load i8, ptr %v22
+  %v24 = zext i8 %v23 to i32
+  %v25 = mul nsw i32 %v24, %B
+  %v26 = zext i8 %v16 to i32
+  %v27 = mul nsw i32 %v26, %C
+  %v28 = getelementptr inbounds i8, ptr %v14, i64 %v21
+  %v29 = load i8, ptr %v28
+  %v30 = zext i8 %v29 to i32
+  %v31 = mul nsw i32 %v30, %D
+  %v32 = add i32 %v20, 32
+  %v33 = add i32 %v32, %v25
+  %v34 = add i32 %v33, %v27
+  %v35 = add i32 %v34, %v31
+  %v36 = lshr i32 %v35, 6
+  %v37 = trunc i32 %v36 to i8
+  %v38 = getelementptr inbounds i8, ptr %v12, i64 %v18
+  store i8 %v37, ptr %v38
+  %v39 = icmp eq i64 %v21, %v5
+  br i1 %v39, label %B6, label %B5
+B6:
+  br label %B7
+B7:
+  br label %B8
+B8:
+  ret void
+B9:
+  %v40 = sub i32 %height, %v7
+  br label %B10
+B10:
+  %v41 = phi i8 [ %v4, %B9 ], [ %v50, %B12 ]
+  %v42 = phi ptr [ %src, %B9 ], [ %v49, %B12 ]
+  %v43 = phi i32 [ %v51, %B12 ], [ 0, %B9 ]
+  %v44 = phi ptr [ %dst, %B9 ], [ %v52, %B12 ]
+  %v45 = phi i32 [ %v53, %B12 ], [ 0, %B9 ]
+  %v46 = getelementptr inbounds i8, ptr %v42, i64 %v0
+  %v47 = load i8, ptr %v46
+  %v48 = getelementptr inbounds i8, ptr %v44, i64 %v3
+  %v49 = getelementptr inbounds i8, ptr %v46, i64 %v0
+  %v50 = load i8, ptr %v49
+  %v51 = add nuw nsw i32 %v43, 2
+  %v52 = getelementptr inbounds i8, ptr %v48, i64 %v3
+  %v53 = add nuw nsw i32 %v45, 2
+  br label %B11
+B11:
+  %v54 = phi i8 [ %v47, %B10 ], [ %v70, %B11 ]
+  %v55 = phi i8 [ %v41, %B10 ], [ %v64, %B11 ]
+  %v56 = phi i64 [ %v62, %B11 ], [ 0, %B10 ]
+  %v57 = phi i8 [ %v50, %B10 ], [ %v90, %B11 ]
+  %v58 = phi i8 [ %v47, %B10 ], [ %v84, %B11 ]
+  %v59 = phi i64 [ %v82, %B11 ], [ 0, %B10 ]
+  %v60 = zext i8 %v55 to i32
+  %v61 = mul nsw i32 %v60, %A
+  %v62 = add nuw nsw i64 %v56, 1
+  %v63 = getelementptr inbounds i8, ptr %v42, i64 %v62
+  %v64 = load i8, ptr %v63
+  %v65 = zext i8 %v64 to i32
+  %v66 = mul nsw i32 %v65, %B
+  %v67 = zext i8 %v54 to i32
+  %v68 = mul nsw i32 %v67, %C
+  %v69 = getelementptr inbounds i8, ptr %v46, i64 %v62
+  %v70 = load i8, ptr %v69
+  %v71 = zext i8 %v70 to i32
+  %v72 = mul nsw i32 %v71, %D
+  %v73 = add i32 %v61, 32
+  %v74 = add i32 %v73, %v66
+  %v75 = add i32 %v74, %v68
+  %v76 = add i32 %v75, %v72
+  %v77 = lshr i32 %v76, 6
+  %v78 = trunc i32 %v77 to i8
+  %v79 = getelementptr inbounds i8, ptr %v44, i64 %v56
+  store i8 %v78, ptr %v79
+  %v80 = zext i8 %v58 to i32
+  %v81 = mul nsw i32 %v80, %A
+  %v82 = add nuw nsw i64 %v59, 1
+  %v83 = getelementptr inbounds i8, ptr %v46, i64 %v82
+  %v84 = load i8, ptr %v83
+  %v85 = zext i8 %v84 to i32
+  %v86 = mul nsw i32 %v85, %B
+  %v87 = zext i8 %v57 to i32
+  %v88 = mul nsw i32 %v87, %C
+  %v89 = getelementptr inbounds i8, ptr %v49, i64 %v82
+  %v90 = load i8, ptr %v89
+  %v91 = zext i8 %v90 to i32
+  %v92 = mul nsw i32 %v91, %D
+  %v93 = add i32 %v81, 32
+  %v94 = add i32 %v93, %v86
+  %v95 = add i32 %v94, %v88
+  %v96 = add i32 %v95, %v92
+  %v97 = lshr i32 %v96, 6
+  %v98 = trunc i32 %v97 to i8
+  %v99 = getelementptr inbounds i8, ptr %v48, i64 %v59
+  store i8 %v98, ptr %v99
+  %v100 = icmp eq i64 %v82, %v5
+  br i1 %v100, label %B12, label %B11
+B12:
+  %v101 = icmp eq i32 %v53, %v40
+  br i1 %v101, label %B13, label %B10
+B13:
+  %v102 = phi i8 [ %v50, %B12 ]
+  %v103 = phi ptr [ %v49, %B12 ]
+  %v104 = phi i32 [ %v51, %B12 ]
+  %v105 = phi ptr [ %v52, %B12 ]
+  %v106 = icmp ne i32 %v7, 0
+  br i1 %v106, label %B3, label %B7
+== -unroll-runtime -unroll-partial-threshold=60
+@function
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B9
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B9
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  %v6 = add i32 %height, -1
+  %v7 = and i32 %height, 3
+  %v8 = icmp ult i32 %v6, 3
+  br i1 %v8, label %B3, label %B10
+B3:
+  %v9 = phi i8 [ %v164, %B14 ], [ %v4, %B2 ]
+  %v10 = phi ptr [ %src, %B2 ], [ %v165, %B14 ]
+  %v11 = phi i32 [ %v166, %B14 ], [ 0, %B2 ]
+  %v12 = phi ptr [ %dst, %B2 ], [ %v167, %B14 ]
+  %v13 = icmp ne i32 %v7, 0
+  call void @llvm.assume(i1 %v13)
+  br label %B4
+B4:
+  %v14 = phi i8 [ %v20, %B6 ], [ %v9, %B3 ]
+  %v15 = phi ptr [ %v10, %B3 ], [ %v19, %B6 ]
+  %v16 = phi i32 [ %v11, %B3 ], [ %v46, %B6 ]
+  %v17 = phi ptr [ %v12, %B3 ], [ %v45, %B6 ]
+  %v18 = phi i32 [ %v48, %B6 ], [ 0, %B3 ]
+  %v19 = getelementptr inbounds i8, ptr %v15, i64 %v0
+  %v20 = load i8, ptr %v19
+  br label %B5
+B5:
+  %v21 = phi i8 [ %v20, %B4 ], [ %v34, %B5 ]
+  %v22 = phi i8 [ %v14, %B4 ], [ %v28, %B5 ]
+  %v23 = phi i64 [ %v26, %B5 ], [ 0, %B4 ]
+  %v24 = zext i8 %v22 to i32
+  %v25 = mul nsw i32 %v24, %A
+  %v26 = add nuw nsw i64 %v23, 1
+  %v27 = getelementptr inbounds i8, ptr %v15, i64 %v26
+  %v28 = load i8, ptr %v27
+  %v29 = zext i8 %v28 to i32
+  %v30 = mul nsw i32 %v29, %B
+  %v31 = zext i8 %v21 to i32
+  %v32 = mul nsw i32 %v31, %C
+  %v33 = getelementptr inbounds i8, ptr %v19, i64 %v26
+  %v34 = load i8, ptr %v33
+  %v35 = zext i8 %v34 to i32
+  %v36 = mul nsw i32 %v35, %D
+  %v37 = add i32 %v25, 32
+  %v38 = add i32 %v37, %v30
+  %v39 = add i32 %v38, %v32
+  %v40 = add i32 %v39, %v36
+  %v41 = lshr i32 %v40, 6
+  %v42 = trunc i32 %v41 to i8
+  %v43 = getelementptr inbounds i8, ptr %v17, i64 %v23
+  store i8 %v42, ptr %v43
+  %v44 = icmp eq i64 %v26, %v5
+  br i1 %v44, label %B6, label %B5
+B6:
+  %v45 = getelementptr inbounds i8, ptr %v17, i64 %v3
+  %v46 = add nuw nsw i32 %v16, 1
+  %v47 = icmp eq i32 %v46, %height
+  %v48 = add i32 %v18, 1
+  %v49 = icmp ne i32 %v48, %v7
+  br i1 %v49, label %B4, label %B7
+B7:
+  br label %B8
+B8:
+  br label %B9
+B9:
+  ret void
+B10:
+  %v50 = sub i32 %height, %v7
+  br label %B11
+B11:
+  %v51 = phi i8 [ %v4, %B10 ], [ %v66, %B13 ]
+  %v52 = phi ptr [ %src, %B10 ], [ %v65, %B13 ]
+  %v53 = phi i32 [ %v67, %B13 ], [ 0, %B10 ]
+  %v54 = phi ptr [ %dst, %B10 ], [ %v68, %B13 ]
+  %v55 = phi i32 [ %v69, %B13 ], [ 0, %B10 ]
+  %v56 = getelementptr inbounds i8, ptr %v52, i64 %v0
+  %v57 = load i8, ptr %v56
+  %v58 = getelementptr inbounds i8, ptr %v54, i64 %v3
+  %v59 = getelementptr inbounds i8, ptr %v56, i64 %v0
+  %v60 = load i8, ptr %v59
+  %v61 = getelementptr inbounds i8, ptr %v58, i64 %v3
+  %v62 = getelementptr inbounds i8, ptr %v59, i64 %v0
+  %v63 = load i8, ptr %v62
+  %v64 = getelementptr inbounds i8, ptr %v61, i64 %v3
+  %v65 = getelementptr inbounds i8, ptr %v62, i64 %v0
+  %v66 = load i8, ptr %v65
+  %v67 = add nuw nsw i32 %v53, 4
+  %v68 = getelementptr inbounds i8, ptr %v64, i64 %v3
+  %v69 = add nuw nsw i32 %v55, 4
+  br label %B12
+B12:
+  %v70 = phi i8 [ %v57, %B11 ], [ %v92, %B12 ]
+  %v71 = phi i8 [ %v51, %B11 ], [ %v86, %B12 ]
+  %v72 = phi i64 [ %v84, %B12 ], [ 0, %B11 ]
+  %v73 = phi i8 [ %v112, %B12 ], [ %v60, %B11 ]
+  %v74 = phi i8 [ %v106, %B12 ], [ %v57, %B11 ]
+  %v75 = phi i64 [ %v104, %B12 ], [ 0, %B11 ]
+  %v76 = phi i8 [ %v132, %B12 ], [ %v63, %B11 ]
+  %v77 = phi i8 [ %v126, %B12 ], [ %v60, %B11 ]
+  %v78 = phi i64 [ %v124, %B12 ], [ 0, %B11 ]
+  %v79 = phi i8 [ %v152, %B12 ], [ %v66, %B11 ]
+  %v80 = phi i8 [ %v146, %B12 ], [ %v63, %B11 ]
+  %v81 = phi i64 [ %v144, %B12 ], [ 0, %B11 ]
+  %v82 = zext i8 %v71 to i32
+  %v83 = mul nsw i32 %v82, %A
+  %v84 = add nuw nsw i64 %v72, 1
+  %v85 = getelementptr inbounds i8, ptr %v52, i64 %v84
+  %v86 = load i8, ptr %v85
+  %v87 = zext i8 %v86 to i32
+  %v88 = mul nsw i32 %v87, %B
+  %v89 = zext i8 %v70 to i32
+  %v90 = mul nsw i32 %v89, %C
+  %v91 = getelementptr inbounds i8, ptr %v56, i64 %v84
+  %v92 = load i8, ptr %v91
+  %v93 = zext i8 %v92 to i32
+  %v94 = mul nsw i32 %v93, %D
+  %v95 = add i32 %v83, 32
+  %v96 = add i32 %v95, %v88
+  %v97 = add i32 %v96, %v90
+  %v98 = add i32 %v97, %v94
+  %v99 = lshr i32 %v98, 6
+  %v100 = trunc i32 %v99 to i8
+  %v101 = getelementptr inbounds i8, ptr %v54, i64 %v72
+  store i8 %v100, ptr %v101
+  %v102 = zext i8 %v74 to i32
+  %v103 = mul nsw i32 %v102, %A
+  %v104 = add nuw nsw i64 %v75, 1
+  %v105 = getelementptr inbounds i8, ptr %v56, i64 %v104
+  %v106 = load i8, ptr %v105
+  %v107 = zext i8 %v106 to i32
+  %v108 = mul nsw i32 %v107, %B
+  %v109 = zext i8 %v73 to i32
+  %v110 = mul nsw i32 %v109, %C
+  %v111 = getelementptr inbounds i8, ptr %v59, i64 %v104
+  %v112 = load i8, ptr %v111
+  %v113 = zext i8 %v112 to i32
+  %v114 = mul nsw i32 %v113, %D
+  %v115 = add i32 %v103, 32
+  %v116 = add i32 %v115, %v108
+  %v117 = add i32 %v116, %v110
+  %v118 = add i32 %v117, %v114
+  %v119 = lshr i32 %v118, 6
+  %v120 = trunc i32 %v119 to i8
+  %v121 = getelementptr inbounds i8, ptr %v58, i64 %v75
+  store i8 %v120, ptr %v121
+  %v122 = zext i8 %v77 to i32
+  %v123 = mul nsw i32 %v122, %A
+  %v124 = add nuw nsw i64 %v78, 1
+  %v125 = getelementptr inbounds i8, ptr %v59, i64 %v124
+  %v126 = load i8, ptr %v125
+  %v127 = zext i8 %v126 to i32
+  %v128 = mul nsw i32 %v127, %B
+  %v129 = zext i8 %v76 to i32
+  %v130 = mul nsw i32 %v129, %C
+  %v131 = getelementptr inbounds i8, ptr %v62, i64 %v124
+  %v132 = load i8, ptr %v131
+  %v133 = zext i8 %v132 to i32
+  %v134 = mul nsw i32 %v133, %D
+  %v135 = add i32 %v123, 32
+  %v136 = add i32 %v135, %v128
+  %v137 = add i32 %v136, %v130
+  %v138 = add i32 %v137, %v134
+  %v139 = lshr i32 %v138, 6
+  %v140 = trunc i32 %v139 to i8
+  %v141 = getelementptr inbounds i8, ptr %v61, i64 %v78
+  store i8 %v140, ptr %v141
+  %v142 = zext i8 %v80 to i32
+  %v143 = mul nsw i32 %v142, %A
+  %v144 = add nuw nsw i64 %v81, 1
+  %v145 = getelementptr inbounds i8, ptr %v62, i64 %v144
+  %v146 = load i8, ptr %v145
+  %v147 = zext i8 %v146 to i32
+  %v148 = mul nsw i32 %v147, %B
+  %v149 = zext i8 %v79 to i32
+  %v150 = mul nsw i32 %v149, %C
+  %v151 = getelementptr inbounds i8, ptr %v65, i64 %v144
+  %v152 = load i8, ptr %v151
+  %v153 = zext i8 %v152 to i32
+  %v154 = mul nsw i32 %v153, %D
+  %v155 = add i32 %v143, 32
+  %v156 = add i32 %v155, %v148
+  %v157 = add i32 %v156, %v150
+  %v158 = add i32 %v157, %v154
+  %v159 = lshr i32 %v158, 6
+  %v160 = trunc i32 %v159 to i8
+  %v161 = getelementptr inbounds i8, ptr %v64, i64 %v81
+  store i8 %v160, ptr %v161
+  %v162 = icmp eq i64 %v144, %v5
+  br i1 %v162, label %B13, label %B12
+B13:
+  %v163 = icmp eq i32 %v69, %v50
+  br i1 %v163, label %B14, label %B11
+B14:
+  %v164 = phi i8 [ %v66, %B13 ]
+  %v165 = phi ptr [ %v65, %B13 ]
+  %v166 = phi i32 [ %v67, %B13 ]
+  %v167 = phi ptr [ %v68, %B13 ]
+  %v168 = icmp ne i32 %v7, 0
+  br i1 %v168, label %B3, label %B8
+@function2
+B0:
+  %v0 = sext i32 %src_stride to i64
+  %v1 = icmp sgt i32 %height, 0
+  br i1 %v1, label %B1, label %B8
+B1:
+  %v2 = icmp sgt i32 %width, 0
+  %v3 = sext i32 %dst_stride to i64
+  br i1 %v2, label %B2, label %B8
+B2:
+  %v4 = load i8, ptr %src
+  %v5 = zext i32 %width to i64
+  %v6 = add i32 %height, -1
+  %v7 = and i32 %height, 1
+  %v8 = icmp ult i32 %v6, 1
+  br i1 %v8, label %B3, label %B9
+B3:
+  %v9 = phi i8 [ %v102, %B13 ], [ %v4, %B2 ]
+  %v10 = phi ptr [ %src, %B2 ], [ %v103, %B13 ]
+  %v11 = phi i32 [ %v104, %B13 ], [ 0, %B2 ]
+  %v12 = phi ptr [ %dst, %B2 ], [ %v105, %B13 ]
+  %v13 = icmp ne i32 %v7, 0
+  call void @llvm.assume(i1 %v13)
+  br label %B4
+B4:
+  %v14 = getelementptr inbounds i8, ptr %v10, i64 %v0
+  %v15 = load i8, ptr %v14
+  br label %B5
+B5:
+  %v16 = phi i8 [ %v15, %B4 ], [ %v29, %B5 ]
+  %v17 = phi i8 [ %v23, %B5 ], [ %v9, %B4 ]
+  %v18 = phi i64 [ %v21, %B5 ], [ 0, %B4 ]
+  %v19 = zext i8 %v17 to i32
+  %v20 = mul nsw i32 %v19, %A
+  %v21 = add nuw nsw i64 %v18, 1
+  %v22 = getelementptr inbounds i8, ptr %v10, i64 %v21
+  %v23 = load i8, ptr %v22
+  %v24 = zext i8 %v23 to i32
+  %v25 = mul nsw i32 %v24, %B
+  %v26 = zext i8 %v16 to i32
+  %v27 = mul nsw i32 %v26, %C
+  %v28 = getelementptr inbounds i8, ptr %v14, i64 %v21
+  %v29 = load i8, ptr %v28
+  %v30 = zext i8 %v29 to i32
+  %v31 = mul nsw i32 %v30, %D
+  %v32 = add i32 %v20, 32
+  %v33 = add i32 %v32, %v25
+  %v34 = add i32 %v33, %v27
+  %v35 = add i32 %v34, %v31
+  %v36 = lshr i32 %v35, 6
+  %v37 = trunc i32 %v36 to i8
+  %v38 = getelementptr inbounds i8, ptr %v12, i64 %v18
+  store i8 %v37, ptr %v38
+  %v39 = icmp eq i64 %v21, %v5
+  br i1 %v39, label %B6, label %B5
+B6:
+  br label %B7
+B7:
+  br label %B8
+B8:
+  ret void
+B9:
+  %v40 = sub i32 %height, %v7
+  br label %B10
+B10:
+  %v41 = phi i8 [ %v4, %B9 ], [ %v50, %B12 ]
+  %v42 = phi ptr [ %src, %B9 ], [ %v49, %B12 ]
+  %v43 = phi i32 [ %v51, %B12 ], [ 0, %B9 ]
+  %v44 = phi ptr [ %dst, %B9 ], [ %v52, %B12 ]
+  %v45 = phi i32 [ %v53, %B12 ], [ 0, %B9 ]
+  %v46 = getelementptr inbounds i8, ptr %v42, i64 %v0
+  %v47 = load i8, ptr %v46
+  %v48 = getelementptr inbounds i8, ptr %v44, i64 %v3
+  %v49 = getelementptr inbounds i8, ptr %v46, i64 %v0
+  %v50 = load i8, ptr %v49
+  %v51 = add nuw nsw i32 %v43, 2
+  %v52 = getelementptr inbounds i8, ptr %v48, i64 %v3
+  %v53 = add nuw nsw i32 %v45, 2
+  br label %B11
+B11:
+  %v54 = phi i8 [ %v47, %B10 ], [ %v70, %B11 ]
+  %v55 = phi i8 [ %v41, %B10 ], [ %v64, %B11 ]
+  %v56 = phi i64 [ %v62, %B11 ], [ 0, %B10 ]
+  %v57 = phi i8 [ %v50, %B10 ], [ %v90, %B11 ]
+  %v58 = phi i8 [ %v47, %B10 ], [ %v84, %B11 ]
+  %v59 = phi i64 [ %v82, %B11 ], [ 0, %B10 ]
+  %v60 = zext i8 %v55 to i32
+  %v61 = mul nsw i32 %v60, %A
+  %v62 = add nuw nsw i64 %v56, 1
+  %v63 = getelementptr inbounds i8, ptr %v42, i64 %v62
+  %v64 = load i8, ptr %v63
+  %v65 = zext i8 %v64 to i32
+  %v66 = mul nsw i32 %v65, %B
+  %v67 = zext i8 %v54 to i32
+  %v68 = mul nsw i32 %v67, %C
+  %v69 = getelementptr inbounds i8, ptr %v46, i64 %v62
+  %v70 = load i8, ptr %v69
+  %v71 = zext i8 %v70 to i32
+  %v72 = mul nsw i32 %v71, %D
+  %v73 = add i32 %v61, 32
+  %v74 = add i32 %v73, %v66
+  %v75 = add i32 %v74, %v68
+  %v76 = add i32 %v75, %v72
+  %v77 = lshr i32 %v76, 6
+  %v78 = trunc i32 %v77 to i8
+  %v79 = getelementptr inbounds i8, ptr %v44, i64 %v56
+  store i8 %v78, ptr %v79
+  %v80 = zext i8 %v58 to i32
+  %v81 = mul nsw i32 %v80, %A
+  %v82 = add nuw nsw i64 %v59, 1
+  %v83 = getelementptr inbounds i8, ptr %v46, i64 %v82
+  %v84 = load i8, ptr %v83
+  %v85 = zext i8 %v84 to i32
+  %v86 = mul nsw i32 %v85, %B
+  %v87 = zext i8 %v57 to i32
+  %v88 = mul nsw i32 %v87, %C
+  %v89 = getelementptr inbounds i8, ptr %v49, i64 %v82
+  %v90 = load i8, ptr %v89
+  %v91 = zext i8 %v90 to i32
+  %v92 = mul nsw i32 %v91, %D
+  %v93 = add i32 %v81, 32
+  %v94 = add i32 %v93, %v86
+  %v95 = add i32 %v94, %v88
+  %v96 = add i32 %v95, %v92
+  %v97 = lshr i32 %v96, 6
+  %v98 = trunc i32 %v97 to i8
+  %v99 = getelementptr inbounds i8, ptr %v48, i64 %v59
+  store i8 %v98, ptr %v99
+  %v100 = icmp eq i64 %v82, %v5
+  br i1 %v100, label %B12, label %B11
+B12:
+  %v101 = icmp eq i32 %v53, %v40
+  br i1 %v101, label %B13, label %B10
+B13:
+  %v102 = phi i8 [ %v50, %B12 ]
+  %v103 = phi ptr [ %v49, %B12 ]
+  %v104 = phi i32 [ %v51, %B12 ]
+  %v105 = phi ptr [ %v52, %B12 ]
+  %v106 = icmp ne i32 %v7, 0
+  br i1 %v106, label %B3, label %B7

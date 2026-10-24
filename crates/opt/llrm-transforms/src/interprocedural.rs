@@ -21,17 +21,19 @@
 //!
 //! The stages, in order:
 //!
-//! 1. `stamped_all`: each exactly defined body is stamped with what is proved
-//!    of it, callees first: `memory(...)`, `nocapture`/`readonly`/`readnone`/
-//!    `writeonly`/`initializes` on pointer parameters, `willreturn`,
-//!    `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
-//!    stamp is stated on the declarations of the body in other modules.
+//! 1. `stamped_all` (the `stamp` slot, before the walk): each exactly defined
+//!    body is stamped with what is proved of it, callees first: `memory(...)`,
+//!    `nocapture`/`readonly`/`readnone`/ `writeonly`/`initializes` on pointer
+//!    parameters, `willreturn`, `norecurse`, `nounwind`. A stated attribute is
+//!    only narrowed. The same stamp is stated on the declarations of the body
+//!    in other modules.
 //! 2. The private bodies nothing reaches any more, the ones the walk
 //!    ([`crate::walk::Walk`]) inlined into every caller, lose their bodies
 //!    (`bare_the_unreached`). Inlining is the walk's alone.
-//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]):
-//!    a pointer a body only reads is passed as the fields it reads; a far
-//!    pointer every call fills from DGROUP is passed as its offset.
+//! 3. `promote.` ([`crate::argpromotion`]), `narrow.` ([`crate::narrowspace`]),
+//!    `globalsra.` ([`crate::globalsra`]): a pointer a body only reads is
+//!    passed as the fields it reads; a far pointer every call fills from DGROUP
+//!    is passed as its offset.
 //! 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
 //!    results replaced by it (`llrm_analysis::interprocedural`); the call
 //!    stays.
@@ -41,9 +43,9 @@
 //! 6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
 //!    caller passes a parameter is stated on it for the body's own proofs.
 //! 7. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
-//! 8. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
-//!    proved pure and terminating, and `ipa-noreturn.` cuts the code after a
-//!    call to a private body every path of which stops, keeping the call.
+//! 8. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+//!    and `ipa-noreturn.` cuts the code after a call to a private body every
+//!    path of which stops, keeping the call.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -135,7 +137,7 @@
 //!
 //! # Needs
 //! [`crate::inline`], [`crate::ipacp`], [`crate::profit`], and
-//! `llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
+//! `llrm_analysis`' `Summaries`, `GlobalsAA`,
 //! `interprocedural` and `parameter_ranges`.
 //!
 //! # See also
@@ -147,7 +149,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::aa::ModRefInfo;
 use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
+use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
@@ -352,10 +354,10 @@ pub fn managers(
                 one = one.carrying(before);
             }
             one.require::<Summaries>();
+            one.require::<GlobalsModRefAnalysis>();
             // As the first run's: a body sent back through reads what no code
             // outside reaches.
             one.require::<GlobalsAA>();
-            one.require::<Callbacks>();
             one
         })
         .collect()
@@ -643,11 +645,8 @@ pub fn optimized_with<E: From<String>>(
         analyses.invalidate_bodies(&PreservedAnalyses::none());
     };
 
-    // Inline only after each independent body has reached its local fixed
-    // point; the splice's result goes straight back through the pipeline.
-    // What each body does, stated on it, is what inlining and the dead-call
-    // removal below read.
-    stamped_all(program, modules).map_err(E::from)?;
+    // The walk has run: what each body does, stated on it by the `stamp`
+    // slot before it, is what the dead-call removal below reads.
     // What the walk inlined into every caller has no use left; `globaldce`
     // would drop it, the passes below skip it.
     for at in 0..count {
@@ -679,6 +678,24 @@ pub fn optimized_with<E: From<String>>(
         }) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
+        }
+    }
+
+    // An internal variable is split into the pieces its loads read, and one a
+    // body that does not recurse writes before it reads is that body's stack
+    // slot: GlobalOpt's `SRAGlobal` and its localizing branch.
+    for at in 0..count {
+        let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
+            crate::globalsra::split(module, &program.layout)
+        });
+        // Every body is told changed before the first runs again: the global
+        // analyses see the new variables once, not once per body.
+        edited(&mut modules[at], &ids);
+        if !ids.is_empty() {
+            modules[at].invalidate(&PreservedAnalyses::none());
+        }
+        for id in ids {
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "globalsra.")?;
         }
     }
 
@@ -782,8 +799,11 @@ pub fn optimized_with<E: From<String>>(
     }
     // What its callers pass bounds each parameter of a body only they call:
     // stated as a range, which the body's own proofs then read.
+    // A calling body is solved again only where it, its own parameters or the
+    // module's facts moved since: the rounds share the solves.
+    let mut solves = llrm_analysis::parameter_ranges::Cache::default();
     for round in 0..if ranges { 4 } else { 0 } {
-        let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
+        let stamped = llrm_analysis::parameter_ranges::stamp_with(program, &unexported, &mut solves);
         if stamped.is_empty() {
             break;
         }
@@ -804,8 +824,6 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
-    // Propagation may have left a body doing less than it states.
-    stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
         let declarations = modules[at].get::<Declarations>(&program.modules[at]);
         for &id in &procedures[at] {

@@ -30,6 +30,7 @@ import cpulimit
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import linkrecipe  # noqa: E402
+import omfalign  # noqa: E402
 import llrmbin  # noqa: E402
 
 BIN = llrmbin.bin_dir()
@@ -102,8 +103,33 @@ class BuildError(Exception):
 _RUNTIME_LOCK = threading.Lock()
 
 
+def with_isel(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-c` or `llrm-qb`, when the variable is set: the same programs through the other instruction selector."""
+    mode = os.environ.get("LLRM_ISEL")
+    if mode and Path(command[0]).name in ("llrm-c", "llrm-qb"):
+        return [command[0], f"--isel={mode}", *command[1:]]
+    return command
+
+
+class ProofMissing(Exception):
+    pass
+
+
+def isel_proof(report: Path, mode: str) -> tuple[int, int]:
+    """The functions `$LLRM_ISEL_REPORT` says the DAG path (first) and the old selector (second) selected. A run that quotes a count
+    under `mode` proves with this which selector compiled it: no report, or no function from `mode`'s selector, is no proof."""
+    if not report.exists() or not report.read_text().strip():
+        raise ProofMissing(f"{report}: no function was reported as selected: nothing shows which selector compiled this run")
+    lines = [line.rsplit(" ", 1) for line in report.read_text().splitlines() if line.strip()]
+    dag = sum(1 for _, by in lines if by == "dag")
+    old = sum(1 for _, by in lines if by == "old")
+    if mode in ("dag", "shadow") and dag == 0:
+        raise ProofMissing(f"LLRM_ISEL={mode} but the DAG path selected no function ({old} by the old selector)")
+    return dag, old
+
+
 def _host(command: list[str]) -> None:
-    done = cpulimit.run(command, 300, capture_output=True, text=True)
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
@@ -212,7 +238,12 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
     _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
     if image is not None:
-        _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
+        # jwlink's ELF writer breaks on paragraph-aligned data (tools/dosbatch/omfalign.py): the image takes dword-aligned copies, in a directory of
+        # its own: rows build at once in one work directory, and copies shared by name were written under each other's linker (E2146 invalid object file).
+        every = omfalign.dword_laid_out([*first, obj, *objects_after, *last, *final], image.with_suffix(".objects"))
+        cut = lambda count: [every.pop(0) for _ in range(count)]  # noqa: E731
+        copies = (cut(len(first)), cut(1)[0], cut(len(objects_after)), cut(len(last)), cut(len(final)))
+        _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(copies[0]), "file", str(copies[1]), *files(copies[2]), *files(copies[3]), *after, *files(copies[4])])
     return (Path(fill(link["loader"])),) if "loader" in link else ()
 
 

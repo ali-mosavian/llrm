@@ -148,3 +148,14 @@ fn the_walk_is_linear_in_the_users() {
     let (small, large) = (asked(100), asked(200));
     assert!(large <= 2 * small + 4, "{small} questions for 100 loads, {large} for 200");
 }
+
+/// IU1 made the program-order map for every value with two users: d_faces -O2
+/// paid 6.2 M instructions for 38 loops (`IdMap::from_iter`, 4.4 M + 1.9 M).
+/// A loop makes it once, however many values have two users (`%i` and `%next`
+/// here).
+#[test]
+fn test_the_program_order_map_is_made_once_for_a_loop() {
+    with_users(ARRAY, |_, _, users, _, _| {
+        assert_eq!(users.order_builds(), 1);
+    });
+}

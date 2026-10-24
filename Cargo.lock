@@ -328,6 +328,7 @@ dependencies = [
  "llrm-coff32",
  "llrm-coff64",
  "llrm-core",
+ "llrm-dagisel",
  "llrm-dwarf",
  "llrm-elf32",
  "llrm-elf64",
@@ -355,6 +356,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-dagisel"
+version = "0.1.0"
+
+[[package]]
+name = "llrm-dagisel-gen"
+version = "0.1.0"
+dependencies = [
+ "llrm-dagisel",
  "tempfile",
  "toml",
 ]
@@ -618,6 +632,7 @@ dependencies = [
  "llrm-x86-m32",
  "num-bigint",
  "num-traits",
+ "regex",
 ]
 
 [[package]]

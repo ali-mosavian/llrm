@@ -182,8 +182,18 @@ pub fn physical(
     };
     let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
         let mut defined = defined;
-        for effect in &effects[&at] {
+        let block = body.blocks.iter().find(|block| block.at == at).expect("a block of the body");
+        for (one, effect) in block.insns.iter().zip(&effects[&at]) {
             match effect {
+                // `movzx ebx, bx` zeroes the upper half and hands the word on
+                // as it is: an undefined word stays undefined, and is not
+                // read (the preheader's copy for a loop that writes the word,
+                // `upperzero::established`).
+                Some(effect) if _widened_word(one).is_some() => {
+                    let word = _lanes(regs, _widened_word(one).expect("tested"));
+                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&word));
+                    defined = defined.or(&effect.writes.minus(&word.minus(&defined)));
+                }
                 // An instruction nothing is known of may write anything.
                 None => defined = everything,
                 Some(effect) => {
@@ -241,6 +251,21 @@ pub fn physical(
         body.name,
         names.join(", ")
     )]
+}
+
+/// The word register of `movzx r32, r16` on one register: its low word is not
+/// an input but passed through.
+fn _widened_word(one: &crate::model::lir::Insn) -> Option<RegId> {
+    use crate::model::ir::Loc;
+    let what = one.what.as_ref().filter(|what| what.name.as_deref() == Some("movzx"))?;
+    match (what.dests.as_slice(), what.sources.as_slice()) {
+        ([Loc::Reg(wide)], [Loc::Reg(word)])
+            if wide.width == 4 && word.width == 2 && wide.register.full_register() == word.register.full_register() =>
+        {
+            Some(word.register)
+        }
+        _ => None,
+    }
 }
 
 /// Once instruction selection has tagged them, every frame cell names the slot
@@ -464,6 +489,24 @@ fn _values(
             }
         }
     }
+    // A phi reads one value for each predecessor of its block, and from none
+    // else (the IR verifier's rule: "PHI nodes must have one entry for each
+    // predecessor").
+    let mut preds: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for block in &body.blocks {
+        for &to in block.succ.iter() {
+            preds.entry(to).or_default().insert(block.at);
+        }
+    }
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (from, _) in &phi.incoming {
+                if !preds.get(&block.at).is_some_and(|set| set.contains(from)) {
+                    out.push(format!("a phi at {:#06x} reads from {from:#06x}, which is not a predecessor", block.at));
+                }
+            }
+        }
+    }
     if !in_ssa && body.blocks.iter().any(|block| !block.phis.is_empty()) {
         let stuck: Vec<String> = body
             .blocks
@@ -480,7 +523,8 @@ fn _values(
     for block in &body.blocks {
         for one in &block.insns {
             read.extend(one.uses.iter().copied());
-            read.extend(one.requires.iter().map(|(held, _)| held.value));
+            // A value an operand reads as undef needs no definition.
+            read.extend(one.requires.iter().map(|(held, _)| held.value).filter(|value| !one.undefs.contains(value)));
         }
         for phi in &block.phis {
             read.extend(phi.incoming.iter().map(|(_, value)| *value));
@@ -501,8 +545,10 @@ fn _values(
             }
         }
     }
+    let undef: BTreeSet<u32> =
+        body.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.undefs.iter().copied()).collect();
     for value in &named {
-        if !read.contains(value) && !written.contains_key(value) {
+        if !read.contains(value) && !written.contains_key(value) && !undef.contains(value) {
             out.push(format!("value#{value} is named by an operand and neither defined nor used anywhere"));
         }
     }
@@ -544,6 +590,22 @@ mod tests {
 
     /// C crc32 returned -1141145971 after an eliminated phi lost its
     /// definition.
+    /// An IR phi has one entry for each predecessor and no other: a LIR phi
+    /// that reads from a block that is not one is a body a pass broke (the
+    /// old PHIElimination left it alone, silently).
+    #[test]
+    fn test_a_phi_reading_from_a_block_that_is_not_a_predecessor_is_reported() {
+        use crate::model::lir::{LirBlock, Phi};
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, Vec::new()) };
+        let next = LirBlock {
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (7, 1)] }].into(),
+            ..LirBlock::new(1, Vec::new())
+        };
+        let body = LirBody::new("p", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        let said = verify(&body, true);
+        assert!(said.iter().any(|one| one.contains("is not a predecessor")), "{said:?}");
+    }
+
     #[test]
     fn test_a_read_value_must_be_defined_or_an_explicit_body_input() {
         let stale = Insn::new(
@@ -757,6 +819,30 @@ mod tests {
             vec![],
         );
         let said = physical(&physical_body(vec![read]), &BTreeSet::new());
+        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
+    }
+
+    /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,
+    /// LLRM_VERIFY=1 refused a valid program): the word is passed on, not read,
+    /// so only a later read of it complains.
+    #[test]
+    fn test_a_widening_of_an_undefined_word_is_not_a_read_of_it() {
+        let widen = Insn::new(
+            1,
+            Some((1, 1)),
+            Some(semantics(Operation::Extend, "movzx", vec![register(RegId::BX, 4)], vec![register(RegId::BX, 2)])),
+            vec![],
+            vec![],
+        );
+        let mov = |at: i64, to: Loc, from: Loc| {
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, "mov", vec![to], vec![from])), vec![], vec![])
+        };
+        let one = Loc::Imm(ir::Imm { value: 1, width: 2, address: None });
+        let writes = mov(2, register(RegId::BX, 2), one);
+        let reads = mov(3, register(RegId::AX, 2), register(RegId::BX, 2));
+        let none = BTreeSet::new();
+        assert!(physical(&physical_body(vec![widen.clone(), writes]), &none).is_empty());
+        let said = physical(&physical_body(vec![widen, reads]), &none);
         assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
     }
 

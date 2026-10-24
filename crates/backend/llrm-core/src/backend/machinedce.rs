@@ -99,7 +99,7 @@ fn _slot(where_: &Loc) -> bool {
 }
 
 /// Whether removing this occurrence can remove only registers and flags.
-fn _pure(
+pub(crate) fn pure(
     regs: Regs,
     one: &Insn,
 ) -> bool {
@@ -141,7 +141,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
                 dead.clear();
                 continue;
             };
-            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(regs, one) {
+            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && pure(regs, one) {
                 redundant.insert(id(one));
                 changed = true;
                 continue;
@@ -196,7 +196,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Option<Semantics> {
-        Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
+        Some(Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) })
     }
 
     fn reg(register: RegId) -> Loc {
@@ -242,7 +242,7 @@ mod tests {
         Arc::new(Insn::new(
             at,
             Some((at, at + 2)),
-            Some(Semantics { name: Some(name.to_owned()), target: Some(10), ..Semantics::new(Operation::Branch) }),
+            Some(Semantics { name: Some(name.into()), target: Some(10), ..Semantics::new(Operation::Branch) }),
             vec![],
             uses,
         ))

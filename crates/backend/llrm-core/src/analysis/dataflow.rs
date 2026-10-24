@@ -3,9 +3,9 @@
 //! block's input from the outputs that flow into it and the transfer across the
 //! block. A block is worked again when the output of one it depends on changed,
 //! not every block each round until none does: a fact crosses one block a
-//! round, so a loop nest d deep took d rounds of every block (machinecp and
-//! spillforward were a third of `lir peephole` on a nest 8 deep). GCC's `df`
-//! and LLVM's dataflow solvers iterate on a worklist the same way.
+//! round, so a loop nest d deep took d rounds of every block (machinecp was a
+//! third of `lir peephole` on a nest 8 deep). GCC's `df` and LLVM's dataflow
+//! solvers iterate on a worklist the same way.
 //!
 //! `LLRM_CHECK_DATAFLOW=1` solves by rounds as the passes did and asserts the
 //! same inputs and outputs: for a transfer that is monotone the fixed point

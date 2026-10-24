@@ -12,7 +12,7 @@ use llrm_lir::registers::RegId;
 
 use super::*;
 use crate::backend::frame::Frame;
-use crate::backend::{machinecp, parcopy, prologue, spillforward, verify};
+use crate::backend::{machinecp, parcopy, prologue, verify};
 use crate::model::ir::Addr;
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
@@ -104,7 +104,7 @@ fn frame(disp: i64) -> Option<Addr> {
 }
 
 fn names(insns: &[Arc<Insn>]) -> Vec<String> {
-    insns.iter().map(|one| one.what.as_ref().unwrap().name.clone().unwrap()).collect()
+    insns.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().map(str::to_owned).unwrap()).collect()
 }
 
 fn code(what: &Semantics) -> Vec<u8> {
@@ -226,134 +226,6 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
         let input = body("screen", 0, crate::model::lir::shared(blocks));
         assert_eq!(pushed_constants(rules(), &input), input, "{barrier}");
     }
-}
-
-#[test]
-fn test_entry_reload_requires_agreement_on_every_edge() {
-    // NBODY's header reload is redundant only when all paths carry the exact
-    // stored bits.
-    for mismatch in ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"] {
-        let register = rl(RegId::EAX, 4);
-        let cell = Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) };
-        let store = insn(
-            1,
-            Some((1, 1)),
-            Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let mut other = store.clone();
-        match mismatch {
-            "register" => other.what.as_mut().unwrap().sources = vec![rl(RegId::ECX, 4)],
-            "slot" => {
-                other.what.as_mut().unwrap().dests =
-                    vec![Loc::Mem(Mem { addr: Some(cell.addr.unwrap().plus(-4)), ..cell.clone() })];
-            }
-            "width" => other.what.as_mut().unwrap().dests = vec![Loc::Mem(Mem { width: 2, ..cell.clone() })],
-            "clobber" => other.clobbers = [RegId::EAX].into(),
-            "missing" => other.what = None,
-            _ => {}
-        }
-        let reload = Insn {
-            spill_reload: mismatch != "unowned",
-            ..insn(
-                3,
-                Some((3, 3)),
-                Some(sem(Operation::Move, "mov", vec![register], vec![Loc::Mem(cell)])),
-                vec![],
-                vec![],
-            )
-        };
-        let input = body(
-            "join",
-            if mismatch == "entry" { 3 } else { 0 },
-            vec![
-                block(0, vec![], vec![1, 2]).into(),
-                block(1, vec![Arc::new(store)], vec![3]).into(),
-                block(2, vec![Arc::new(other)], vec![3]).into(),
-                block(3, vec![Arc::new(reload.clone())], vec![]).into(),
-            ],
-        );
-        let done = spillforward::forwarded(&input);
-        let kept =
-            done.blocks[done.blocks.len() - 1].insns.iter().any(|one| one.spill_reload || one.what == reload.what);
-        assert_eq!(kept, !["none", "unowned"].contains(&mismatch), "{mismatch}");
-    }
-}
-
-/// A store of a register back into the slot it holds is dead: qbsp's
-/// RPointLeaf reloaded a spilled pointer and stored it straight back, on
-/// each side of a call, every iteration.
-#[test]
-fn test_storing_a_slot_back_from_its_reload_is_dead() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let reload = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])),
-        vec![],
-        vec![],
-    );
-    let back = insn(
-        2,
-        Some((2, 2)),
-        Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let other =
-        insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(RegId::CX, 2)])), vec![], vec![]);
-    let input = body("back", 1, vec![block(1, vec![Arc::new(reload), Arc::new(back), Arc::new(other)], vec![]).into()]);
-
-    let done = spillforward::forwarded(&input);
-
-    let stores: Vec<_> = done
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref())
-        .filter(|what| matches!(what.dests[..], [Loc::Mem(_)]))
-        .map(|what| what.sources.clone())
-        .collect();
-    assert_eq!(stores, vec![vec![rl(RegId::CX, 2)]]);
-}
-
-#[test]
-fn test_forwarded_spill_reload_retains_its_virtual_definition() {
-    // BASIC nbody's store read value#979 after spill forwarding removed its
-    // reload.
-    let register = rl(RegId::EAX, 4);
-    let source = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-4), 4) });
-    let destination = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 8)), 4));
-    let establish = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![source.clone()], vec![register.clone()])),
-        vec![],
-        vec![],
-    );
-    let reload = Insn {
-        spill_reload: true,
-        ..insn(
-            2,
-            Some((2, 2)),
-            Some(sem(Operation::Move, "mov", vec![register.clone()], vec![source])),
-            vec![2],
-            vec![],
-        )
-    };
-    let consume =
-        insn(3, Some((3, 4)), Some(sem(Operation::Move, "mov", vec![destination], vec![register])), vec![], vec![2]);
-    let input = body(
-        "forwarded-definition",
-        1,
-        vec![block(1, vec![Arc::new(establish), Arc::new(reload), Arc::new(consume)], vec![]).into()],
-    );
-
-    let done = spillforward::forwarded(&input);
-
-    assert!(verify::verify(&done, false).is_empty());
-    assert_eq!(done.insns().iter().filter(|one| one.what.as_ref().unwrap().op == Operation::Move).count(), 2);
 }
 
 #[test]
@@ -1861,7 +1733,7 @@ fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "jne", "jmp"]);
 }
@@ -1900,7 +1772,7 @@ fn test_a_zero_test_after_a_step_with_a_memory_source_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["sub", "", "je"]);
 }
@@ -1937,7 +1809,7 @@ fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -2479,7 +2351,7 @@ fn test_transitive_extension_preserves_nonlocal_machine_state() {
         );
         let mut tail = vec![];
         match guard {
-            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".to_owned()),
+            "signedness" => wide.what.as_mut().unwrap().name = Some("movsx".into()),
             "register" => wide.what.as_mut().unwrap().dests = vec![rl(RegId::EAX, 4)],
             "shared" => {
                 tail.push(Arc::new(insn(
@@ -2836,6 +2708,27 @@ fn test_narrow_load_folds_into_its_only_widening_use() {
     assert_eq!(emitted[0].defines, [2]);
     assert_eq!(emitted.len(), 2);
     assert!(verify::verify(&result, false).is_empty());
+}
+
+#[test]
+fn test_a_far_load_whose_selector_is_required_in_es_still_folds_into_its_widening_use() {
+    // bench/huge -O2: `mov cx,es:[di]; movsx ecx,cx` ran 40,200 times beside
+    // `movsx ecx,es:[di]`, because the load's requirement of ES refused the
+    // fold.
+    let (cell, narrow, wide) = narrow_load_parts();
+    let mut far = (*narrow).clone();
+    far.requires = vec![(Held { value: 9, width: 2 }, RegId::ES)];
+    let used =
+        plain(2, Operation::Binary, "add", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::EDX, 4)], None);
+    let input = body("far-load-extend", 0, vec![block(0, vec![Arc::new(far), wide, used], vec![]).into()]);
+
+    let result = extensions(rules(), &input);
+    let emitted: Vec<Arc<Insn>> =
+        result.insns().into_iter().filter(|one| one.what.as_ref().unwrap().op != Operation::Nothing).collect();
+
+    assert_eq!(emitted[0].what, Some(sem(Operation::Extend, "movsx", vec![rl(RegId::EDX, 4)], vec![Loc::Mem(cell)])));
+    assert_eq!(emitted[0].requires, [(Held { value: 9, width: 2 }, RegId::ES)], "the selector stays required");
+    assert_eq!(emitted.len(), 2);
 }
 
 #[test]
@@ -3688,6 +3581,260 @@ fn test_unit_add_selects_inc_only_when_carry_is_dead() {
     assert_eq!(names(&increments(rules(), &live).insns())[0], "add");
 }
 
+/// A body of one `lea eax, address` and, where `flags_read`, a `jb` after it.
+fn lea_body(
+    address: AddressRef,
+    flags_read: bool,
+) -> LirBody {
+    let eax = rl(RegId::EAX, 4);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![eax], vec![Loc::Address(address)])),
+        vec![1],
+        vec![1],
+    ));
+    if !flags_read {
+        // A compare writes every flag before anything reads one.
+        let compare = Arc::new(insn(
+            2,
+            Some((2, 2)),
+            Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(8, 4)])),
+            vec![],
+            vec![1],
+        ));
+        return body("lea", 1, vec![block(1, vec![lea, compare], vec![]).into()]);
+    }
+    let branch =
+        Arc::new(insn(2, Some((2, 2)), Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))), vec![], vec![]));
+    body("lea", 1, vec![block(1, vec![lea, branch], vec![3]).into(), block(3, vec![], vec![]).into()])
+}
+
+fn sum(
+    through: RegId,
+    index_through: RegId,
+    scale: i64,
+    offset: i64,
+) -> AddressRef {
+    AddressRef { through, index_through, scale, offset, ..AddressRef::new(None) }
+}
+
+/// X86FixupLEAs `optTwoAddrLEA`: `lea eax,[eax+ecx]` is `add eax,ecx`, in
+/// either operand order, where no flag is read after it. Without the pass the
+/// LEA stayed an LEA: 3 bytes for `add`, 3 for `lea`, but the pin's output
+/// differs in 37 IRs.
+#[test]
+fn test_two_address_lea_sum_is_an_add_where_flags_are_dead() {
+    for (through, index) in [(RegId::EAX, RegId::ECX), (RegId::ECX, RegId::EAX)] {
+        let done = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), false));
+        let what = done.insns()[0].what.clone().unwrap();
+        assert_eq!(what.name.as_deref(), Some("add"));
+        assert_eq!(what.sources, [rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
+        let kept = lea_fixed(rules(), &lea_body(sum(through, index, 1, 0), true));
+        assert_eq!(names(&kept.insns())[0], "lea", "a jb reads the flags the add would set");
+    }
+}
+
+/// `lea eax,[eax+8]` is `add eax,8`; a step of one is the `add eax,1` that
+/// `increments` makes `inc`.
+#[test]
+fn test_two_address_lea_step_is_an_add_where_flags_are_dead() {
+    let done = lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 8), false));
+    let what = done.insns()[0].what.clone().unwrap();
+    assert_eq!(what.name.as_deref(), Some("add"));
+    assert_eq!(what.sources, [rl(RegId::EAX, 4), im(8, 4)]);
+    let one = increments(rules(), &lea_fixed(rules(), &lea_body(sum(RegId::EAX, RegId::None, 1, 1), false)));
+    assert_eq!(names(&one.insns())[0], "inc");
+}
+
+/// The pin leaves a three-address or scaled LEA alone: only the two-address
+/// scale-1 forms are the pass's.
+#[test]
+fn test_lea_that_is_not_two_address_stays() {
+    for address in [
+        sum(RegId::ECX, RegId::EDX, 1, 0),
+        sum(RegId::EAX, RegId::ECX, 2, 0),
+        sum(RegId::EAX, RegId::ECX, 1, 4),
+        sum(RegId::ECX, RegId::None, 1, 8),
+    ] {
+        let done = lea_fixed(rules(), &lea_body(address, false));
+        assert_eq!(names(&done.insns())[0], "lea");
+    }
+}
+
+/// `lea ecx,[eax+edx]`, the `between` instructions, `op d, d, ecx`, then a
+/// compare that writes every flag (or a `jb` that reads them, where
+/// `flags_read`).
+fn lea_alu_body(
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    lea_alu_body_at(sum(RegId::EAX, RegId::EDX, 1, 0), op, d, between, flags_read)
+}
+
+fn lea_alu_body_at(
+    address: AddressRef,
+    op: &str,
+    d: RegId,
+    between: Vec<Arc<Insn>>,
+    flags_read: bool,
+) -> LirBody {
+    let ecx = rl(RegId::ECX, 4);
+    let mut insns = vec![Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![ecx.clone()], vec![Loc::Address(address)])),
+        vec![11],
+        vec![20, 21],
+    ))];
+    insns.extend(between);
+    insns.push(Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, op, vec![rl(d, 4)], vec![rl(d, 4), ecx])),
+        vec![12],
+        vec![13, 11],
+    )));
+    if flags_read {
+        insns.push(Arc::new(insn(
+            4,
+            Some((4, 4)),
+            Some(semt(Operation::Branch, "jb", vec![], vec![], Some(3))),
+            vec![],
+            vec![],
+        )));
+        return body("leaalu", 1, vec![block(1, insns, vec![3]).into(), block(3, vec![], vec![]).into()]);
+    }
+    insns.push(Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EBX, 4), im(8, 4)])),
+        vec![],
+        vec![],
+    )));
+    // The return reads only eax: everything else is dead after it.
+    insns.push(Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    }));
+    body("leaalu", 1, vec![block(1, insns, vec![]).into()])
+}
+
+fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
+    done.insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.as_deref().unwrap_or_default().to_owned(), what.sources.clone()))
+        .collect()
+}
+
+/// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
+/// add ebx,edx`, and a subtract the same two steps. Without the case the
+/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// `mov eax, edx`.
+#[test]
+fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
+    for op in ["add", "sub"] {
+        let done = steps(&lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false)));
+        assert_eq!(done[0], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+        assert_eq!(done[1], (op.to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::EDX, 4)]), "{done:?}");
+        assert_eq!(done.len(), 4, "the lea is gone: two steps, the compare and the return: {done:?}");
+        // The lea's value (11) is gone with it: a step reading it was "read but
+        // never defined" in call_keeps.c.
+        let again = lea_alus(rules(), &lea_alu_body(op, RegId::EBX, vec![], false));
+        assert!(again.insns().iter().all(|one| !one.uses.contains(&11)), "{op}: a step still reads the lea's value");
+        assert!(
+            again.insns().iter().any(|one| one.uses.contains(&20) && one.uses.contains(&21)),
+            "{op}: the steps read the address's values"
+        );
+    }
+}
+
+/// `lea cx,[eax+edx]; add bx,cx` (a word `lea` of dword address registers, as
+/// the real-mode target makes one) is no two word steps on `eax` and `edx`,
+/// which are no word operands: QCport's `con_draw` ended `add ax, ecx; add ax,
+/// edi`, which no assembler takes, and its object was not made. The pin splits
+/// only the `lea`s whose terms are as wide as the add.
+#[test]
+fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
+    let cx = rl(RegId::CX, 2);
+    let lea = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(sem(Operation::Address, "lea", vec![cx.clone()], vec![Loc::Address(sum(RegId::EAX, RegId::EDX, 1, 0))])),
+        vec![11],
+        vec![20, 21],
+    ));
+    let add = Arc::new(insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::BX, 2)], vec![rl(RegId::BX, 2), cx])),
+        vec![12],
+        vec![13, 11],
+    ));
+    let cmp = Arc::new(insn(
+        4,
+        Some((4, 4)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::SI, 2), im(8, 2)])),
+        vec![],
+        vec![],
+    ));
+    // The return reads only eax: everything else is dead after it, as in
+    // `lea_alu_body_at`.
+    let ret = Arc::new(Insn {
+        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
+    });
+    let done = lea_alus(rules(), &body("wordlea", 1, vec![block(1, vec![lea, add, cmp, ret], vec![]).into()]));
+    assert_eq!(names(&done.insns())[0], "lea", "{:?}", steps(&done));
+}
+
+/// Where the address register `d` is the index, `d` is added first: `d + (x+d)`
+/// is `(d+d)+x`.
+#[test]
+fn test_the_destination_that_is_an_address_register_is_added_first() {
+    let done = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EDX, vec![], false)));
+    assert_eq!(done[0].1, vec![rl(RegId::EDX, 4), rl(RegId::EDX, 4)], "{done:?}");
+    assert_eq!(done[1].1, vec![rl(RegId::EDX, 4), rl(RegId::EAX, 4)], "{done:?}");
+}
+
+/// `lea ecx,[eax+ecx]; add ebx,ecx` (the LEA's register is one of its terms, as
+/// six_ allocated it): `add ecx,eax`, and the add stays (`optTwoAddrLEA` case
+/// 1, in the shape the two-address pass makes). It stayed an `lea` whose result
+/// the add read, and six_ listed one instruction more than the pin's chain of
+/// adds.
+#[test]
+fn test_an_lea_that_sums_into_its_own_register_before_an_add_is_an_add() {
+    let done = steps(&lea_alus(
+        rules(),
+        &lea_alu_body_at(sum(RegId::EAX, RegId::ECX, 1, 0), "add", RegId::EBX, vec![], false),
+    ));
+    assert_eq!(done[0], ("add".to_owned(), vec![rl(RegId::ECX, 4), rl(RegId::EAX, 4)]), "{done:?}");
+    assert_eq!(done[1], ("add".to_owned(), vec![rl(RegId::EBX, 4), rl(RegId::ECX, 4)]), "{done:?}");
+}
+
+/// The search ends where the ALU is not the next instruction (the pin looks
+/// five ahead: DEVIATE LF-2), where the flags are read after the add, and where
+/// the `lea`'s register is read again.
+#[test]
+fn test_an_lea_stays_where_the_add_is_not_next_or_its_flags_are_read() {
+    let between = Arc::new(insn(
+        2,
+        Some((2, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::ESI, 4)], vec![rl(RegId::ECX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let read = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![between], false)));
+    assert_eq!(read[0].0, "lea", "{read:?}");
+    let flags = steps(&lea_alus(rules(), &lea_alu_body("add", RegId::EBX, vec![], true)));
+    assert_eq!(flags[0].0, "lea", "{flags:?}");
+}
+
 /// The combiner's canonical `x - 1` is `add x, -1`: INC and DEC were chosen
 /// only for `sub x, 1`, so recmany and recfloat grew (`dec ecx` became `add
 /// edx, -1`, 3 bytes against 1). X86's patterns select DEC for `add x, -1` as
@@ -4108,7 +4255,7 @@ fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
         .insns
         .iter()
-        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
@@ -4472,7 +4619,7 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
     let rows: Vec<_> = llrm_x86_m16::instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
     assert_eq!(rows.len(), 16);
     for form in rows {
-        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let branch = Semantics { name: Some(form.name.as_str().into()), ..Semantics::new(Operation::Branch) };
         let wanted = _flag_lanes(llrm_x86_m16::instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
@@ -4734,35 +4881,6 @@ fn test_flag_liveness_over_a_loop_is_not_worked_by_rounds() {
     assert!(worked <= 4 * blocks as usize, "{worked} blocks worked for a loop of {blocks}");
 }
 
-/// Every block's transfer was worked again each round until no entry changed,
-/// and a fact crosses one block a round: a loop of 30 blocks took 30 rounds of
-/// 30 transfers (a nest 8 deep: a quarter of lir peephole). A block is worked
-/// again when its entry changed.
-#[test]
-fn test_spill_forwarding_works_a_block_again_only_when_its_entry_changed() {
-    let register = rl(RegId::BX, 2);
-    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-32), 2) });
-    let blocks = 30;
-    let mut list = Vec::new();
-    for at in 1..=blocks {
-        let store = insn(
-            at,
-            Some((at, at)),
-            Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])),
-            vec![],
-            vec![],
-        );
-        let next = if at == blocks { vec![1, blocks + 1] } else { vec![at + 1] };
-        list.push(block(at, if at == 1 { vec![Arc::new(store)] } else { vec![] }, next));
-    }
-    list.push(block(blocks + 1, vec![], vec![]));
-    let input = body("loop", 1, crate::model::lir::shared(list));
-    crate::analysis::dataflow::WORKED.with(|count| count.set(0));
-    spillforward::forwarded(&input);
-    let worked = crate::analysis::dataflow::WORKED.with(std::cell::Cell::get);
-    assert!(worked <= 4 * blocks as usize, "{worked} transfers for a loop of {blocks} blocks");
-}
-
 /// Copy propagation worked every block again each round until no exit changed:
 /// a loop of 30 blocks took 30 rounds of 30 blocks. A block is worked again
 /// when a parent's exit changed.
@@ -4930,7 +5048,7 @@ fn test_a_compare_that_a_sole_predecessor_just_made_is_not_made_again() {
         after.blocks[at]
             .insns
             .iter()
-            .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+            .map(|one| one.what.as_ref().and_then(|what| what.name.as_deref().map(str::to_owned)).unwrap_or_default())
             .collect::<Vec<_>>()
     };
     let after = compares_again(&body("search", 0, crate::model::lir::shared(blocks)));

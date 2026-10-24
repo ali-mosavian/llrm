@@ -184,6 +184,9 @@ pub struct Calling {
     /// whatever ABI the program has: no one else sees it, so the target's
     /// best serves. None where its default is that.
     pub private: Option<String>,
+    /// The convention an instrument gives private functions in place of
+    /// `private` (`LLRM_PRIVATE_WATCALL`), to compare the two. Never a default.
+    pub private_instrument: Option<String>,
 }
 
 const KEYS: &[&str] = &[
@@ -254,7 +257,13 @@ impl Calling {
                 .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
         }
-        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi" | "private")) {
+        for (name, value) in table
+            .iter()
+            .filter(|(name, _)| !matches!(
+                name.as_str(),
+                "default" | "abi" | "private" | "private_instrument"
+            ))
+        {
             let mut one = value.as_table().ok_or_else(|| format!("calling.toml: {name} is not a table"))?.clone();
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
@@ -278,11 +287,17 @@ impl Calling {
             .get("private")
             .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private` names a convention"))
             .transpose()?;
-        let calling = Self { conventions, abis, default, private };
-        if let Some(name) = &calling.private {
-            calling
-                .named(name)
-                .ok_or_else(|| format!("calling.toml: private is the convention {name}, which is not given"))?;
+        let private_instrument = table
+            .get("private_instrument")
+            .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention"))
+            .transpose()?;
+        let calling = Self { conventions, abis, default, private, private_instrument };
+        for (key, name) in [("private", &calling.private), ("private_instrument", &calling.private_instrument)] {
+            if let Some(name) = name {
+                calling
+                    .named(name)
+                    .ok_or_else(|| format!("calling.toml: {key} is the convention {name}, which is not given"))?;
+            }
         }
         for (family, convention) in &calling.abis {
             calling
@@ -298,6 +313,11 @@ impl Calling {
     /// The convention a private function takes, where the target states one.
     pub fn private(&self) -> Option<&Convention> {
         self.private.as_deref().and_then(|name| self.named(name))
+    }
+
+    /// The convention the comparison instrument gives a private function.
+    pub fn private_instrument(&self) -> Option<&Convention> {
+        self.private_instrument.as_deref().and_then(|name| self.named(name))
     }
 
     /// Whether a function with `convention` may take the private one instead:
@@ -376,15 +396,17 @@ impl Calling {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
     }
 
-    /// The convention a MIR calling-convention number names: `ccc` and `fastcc`
-    /// the one stating `cc = "cdecl"`, any other the one whose `cc` is the
-    /// number's name without its `cc`.
+    /// The convention a MIR calling-convention number names: `ccc` the one
+    /// stating `cc = "cdecl"`, `fastcc` the one stating `cc = "fast"` or, where
+    /// there is none, C's own; any other the one whose `cc` is the number's
+    /// name without its `cc`.
     pub fn by_number(
         &self,
         number: u32,
     ) -> Option<&Convention> {
         match number {
-            0 | llrm_mir::opcode::FAST => self.by_cc("cdecl"),
+            0 => self.by_cc("cdecl"),
+            llrm_mir::opcode::FAST => self.by_cc("fast").or_else(|| self.by_cc("cdecl")),
             other => self
                 .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }

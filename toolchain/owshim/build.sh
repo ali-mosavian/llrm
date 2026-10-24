@@ -52,9 +52,11 @@ CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
 
-compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -DLLRM_NEAR_BYTES=$NEAR -DLLRM_FAR_BYTES=$FAR -DLLRM_INT_BYTES=$INT -DLLRM_LDOUBLE_BYTES=$LDOUBLE -o "$1" "$2" ); }
+# Same bytes in any tree at any hour: no build path or clock in the objects.
+compile() { ( cd "$CC_OBJ" && $CC_LINE -ffile-prefix-map="$OUT=/owshim" -ffile-prefix-map="$HERE=/llrm" -ffile-prefix-map="$OWROOT=/ow" -Wno-builtin-macro-redefined -D__TIME__='"00:00:00"' -D__DATE__='"Jan  1 1970"' -I"$HERE" ${3:-} -DLLRM_FLAT=$FLAT -DLLRM_NEAR_BYTES=$NEAR -DLLRM_FAR_BYTES=$FAR -DLLRM_INT_BYTES=$INT -DLLRM_LDOUBLE_BYTES=$LDOUBLE -o "$1" "$2" ); }
 
-compile "$OUT/cgshim.o" "$HERE/cgshim.c"
+# The stream is written once per code-generator call: it is the one object here worth optimizing.
+compile "$OUT/cgshim.o" "$HERE/cgshim.c" -O2
 compile "$OUT/i64.o" "$OWROOT/bld/watcom/c/i64.c"
 rm -f "$OUT/libcgshim.a"
 ar rcs "$OUT/libcgshim.a" "$OUT/cgshim.o" "$OUT/i64.o"

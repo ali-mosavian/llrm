@@ -187,7 +187,10 @@ impl ProgramPass for Walk {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
-        let params = crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 });
+        let params = crate::inlinecost::InlineParams {
+            allow_recursive_call: self.inline.recursive,
+            ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
+        };
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
         } else {
@@ -254,14 +257,14 @@ impl ProgramPass for Walk {
                     // (gcc's peeling, not at -Os).
                     let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
                         .values()
-                        .filter(|one| one.self_calls.is_some() && !self.inline.single)
+                        .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
                         .filter_map(|one| Some((one.callee?, one.clone())))
                         .collect();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
                         recursive: recursive.contains(&id),
                         self_inlining: None,
-                        peeling: !self.inline.single,
+                        peeling: !self.inline.single && self.inline.recursive,
                     };
                     let spliced =
                         crate::inline::expanded_all(context, function, &by, &peeled, Some(&constant), &mut declared)?
@@ -269,7 +272,7 @@ impl ProgramPass for Walk {
                     // DEVIATE (recursion): a tree-recursive function waits for
                     // its tail-call elimination until its copies are made
                     // (`SelfInline`, after ipa-cp has seen it whole).
-                    if self_calls(module, &program.layout, id, self.inline.single).is_some() {
+                    if self.inline.recursive && self_calls(module, &program.layout, id, self.inline.single).is_some() {
                         function_mut(module, id)
                             .1
                             .attrs
@@ -385,6 +388,7 @@ impl ProgramPass for Walk {
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
                 if !members.is_empty() {
+                    let mut stated = false;
                     for id in llrm_analysis::functionattrs::post_order(
                         module,
                         &program.layout,
@@ -392,6 +396,11 @@ impl ProgramPass for Walk {
                         &members,
                     ) {
                         modules[at].changed(id);
+                        stated = true;
+                    }
+                    // What it stated reaches the next body's callees.
+                    if stated {
+                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }
@@ -458,6 +467,14 @@ fn self_calls(
 /// prices the callee whole (copies first made recchop -O3 decline its clones:
 /// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
 /// clocks, 294986 copied after tail-call elimination made it a loop).
+///
+/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w-6, review
+/// 2026-11-30. The rule is cost-based: the target's `gcc_insns` (150 here,
+/// 450 for peeling), the call frequency over the entry's (10%), depth 3; no
+/// shape of a program. Depth 3 and cap 450 kept. The priced row is recpow -O1:
+/// compile 49 to 461 M, bytes 5547 against main's 293, clocks 454246 against
+/// main's 504509. The rows still above main are open rows with owners
+/// (docs/architecture/recursion-rows.md).
 pub struct SelfInline {
     /// The Simplify list over one body.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
@@ -488,6 +505,7 @@ impl SelfInline {
             let marked: Vec<GlobalId> =
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
+                let mut copies = 0;
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
@@ -507,7 +525,7 @@ impl SelfInline {
                         self_inlining: Some(&frequencies),
                         peeling: false,
                     };
-                    crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    copies = crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
                     if declared.place(module)? > 0 {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
@@ -524,6 +542,21 @@ impl SelfInline {
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
+                // DEVIATE (recursion, D10 third part, docs/architecture/
+                // recursion-rows.md): the pin runs its function pipeline once
+                // (`NoRerun`, PassBuilderPipelines.cpp:1047) and has no
+                // self-copies; gcc's FRE and PRE run again after the inliner.
+                // The list runs GVN before jump threading and the copies' paths
+                // join in the threading, so once, each copy repeats the calls
+                // of the ones that dominate it (fib -O2: 154398 clocks once,
+                // 14802 twice). Owner: w-6. Exit: this run goes when the
+                // cleanup can run in
+                // the pin's inline-then-cleanup order, or when that order gives
+                // fib and x_fib at or below main (227171) without it; review
+                // 2026-11-30, else a permanent numbered DEVIATE.
+                if copies > 0 {
+                    (self.simplify)(module, &mut modules[at], id, "self-inline-again.");
+                }
             }
         }
         Ok(())

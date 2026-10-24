@@ -156,7 +156,7 @@ fn a_targets_pins_come_from_its_own_forms() {
     // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
     // the value, the pointer, the selector.
     let store = Semantics {
-        name: Some("stosd".to_owned()),
+        name: Some("stosd".into()),
         dests: vec![Loc::Mem(Mem::new(None, 0)), held(5)],
         sources: vec![held(1), held(2), held(3)],
         ..Semantics::new(Operation::Fill)
@@ -285,8 +285,8 @@ fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
 
 /// A frame register given to a value is a callee-saved register like rbx: a
 /// function with more values live across a call than rbx and r12-r15 hold kept
-/// one in rbp and never saved it (it listed `(rbp, rbp)` where the others list a
-/// root), so its caller's frame was garbage.
+/// one in rbp and never saved it (it listed `(rbp, rbp)` where the others list
+/// a root), so its caller's frame was garbage.
 #[test]
 fn a_freed_frame_register_holding_a_value_is_saved() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\

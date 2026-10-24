@@ -61,12 +61,16 @@ pub struct X86 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealMode {
     /// What an address `base + scale * index` costs above the native form,
-    /// for each scale a primary address form holds: the legal scales. A
-    /// secondary form (the address-size prefix) is the backend's fallback, not
-    /// an address LSR may form.
+    /// for each scale some address form holds: the legal scales.
     pub scale_costs: Vec<(i64, i64)>,
     /// General registers a value may sit in.
     pub registers: u32,
+    /// What a scaled index costs in instructions, once for each scaled
+    /// register: the address-size prefix and the stall it takes.
+    pub scaled_index_insns: u32,
+    /// The space of huge pointers: an offset there carries into the selector,
+    /// so an address is one register and no more.
+    pub huge_space: Option<u32>,
 }
 
 impl RealMode {
@@ -454,12 +458,20 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// SZ1: at most one call penalty (25) of growth over the call removed, where
-    /// the pin's 50 let crc, tile and recchop copy an external callee into
-    /// `main` at -Os (+52, +42, +15 bytes). Over the -Os corpus: 0 grows 16
-    /// programs, 25 grows 3, 50 is the pin.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        Some(25)
+    /// SZ1: an inline that stays must not grow the code. The pin's
+    /// threshold of 50 let crc, tile and recchop copy an external callee into
+    /// `main` at -Os (+52, +42, +15 bytes), and a fixed bound of 25 let a
+    /// 14-instruction loop in at ten sites of idioms.bas (+690 bytes).
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
+    /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
+    /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
+    /// 14-instruction loop of `idioms.bas` out of ten sites.
+    fn call_code_size_percent(&self) -> i64 {
+        150
     }
 
     fn is_type_legal(
@@ -677,6 +689,20 @@ impl Tti for X86 {
         }
     }
 
+    fn is_legal_addressing_mode_in(
+        &self,
+        addr_space: u32,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        if self.real_mode.as_ref().is_some_and(|real| real.huge_space == Some(addr_space)) {
+            return !base_gv && has_base_reg && base_offset == 0 && scale == 0;
+        }
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `X86TargetLowering::isLegalAddressingMode`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621,
     /// Small code model; position independent in long mode, not in 32-bit.
@@ -783,6 +809,11 @@ impl Tti for X86 {
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+    }
+
+    /// Real mode forms a scaled index with an address-size prefix.
+    fn scaled_index_insns(&self) -> u32 {
+        self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

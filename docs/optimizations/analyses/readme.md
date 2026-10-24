@@ -2,12 +2,11 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 73 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
-| access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: none in | [access](access.md) |
 | accessanalysis | `AccessAnalysis`: the memory accesses of a loop, grouped by what they may alias, for the dependence checker and the runtime checks. |  | [accessanalysis](accessanalysis.md) |
 | aggregate | `AAResults::addAAResult` of `AliasAnalysis.cpp` at d1106deb71cc: several alias analyses asked as one. | `AggregateAA`. | [aggregate](aggregate.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
@@ -30,12 +29,12 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 73 documented, 0 undoc
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |
 | demandedbits | Which bits of each integer value anything reads: a translation of LLVM's `DemandedBits` (`DemandedBits.cpp` at d1106deb71cc). | `DemandedBits::of`, then `demanded_bits`, `demanded_bits_of_use`, | [demandedbits](demandedbits.md) |
-| dependence | Data dependence distances over a two-deep loop nest, and whether its two loops may swap. | `distances`, `interchangeable`, `walk_cost`. Consumer: `loopinterchange`. | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |
 | equivalence | `EquivalenceClasses`: disjoint sets of values with a stable member order. |  | [equivalence](equivalence.md) |
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
 | floatfacts | Exact finite values of floating-point operations, and the memory they pass through. | `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`, | [floatfacts](floatfacts.md) |
+| forging | Whether a module forges pointers into the data segment: the one fact that decides if a global can be "reached by name only" on a segmented target. | `forges_selector`; the manager entry `ForgedSelectors` computes it once for | [forging](forging.md) |
 | frameescape | Which frame objects' addresses reach where, and which are exposed. | `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers: | [frameescape](frameescape.md) |
 | functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` calls `post_order` once per SCC, callees first: | [functionattrs](functionattrs.md) |
 | generated | Random loops for checking the recurrence form (`induction::Scev`) against the interpreter. | `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for | [generated](generated.md) |
@@ -67,8 +66,8 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 73 documented, 0 undoc
 | parameter_ranges | Bounds each integer parameter of a body only the program calls by what its callers pass, so the body's own checks on it can be decided. | `stamp`: a `range` attribute on each integer parameter whose callers all | [parameter_ranges](parameter_ranges.md) |
 | peelsize | Decides whether a counted loop is worth copying out completely, from the size the copy would have once constants fold, before anything is cloned. | `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in | [peelsize](peelsize.md) |
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
-| ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`, `LoopView::at`. | [ranger](ranger.md) |
-| ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block and the counted loops that hold it. | The interval facts above. In the manager they are `DominatedEdges` and | [ranges](ranges.md) |
+| ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`. | [ranger](ranger.md) |
+| ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block. | The interval facts above. In the manager they are `DominatedEdges` | [ranges](ranges.md) |
 | reachability | `isPotentiallyReachable` of `CFG.cpp` at d1106deb71cc: whether a path may lead from one instruction or block to another. | `is_potentially_reachable`, `is_potentially_reachable_blocks`, | [reachability](reachability.md) |
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |

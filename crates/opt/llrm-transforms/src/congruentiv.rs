@@ -59,6 +59,7 @@ pub fn replaced_in(
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
         headers.reverse();
+        crate::loopfilter::retain(&mut headers);
         headers
     };
     // `Rewriter.disableCanonicalMode()`.
@@ -70,11 +71,7 @@ pub fn replaced_in(
     for header in headers {
         let simple = {
             let cx = env.cx(&*context, &*function);
-            cx.loops
-                .get_loop_for(header)
-                .is_some_and(
-                    |found| found.is_loop_simplify_form(cx.function),
-                )
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
         };
         if simple {
             eliminated +=

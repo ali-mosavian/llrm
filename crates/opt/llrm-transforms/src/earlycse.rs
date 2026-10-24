@@ -249,6 +249,49 @@ pub trait MemorySsaView {
     fn into_mssa(self: Box<Self>) -> Option<Mssa> {
         None
     }
+    /// Whether there is a MemorySSA behind the view (`MSSA` is not null).
+    fn present(&self) -> bool {
+        true
+    }
+}
+
+/// No MemorySSA (`MSSA == nullptr`): `removeMSSA` does nothing and
+/// `isSameMemGeneration` is false unless the generations are equal.
+struct Detached;
+
+impl MemorySsaView for Detached {
+    fn memory_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn clobbering_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn defining_access(
+        &self,
+        _inst: InstId,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn dominates(
+        &self,
+        _ahead: usize,
+        _access: usize,
+    ) -> bool {
+        false
+    }
+
+    fn present(&self) -> bool {
+        false
+    }
 }
 
 /// The translated MemorySSA (`llrm_analysis::mssa`) as that view.
@@ -654,6 +697,10 @@ impl Walk<'_> {
     ) -> bool {
         if earlier_generation == later_generation {
             return true;
+        }
+        // `if (!MSSA) return false;` (EarlyCSE.cpp#L1074).
+        if !self.mssa.present() {
+            return false;
         }
         let (Some(earlier_access), Some(_)) = (self.mssa.memory_access(earlier), self.mssa.memory_access(later)) else {
             return true;
@@ -1147,8 +1194,18 @@ impl Walk<'_> {
 /// `EarlyCSEPass`
 /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1809)
 /// with MemorySSA.
-#[derive(Default)]
-pub struct EarlyCse;
+pub struct EarlyCse {
+    /// `UseMemorySSA` (`EarlyCSEPass(true)`, EarlyCSE.cpp#L1809): the pass at
+    /// `earlycse@649` has it, EarlyFPM's at `earlycse@1180` has none
+    /// (PassBuilderPipelines.cpp#L508, #L649, #L1180).
+    pub memory_ssa: bool,
+}
+
+impl Default for EarlyCse {
+    fn default() -> Self {
+        Self { memory_ssa: true }
+    }
+}
 
 impl FunctionPass for EarlyCse {
     fn name(&self) -> &'static str {
@@ -1165,10 +1222,11 @@ impl FunctionPass for EarlyCse {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
-            Ok(accesses) => accesses,
-            Err(error) => panic!("earlycse: {error}"),
-        };
+        let accesses =
+            self.memory_ssa.then(|| match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
+                Ok(accesses) => accesses,
+                Err(error) => panic!("earlycse: {error}"),
+            });
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
         // `unit.function`, which this copy and the context's copy do not
@@ -1182,17 +1240,22 @@ impl FunctionPass for EarlyCse {
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
         // keeps MemorySSA through `PA.preserve<MemorySSAAnalysis>()`).
-        let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
-        let (mssa, kept_accesses) = match &*held {
-            Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
-            Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(&accesses, &before)), None),
+        let (view_of_memory, kept_accesses): (Box<dyn MemorySsaView + '_>, _) = match &accesses {
+            Some(accesses) => {
+                let held = analyses.get::<MemorySsa>(unit.context, unit.layout, unit.function);
+                let (mssa, kept_accesses) = match &*held {
+                    Ok(held) => (held.mssa.clone(), Some(Rc::clone(&held.accesses))),
+                    Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of(accesses, &before)), None),
+                };
+                (Box::new(Translated::new(&view, accesses, mssa)), kept_accesses)
+            }
+            None => (Box::new(Detached), None),
         };
-        let translated = Translated::new(&view, &accesses, mssa);
         let mut walk = Walk {
             context: unit.context,
             function: unit.function,
             view: &view,
-            mssa: Box::new(translated),
+            mssa: view_of_memory,
             callees: outer.callees(),
             tree: &tree,
             analyses: &simplifier,

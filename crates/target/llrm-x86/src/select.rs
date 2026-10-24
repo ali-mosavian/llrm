@@ -685,7 +685,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
     let seg = |place: &Loc| matches!(place, Loc::Reg(one) if SEGMENTS.contains_key(&one.register));
     let step = |op, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
         op,
-        name: Some(name.to_owned()),
+        name: Some(name.into()),
         dests,
         sources,
         target: None,
@@ -1129,7 +1129,7 @@ fn in_mode(
 /// frontend's finalizer spells them (`fatan` is `fld1; fpatan`), and the
 /// encoder prices them as the same bytes, so that no operation the backend
 /// emits has no price.
-pub const X87_SEQUENCES: [(&str, &[u8]); 6] = [
+pub const X87_SEQUENCES: [(&str, &[u8]); 8] = [
     ("fsin", &[0xd9, 0xfe]),
     ("fcos", &[0xd9, 0xff]),
     ("fatan", &[0xd9, 0xe8, 0xd9, 0xf3]),
@@ -1140,8 +1140,29 @@ pub const X87_SEQUENCES: [(&str, &[u8]); 6] = [
         "fexp2",
         &[0xd9, 0xc0, 0xd9, 0xfc, 0xd9, 0xc9, 0xd8, 0xe1, 0xd9, 0xf0, 0xd9, 0xe8, 0xde, 0xc1, 0xd9, 0xfd, 0xdd, 0xd9],
     ),
+    // ln x is FLDLN2 times log2 x in one FYL2X, as BC computes it, and e**x
+    // is x times FLDL2E in the unit's extended precision, then 2**: the
+    // constants are not rounded to a double.
+    ("fln", &[0xd9, 0xed, 0xd9, 0xc9, 0xd9, 0xf1]),
+    (
+        "fexp",
+        &[
+            0xd9, 0xea, 0xde, 0xc9, 0xd9, 0xc0, 0xd9, 0xfc, 0xd9, 0xc9, 0xd8, 0xe1, 0xd9, 0xf0, 0xd9, 0xe8, 0xde, 0xc1,
+            0xd9, 0xfd, 0xdd, 0xd9,
+        ],
+    ),
     ("fround", &[0xd9, 0xfc]),
 ];
+
+/// The x87 slots the sequence `name` pushes above its operand while it runs:
+/// `fexp2` copies it and loads 1, `flog2` and `fatan` load 1.
+pub fn x87_scratch(name: &str) -> usize {
+    match name {
+        "fexp2" | "fexp" => 2,
+        "flog2" | "fln" | "fatan" => 1,
+        _ => 0,
+    }
+}
 
 /// The bytes of the x87 operation `name` where it is a sequence.
 pub fn x87_sequence(name: &str) -> Option<&'static [u8]> {
@@ -2611,7 +2632,7 @@ mod sweep_support {
         target: Option<i64>,
         indirect: bool,
     ) -> Semantics {
-        Semantics { op, name: name.map(str::to_owned), dests, sources, target, indirect, table: Vec::new() }
+        Semantics { op, name: name.map(Into::into), dests, sources, target, indirect, table: Vec::new() }
     }
 
     type Want = Option<(&'static str, Option<usize>, Option<usize>, Vec<usize>, bool)>;

@@ -222,7 +222,9 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = true;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
     .and_then(|done| done)
@@ -234,6 +236,67 @@ b0:
         calls <= crate::inline::MAX_INLINE_INSNS_RECURSIVE as usize,
         "fib was copied past gcc's limit, {calls} calls of it"
     );
+}
+
+/// The Simplify list runs GVN before its jump threading, and the copies of a
+/// recursion in itself join their paths only in the threading: run once, each
+/// copy repeated the calls of the ones that dominate it (fib -O2, i486 rows:
+/// 154398 clocks once, 14802 with the list run again). A body with copies runs
+/// the list twice, one without once.
+#[test]
+fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
+    use llrm_mir::program::ProgramPass;
+    let runs = |text: &str| {
+        let mut module = parsed(text);
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = std::rc::Rc::clone(&seen);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut analyses = Default::default();
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut analyses)?;
+                let mut modules = super::managers(program, &mut analyses);
+                let mut late = crate::walk::SelfInline {
+                    simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
+                    for_size: false,
+                };
+                late.apply(program, &mut modules)
+            },
+        )
+        .and_then(|done| done)
+        .expect("the late step runs");
+        seen.get()
+    };
+    let fib = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+    assert_eq!(runs(fib), 2, "fib has copies");
+    assert_eq!(runs(LINEAR), 0, "a count-down waits for nothing");
 }
 
 /// A tail-recursive function called once: tail-call elimination makes its
@@ -335,7 +398,10 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                simplify: Box::new(|_, _, _, _| {}),
+            };
             walk.run(program, &mut Default::default())
         },
     )
@@ -544,13 +610,16 @@ b0:
 #[test]
 fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
     use llrm_mir::program::ProgramPass;
-    let marked = |text: &str, name: &str| {
+    let marked_with = |text: &str, name: &str, recursive: bool| {
         let mut module = parsed(text);
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::default()),
             |program: &mut llrm_mir::program::Program| {
-                let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
                 walk.run(program, &mut Default::default())
             },
         )
@@ -604,8 +673,64 @@ b0:
   ret i32 %r
 }
 ";
+    let marked = |text: &str, name: &str| marked_with(text, name, true);
     assert!(marked(tree, "fib"), "fib waits for tail-call elimination");
     assert!(!marked(linear, "down"), "a count-down does not");
+    assert!(!marked_with(tree, "fib", false), "by default nothing waits: the copies are `-finline-recursive`'s");
+}
+
+/// The pin refuses a callee that calls itself (`IsRecursiveCall`, no
+/// `AllowRecursiveCall`): `report(fib(30))` keeps its one call of `fib`. The
+/// walk inlined it by default, and the unrolled loop it brought left 15 calls
+/// of `fib` in `main`.
+#[test]
+fn test_a_callee_that_calls_itself_is_not_inlined_unless_recursion_is_on() {
+    use llrm_mir::program::ProgramPass;
+    let calls_of_fib_in_main = |recursive: bool| {
+        let mut module = parsed(
+            "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @fib(i32 30)
+  ret i32 %r
+}
+",
+        );
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        let text = llrm_mir::print::module(&module);
+        let main = text.split("define").find(|one| one.contains("@main(")).expect("main").to_owned();
+        main.matches("call i32 @fib(").count()
+    };
+    assert_eq!(calls_of_fib_in_main(false), 1, "the pin leaves the call");
+    assert_ne!(calls_of_fib_in_main(true), 1, "-finline-recursive inlines it");
 }
 
 /// ipa-cp prices the callee whole: copies made in the walk first left
@@ -630,13 +755,24 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
 
 /// The module `text` after the walk alone (no simplifier), `top`'s body.
 fn walked_top(text: &str) -> String {
+    walked_top_with(text, true)
+}
+
+/// `walked_top` with gcc's recursive inlining (`-finline-recursive`) on or off.
+fn walked_top_with(
+    text: &str,
+    recursive: bool,
+) -> String {
     use llrm_mir::program::ProgramPass;
     let mut module = parsed(text);
     llrm_mir::program::Program::lend(
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let mut walk = crate::walk::Walk { inline: Default::default(), simplify: Box::new(|_, _, _, _| {}) };
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { recursive, ..Default::default() },
+                simplify: Box::new(|_, _, _, _| {}),
+            };
             walk.run(program, &mut Default::default())
         },
     )
@@ -680,6 +816,16 @@ fn test_a_linear_recursive_callee_is_peeled_in_its_caller() {
     let top = walked_top(LINEAR);
     let copies = top.matches("mul i32 %").count();
     assert_eq!(copies, 9, "{copies} copies of down in top:\n{top}");
+}
+
+/// The default is the pin's inliner: a callee that calls itself is not copied
+/// into its caller (`IsRecursiveCall`; hanoi's nine copies and its lookup
+/// table, 40 instructions where gcc runs 35,764 and clang 249,852, are
+/// `-finline-recursive`, a DEVIATE (recursion) the pin has no counterpart of).
+#[test]
+fn test_the_default_does_not_copy_a_recursive_callee() {
+    let copies = walked_top_with(LINEAR, false).matches("mul i32 %").count();
+    assert_eq!(copies, 0, "{copies} copies of down in top by default");
 }
 
 /// A tree is not peeled: the copy doubles at each level (bintree -O2 +0.13%
@@ -846,4 +992,50 @@ fn test_an_os_call_whose_stack_arguments_make_the_loop_a_constant_is_inlined() {
 fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     let top = sized_top(7, 5, false);
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
+}
+
+/// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
+/// differ from a fresh listing` of 26 programs: what `post_order` stated of a
+/// callee (`memory(argmem: write)`, `writeonly`) was reported edited, but the
+/// held `Declarations` was not looked at again, so the next body's callers
+/// priced the callee by the attributes it had before.
+#[test]
+fn a_callee_the_walk_states_attributes_of_is_held_with_them_for_the_next_body() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal void @w(ptr %p) {
+b0:
+  store i16 1, ptr %p
+  ret void
+}
+
+define void @c(ptr %p) {
+b0:
+  call void @w(ptr %p)
+  ret void
+}
+",
+    );
+    let stale = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = std::rc::Rc::clone(&stale);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        move |program: &mut llrm_mir::program::Program| {
+            let seen = std::rc::Rc::clone(&seen);
+            let mut walk = crate::walk::Walk {
+                inline: crate::inline::Threshold { limit: 0, ..Default::default() },
+                simplify: Box::new(move |module, analyses, _, _| {
+                    let held = analyses.get::<llrm_mir::passes::Declarations>(module);
+                    if *held != module.declarations() {
+                        seen.set(true);
+                    }
+                }),
+            };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    assert!(!stale.get(), "the held declarations differ from a fresh listing");
 }

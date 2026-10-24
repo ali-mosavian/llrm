@@ -46,9 +46,12 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
 /// A slot the parity pipeline runs must be in the registry, or it has no kind.
 #[test]
 fn test_a_slot_that_runs_and_is_not_registered_fails() {
-    let why =
-        parity::check(parity::REGISTRY, Phase::Early, &["decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"])
-            .unwrap_err();
+    let why = parity::check(
+        parity::REGISTRY,
+        Phase::Early,
+        &["lowerexpect@1177", "decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"],
+    )
+    .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -77,7 +80,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("dead@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
@@ -109,7 +112,31 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
-        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &[
+            "cmpsub@1",
+            "processimpdefs@2",
+            "optimizephis@1",
+            "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
+            "callframe@5",
+            "fixupbw@14",
+            "fixupleas@14",
+            "machinecse@4",
+            "machinesink@4",
+            "machinesched@5",
+            "combiner@4",
+            "liverangeshrink@4",
+            "floatalloc@8",
+            "pushfold@6",
+            "coalesce@10",
+            "latecleanup@13",
+            "leaopt@5",
+            "jumps@17",
+            "copyprop@18",
+            "allocate@11",
+            "unknown@1",
+        ],
         &[],
     )
     .unwrap_err();
@@ -276,7 +303,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
     };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
-    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
 }
 
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
@@ -404,6 +431,13 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
             let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
             let built: Vec<_> = held.iter().map(|one| one.0).collect();
             let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
+            // The slots the options leave out, as `Fixed::linear` names them:
+            // the jam is off below -O3.
+            let off: Vec<_> = parity::REGISTRY
+                .iter()
+                .filter(|one| one.phase == phase && !on.options.wanted(one.slot))
+                .map(|one| one.slot)
+                .collect();
             let checked = parity::check_phase_with(
                 phase,
                 &built,
@@ -411,7 +445,7 @@ fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
                 on.options.sroa,
                 on.options.mem2reg,
                 on.options.rotate_slot,
-                &[],
+                &off,
                 &held,
             );
             assert_eq!(checked, Ok(()), "{phase:?} {level:?}");
@@ -536,4 +570,17 @@ fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
         }
     }
     assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
+}
+
+/// The three late InstCombines of the pin's default pipeline (l.1403, l.1464,
+/// l.1499) had no slot: a `not` of a condition that SimplifyCFG (l.1438) made
+/// before a branch stayed, 30 QCport objects larger once `fold`, which had
+/// cleaned it, went. They run in a compile of a body, once each.
+#[test]
+fn test_the_late_instcombine_slots_run_in_a_compile() {
+    let lines = runs_of(&Applied::default());
+    for slot in ["combine@1403", "combine@1464", "combine@1499"] {
+        let ran = lines.iter().filter(|line| line.contains(&format!("r01-{slot}"))).count();
+        assert!(ran >= 1, "{slot} did not run: {lines:?}");
+    }
 }

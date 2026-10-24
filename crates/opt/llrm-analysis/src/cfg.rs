@@ -251,6 +251,7 @@ impl Around for Loop {
         &self,
         function: &Function,
     ) -> Vec<(i64, i64)> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LoopExitScans);
         self.body
             .iter()
             .flat_map(|&from| successors_of(function, from).into_iter().map(move |to| (from, to)))
@@ -631,7 +632,10 @@ pub fn _unreachable(
         // the predecessors are.
         let predecessors = function.predecessors(block(at));
         let live = |from: &Operand| {
-            matches!(from, Operand::Block(one) if reached.contains(&id(*one)) && predecessors.contains(one))
+            matches!(
+                from,
+                Operand::Block(one) if reached.contains(&id(*one)) && predecessors.contains(one)
+            )
         };
         for phi in function.iter_block(block(at)).collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {

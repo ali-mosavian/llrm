@@ -494,10 +494,13 @@ pub fn propagated(
             if changed || !pending.is_empty() {
                 continue;
             }
+            // The seeds are no longer the fixed point of the body's constants
+            // (the manager keeps none, `Registers::run`): a body
+            // with no open phi may come to more than its seeds, and
+            // may not come to less or to other.
             assert!(
-                open || facts.iter().all(|(value, fact)| seeds.get(value) == Some(fact))
-                    && (sparse || facts.len() == seeds.len()),
-                "constant cycles: a body with no open phi came to more than its seeds"
+                open || seeds.iter().all(|(value, fact)| facts.get(value) == Some(fact)),
+                "constant cycles: a body with no open phi contradicted its seeds"
             );
             // The evaluator is asked only where a value it reads changed: asked
             // of every live block now, it names no edge that is not
