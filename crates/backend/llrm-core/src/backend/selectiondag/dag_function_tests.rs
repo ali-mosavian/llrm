@@ -3012,3 +3012,32 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
+
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
+declare i8 @llrm.ia16.in.i8(i16)
+declare void @llrm.ia16.out.i8(i16, i8)
+define i8 @f(i16 %p) {
+entry:
+  call void @llrm.ia16.out.i8(i16 968, i8 7)
+  %v = call i8 @llrm.ia16.in.i8(i16 %p)
+  ret i8 %v
+}
+";
+
+/// Port I/O (`OUT`, `INP` of QB): a write to an immediate port, then a read
+/// through `dx`, in that order, as `out` and `in` barriers. The builder
+/// refused them ("intrinsic call llrm.ia16.out.i8": palette_using_pds71).
+#[test]
+fn port_writes_and_reads_stay_in_order() {
+    let module = llrm_mir::parse::module(PORTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let names: Vec<&str> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Barrier)
+        .filter_map(|w| w.name.as_deref())
+        .collect();
+    assert_eq!(names, ["out", "in"]);
+}
