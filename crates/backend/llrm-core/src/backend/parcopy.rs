@@ -180,9 +180,10 @@ struct Spare<'a> {
     free: &'a [RegId],
 }
 
-/// `body` without its `implicit_def`s: a value nothing defines has a register
-/// and no code (`ExpandPostRAPseudos`'s `IMPLICIT_DEF` case, here because this
-/// is the first phase after allocation).
+/// `body` without its `implicit_def`s: what reads such a value reads it as
+/// undef, and the definition goes (`ExpandPostRAPseudos`' `IMPLICIT_DEF` case;
+/// here the first phase after allocation, using `ProcessImplicitDefs`' own
+/// work).
 pub fn expanded(body: &LirBody) -> LirBody {
     let is_implicit = |one: &Insn| {
         one.uses.is_empty()
@@ -191,12 +192,7 @@ pub fn expanded(body: &LirBody) -> LirBody {
     if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| is_implicit(one)) {
         return body.clone();
     }
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| block.with_insns(block.insns.iter().filter(|one| !is_implicit(one)).cloned().collect()))
-        .collect();
-    body.with_blocks(blocks)
+    crate::processimpdefs::processed(body)
 }
 
 impl LIRTransform for ParallelCopy {
@@ -1029,9 +1025,11 @@ mod tests {
 
     /// PHIElimination makes `implicit_def`s the allocator gives registers; one
     /// left in the body after allocation printed as an instruction no
-    /// assembler knows (`implicit_def` in the listing).
+    /// assembler knows, and one simply dropped left its readers reading a value
+    /// nothing defines (jpeg_fixed and desk.nib: "value is read but never
+    /// defined"). The definition goes and the readers read it as undef.
     #[test]
-    fn test_an_implicit_def_is_gone_after_allocation_and_the_rest_stays() {
+    fn test_an_implicit_def_is_gone_after_allocation_and_its_readers_read_undef() {
         let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4 });
         let undef = Insn::new(
             0,
@@ -1040,28 +1038,30 @@ mod tests {
             vec![1],
             vec![],
         );
-        let other = Insn::new(
+        let reader = Insn::new(
             1,
             Some((1, 1)),
             semantics(
-                Operation::Move,
-                "mov",
+                Operation::Binary,
+                "add",
                 vec![held(2)],
-                vec![Loc::Imm(crate::model::ir::Imm { value: 3, width: 4, address: None })],
+                vec![held(1), Loc::Imm(crate::model::ir::Imm { value: 3, width: 4, address: None })],
             ),
             vec![2],
-            vec![],
+            vec![1],
         );
         let body = LirBody::new(
             "expanded",
             0,
-            vec![LirBlock::new(0, vec![Arc::new(undef), Arc::new(other)]).into()],
+            vec![LirBlock::new(0, vec![Arc::new(undef), Arc::new(reader)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
         let got = super::expanded(&body);
         let names: Vec<String> =
             got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
-        assert_eq!(names, ["mov"]);
+        assert_eq!(names, ["add"]);
+        let add = &got.insns()[0];
+        assert!(add.uses.is_empty() && add.undefs == [1], "uses {:?} undefs {:?}", add.uses, add.undefs);
     }
 }
