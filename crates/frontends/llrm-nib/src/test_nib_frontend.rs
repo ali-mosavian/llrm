@@ -2724,14 +2724,16 @@ fn test_mir_infers_what_a_nib_function_touches() {
     assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
 }
 
-/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
-/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// The body is not linear in `s`: with `s += values[0]` the SCEV trip count
+/// (239e6625e) folds the whole loop to `values[0] * n` and no loop is left to
+/// test. A range loop's counter cannot wrap (`nsw`), so its trip count is `n`
+/// and the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
 /// in the loop. Three callers pass 5, 6 and 1000: with one, or with 5 and 6
 /// (a range IPSCCP knows), the bound is known to the body, and the loop (which
 /// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s = s * 3 + values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    print(total(a, 1000))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline =
@@ -2749,7 +2751,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
         .captures_iter(body)
         .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
         .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
-        .expect("a loop");
+        .unwrap_or_else(|| panic!("a loop in\n{body}"));
     let looped = between(&body[..end], &format!("{head}:\n"), "\0");
     assert!(!looped.contains("cmp"), "{looped}");
 }
