@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dfajumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dfajumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:5a1800fa6adf8b3ad43ea0f3939939521fb10a9747877a37546d30eef230895c -->
+<!-- src: crates/opt/llrm-transforms/src/dfajumpthreading.rs sha256:712b42d60eb00e3749320318fdcfdf0df25b1c12af1a91374568a0f8ce5db484 -->
 
 # dfajumpthreading
 
@@ -43,15 +43,15 @@ is a parity note):
 - DF3. A path through a block that starts with a `landingpad` is not
   threaded: the copy would be a second pad, and the one module handler
   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
-- DF5 (parity at the IR, a row in the lowering). On the kernel written
-  for 32 bits (`i32` is `long`, #3535) `x_switch` m16 -O2/-O3 is 709 B with
-  the pass and 629 B without (+80 B); -O1 and -Os are identical (size
-  gate). The pass's decision is the pin's: `bench_x_switch` is 86 IR
-  instructions with it and 50 without, and `opt -passes='default<O2>'`
-  (m16 target, `-enable-dfa-jump-thread` true/false) gives 93 and 48. The
-  loss is in lowering the threaded state machine: 198 asm instructions with
-  the pass and 178 without, where the pin's `llc` has 108 and 131 (the pin
-  gains, we lose). Owner w-4, exit 2026-11-09. The earlier +17 B was UB code.
+- DF5 (parity at the IR, a row in the lowering). On the kernel written for
+  32 bits (`i32` is `long`, #3535) `x_switch` m16 -O2/-O3 is 709 B with the
+  pass and 629 B without (+80 B); -O1 and -Os are identical (size gate). The
+  pass's decision is the pin's: `bench_x_switch` is 86 IR instructions with
+  it and 50 without, and `opt -passes='default<O2>'` (m16 target,
+  `-enable-dfa-jump-thread` true/false) gives 93 and 48. The loss is in
+  lowering the threaded state machine: 198 asm instructions with the pass
+  and 178 without, where the pin's `llc` has 108 and 131 (the pin gains, we
+  lose). Owner w-4, exit 2026-11-09. The earlier +17 B was UB code.
 
 ## Example
 The state is set to 1 on one path and to 2 on the other, and the `switch`

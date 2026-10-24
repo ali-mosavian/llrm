@@ -17,9 +17,9 @@
 //!   pointers, aggregates and calls only, so a change to integer arithmetic
 //!   leaves them standing.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
-//!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-//!   or loops `Touched::reach` the changes (a change to a terminator or to the
-//!   CFG redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//!   change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+//!   `Touched::reach` the changes (a change to a terminator or to the CFG
+//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
@@ -64,8 +64,7 @@
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
-//!  Bounded          Registers, Counted, DominatedEdges
-//!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
+//!  Annotated        PointerValues, Registers, Counted, DominatedEdges
 //!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
@@ -85,7 +84,6 @@
 //! module, target and program), carrying whichever cached results the caller
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
-//! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 //!
 //! # Example
 //! A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -134,8 +132,8 @@
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 //! `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-//! `Bounded`; module entries `GlobalsAA`, `Summaries`; program
+//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+//! module entries `GlobalsAA`, `Summaries`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 //! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
 //! `Accesses` is an entry defined beside its analysis.
@@ -169,7 +167,6 @@ use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::memoryssa;
-use crate::ranges;
 
 impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
@@ -193,6 +190,7 @@ impl<'a> Unit<'a> {
             function,
             globals_aa,
             globals_mr,
+            outer: Some(outer),
             references: None,
             shape: None,
             registers: None,
@@ -202,11 +200,9 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
         }
@@ -859,7 +855,6 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let bounds = loop_bounds(context, layout, function, analyses);
         let mut unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
@@ -869,9 +864,6 @@ impl Analysis for Annotated {
             .with_counted(&counted);
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
-        }
-        if let Ok(bounds) = &*bounds {
-            unit = unit.with_bounds(bounds);
         }
         alias::annotated_with(&unit, pointers, &registers)
     }
@@ -1138,9 +1130,9 @@ impl Analysis for CallFootprints {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        // The unit `Accesses` made them under: without the shape and the exposed
-        // frames each argument's object was worked out from the body again (3x
-        // the Ir a walk).
+        // The unit `Accesses` made them under: without the shape and the
+        // exposed frames each argument's object was worked out from the
+        // body again (3x the Ir a walk).
         let values = analyses.get::<PointerValues>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
@@ -1489,56 +1481,8 @@ pub fn dominated_by(
     false
 }
 
-/// The facts each counted loop gives its blocks, and where there is none the
-/// edges': `ranges::bounded`.
-pub struct Bounded;
-
-impl Analysis for Bounded {
-    type Result = Result<ranges::Bounds, String>;
-    const NAME: &'static str = "bounded";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        Self::solved(context, layout, function, analyses, None)
-    }
-
-    /// A loop's facts read its own blocks, the facts of the values its
-    /// operations read, the edges' facts above it and the facts of the
-    /// loops it starts from; the loops a change reaches by any of these are
-    /// worked again.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let bounds = previous.as_ref().ok()?;
-        let reach = function.reach_of(changes)?;
-        if reach.cfg_changed() {
-            return None;
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        edges.as_ref().as_ref().ok()?;
-        // A loop starts from the edges' facts of its dominator: those of a
-        // block a change reached or one it dominates may have changed.
-        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, function, &reached, at)
-        });
-        Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
-    }
-}
-
 /// What a pass asks of the ranges of a body as it stands: the manager's
-/// registers, bounds and edges, and the unit that carries them.
+/// registers and edges, and the unit that carries them.
 pub struct Ranges {
     shape: Rc<Shape>,
     assumptions: Rc<<AssumptionCache as Analysis>::Result>,
@@ -1546,17 +1490,14 @@ pub struct Ranges {
     exposed: Rc<<ExposedFrames as Analysis>::Result>,
     counted: Rc<<Counted as Analysis>::Result>,
     edges: Rc<<DominatedEdges as Analysis>::Result>,
-    bounds: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Ranges {
-    /// With the bounds too, which `Bounded` itself works out from the rest.
     pub fn of(
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        with_bounds: bool,
     ) -> Self {
         Self {
             shape: analyses.get::<Shape>(context, layout, function),
@@ -1565,32 +1506,11 @@ impl Ranges {
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             counted: analyses.get::<Counted>(context, layout, function),
             edges: analyses.get::<DominatedEdges>(context, layout, function),
-            bounds: None,
         }
-        .bounded(context, layout, function, analyses, with_bounds)
-    }
-
-    fn bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        with_bounds: bool,
-    ) -> Self {
-        if with_bounds {
-            self.bounds = Some(analyses.get::<Bounded>(context, layout, function));
-        }
-        self
     }
 
     pub fn registers(&self) -> &Rc<<Registers as Analysis>::Result> {
         &self.registers
-    }
-
-    /// The bounds, where they were asked for.
-    pub fn bounds(&self) -> Option<&<Bounded as Analysis>::Result> {
-        self.bounds.as_deref()
     }
 
     pub fn unit<'a>(
@@ -1609,42 +1529,7 @@ impl Ranges {
         if let Ok(edges) = &*self.edges {
             unit = unit.with_edges(edges);
         }
-        if let Some(Ok(bounds)) = self.bounds.as_deref() {
-            unit = unit.with_bounds(bounds);
-        }
         unit
-    }
-}
-
-impl Bounded {
-    fn solved(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        prior: Option<(&ranges::Bounds, &llrm_mir::dense::IdSet<i64>)>,
-    ) -> <Self as Analysis>::Result {
-        let held = Ranges::of(context, layout, function, analyses, false);
-        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)
-    }
-}
-
-/// The counted loops' intervals for alias and decisions: `Bounded`, or none at
-/// a level without them (-O1: gcc's has value ranges only from -O2's
-/// `-ftree-vrp`; its -O1 reaches an induction variable's range through SCEV and
-/// the loop's iteration bound, which `indvars`, `loopexit`, `hoist` and
-/// `algebraic` still ask `Bounded` for). Empty, the unit does not solve them
-/// itself.
-fn loop_bounds(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    analyses: &mut Analyses,
-) -> Rc<<Bounded as Analysis>::Result> {
-    if analyses.outer().loop_intervals() {
-        analyses.get::<Bounded>(context, layout, function)
-    } else {
-        Rc::new(Ok(ranges::Bounds::default()))
     }
 }
 
@@ -1660,7 +1545,6 @@ pub struct Held {
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
     followers: Option<Rc<<Followers as Analysis>::Result>>,
-    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -1681,7 +1565,6 @@ impl Held {
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
-            bounded: None,
         }
     }
 
@@ -1701,20 +1584,6 @@ impl Held {
             followers: Some(analyses.get::<Followers>(context, layout, function)),
             ..Self::of(context, layout, function, analyses, false)
         }
-    }
-
-    /// Also what the counted loops bound: for a pass that asks it, so that it
-    /// is the manager's, kept and brought up to date, and not a solve of
-    /// the pass's own.
-    pub fn with_bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self {
-        self.bounded = Some(loop_bounds(context, layout, function, analyses));
-        self
     }
 
     /// A unit over `function`, the body these were found of.
@@ -1741,9 +1610,6 @@ impl Held {
         }
         if let Some(followers) = self.followers.as_deref() {
             unit = unit.with_followers(followers);
-        }
-        if let Some(Ok(bounds)) = self.bounded.as_deref() {
-            unit = unit.with_bounds(bounds);
         }
         unit
     }
@@ -1813,9 +1679,6 @@ pub fn ask_some(
     }
     if chosen() {
         analyses.get::<DominatedEdges>(context, layout, function);
-    }
-    if chosen() {
-        analyses.get::<Bounded>(context, layout, function);
     }
     if chosen() {
         analyses.get::<TableLoads>(context, layout, function);

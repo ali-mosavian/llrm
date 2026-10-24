@@ -71,7 +71,7 @@ use std::sync::Arc;
 use crate::backend::assemble::Machined;
 use crate::backend::frame::Frame;
 use crate::model::ir::{Addr, AddressRef, Loc, Mem, Semantics, Space};
-use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, WHOLE_FRAME, outside};
+use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, LirBody, WHOLE_FRAME, outside};
 use crate::support::hash::IndexMap;
 
 /// `first`, which was laid out under `frame` (no hole), laid out with `hole`
@@ -86,25 +86,8 @@ pub fn laid_again(
         return None;
     }
     let (again, homes) = replayed(frame, hole)?;
-    let moved = Moves { frame, homes: &homes, hole };
-    let mut blocks = Vec::with_capacity(first.body.blocks.len());
-    for block in &first.body.blocks {
-        let mut insns = Vec::with_capacity(block.insns.len());
-        for one in &block.insns {
-            insns.push(moved.insn(one)?);
-        }
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
-    }
-    let mut body = first.body.with_blocks(blocks);
-    body.homes = Arc::new(
-        first
-            .body
-            .homes
-            .iter()
-            .map(|(value, cell)| Some((*value, moved.mem(cell)?)))
-            .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
-    );
-    body.variables = first.body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    let moved = Moves { frame: Some(frame), homes: &homes, hole };
+    let body = moved_body(&first.body, &moved)?;
     let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
     let mut inline = first.inline.clone();
     for (at, places) in &first.inline_places {
@@ -144,6 +127,40 @@ pub fn laid_again(
     Some((machined, again))
 }
 
+/// `body` with every cell moved by `moved`.
+fn moved_body(
+    body: &LirBody,
+    moved: &Moves,
+) -> Option<LirBody> {
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for block in &body.blocks {
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            insns.push(moved.insn(one)?);
+        }
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
+    }
+    let mut out = body.with_blocks(blocks);
+    out.homes = Arc::new(
+        body.homes
+            .iter()
+            .map(|(value, cell)| Some((*value, moved.mem(cell)?)))
+            .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
+    );
+    out.variables = body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    Some(out)
+}
+
+/// `body` with every cell below BP `bytes` lower, as a frame whose callee-saved
+/// registers are pushed first lays it out; None where a cell names no slot.
+pub fn pushed_down(
+    body: &LirBody,
+    bytes: i64,
+) -> Option<LirBody> {
+    let homes = IndexMap::default();
+    moved_body(body, &Moves { frame: None, homes: &homes, hole: bytes })
+}
+
 /// The frame `frame` would be with `hole`: the same floor lowered by the hole,
 /// the selector's slots moved, and the spill slots handed out again in the
 /// order they were first made.
@@ -176,7 +193,8 @@ fn replayed(
 }
 
 struct Moves<'a> {
-    frame: &'a Frame,
+    /// None: every cell below BP moves by `hole` (`pushed_down`).
+    frame: Option<&'a Frame>,
     /// Each spill slot's first byte in the old layout and in the new.
     homes: &'a IndexMap<i64, i64>,
     hole: i64,
@@ -192,10 +210,11 @@ impl Moves<'_> {
         if home == 0 {
             return Some(0);
         }
+        let Some(frame) = self.frame else { return Some(home - self.hole) };
         if let Some(found) = self.homes.get(&home) {
             return Some(*found);
         }
-        self.frame.extents.iter().any(|(start, _)| *start == home).then_some(home - self.hole)
+        frame.extents.iter().any(|(start, _)| *start == home).then_some(home - self.hole)
     }
 
     /// Where the byte at `disp` of a cell tagged with slot `home` is in the new
@@ -208,12 +227,13 @@ impl Moves<'_> {
         if home == 0 {
             return Some(disp);
         }
+        let Some(frame) = self.frame else { return Some(disp - self.hole) };
         // A spill slot: where the replay put the slot, and the cell's place in
         // it.
         if let Some(found) = self.homes.get(&home) {
             return Some(disp - home + found);
         }
-        if self.frame.extents.iter().any(|(start, _)| *start == home) {
+        if frame.extents.iter().any(|(start, _)| *start == home) {
             return Some(disp - self.hole);
         }
         None
@@ -405,7 +425,7 @@ mod tests {
     fn load(addr: Addr) -> Semantics {
         let cell = Mem { through: RegId::EBP, ..Mem::new(Some(addr), 4) };
         Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::EAX, width: 4 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
@@ -441,7 +461,7 @@ mod tests {
         use crate::backend::frame::Frame;
         let frame = Frame::new(0);
         let homes = crate::support::hash::IndexMap::default();
-        let moves = Moves { frame: &frame, homes: &homes, hole: 6 };
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 6 };
         let reach = |ranges: &[(i64, i64)]| crate::model::lir::outside(&ranges.iter().copied().collect());
         assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
     }
@@ -457,7 +477,7 @@ mod tests {
         let mut frame = Frame::new(0);
         frame.extents = vec![(-100, 32)];
         let homes = [(-12, -20)].into_iter().collect();
-        let moves = Moves { frame: &frame, homes: &homes, hole: 8 };
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
         let cell = |disp: i64, home: i64| Addr::new(Space::Frame, disp).in_slot(home);
         let (spilled, _) = moves.addr(cell(-10, -12), 0).expect("a spill slot moves");
         assert_eq!((spilled.disp, spilled.slot_home()), (-18, Some(-20)));

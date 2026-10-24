@@ -1,6 +1,6 @@
 //! Types, uniqued by the context as LLVM's are, so a type is a copyable id.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::arena::Arena;
 use crate::hash::HashMap;
@@ -92,8 +92,23 @@ pub struct StructBody {
 pub struct Types {
     types: Arena<Type>,
     interned: Box<RefCell<HashMap<Type, TypeId>>>,
+    /// `Type::Int(w)` for `w <= SMALL_INT`, the hot ask, without hashing.
+    small_ints: SmallInts,
     /// Identified structs in definition order.
     pub named: Vec<(String, Option<StructBody>)>,
+}
+
+/// Widths with a direct slot.
+const SMALL_INT: usize = 64;
+
+/// A type id plus one per width, 0 where the width was never asked.
+#[derive(Clone, Debug)]
+struct SmallInts([Cell<u32>; SMALL_INT + 1]);
+
+impl Default for SmallInts {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| Cell::new(0)))
+    }
 }
 
 impl Types {
@@ -105,12 +120,24 @@ impl Types {
         &self,
         ty: Type,
     ) -> TypeId {
-        let found = self.interned.borrow().get(&ty).copied();
-        if let Some(id) = found {
-            return id;
+        let slot = match ty {
+            Type::Int(bits) => self.small_ints.0.get(bits as usize),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if slot.get() != 0 {
+                return TypeId(slot.get() - 1);
+            }
         }
-        let id = TypeId(self.types.push(ty.clone()) as u32);
-        self.interned.borrow_mut().insert(ty, id);
+        let found = self.interned.borrow().get(&ty).copied();
+        let id = found.unwrap_or_else(|| {
+            let id = TypeId(self.types.push(ty.clone()) as u32);
+            self.interned.borrow_mut().insert(ty, id);
+            id
+        });
+        if let Some(slot) = slot {
+            slot.set(id.0 + 1);
+        }
         id
     }
 
@@ -257,3 +284,7 @@ pub fn struct_text(
     let inner = if fields.is_empty() { "{}".to_owned() } else { format!("{{ {fields} }}") };
     if packed { format!("<{inner}>") } else { inner }
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

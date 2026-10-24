@@ -2,21 +2,6 @@
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
-id = "unit llrm-c::compile::tests::test_m16_regparm3_a_small_struct_argument_is_on_the_stack"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::nibstages::tests::test_the_dump_shows_the_code_the_compiler_emits"
 issue = 2848
 owner = "unassigned"
@@ -146,11 +131,6 @@ id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_divi
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
-[[xfail]]
-id = "unit llrm-c::compile::tests::test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments"
-issue = 3059
-owner = "backend-slopes"
-date = "2026-10-20"
 [[xfail]]
 id = "unit llrm-transforms::promote::tests::a_call_to_a_procedure_that_does_not_write_a_cell_keeps_it_promoted"
 issue = 3190

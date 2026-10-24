@@ -16,7 +16,11 @@ EMU=$(python3 "$R/tools/linkrecipe.py" x86-m32 ld-emulation)
 # VSGCC_ONLY=llrm: llrm's objects alone, for what compares llrm with itself (m16.py), with no gcc or clang installed
 if [ -z "${VSGCC_ONLY:-}" ]; then
 RT_gcc=$(gcc -m32 -print-libgcc-file-name)
-RT_clang=$(clang -m32 --rtlib=compiler-rt -print-libgcc-file-name)
+# the pin's clang only: PATH's is the distro's 20.1.8 (its numbers were read as the pin's); pin_clang.py refuses anything else
+CLANG=$(python3 "$R/tools/pin_clang.py")
+RT_clang=$($CLANG -m32 --rtlib=compiler-rt -print-libgcc-file-name)
+# the pin has no 32-bit compiler-rt on this host: the 64-bit divides come from the host's libgcc (the kernels' code is clang's)
+[ -f "$RT_clang" ] || RT_clang=$RT_gcc
 fi
 $LLRM -m32 -mabi=$ABI -O2 -march=i486 -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM -m32 -mabi=$ABI -Os -march=i486 -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
@@ -26,7 +30,7 @@ cd $O/b
 F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 for o in O1 O2 O3 Os; do
   gcc $F -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  clang $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  $CLANG $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM -m32 -mabi=$ABI -$o -march=i486 -fobject-format=elf -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"

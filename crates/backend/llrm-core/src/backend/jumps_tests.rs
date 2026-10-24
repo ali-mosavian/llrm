@@ -38,7 +38,7 @@ fn _insn(
     sources: Vec<Loc>,
     target: Option<i64>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
+    let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
 }
 
@@ -211,7 +211,6 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         false,
         "386",
         &crate::backend::target::BUILT_IN,
-        false,
     )
     .unwrap()
     .into_iter()
@@ -224,7 +223,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|one| (one.op, one.name.clone(), one.target))
+        .map(|one| (one.op, one.name.as_deref().map(str::to_owned), one.target))
         .collect();
     assert_eq!(
         real,
@@ -264,7 +263,7 @@ fn test_jump_to_the_next_block_is_dropped() {
             block(1, vec![_move(1, bx()), _jump(2, 4)], vec![4]).into(),
             block(4, vec![_return(4)], vec![]).into(),
         ]),
-        ["L0_1:", "mov ax, bx", "L0_4:", "ret"]
+        ["L0_1:", "mov ax, bx", "ret"]
     );
 }
 
@@ -277,8 +276,10 @@ fn test_source_owned_jump_to_fallthrough_becomes_an_anchor() {
 
     let result = threaded(&source);
 
+    // The block it fell into is one block with it (L1515): the anchor, then the
+    // return.
     let kept = &result.blocks[0].insns;
-    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.len(), 2);
     assert_eq!(kept[0].covers, Some((1, 4)));
     assert!(kept[0].what.as_ref().is_some_and(|what| what.op == Operation::Nothing));
 }
@@ -292,7 +293,7 @@ fn test_jump_over_a_block_nothing_reaches_is_dropped() {
             block(5, vec![], vec![]).into(),
             block(9, vec![_return(9)], vec![]).into(),
         ]),
-        ["L0_1:", "mov ax, bx", "L0_9:", "ret"]
+        ["L0_1:", "mov ax, bx", "ret"]
     );
 }
 
@@ -300,7 +301,7 @@ fn nothing(
     at: i64,
     covers: Option<(i64, i64)>,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
+    let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
     Arc::new(Insn::new(at, covers, Some(what), Vec::new(), Vec::new()))
 }
 
@@ -392,8 +393,10 @@ fn test_reachable_inert_source_ownership_is_a_passage_that_keeps_its_bytes() {
 
     let result = threaded(&source);
 
-    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 5, 9]);
-    assert_eq!(result.blocks[0].succ, [9]);
+    // The passage is bypassed and the return it led to is one block with the
+    // block before it (L1515); the passage stays after, for its bytes.
+    assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 5]);
+    assert!(result.blocks[0].succ.is_empty());
     assert_eq!(result.blocks[1].insns, [owned]);
     assert!(result.blocks[1].succ.is_empty());
 }
@@ -853,7 +856,15 @@ fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
         count(&result, Operation::Compare),
         count(&source, Operation::Compare),
         "{:?}",
-        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+        result
+            .blocks
+            .iter()
+            .map(|b| (
+                b.at,
+                b.succ.clone(),
+                b.insns.iter().map(|i| i.what.as_ref().map(|w| format!("{:?}", w.op))).collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -916,7 +927,6 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
         false,
         "386",
         &crate::backend::target::BUILT_IN,
-        false,
     )
     .unwrap()
     .into_iter()
@@ -1029,7 +1039,7 @@ fn test_loop_test_is_placed_after_its_latch() {
     );
     assert_eq!(
         inner(listed(threaded(&placed(&source).unwrap()), "_f")),
-        ["L0_1:", "L0_8:", "mov ax, cx", "L0_4:", "cmp ax, bx", "jne L0_8", "L0_23:", "ret"]
+        ["L0_1:", "L0_8:", "mov ax, cx", "cmp ax, bx", "jne L0_8", "L0_23:", "ret"]
     );
 }
 
@@ -1147,7 +1157,6 @@ fn test_loop_test_is_followed_by_the_block_it_leaves_for() {
             "jl L0_8",
             "L0_20:",
             "mov ax, cx",
-            "L0_12:",
             "ret",
         ]
     );
@@ -1433,7 +1442,7 @@ fn test_a_branch_taken_to_the_next_block_then_a_jump_is_one_opposite_branch() {
         .insns
         .iter()
         .map(|one| one.what.as_ref().unwrap())
-        .map(|what| (what.name.clone().unwrap(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap(), what.target))
         .collect();
     assert_eq!(names, vec![("cmp".to_owned(), None), ("je".to_owned(), Some(3))]);
 }
@@ -1579,7 +1588,7 @@ fn test_a_loop_block_with_neither_way_next_branches_back_conditionally() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
 }
@@ -1604,7 +1613,7 @@ fn test_the_likelier_way_stays_the_conditional_jump() {
         .insns
         .iter()
         .filter_map(|one| one.what.as_ref())
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(names, [("cmp".to_owned(), None), ("jne".to_owned(), Some(5)), ("jmp".to_owned(), Some(20))]);
 }
@@ -1631,7 +1640,7 @@ fn test_for_size_a_two_way_branch_keeps_its_condition() {
         let result = inverted(&source, size);
         let what =
             result.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()).find(|what| what.op == Operation::Branch);
-        what.map(|what| (what.name.clone().unwrap_or_default(), what.target)).unwrap()
+        what.map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target)).unwrap()
     };
     assert_eq!(branch(false), ("je".to_owned(), Some(20)), "the likelier way is the jump");
     assert_eq!(branch(true), ("jne".to_owned(), Some(30)), "size keeps the condition");
@@ -1672,7 +1681,7 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
 #[test]
 fn test_a_table_entry_for_a_block_that_only_jumps_goes_to_its_target() {
     let table = Semantics {
-        name: Some("jmp".to_owned()),
+        name: Some("jmp".into()),
         sources: vec![bx()],
         indirect: true,
         table: vec![2, 3, 2],
@@ -1903,7 +1912,30 @@ fn test_a_one_block_loop_is_folded_into_a_branch_back() {
     let tail: Vec<(String, Option<i64>)> = physical(&folded)
         .into_iter()
         .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
-        .map(|what| (what.name.clone().unwrap_or_default(), what.target))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
+        .collect();
+    assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
+}
+
+/// A block the block before falls into, and nothing else enters, is one block
+/// with it (`OptimizeBlock` L1515). Left apart, the loop `4: mov; 6: cmp; jcc
+/// Out; jmp 4` was two blocks, the jump went to a block that is not the one it
+/// ends, and the loop kept `jcc Out; jmp Loop` instead of `jncc Loop; jmp Out`
+/// (the L1685 reversal needs the one-block loop).
+#[test]
+fn test_a_block_only_the_block_before_falls_into_is_merged_into_it() {
+    let blocks: Vec<Block> = vec![
+        block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+        block(4, vec![_move(4, bx())], vec![6]).into(),
+        block(6, vec![_compare(6), _branch(7, "je", 9), _jump(8, 4)], vec![9, 4]).into(),
+        block(7, vec![_move(7, bx()), _return(8)], vec![]).into(),
+        block(9, vec![_return(9)], vec![]).into(),
+    ];
+    let folded = branchfold::folded(&body("f", 1, blocks), &std::collections::BTreeSet::new());
+    let tail: Vec<(String, Option<i64>)> = physical(&folded)
+        .into_iter()
+        .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
+        .map(|what| (what.name.as_deref().map(str::to_owned).unwrap_or_default(), what.target))
         .collect();
     assert_eq!(tail, [("je".to_owned(), Some(7)), ("jne".to_owned(), Some(4)), ("jmp".to_owned(), Some(9))]);
 }
@@ -1921,6 +1953,22 @@ fn test_a_repeated_conditional_branch_is_dropped_from_the_block_before() {
     assert_eq!(lines.iter().filter(|line| line.starts_with("je")).count(), 1, "{lines:?}");
 }
 
+/// `HoistCommonCodeInSuccs` (L2043): both ways begin with `mov cx, 5` and this
+/// block is the only way into either; it runs once, ahead of the compare.
+#[test]
+fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let set = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![imm(5)], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![set(4), _move(5, bx()), _return(6)], vec![]).into(),
+        block(9, vec![set(9), _move(10, cx()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "mov cx, 5").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
+    let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
+    assert!(at < compare, "{lines:?}");
+}
+
 /// The pin copies propagation twice, again after tail duplication and block
 /// placement (row 84): the phases end `ControlFlow`, `CopyPropagation`.
 #[test]
@@ -1934,7 +1982,6 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
             false,
             cpu,
             &crate::backend::target::BUILT_IN,
-            false,
         )
         .unwrap()
         .iter()

@@ -257,6 +257,22 @@ def failed_tests(output: str) -> list[str]:
     return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
 
 
+def panic_reasons(output: str) -> dict[str, str]:
+    """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
+    names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
+    found: dict[str, str] = {}
+    lines = output.splitlines()
+    for at, line in enumerate(lines):
+        if not (m := re.match(r"thread '(?P<name>[^']+)'(?: \(\d+\))? panicked at .*:$", line)) or at + 1 >= len(lines):
+            continue
+        reason = lines[at + 1].strip()
+        pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
+        short = m["name"].rsplit("::", 1)[-1]
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else ""))
+        found.setdefault(m["name"], found[short])
+    return found
+
+
 def selection() -> dict:
     return tomllib.loads(SELECTION.read_text()) if SELECTION.exists() else {}
 
@@ -318,9 +334,12 @@ def oracle_env() -> dict[str, str]:
 
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
-    """None where the compile succeeded; else its first line of complaint."""
+    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: llrm-c encodes only for an `.o` or
+    `.obj` output, so the null device never reached the encoder."""
     try:
-        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+        with tempfile.TemporaryDirectory(prefix="smoke-") as work:
+            command = [str(Path(work) / "out.obj") if after == "-o" and arg == os.devnull else arg for after, arg in zip(["", *command], command)]
+            done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
     except cpulimit.MemoryLimit as error:
         return f"memory limit: {error}"
     except subprocess.TimeoutExpired:
@@ -476,6 +495,17 @@ def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
     return out
 
 
+# Lib tests that exist only with a feature, which no layer enabled (llrm-c's `toolchain`: the call-boundary and compile listings; an interrupt handler refused for four days, #2936): the
+# features each package's lib run turns on. 12 s on a warm target for llrm-c.
+LIB_FEATURES: dict[str, tuple[str, ...]] = {"llrm-c": ("toolchain",)}
+
+
+def lib_command(package: str, *extra: str) -> list[str]:
+    """`cargo test --no-fail-fast -p PACKAGE --lib [--features ...]`: the one command the lib layers and the baseline run."""
+    features = LIB_FEATURES.get(package)
+    return ["cargo", "test", "--no-fail-fast", "-p", package, "--lib", *(["--features", ",".join(features)] if features else []), *extra]
+
+
 # The last `dependants_lib_failures` run: crates, tests passed, a hash of the test names, seconds.
 LAST_LIB: dict = {}
 
@@ -493,7 +523,7 @@ def dependants_lib_failures(
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
-        done = run(slotted(["cargo", "test", "--no-fail-fast", "-p", package, "--lib"]), cwd=root, capture_output=True, text=True)
+        done = run(slotted(lib_command(package)), cwd=root, capture_output=True, text=True)
         output = done.stdout + done.stderr
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:
@@ -528,6 +558,8 @@ SCANNERS = {
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",
+    "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
+    "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",

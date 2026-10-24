@@ -19,14 +19,10 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
-//! DEVIATE P1 (no number): a phi with an edge from outside the body is left
-//! alone, as before. Fact: LLVM's phis list only blocks of their function.
-//!
-//! DEVIATE P4 (exit: floatassign deleted): without RFP a phi of an x87 value
-//! is left for `phielim`'s own lowering. Fact: `FloatAssign` and `FloatAlloc`
-//! run before the coalescer on that route, where LLVM's FPS runs after
-//! register allocation, so a copy of an x87 value costs an `fld` and an `fstp`
-//! that nothing joins away. Under RFP the phis are lowered like any other.
+//! No deviation for a phi that reads from a block outside the body: LLVM's phis
+//! list only predecessors in their function, so it is an error here too (the
+//! verifier says the same, `a phi ... is not a predecessor`); it was left alone
+//! before.
 //!
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
 //! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
@@ -134,6 +130,16 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         return Ok(body.clone());
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            if let Some((pre, _)) = phi.incoming.iter().find(|(pre, _)| !at_of.contains_key(pre)) {
+                return Err(format!(
+                    "{}: the phi at {:#06x} reads from {pre:#06x}, which is not a block of the body",
+                    body.name, block.at
+                ));
+            }
+        }
+    }
     let widths = phielim::_widths(body);
     let kept_phis = |body: &LirBody| -> IndexMap<i64, Vec<Phi>> {
         body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect()
@@ -160,7 +166,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let mut next = body.next_value();
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut left: IndexMap<i64, Vec<Phi>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
     let mut preds: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -168,25 +173,13 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             *preds.entry(to).or_insert(0) += 1;
         }
     }
-    // The x87 values, left alone without RFP: the stackifier follows allocation
-    // only there.
-    let x87 = if crate::backend::allocate::rfp_on() {
-        Default::default()
-    } else {
-        crate::backend::floatassign::_floating_values(body)
-    };
     for block in &body.blocks {
-        let mut stays = Vec::new();
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
         let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
             && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
         let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(pre, _)| !at_of.contains_key(pre)) || x87.contains(&phi.result) {
-                stays.push(phi.clone());
-                continue;
-            }
             let width = widths[&phi.result];
             let key = {
                 let mut key = phi.incoming.clone();
@@ -220,7 +213,6 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                 tails.entry(pre).or_default().push(phielim::_copy(at_of[&pre], incoming, source, None, width));
             }
         }
-        left.insert(block.at, stays);
     }
     let mut out = body.clone();
     if !born.is_empty() {
@@ -233,8 +225,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         insns.extend(tail[..first].iter().cloned());
         insns.extend(head.get(&block.at).into_iter().flatten().cloned());
         insns.extend(tail[first..].iter().cloned());
-        let stays = &left[&block.at];
-        *block = LirBlock { insns: insns.into(), phis: stays.clone().into(), ..(**block).clone() }.into();
+        *block = LirBlock { insns: insns.into(), phis: Vec::new().into(), ..(**block).clone() }.into();
     }
     Ok(out)
 }
@@ -258,7 +249,7 @@ mod tests {
 
     fn def(v: u32) -> Arc<Insn> {
         let what = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![held(v)],
             sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
@@ -271,13 +262,12 @@ mod tests {
     }
 
     fn jump(target: i64) -> Arc<Insn> {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
     fn branch(target: i64) -> Arc<Insn> {
-        let what =
-            Semantics { name: Some("jne".to_owned()), target: Some(target), ..Semantics::new(Operation::Branch) };
+        let what = Semantics { name: Some("jne".into()), target: Some(target), ..Semantics::new(Operation::Branch) };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
     }
 
@@ -332,7 +322,7 @@ mod tests {
         let wide = |value: u32| Loc::Held(Held { value, width: 8 });
         let make = |value: u32| {
             let what = Semantics {
-                name: Some("mov".to_owned()),
+                name: Some("mov".into()),
                 dests: vec![wide(value)],
                 sources: vec![Loc::Imm(Imm { value: 7, width: 8, address: None })],
                 ..Semantics::new(Operation::Move)
@@ -349,15 +339,14 @@ mod tests {
         assert_eq!(now.blocks.iter().map(|one| one.phis.len()).sum::<usize>(), 0, "no phi is left for the old stage");
     }
 
-    /// The x87 phi of a loop: floatassign's route leaves it for `phielim`'s own
-    /// lowering, RFP lowers it like any other. The skip was removed for both
-    /// routes at once and nbody -O3 ran 10.5% more instructions on the old one.
+    /// The x87 phi of a loop is lowered like any other (the old route left it
+    /// for `phielim`'s own lowering, which is deleted).
     #[test]
-    fn test_an_x87_phi_is_left_alone_only_without_rfp() {
+    fn test_an_x87_phi_is_lowered_like_any_other() {
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let load = |value: u32| {
             let what = Semantics {
-                name: Some("fldz".to_owned()),
+                name: Some("fldz".into()),
                 dests: vec![float(value)],
                 ..Semantics::new(Operation::FloatLoad)
             };
@@ -365,7 +354,7 @@ mod tests {
         };
         let store = |value: u32| {
             let what = Semantics {
-                name: Some("fstp".to_owned()),
+                name: Some("fstp".into()),
                 dests: vec![Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::BX, width: 4 })],
                 sources: vec![float(value)],
                 ..Semantics::new(Operation::FloatStore)
@@ -379,10 +368,6 @@ mod tests {
             block(2, vec![store(10)], &[], vec![]),
         ]);
         let phis_left = |now: &LirBody| now.blocks.iter().map(|one| one.phis.len()).sum::<usize>();
-        let old = crate::backend::allocate::RfpOn::off();
-        assert_eq!(phis_left(&lowered(&was).expect("lowers")), 1, "left for phielim");
-        drop(old);
-        let _rfp = crate::backend::allocate::RfpOn::set();
         assert_eq!(phis_left(&lowered(&was).expect("lowers")), 0, "lowered");
     }
 
@@ -416,6 +401,19 @@ mod tests {
     /// phi of the block rewrites. Each phi is lowered through a register of
     /// its own, as LLVM's are; left to `phielim`'s parallel copy (DEVIATE P5)
     /// they cost idiv_loop_os 14% of its estimate at -O2 and recgcd as much.
+    /// A phi that reads from a block that is not in the body: LLVM has no such
+    /// phi, and the old pass left it a phi for `phielim`'s own lowering. It
+    /// is an error now (no program of 71 x 2 vsgcc and 65 QCport
+    /// modules has one: the verifier rule found none).
+    #[test]
+    fn test_a_phi_reading_from_a_block_outside_the_body_is_refused() {
+        let phi = Phi { result: 5, incoming: vec![(0, 1), (9, 2)] };
+        let was =
+            body(vec![block(0, vec![def(1), def(2), jump(1)], &[1], vec![]), block(1, vec![read(5)], &[], vec![phi])]);
+        let got = lowered(&was);
+        assert!(got.as_ref().is_err_and(|why| why.contains("not a block of the body")), "{got:?}");
+    }
+
     #[test]
     fn test_phis_that_read_each_other_are_lowered_like_any_other() {
         let phis = vec![

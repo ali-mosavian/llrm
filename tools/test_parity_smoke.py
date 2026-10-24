@@ -558,3 +558,60 @@ def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
     assert why and "new.rs" in why[0], why
     assert sq.subset_refusals(head, set(head), fixes=False) == []
     assert sq.new_names({"ratchet:docs"}, merged) == []  # a head cached before the lines were named covers them
+
+
+def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_without():
+    """`cargo test -p llrm-c --lib` never ran the call-boundary and compile-listing tests (feature `toolchain`): an interrupt handler was refused from 10-19 to 10-23 and 16 listings went red unseen."""
+    assert ps.lib_command("llrm-c") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-c", "--lib", "--features", "toolchain"]
+    assert ps.lib_command("llrm-core") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-core", "--lib"]
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command)
+        return Done()
+
+    ps.dependants_lib_failures({"llrm-c", "llrm-core"}, run=run)
+    assert any("--features" in command and "llrm-c" in command for command in ran)
+    assert not any("--features" in command and "llrm-core" in command for command in ran)
+
+
+def test_a_selectiondag_change_runs_the_selectiondag_registry():
+    """#3899 landed with tests/selectiondag_registry.rs red (SD403 had no row): the target read no crate, was in neither SCANNERS nor NIGHTLY_ONLY, so no selection
+    of a PR's targets ever named it."""
+    mapping = ps.integration_map()
+    files = ["crates/backend/llrm-core/src/backend/selectiondag/dag_function.rs"]
+    packages, _ = ps.workspace_graph()
+    chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
+    assert "selectiondag_registry" in chosen, chosen
+
+
+def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
+    """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
+    compiler.chmod(0o755)
+    assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
+
+
+def test_a_refusal_can_carry_the_first_panic_line_of_a_failed_test():
+    """#4172 was refused three times with the test's name and nothing else; the cause was a `debug_assert_eq!` that fires in the runner's debug profile and not in release."""
+    output = """running 1 test
+test backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector ... FAILED
+
+failures:
+
+---- backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector stdout ----
+
+thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/backend/llrm-core/src/backend/selectiondag/legalize_types.rs:173:13:
+assertion `left == right` failed: a node on the worklist is ready
+  left: Processed
+ right: Ready
+"""
+    reasons = ps.panic_reasons(output)
+    assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"

@@ -52,7 +52,7 @@ the four addressing registers; reviewed 2026-11-30.
 
 Its -O2 cost is measured, not counted statically (static counts said
 smaller): QCport's 61-frame BENCH run in the dosrun emulator, every object
-main's but `d_faces.obj` (~/scratch/dfdyn: build.py, run.py). Executed
+main's but `d_faces.obj` (dfdyn: build.py, run.py). Executed
 instructions: main 485,835,518; parity +2,383,382 (+0.49%); head +2,816,018
 (+0.58%), so this charge adds +432,636 (+0.09%). The parity loss is row
 DFACES-DYN-1, not LU1's.

@@ -51,10 +51,10 @@ while true; do
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
-    && PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
+    && WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}" 2>&1 \
       | awk '{print strftime("%H:%M:%S"), $0; fflush()}' > $log ) 9>"$W.checkout.lock"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
-    else echo "$m: REFUSED: batch $log: $(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' ' | cut -c1-400)"; fi
+    else why=$(grep -E "#$m: REFUSED" $log | head -1); [ -n "$why" ] || why=$(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' '); echo "$m: REFUSED: batch $log: $(echo "$why" | cut -c1-400)"; fi
   done
 done

@@ -5,10 +5,10 @@
 //! `stamp` takes the bodies that are neither exported nor address-taken. For
 //! each integer parameter that has users and no `range` attribute, it collects
 //! what every direct call (`call` or `invoke`) passes. A call's actual is read
-//! in its caller by [`crate::ranges`] under the interval scope of the call's
-//! block, with the caller's own parameters' stamps, and for an operand with no
-//! interval, computed from its operands two levels down. A call in a block
-//! `ranges` finds unreachable passes nothing. The actuals are joined into
+//! in its caller by [`crate::ranges`] under the branch edges' intervals at the
+//! call's block, with the caller's own parameters' stamps, and for an operand
+//! with no interval, computed from its operands two levels down. The actuals
+//! are joined into
 //! `Seen`: `Nothing`, `Within(interval)` or `Anything`. A caller that has not
 //! itself been seen yet is `waiting` and does not turn an unknown actual into
 //! `Anything`.
@@ -78,7 +78,8 @@
 //! and stops when none.
 //!
 //! # Needs
-//! [`crate::ranges`] (`bounds`, interval of an operand), [`crate::consts`],
+//! [`crate::ranges`] (`dominated_edges`, interval of an operand),
+//! [`crate::consts`],
 //! [`crate::effects`] for `callee`, `llrm_mir::program::Program`.
 //!
 //! # See also
@@ -88,8 +89,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
+use llrm_mir::context::ConstantId;
 use llrm_mir::facts::{Bounds, Fact};
-use llrm_mir::module::{GlobalKind, Operand, ValueDef, ValueId};
+use llrm_mir::module::{GlobalKind, Mark, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::program::Program;
 use llrm_support::hash::IndexMap;
@@ -205,11 +207,66 @@ fn attribute(
     Fact::Range(Bounds { lo, hi }).typed_attribute(ty, bits)
 }
 
-/// Stamps each `eligible` body's integer parameters with the range its callers
-/// pass, where they all are known; the bodies whose parameters it stamped.
+/// What a body's solve reads outside the body: the attributes of every function
+/// and the kind of every variable (`ranges` reads a callee's `return_attrs`,
+/// `consts` a global's constness and initializer). A callee's body and its
+/// parameter attributes are not in it: stamping changes the second each round.
+#[derive(Clone, Debug, PartialEq)]
+enum GlobalFact {
+    Function { attrs: Vec<Attribute>, returns: Vec<Attribute> },
+    Variable { constant: bool, initializer: Option<ConstantId> },
+}
+
+fn module_facts(module: &llrm_mir::module::Module) -> Vec<GlobalFact> {
+    module
+        .globals
+        .iter()
+        .map(|global| match &global.kind {
+            GlobalKind::Function(function) => {
+                GlobalFact::Function { attrs: function.attrs.clone(), returns: function.return_attrs.clone() }
+            }
+            GlobalKind::Variable(variable) => {
+                GlobalFact::Variable { constant: variable.constant, initializer: variable.initializer }
+            }
+        })
+        .collect()
+}
+
+/// What a calling body's solve found, and what it was found over.
+struct Solved {
+    mark: Mark,
+    parameters: Vec<Vec<Attribute>>,
+    facts: Vec<GlobalFact>,
+    registers: IndexMap<ValueId, Known>,
+    scoped: IndexMap<i64, ranges::Intervals>,
+}
+
+/// The solves of the calling bodies, kept between rounds of `stamp_with` and
+/// between calls of it: a body's solve is a function of the body, its own
+/// parameters' attributes and the module's facts, so it stands until one of
+/// them moves.
+#[derive(Default)]
+pub struct Cache {
+    solved: BTreeMap<Defined, Solved>,
+    /// Bodies solved so far (a hit is not one).
+    pub solves: usize,
+}
+
+/// `stamp_with` with a fresh cache.
 pub fn stamp(
     program: &mut Program,
     eligible: &BTreeSet<Defined>,
+) -> BTreeSet<Defined> {
+    stamp_with(program, eligible, &mut Cache::default())
+}
+
+/// Stamps each `eligible` body's integer parameters with the range its callers
+/// pass, where they all are known; the bodies whose parameters it stamped. The
+/// solves of the calling bodies are kept in `cache`.
+pub fn stamp_with(
+    program: &mut Program,
+    eligible: &BTreeSet<Defined>,
+    cache: &mut Cache,
 ) -> BTreeSet<Defined> {
     // The parameters worth following: an integer one of a body nothing but the
     // program calls.
@@ -237,6 +294,7 @@ pub fn stamp(
     let mut settled = false;
     for round in 0..ROUNDS {
         let mut next = seen.clone();
+        let facts: Vec<Vec<GlobalFact>> = program.modules.iter().map(module_facts).collect();
         for (at, module) in program.modules.iter().enumerate() {
             for (own, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
                 // A body none has called yet, or only itself: what it passes is
@@ -263,21 +321,37 @@ pub fn stamp(
                     continue;
                 }
                 let shape = cfg::Shape::of(function);
-                let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
-                // Found once, for the body as it is: its ranges and the
-                // arguments' proofs ask the same.
-                let registers = crate::consts::known(&unit);
-                let unit = unit.with_registers(&registers);
-                let scoped = ranges::bounds(&unit).map(std::borrow::Cow::into_owned).unwrap_or_default();
+                let key = (at, own);
+                // Found once for the body as it is, and again only where the
+                // body, its own parameters' attributes or the module's facts
+                // moved: its ranges and the arguments' proofs ask the same.
+                let kept = cache.solved.get(&key).is_some_and(|one| {
+                    one.mark == function.mark() && one.parameters == function.parameter_attrs && one.facts == facts[at]
+                });
+                if !kept {
+                    let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
+                    let registers = crate::consts::known(&unit);
+                    let scoped = ranges::dominated_edges(&unit.with_registers(&registers)).unwrap_or_default();
+                    cache.solves += 1;
+                    cache
+                        .solved
+                        .insert(
+                            key,
+                            Solved {
+                                mark: function.mark(),
+                                parameters: function.parameter_attrs.clone(),
+                                facts: facts[at].clone(),
+                                registers,
+                                scoped,
+                            },
+                        );
+                }
+                let solved = &cache.solved[&key];
+                let (registers, scoped) = (&solved.registers, &solved.scoped);
+                let unit = Unit::of(module, &program.layout, function).with_shape(&shape).with_registers(registers);
+                let empty = ranges::Intervals::default();
                 for (block, inst, target) in calls {
-                    // A round assumes a range before it proves it: where the
-                    // loops' facts contradict each other under
-                    // the assumption the block is not reached, and a call in it
-                    // passes nothing.
-                    if scoped.unreachable(cfg::id(block)) {
-                        continue;
-                    }
-                    let scope = scoped.scope(&unit, cfg::id(block));
+                    let scope = scoped.get(&cfg::id(block)).unwrap_or(&empty);
                     let parameters =
                         program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
                     for index in 0..parameters {
@@ -286,7 +360,7 @@ pub fn stamp(
                             .instruction(inst)
                             .operands
                             .get(index)
-                            .and_then(|&operand| actual(&unit, &scope, &registers, operand, 2));
+                            .and_then(|&operand| actual(&unit, scope, registers, operand, 2));
                         *entry = match found {
                             Some(found) => entry.joined(&found),
                             None if waiting => continue,

@@ -642,7 +642,7 @@ mod tests {
 
     use super::{_interference, _merged};
     use crate::analysis::intervals;
-    use crate::backend::{allocate, cpu::ProfileOrName, select, target};
+    use crate::backend::{allocate, select};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -653,7 +653,7 @@ mod tests {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+        Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
     }
 
     fn held(
@@ -697,7 +697,7 @@ mod tests {
         at: i64,
         to: i64,
     ) -> Insn {
-        let what = Semantics { name: Some("jmp".to_owned()), target: Some(to), ..Semantics::new(Operation::Jump) };
+        let what = Semantics { name: Some("jmp".into()), target: Some(to), ..Semantics::new(Operation::Jump) };
         Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![])
     }
 
@@ -722,21 +722,20 @@ mod tests {
         Insn { group: Some(group), ..one }
     }
 
+    /// The assignment the pins give: nothing here needs an allocator.
     fn allocated(
-        body: &LirBody,
+        _body: &LirBody,
         pins: &IndexMap<u32, RegId>,
     ) -> allocate::Assignment {
-        allocate::allocate(
-            body,
-            Some(pins),
-            None,
-            None,
-            None,
-            ProfileOrName::Name("386"),
-            &target::BUILT_IN,
-            &crate::backend::classes::RegisterClasses::m16(),
-        )
-        .expect("allocates")
+        let mut values = pins.clone();
+        values.insert(3, RegId::ES);
+        allocate::Assignment {
+            r#where: values,
+            spilled: Default::default(),
+            cost: 0.0,
+            optimal: false,
+            why: "pins".to_owned(),
+        }
     }
 
     /// HARR's hoisted selector copy became unencodable mov es,es across a
@@ -744,9 +743,12 @@ mod tests {
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, RegId::ES)]);
-        let result =
-            allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::m16())
-                .expect("applies");
+        let result = crate::backend::rewriter::rewrite(
+            &body,
+            &allocated(&body, &body.pins),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("applies");
         let insns = result.insns();
         assert_eq!(insns.len(), 1);
         assert_eq!(insns[0].covers, body.insns()[0].covers);
@@ -929,5 +931,30 @@ impl Alive {
         values: impl IntoIterator<Item = u32>,
     ) {
         values.into_iter().for_each(|value| self.insert(value));
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use crate::backend::regalloc_input::{Calls, before_phase};
+    use crate::liveness::liveintervals::{BUILT, take_handed_over};
+
+    /// The pin's coalescer reads the `LiveIntervals` TwoAddress edited; a
+    /// fresh set per phase was one `LiveIntervals::new` more per function.
+    #[test]
+    fn test_the_coalescer_takes_the_intervals_two_address_left_and_builds_none() {
+        let built = |taking: bool| {
+            let (body, mut phases) =
+                before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "Coalescer");
+            if !taking {
+                // The premise: without the hand-over the coalescer builds its
+                // own.
+                assert!(take_handed_over(&body).is_some(), "TwoAddress left no intervals");
+            }
+            let before = BUILT.with(std::cell::Cell::get);
+            phases[0].transform(body).expect("coalesces");
+            BUILT.with(std::cell::Cell::get) - before
+        };
+        assert_eq!((built(true), built(false)), (0, 1));
     }
 }

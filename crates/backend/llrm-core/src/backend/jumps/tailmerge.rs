@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
 use crate::backend::layout::_OPPOSITE;
-use crate::backend::{masm, spiller};
+use crate::backend::masm;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
@@ -122,7 +122,7 @@ fn jump_to(
     Arc::new(Insn::new(
         at,
         Some((at, at)),
-        Some(Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) }),
+        Some(Semantics { name: Some("jmp".into()), target: Some(target), ..Semantics::new(Operation::Jump) }),
         Vec::new(),
         Vec::new(),
     ))
@@ -170,11 +170,7 @@ fn seq_of(
                     let opposite = _OPPOSITE.get(branch.name.as_deref()?)?;
                     let at = items.len() - 1;
                     let flipped = Arc::new(Insn {
-                        what: Some(Semantics {
-                            name: Some((*opposite).to_owned()),
-                            target: Some(way),
-                            ..branch.clone()
-                        }),
+                        what: Some(Semantics { name: Some((*opposite).into()), target: Some(way), ..branch.clone() }),
                         ..(*items[at].insn).clone()
                     });
                     items[at].insn = flipped;
@@ -878,7 +874,11 @@ pub fn merged(
             folder.rename.keys().map(|one| (*one, super::_root(&folder.rename, *one))).collect();
         order = order
             .iter()
-            .map(|block| block.with_insns(block.insns.iter().map(|one| spiller::_renamed(one, &rename)).collect()))
+            .map(|block| {
+                block.with_insns(
+                    block.insns.iter().map(|one| crate::backend::bodyfacts::_renamed(one, &rename)).collect(),
+                )
+            })
             .collect();
     }
     let mut out = body.with_blocks(order);

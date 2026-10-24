@@ -1,7 +1,7 @@
 # Lazy Annotated and the MemorySSA cost: plan
 
 Owner: funcattrs-port. Written 2026-10-22 (due 10-28, a document only). Numbers: the compile ledger
-`~/scratch/results/ledger-c4fade734-O2.txt` (d_faces -O2, callgrind Ir, ours 1318 M against the pin's 509 M, 2.59x) and the
+`ledger-c4fade734-O2.txt` (d_faces -O2, callgrind Ir, ours 1318 M against the pin's 509 M, 2.59x) and the
 coordinator's MemorySSA findings (w-1's #3471 plan).
 
 ## What costs

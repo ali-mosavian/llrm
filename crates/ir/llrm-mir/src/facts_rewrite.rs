@@ -220,6 +220,56 @@ mod tests {
         assert_eq!(all.speculated().iter().count(), all.iter().count());
     }
 
+    /// `text` without its `#[cfg(test)]` items, where a test module may come
+    /// before production code.
+    fn production_source(text: &str) -> String {
+        let mut kept = String::new();
+        let mut depth = 0_i32;
+        let mut skipping = false;
+        let mut lines = text.lines().peekable();
+        while let Some(line) = lines.next() {
+            let trimmed = line.trim();
+            if !skipping && depth == 0 && trimmed == "#[cfg(test)]" {
+                skipping = true;
+                continue;
+            }
+            if !skipping {
+                kept.push_str(line);
+                kept.push('\n');
+                continue;
+            }
+            // Attributes between `#[cfg(test)]` and its item belong to it.
+            if trimmed.starts_with("#[") {
+                continue;
+            }
+            for (at, one) in line.char_indices() {
+                match one {
+                    '{' if !line[..at].contains("//") => depth += 1,
+                    '}' if !line[..at].contains("//") => depth -= 1,
+                    _ => {}
+                }
+            }
+            // The item ends at its closing brace, or at a `;` outside braces.
+            if depth <= 0 && (line.contains('}') || trimmed.ends_with(';')) {
+                skipping = false;
+                depth = 0;
+            }
+        }
+        kept
+    }
+
+    /// The audit cut each file at its first `#[cfg(test)]`, so production code
+    /// after an early test item was never read: `ranges.rs`'s `nsw` read hid
+    /// behind one until the code before it was deleted.
+    #[test]
+    fn a_reader_after_an_early_test_item_is_audited() {
+        let source = production_source(
+            "#[cfg(test)]\nfn helper() {}\nfn real(f: &F) { f.no_signed_wrap(); }\n#[cfg(test)]\nmod tests {\n    fn t() { x.in_bounds(); }\n}\n",
+        );
+        assert!(source.contains("no_signed_wrap()"), "{source}");
+        assert!(!source.contains("in_bounds()"), "{source}");
+    }
+
     /// Every file that reads a no-wrap or inbounds promise off an
     /// instruction is one whose conclusion was checked (see the module
     /// documentation); a new one fails here until it is, and is listed.
@@ -242,9 +292,25 @@ mod tests {
             "pattern.rs",
             "power2.rs",
             "range.rs",
+            // ValueTracking.cpp's `getRangeForInstruction` bounds an add,
+            // sub, mul or shl by the `nsw` it has (`addWithNoWrap`,
+            // `multiplyWithNoWrap`); the interval is worked out afresh from
+            // the instruction when asked and kept by no pass.
+            "ranges.rs",
+            // CorrelatedValuePropagation.cpp's `processBinOp` and
+            // `processTrunc` read the `nsw`/`nuw` the operation has and add
+            // the ones LVI's ranges prove; neither drops one.
+            "cvp.rs",
             // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
             // to flag the constant that replaces it.
             "constantfolding.rs",
+            // LowerMemIntrinsics.cpp makes the pattern loop's GEP `inbounds`;
+            // `memsetpattern.rs` sets the flag on it and reads none.
+            "memsetpattern.rs",
+            // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
+            // `inbounds` into the node's SDNodeFlags (`visitBinary`,
+            // `visitGetElementPtr`); the DAG grants no promise from them.
+            "builder.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
@@ -447,6 +513,13 @@ mod tests {
             // keeps no instruction's promise and grants none.
             "loopinterchange.rs",
             "loopinterchange_transform.rs",
+            // CodeGenPrepare.cpp's `canGetThrough` reads the `nsw`/`nuw` of
+            // the operand a sign or zero extension is moved up through: the
+            // flag says the narrow operation did not wrap, so the same
+            // operation on the extended operands computes the extension. The
+            // promoted instruction keeps its flags (the pin's `mutateType`
+            // does not touch them) and none is granted.
+            "extpromotion.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
@@ -470,7 +543,7 @@ mod tests {
                     )
                 {
                     let text = std::fs::read_to_string(&path).expect("source");
-                    let source = text.split("#[cfg(test)]").next().unwrap_or_default();
+                    let source = production_source(&text);
                     if reads.iter().any(|read| source.contains(read)) {
                         found.push(name);
                     }

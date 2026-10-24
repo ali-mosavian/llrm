@@ -103,8 +103,33 @@ class BuildError(Exception):
 _RUNTIME_LOCK = threading.Lock()
 
 
+def with_isel(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, when the variable is set: the same programs through the other instruction selector."""
+    mode = os.environ.get("LLRM_ISEL")
+    if mode and Path(command[0]).name == "llrm-c":
+        return [command[0], f"--isel={mode}", *command[1:]]
+    return command
+
+
+class ProofMissing(Exception):
+    pass
+
+
+def isel_proof(report: Path, mode: str) -> tuple[int, int]:
+    """The functions `$LLRM_ISEL_REPORT` says the DAG path (first) and the old selector (second) selected. A run that quotes a count
+    under `mode` proves with this which selector compiled it: no report, or no function from `mode`'s selector, is no proof."""
+    if not report.exists() or not report.read_text().strip():
+        raise ProofMissing(f"{report}: no function was reported as selected: nothing shows which selector compiled this run")
+    lines = [line.rsplit(" ", 1) for line in report.read_text().splitlines() if line.strip()]
+    dag = sum(1 for _, by in lines if by == "dag")
+    old = sum(1 for _, by in lines if by == "old")
+    if mode in ("dag", "shadow") and dag == 0:
+        raise ProofMissing(f"LLRM_ISEL={mode} but the DAG path selected no function ({old} by the old selector)")
+    return dag, old
+
+
 def _host(command: list[str]) -> None:
-    done = cpulimit.run(command, 300, capture_output=True, text=True)
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True)
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 

@@ -489,6 +489,24 @@ fn _values(
             }
         }
     }
+    // A phi reads one value for each predecessor of its block, and from none
+    // else (the IR verifier's rule: "PHI nodes must have one entry for each
+    // predecessor").
+    let mut preds: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for block in &body.blocks {
+        for &to in block.succ.iter() {
+            preds.entry(to).or_default().insert(block.at);
+        }
+    }
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (from, _) in &phi.incoming {
+                if !preds.get(&block.at).is_some_and(|set| set.contains(from)) {
+                    out.push(format!("a phi at {:#06x} reads from {from:#06x}, which is not a predecessor", block.at));
+                }
+            }
+        }
+    }
     if !in_ssa && body.blocks.iter().any(|block| !block.phis.is_empty()) {
         let stuck: Vec<String> = body
             .blocks
@@ -505,7 +523,8 @@ fn _values(
     for block in &body.blocks {
         for one in &block.insns {
             read.extend(one.uses.iter().copied());
-            read.extend(one.requires.iter().map(|(held, _)| held.value));
+            // A value an operand reads as undef needs no definition.
+            read.extend(one.requires.iter().map(|(held, _)| held.value).filter(|value| !one.undefs.contains(value)));
         }
         for phi in &block.phis {
             read.extend(phi.incoming.iter().map(|(_, value)| *value));
@@ -526,8 +545,10 @@ fn _values(
             }
         }
     }
+    let undef: BTreeSet<u32> =
+        body.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.undefs.iter().copied()).collect();
     for value in &named {
-        if !read.contains(value) && !written.contains_key(value) {
+        if !read.contains(value) && !written.contains_key(value) && !undef.contains(value) {
             out.push(format!("value#{value} is named by an operand and neither defined nor used anywhere"));
         }
     }
@@ -569,6 +590,22 @@ mod tests {
 
     /// C crc32 returned -1141145971 after an eliminated phi lost its
     /// definition.
+    /// An IR phi has one entry for each predecessor and no other: a LIR phi
+    /// that reads from a block that is not one is a body a pass broke (the
+    /// old PHIElimination left it alone, silently).
+    #[test]
+    fn test_a_phi_reading_from_a_block_that_is_not_a_predecessor_is_reported() {
+        use crate::model::lir::{LirBlock, Phi};
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, Vec::new()) };
+        let next = LirBlock {
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (7, 1)] }].into(),
+            ..LirBlock::new(1, Vec::new())
+        };
+        let body = LirBody::new("p", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        let said = verify(&body, true);
+        assert!(said.iter().any(|one| one.contains("is not a predecessor")), "{said:?}");
+    }
+
     #[test]
     fn test_a_read_value_must_be_defined_or_an_explicit_body_input() {
         let stale = Insn::new(

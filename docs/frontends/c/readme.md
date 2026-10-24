@@ -165,6 +165,8 @@ set, otherwise a tree cached per commit (`toolchain/owshim/ow-commit`) and
 bootstrapped once. `--no-default-features --features wccq` builds only the front
 end. Without the toolchain feature `llrm-c` still reads `.cgs` streams.
 
+[GNU C builtins](builtins.md): how a `__builtin_*` call compiles.
+
 ## Tests
 
 Unit tests are in `crates/frontends/llrm-c/src/`. Run them with `cargo test -p llrm-c --features toolchain`; without it they do not compile. Programs in `tests/run/c`

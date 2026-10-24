@@ -157,14 +157,21 @@ def first_difference(want: list[str], got: list[str]) -> str:
     return ""
 
 
-def compile_one(program: Program, obj: Path) -> str | None:
+def compile_command(program: Program, obj: Path) -> list[str]:
+    """The compiler's command for `program`; a C program goes through $LLRM_ISEL (see dosbatch.with_isel)."""
     tool, *rest = COMPILERS[program.source.suffix]
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
-        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
-    done = cpulimit.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)], 300,
-                        capture_output=True, text=True)
+    command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)]
+    # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
+    real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
+    return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
+
+
+def compile_one(program: Program, obj: Path) -> str | None:
+    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
     return None
@@ -318,8 +325,16 @@ def main() -> int:
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
+    mode = os.environ.get("LLRM_ISEL")
+    report = work.with_name(work.name + "-isel.txt")
+    if mode:
+        report.unlink(missing_ok=True)
+        os.environ["LLRM_ISEL_REPORT"] = str(report)
     with ThreadPoolExecutor() as pool:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
+    if mode:
+        dag, old = dosbatch.isel_proof(report, mode)
+        print(f"isel proof ({report.name}): LLRM_ISEL={mode}: {dag} functions selected by the DAG path, {old} by the old selector")
     launches = []
     for dialect, tools in TOOLS.items():
         jobs = [dataclasses.replace(built[p.name], args=f"< {p.stdin.upper()}") if p.stdin else built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]

@@ -394,6 +394,20 @@ pub struct Stats {
     pub failed: usize,
 }
 
+/// One line of `LLRM_GREEDY_DECISIONS`: the interval `reg` that `selectOrSplit`
+/// took off the queue at `stage`, with its segment count and weight, and what
+/// it decided. Two builds' lines for one function diff to the first decision
+/// that changed.
+fn decision_line(
+    reg: u32,
+    stage: LiveRangeStage,
+    size: usize,
+    weight: f32,
+    verdict: &str,
+) -> String {
+    format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
+}
+
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
 
 /// `RAGreedy` (RegAllocGreedy.h#L55) over `RegAllocBase`.
@@ -595,7 +609,28 @@ impl<'a> RAGreedy<'a> {
             // physical register if possible and populate a list of
             // new live intervals that result from splitting.
             let mut split_vregs: Vec<u32> = Vec::new();
-            match self.select_or_split(&virt_reg, &mut split_vregs) {
+            let decision = self.select_or_split(&virt_reg, &mut split_vregs);
+            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+                let verdict = match &decision {
+                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Fail => "FAIL".to_owned(),
+                    Select::None => format!("split/spill into {split_vregs:?}"),
+                };
+                eprintln!(
+                    "{}",
+                    decision_line(
+                        virt_reg.reg(),
+                        self.extra.get_stage(virt_reg.reg()),
+                        virt_reg.size(),
+                        virt_reg.weight(),
+                        &verdict
+                    )
+                );
+                if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS_INTERVALS") {
+                    eprintln!("    {}", virt_reg);
+                }
+            }
+            match decision {
                 Select::Fail => {
                     // selectOrSplit failed to find a register: no valid
                     // allocation.
@@ -1218,6 +1253,16 @@ mod tests {
     use crate::greedy::virtregmap::RegisterInfo;
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// The line `LLRM_GREEDY_DECISIONS` prints is the one a diff of two builds
+    /// reads: it names the interval, its stage, size and weight, and the
+    /// outcome. A sys.c function's allocation changed by one removed copy, and
+    /// no line said which interval it was (v127, w 0.4365 to 0.3018).
+    #[test]
+    fn test_a_decision_line_names_the_interval_its_stage_weight_and_outcome() {
+        let line = decision_line(127, LiveRangeStage::Split, 1, 0.30180937, "assign EBX");
+        assert_eq!(line, "dec v127 stage=Split size=1 w=0.3018 -> assign EBX");
+    }
 
     struct Env {
         regs: Vec<RegId>,

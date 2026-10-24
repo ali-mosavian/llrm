@@ -117,7 +117,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
     partial(
         "decide@1244",
@@ -135,6 +134,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
     ),
     entry("cvp@669", Simplify, "correlated-propagation", Translated, ""),
+    entry("jumptableswitch@672", Simplify, "jump-table-to-switch", Translated, "jumptableswitch.rs"),
     partial(
         "decide@675",
         Simplify,
@@ -147,7 +147,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@677", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@677", Simplify, "instcombine", Old, "instcombine-port"),
     partial(
         "aggressive-instcombine@678",
@@ -182,7 +181,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
@@ -214,7 +212,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@801", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dfajumpthreading@806", Simplify, "dfa-jump-threading", Translated, ""),
     entry(
@@ -243,6 +240,24 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
+    partial(
+        "combine@1403",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
+    partial(
+        "combine@1464",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
+    partial(
+        "combine@1499",
+        Late,
+        "instcombine",
+        "criterion: as combine@1242 (the same translated families), a late InstCombine of the pin's default pipeline that cleans what SimplifyCFG@1438 and the unroll leave; exit: as combine@1242",
+    ),
     entry("licm@1508", Late, "licm<allowspeculation>", Translated, ""),
     partial(
         "decide@832",
@@ -256,7 +271,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "instcombine",
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
-    entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
     // Not slots: SimplifyCFG at PassBuilderPipelines.cpp#L873
@@ -301,12 +315,6 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the default options runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
-    partial(
-        "simplifycfg@2376",
-        Late,
-        "simplifycfg",
-        "translated SimplifyCfg at hoistCommonInsts runs here; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
-    ),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     // LSR runs in llc's IR preparation (`TargetPassConfig::addIRPasses`,
@@ -325,9 +333,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
+    entry("cmpsub@1", Backend, "x86 EmitCmp: SUB shares flags with the difference", Translated, ""),
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
+    entry("processimpdefs@2", Backend, "process-implicit-defs (ProcessImplicitDefs.cpp)", Translated, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
+    entry("machinelicm@4", Backend, "early-machinelicm", Translated, ""),
     partial(
         "machinecse@4",
         Backend,
@@ -340,6 +351,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "machine-sink",
         "criterion: hanoi, x_switch_* and mandel keep a phi constant off the path that does not read it; exit: store and load sinking along critical edges (hasStoreBetween), SinkAndFold, the pressure test of isProfitableToSinkTo",
     ),
+    entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
+    entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     entry(
         "pressuresink@5",
@@ -349,7 +362,16 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "lir-cleanup-poc",
     ),
     entry("fixupsetcc@5", Backend, "x86-fixup-setcc (X86FixupSetCC.cpp)", Translated, ""),
+    entry("callframe@5", Backend, "x86-cf-opt (X86CallFrameOptimization.cpp)", Translated, ""),
+    entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
+    entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    partial(
+        "pushfold@6",
+        Backend,
+        "x86-cf-opt (X86CallFrameOptimization.cpp)",
+        "criterion: a pushed value a load made and nothing else reads is pushed from memory, rows identical or better; exit: none, the pass's reserved-frame input is not made (CG6)",
+    ),
     entry("floatassign@7", Backend, "x87 stack slots (regalloc, target)", Old, "regalloc-core-poc"),
     entry("floatalloc@8", Backend, "x86-fp-stackifier (X86FloatingPoint.cpp)", Translated, ""),
     entry("twoaddr@9", Backend, "two-address-instruction", Old, "lir-cleanup-poc"),
@@ -369,6 +391,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("prologue@13", Backend, "prologepilog", Old, ""),
     entry("latecleanup@13", Backend, "machine-latecleanup (MachineLateInstrsCleanup.cpp)", Translated, ""),
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
+    entry("fixupbw@14", Backend, "x86-fixup-bw-insts (X86FixupBWInsts.cpp)", Translated, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
     partial(
@@ -617,12 +640,6 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "LVI and CVP callers; ranges::dominated_edges goes (vt-constantfolding)",
     ),
     old_analysis(
-        "bounded",
-        "Bounded",
-        "LazyValueInfo / ScalarEvolution getRange",
-        "LVI and SCEV getRange; ranges::bounded goes (vt-constantfolding, scev-createscev-2239)",
-    ),
-    old_analysis(
         "pointer-values",
         "PointerValues",
         "BasicAA + CaptureTracking",
@@ -702,6 +719,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
+    "jumptableswitch@672",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

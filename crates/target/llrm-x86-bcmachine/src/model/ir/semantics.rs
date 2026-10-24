@@ -207,7 +207,7 @@ fn shaped(
     dests: Vec<Loc>,
     sources: Vec<Loc>,
 ) -> Semantics {
-    Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
+    Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
 }
 
 pub fn _move(
@@ -459,7 +459,7 @@ pub fn _transfer(
     name: &str,
 ) -> Option<Semantics> {
     let target = insn.target()?;
-    Some(Semantics { name: Some(name.to_owned()), target: Some(target as i64), ..Semantics::new(op) })
+    Some(Semantics { name: Some(name.into()), target: Some(target as i64), ..Semantics::new(op) })
 }
 
 /// A direct far branch's target: a segment:offset immediate a fixup writes.
@@ -478,7 +478,7 @@ pub fn _jump(
     }
     FAR_BRANCH
         .contains(&insn.insn.op0_kind())
-        .then(|| Semantics { name: Some(name.to_owned()), ..Semantics::new(Operation::Escape) })
+        .then(|| Semantics { name: Some(name.into()), ..Semantics::new(Operation::Escape) })
 }
 
 /// A call site's own shape; its effect stays conservative.
@@ -488,11 +488,7 @@ pub fn _call(
     op: Operation,
     name: &str,
 ) -> Option<Semantics> {
-    Some(Semantics {
-        name: Some(name.to_owned()),
-        target: insn.target().map(|target| target as i64),
-        ..Semantics::new(op)
-    })
+    Some(Semantics { name: Some(name.into()), target: insn.target().map(|target| target as i64), ..Semantics::new(op) })
 }
 
 /// An instruction that does nothing at all -- padding between bodies.
