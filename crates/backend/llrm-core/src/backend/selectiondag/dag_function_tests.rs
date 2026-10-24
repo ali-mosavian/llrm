@@ -2088,7 +2088,7 @@ impl crate::backend::assemble::Abi for Stub {
     }
 }
 
-fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
+fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static str>> {
     let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
     let function = module.global(module.named("f").expect("f")).function().expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
@@ -2098,16 +2098,16 @@ fn verdicts(flags: bool) -> Vec<Result<(), &'static str>> {
 }
 
 /// `B$SCMP` answers in the flags under `--runtime qb45`; the DAG path tested
-/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. A
-/// call whose contract the convention does not model is refused.
+/// `ax` instead, so every string comparison of `strcmp_smoke` printed 0. The
+/// call is known to answer in the flags.
 #[test]
-fn a_runtime_call_answering_in_the_flags_is_refused() {
-    assert_eq!(verdicts(true), [Err("QB runtime routine answering in the flags")]);
+fn a_runtime_call_answering_in_the_flags_says_so() {
+    assert_eq!(verdicts(true), [Ok(super::builder::RuntimeAnswer::Flags)]);
 }
 
 #[test]
-fn a_runtime_call_the_convention_models_is_accepted() {
-    assert_eq!(verdicts(false), [Ok(())]);
+fn a_runtime_call_answering_in_registers_says_so() {
+    assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
 const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
@@ -2226,6 +2226,66 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
     let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const CARRY_ACROSS_A_TEST: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1003 range(i32 0, -2147483648) i32 @_bench_x_ll_arith(i32 noundef %0) \"llrm-fp-eval\"=\"x87-extended\" memory(none) nounwind norecurse willreturn {
+b1:
+  %1 = icmp sgt i32 %0, 0
+  br i1 %1, label %22, label %b3
+
+b3:
+  %2 = phi i32 [ %21, %20 ], [ 0, %b1 ]
+  %3 = and i32 %2, 2147483647
+  ret i32 %3
+
+b4:
+  %4 = phi i32 [ %19, %b4 ], [ 0, %22 ]
+  %5 = phi i64 [ %18, %b4 ], [ 0, %22 ]
+  %6 = phi i64 [ %8, %b4 ], [ 81985529216486895, %22 ]
+  %7 = mul i64 %6, 6364136223846793005
+  %8 = add i64 %7, 1442695040888963407
+  %9 = lshr i64 %8, 33
+  %10 = or i64 %9, 1
+  %11 = mul i64 %10, %8
+  %12 = and i32 %4, 31
+  %13 = zext nneg i32 %12 to i64
+  %14 = lshr i64 %8, %13
+  %15 = xor i64 %11, %14
+  %16 = shl i64 %8, %13
+  %17 = add i64 %16, %5
+  %18 = add i64 %17, %15
+  %19 = add nuw nsw i32 %4, 1
+  %exitcond = icmp ne i32 %0, %19
+  br i1 %exitcond, label %b4, label %20
+
+20:
+  %21 = trunc i64 %18 to i32
+  br label %b3
+
+22:
+  br label %b4
+}
+";
+
+/// A 64-bit add's carry read after a select's `test` came between: the pin
+/// glues the `adc` to the `add` and the scheduler here could not keep the
+/// pair together ('flags overwritten between their producer and a consumer',
+/// vsgcc x_ll_arith). The carry is saved in a byte before the `test` and put
+/// back before its reader.
+#[test]
+fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
+    let module = llrm_mir::parse::module(CARRY_ACROSS_A_TEST).expect("parses");
+    let done = selected(
+        &module,
+        "_bench_x_ll_arith",
+        &llrm_x86_m32::M32,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+    )
+    .unwrap_or_else(|e| panic!("{}", e.0));
+    let saved = done.body.insns().iter().filter_map(|i| i.what.as_ref()).any(|w| w.name.as_deref() == Some("setb"));
+    assert!(saved, "the carry is saved in a byte");
 }
 
 const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
