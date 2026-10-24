@@ -35,3 +35,20 @@ D64-1 is tested on a `TestDag` and needs none of D64-2..4; the leaf's 7 LEAs app
 `llrm-llc -m64` only once D64-2/3 let it select functions through the DAG path (12-08).
 Until then `llrm-llc -m64` runs the old selector; forming LEA there is the old selector's own
 address-form matchers, which are not mine and are being deleted.
+
+## D64-1 design (2026-10-24)
+
+Pin: `X86ISelAddressMode` and its users in `X86ISelDAGToDAG.cpp` (permalinks at d1106deb71cc).
+The 64-bit arms are few; the matcher already mirrors the rest.
+
+| Arm | Pin | Change in `x86_addr.rs` |
+|---|---|---|
+| `Flat64` mode, pointer `i64`, 64-bit base and index | whole file | `AddrMode::Flat64`; the `Flat32` guards (scaled shifts, `MUL_IMM` 3/5/9) become "not `Real16`" |
+| RIP-relative symbols | `matchWrapper` L1973-2045: `X86ISD::WrapperRIP`, `AM.setBaseReg(RIP)` unless the code model is large or a base or index already exists | `Wrapper`/`WrapperRIP` both reach `match_wrapper`; `base_reg = RIP` |
+| RIP-relative offsets | `foldOffsetIntoAddress` L1883-1910 (`isInt<32>`), L2689 "RIP + 32-bit displacement" | 64-bit value range check; RIP forbids a second register (L2200-2207, L2851) |
+| Displacement safety | `isDispSafeForFrameIndexOrRegBase` (the `!is64Bit \|\|` at L2735) | the 64-bit form of the check |
+| LEA | `selectLEAAddr` L3329-3379: at 64 bits always a `LEA` for RIP-relative (L3370), `LEA64_32r` for 32-bit results | `lea64addr`/`lea64_32addr` complex patterns beside `lea16addr` |
+
+Test (fail-first): on a `TestDag`, `(add (shl i, 2), base)` plus a displacement selects
+`LEA64r` with scale 4 and 64-bit registers; with the `Flat64` arm off it is `ADD64rr`.
+Needs D64-0 (the table) first; D64-0 is 11-17, D64-1 11-24 as above.
