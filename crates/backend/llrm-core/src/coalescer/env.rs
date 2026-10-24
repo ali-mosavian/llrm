@@ -100,6 +100,8 @@ pub fn joined(
         let compared = lis.assert_intervals_cover_afresh(&after);
         assert!(compared > 0, "{}: the check compared no interval", body.name);
     }
+    // The allocator starts from these (`take_handed_over_edited_to`).
+    crate::liveness::liveintervals::hand_over(lis, &after);
     after
 }
 

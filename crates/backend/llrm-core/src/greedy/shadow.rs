@@ -742,7 +742,8 @@ pub fn decide_with_split(
             }
         }
     }
-    let mut lis = LiveIntervals::new(body);
+    let mut lis =
+        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =

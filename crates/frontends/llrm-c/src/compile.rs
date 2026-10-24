@@ -1794,8 +1794,9 @@ mod tests {
     /// in one target's file. The profile adds it where the layout has the x87
     /// type.
     /// A runtime that names no `libcalls` has none (`memcpy` stays `rep movs`
-    /// there), a named one is a call: the m16 runtime names none and the m32
-    /// one names `memcpy` (runtime/c/x86-m32/ext.asm).
+    /// there), a named one is a call: the m16 runtime names `memmove` and the
+    /// m32 one `memcpy`, `memmove` and `memset`
+    /// (runtime/c/x86-m32/ext.asm).
     #[test]
     fn test_a_runtime_names_its_libcalls_and_none_by_default() {
         let table: toml::Table = "libcalls = [\"memcpy\"]".parse().unwrap();
@@ -1803,7 +1804,7 @@ mod tests {
         assert!(super::libcall_names(&toml::Table::new()).is_empty());
         let names =
             |target: &dyn llrm_target::Target| super::libcall_names(&target.runtime("c").unwrap().table().unwrap());
-        assert!(names(&llrm_x86_m16::M16).is_empty(), "m16 names no libcalls yet");
+        assert_eq!(names(&llrm_x86_m16::M16), ["memmove"], "m16 names the routine it has");
         assert_eq!(names(&llrm_x86_m32::M32), ["memcpy", "memmove", "memset"]);
     }
 
@@ -2324,7 +2325,16 @@ mod tests {
             let reads = lines[at + 1..]
                 .iter()
                 .take_while(|next| !written(next, register) && !next.contains("call") && !next.ends_with("endp"))
-                .filter(|next| !next.starts_with("mov word ptr [bp-") && next.contains(&format!("[bp-{slot}]")))
+                // An extend of the slot is a folded reload (the pin folds a
+                // reload into `movsx`/`movzx` too): the allocator started from
+                // the coalescer's intervals leaves `movsx esi, [bp-6]` where si
+                // still holds the word (AM-IO, #4269).
+                .filter(|next| {
+                    !next.starts_with("mov word ptr [bp-")
+                        && !next.starts_with("movsx ")
+                        && !next.starts_with("movzx ")
+                        && next.contains(&format!("[bp-{slot}]"))
+                })
                 .count();
             assert_eq!(
                 reads,
