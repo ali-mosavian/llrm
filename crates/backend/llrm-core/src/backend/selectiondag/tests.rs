@@ -14,6 +14,7 @@ fn arg(
 
 mod action_table;
 mod and_fold;
+mod and_simplify;
 mod bit_counts;
 mod bit_test;
 mod bitcast_float;
