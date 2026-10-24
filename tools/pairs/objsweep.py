@@ -23,7 +23,7 @@ FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i
 
 
 def compile_one(binary: str, source: Path, target: str, level: str, out: Path) -> tuple[bytes | None, str]:
-    """(object bytes, '') or (None, first line of stderr)."""
+    """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-c writes any other name as assembly text."""
     done = subprocess.run([binary, *FLAGS[target], f"-{level}", "-o", str(out), str(source)], capture_output=True, text=True, timeout=600)
     if done.returncode != 0 or not out.exists():
         return None, (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:120]
@@ -70,8 +70,8 @@ def main() -> int:
     def run(cell):
         source, target, level = cell
         tag = f"{source.stem}-{target}-{level}"
-        old = compile_one(args.old, source, target, level, scratch / f"{tag}.old")
-        new = compile_one(args.new, source, target, level, scratch / f"{tag}.new")
+        old = compile_one(args.old, source, target, level, scratch / f"{tag}.old.o")
+        new = compile_one(args.new, source, target, level, scratch / f"{tag}.new.o")
         return cell, old, new
 
     changed, one_side, both, same = [], [], [], 0
