@@ -52,7 +52,7 @@ pub struct BuilderTarget {
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
-    pub runtime_calls: Option<HashMap<InstId, Result<(), &'static str>>>,
+    pub runtime_calls: Option<IdMap<InstId, Result<(), &'static str>>>,
 }
 
 impl BuilderTarget {
@@ -77,7 +77,7 @@ impl BuilderTarget {
     /// This target with the verdict on each call of a runtime routine.
     pub fn with_runtime_call_verdicts(
         mut self,
-        verdicts: Option<HashMap<InstId, Result<(), &'static str>>>,
+        verdicts: Option<IdMap<InstId, Result<(), &'static str>>>,
     ) -> BuilderTarget {
         self.runtime_calls = verdicts;
         self
