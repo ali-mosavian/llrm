@@ -90,6 +90,76 @@ pub fn is_trivially_re_materializable(
     }
 }
 
+/// The loads of an incoming stack argument that nothing in `body` writes or
+/// takes the address of. X86 lowers a stack argument to an immutable fixed
+/// stack object, and `isLoadFromInvariantOrConstantMemory` takes a load of one
+/// (`MachineFrameInfo::isImmutableObjectIndex`): the pin's own rule, which
+/// needs no per-live-range proof. Incoming arguments are the frame cells above
+/// the frame pointer.
+pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |cell: &crate::model::ir::Mem| {
+        cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
+            && cell.base.is_none()
+            && cell.index.is_none()
+    };
+    let mut written: Vec<(i64, i64)> = Vec::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let span = |addr: crate::model::ir::Addr, width: u32| (addr.disp, addr.disp + i64::from(width));
+            match place {
+                // Its address is taken: any callee may write it.
+                Loc::Address(a) if a.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
+                    return BTreeSet::new();
+                }
+                Loc::Imm(imm) if imm.address.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
+                    return BTreeSet::new();
+                }
+                _ => {}
+            }
+            if what.op == Operation::Address {
+                if let Loc::Mem(cell) = place {
+                    if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
+                        return BTreeSet::new();
+                    }
+                }
+            }
+            if let Loc::Mem(cell) = place {
+                let is_dest = what.dests.iter().any(|d| matches!(d, Loc::Mem(c) if c == cell));
+                if is_dest && cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
+                    written.push(span(cell.addr.expect("an address"), cell.width));
+                }
+            }
+        }
+    }
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|one| {
+            let what = one.what.as_ref()?;
+            let ([Loc::Held(into)], [Loc::Mem(cell)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                return None;
+            };
+            let addr = cell.addr?;
+            let (from, to) = (addr.disp, addr.disp + i64::from(cell.width));
+            (what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && incoming(cell)
+                && into.width == cell.width
+                && one.defines == [into.value]
+                && definitions.get(&into.value) == Some(&1)
+                && !written.iter().any(|(start, end)| *start < to && from < *end))
+            .then_some(into.value)
+        })
+        .collect()
+}
+
 /// The values of `body` with one definition that
 /// `is_trivially_re_materializable` takes. `invariant` names the loads that
 /// hold; a value read wider than its definition writes, or inside a parallel
@@ -223,5 +293,72 @@ mod tests {
             Default::default(),
         );
         assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+    }
+
+    fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
+        LirBody::new(
+            "args",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            Default::default(),
+            Default::default(),
+        )
+    }
+
+    fn move_of(
+        at: i64,
+        dest: Loc,
+        source: Loc,
+        defines: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = crate::model::ir::Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..crate::model::ir::Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(at, None, Some(what), defines, vec![]))
+    }
+
+    fn argument(disp: i64) -> Loc {
+        Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Frame, disp)), 2))
+    }
+
+    fn word(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 2 })
+    }
+
+    /// The pin takes a load of an incoming stack argument as invariant (an
+    /// immutable fixed stack object): hanoi's three parameters were stored to
+    /// slots and read back (`mov [bp-6], cx`), not read again from `[bp+6]`
+    /// (m16 BASIC memory operands +15.8% with the per-range proof off).
+    #[test]
+    fn test_a_load_of_an_unwritten_incoming_argument_is_invariant() {
+        let body =
+            one_block(vec![move_of(0, word(1), argument(6), vec![1]), move_of(1, word(2), argument(8), vec![2])]);
+        assert_eq!(argument_loads(&body), BTreeSet::from([1, 2]));
+    }
+
+    /// A parameter the function assigns, or whose address it takes, is not
+    /// immutable: the loads of it stay.
+    #[test]
+    fn test_a_written_or_address_taken_argument_is_not_invariant() {
+        let body = one_block(vec![
+            move_of(0, word(1), argument(6), vec![1]),
+            move_of(1, word(2), argument(8), vec![2]),
+            move_of(2, argument(8), word(3), vec![]),
+        ]);
+        assert_eq!(argument_loads(&body), BTreeSet::from([1]), "only the cell nobody writes");
+        let lea = {
+            let what = crate::model::ir::Semantics {
+                name: Some("lea".into()),
+                dests: vec![word(4)],
+                sources: vec![argument(6)],
+                ..crate::model::ir::Semantics::new(Operation::Address)
+            };
+            Arc::new(Insn::new(3, None, Some(what), vec![4], vec![]))
+        };
+        let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
+        assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
     }
 }
