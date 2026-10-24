@@ -254,6 +254,7 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 /// and all of them.
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
+    xmm_bytes: std::sync::OnceLock<u32>,
 }
 
 impl Cache {
@@ -265,6 +266,7 @@ impl Cache {
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
             ],
+            xmm_bytes: std::sync::OnceLock::new(),
         }
     }
 }
@@ -563,6 +565,14 @@ impl Info {
     /// The segment registers, by iced's number.
     pub fn segments(&self) -> impl Iterator<Item = RegId> + '_ {
         self.entries().filter(|(_, one)| one.classes & class::SEGMENT != 0).map(|(id, _)| id)
+    }
+
+    /// The bytes of the target's SSE registers, 0 where it has none: a value
+    /// that wide is held in one.
+    pub fn xmm_bytes(&self) -> u32 {
+        *self.cache.xmm_bytes.get_or_init(|| {
+            self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8)
+        })
     }
 
     /// How wide this register is, or None where the target does not say: a

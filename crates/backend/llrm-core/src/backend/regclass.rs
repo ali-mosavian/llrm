@@ -194,6 +194,7 @@ pub enum Role {
     Byte,
     Base,
     Index,
+    Xmm,
 }
 
 /// One read of a value that confines it: where it is read, and the registers
@@ -229,10 +230,12 @@ pub enum Kind {
     Addressing,
     WordBases,
     Bytes,
+    /// A 16-byte value: scalar `float` and `double` live in an SSE register.
+    Xmm,
 }
 
 impl Kind {
-    const ALL: [Kind; 4] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes];
+    const ALL: [Kind; 5] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes, Kind::Xmm];
 
     fn registers<'a>(
         self,
@@ -243,6 +246,7 @@ impl Kind {
             Kind::Addressing => &registers.addressing,
             Kind::WordBases => &registers.word_bases,
             Kind::Bytes => &registers.byte_words,
+            Kind::Xmm => &registers.xmm_set,
         }
     }
 }
@@ -272,7 +276,7 @@ pub enum Item {
 #[derive(Clone)]
 pub struct Sets {
     pub available: Vec<RegId>,
-    kinds: [BTreeSet<RegId>; 4],
+    kinds: [BTreeSet<RegId>; 5],
 }
 
 impl Sets {
@@ -409,6 +413,14 @@ pub fn contribution(
                     defining: what.dests.contains(place),
                 });
             }
+            if regs.xmm_bytes() != 0 && held.width == regs.xmm_bytes() {
+                items.push(Item::Restrict {
+                    value: held.value,
+                    kind: Kind::Xmm,
+                    role: Role::Xmm,
+                    defining: what.dests.contains(place),
+                });
+            }
         }
     }
     if target::far_load(regs, what) {
@@ -432,7 +444,7 @@ pub struct Scan {
 
 #[derive(Clone, Copy, Default)]
 struct Counts {
-    kinds: [u32; 4],
+    kinds: [u32; 5],
     selecting: u32,
     numeric: u32,
     far: u32,
@@ -440,7 +452,7 @@ struct Counts {
 
 impl Counts {
     fn is_empty(&self) -> bool {
-        self.kinds == [0; 4] && self.selecting == 0 && self.numeric == 0 && self.far == 0
+        self.kinds == [0; 5] && self.selecting == 0 && self.numeric == 0 && self.far == 0
     }
 }
 
@@ -511,6 +523,7 @@ impl Scan {
                         Kind::Addressing => |c| &mut c.kinds[1],
                         Kind::WordBases => |c| &mut c.kinds[2],
                         Kind::Bytes => |c| &mut c.kinds[3],
+                        Kind::Xmm => |c| &mut c.kinds[4],
                     },
                 ),
                 Item::Numeric(value) => (value, |c| &mut c.numeric),
