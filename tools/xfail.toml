@@ -67,11 +67,6 @@ issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
 [[xfail]]
-id = "unit llrm-nib::test_pipeline::test_a_frame_no_stack_segment_holds_is_refused"
-issue = 2848
-owner = "unassigned"
-date = "2026-10-19"
-[[xfail]]
 id = "unit llrm-nib::test_pipeline::test_a_partition_loop_has_no_bounds_check_in_it"
 issue = 2848
 owner = "unassigned"

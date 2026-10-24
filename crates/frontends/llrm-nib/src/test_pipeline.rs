@@ -63,6 +63,11 @@ fn test_a_small_program_adds_no_stack() {
 }
 
 /// #356: a frame no stack segment can hold is an error, not a silent crash.
+///
+/// The fixture hands the array to a `@noipa` callee. Read in `main`, its
+/// 63998-byte offset overflowed the signed 16-bit index, the load folded to
+/// poison and the array went, as with the pin's clang for msp430; the frame
+/// was gone (the LLVM order, #2369, and again at 2e8a59eb0).
 #[test]
 fn test_a_frame_no_stack_segment_holds_is_refused() {
     let error = _stack_of("hugeframe").unwrap_err();
