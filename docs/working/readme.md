@@ -92,6 +92,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
+| [selectiondag-tail-calls](selectiondag-tail-calls.md) | Tail calls in the DAG path: pin functions, steps, dates (sdag-a) |
+| [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
 | [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
