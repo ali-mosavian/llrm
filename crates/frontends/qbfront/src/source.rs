@@ -189,7 +189,7 @@ mod tests {
 
     /// DOS file names ignore case: `Q45L00.BAS` named in a suite file and an
     /// `$INCLUDE 'NESTED.BI'` found nothing on Linux where the files are
-    /// `q45l00.bas` and `nested.bi` (qbfront's generated_parser tests failed).
+    /// `q45l00.bas` and `nested.bi` (qbfront's parser tests failed).
     #[test]
     fn a_name_matches_the_file_by_its_letters_alone() {
         let root = std::env::temp_dir().join(format!("qbfront-dos-case-{}", std::process::id()));

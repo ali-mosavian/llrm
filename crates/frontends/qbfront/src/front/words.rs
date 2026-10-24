@@ -673,3 +673,9 @@ pub const NAMES: &[&str] = &[
     "tkWRITE",
     "tkXOR",
 ];
+
+/// The reserved word each [`Word`] is.
+pub fn kw_of(word: Word) -> crate::front::kw::Kw {
+    static TABLE: std::sync::OnceLock<Vec<crate::front::kw::Kw>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| NAMES.iter().map(|name| crate::front::kw::named(name)).collect())[word as usize]
+}

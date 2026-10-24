@@ -13,8 +13,7 @@ use std::collections::BTreeSet;
 use crate::front::classes::*;
 use crate::front::kw::Kw;
 use crate::front::tokens::{terminal, Tok};
-use crate::generated_parser::tables;
-use crate::generated_parser::{Token, TokenKind};
+use crate::front::token::{Token, TokenKind};
 use crate::syntax::{
     Binary, Bound, CaseItem, Declaration, ExitTarget, Expr, FileAccess, FileLock, FileMode, Literal, Module, Parameter,
     PrintItem, PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
@@ -37,9 +36,9 @@ type R<T> = Result<T, usize>;
 
 /// STEP-relative coordinate pairs wrap their x in this call, as the
 /// table-driven parser does.
-pub const STEP_MARK: &str = crate::generated_parser::STEP_MARK;
+pub const STEP_MARK: &str = crate::front::quickr::STEP_MARK;
 /// ON n GOTO|GOSUB's selector.
-pub const ON_SELECTOR: &str = crate::generated_parser::ON_SELECTOR;
+pub const ON_SELECTOR: &str = crate::front::quickr::ON_SELECTOR;
 
 /// Which primary an expression may begin with: the grammar's `P`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,7 +58,7 @@ pub fn parse(
     // QuickrBASIC's statements are rewritten into ones the parser has: `x += 1`
     // is a call of `$AUG+`
     let (tokens, private_at) = if dialect.format_strings() {
-        use crate::generated_parser::ast as quickr;
+        use crate::front::quickr;
         quickr::without_private(quickr::for_in(quickr::augmented(quickr::tuple_assignment(
             quickr::returned(tokens, dialect),
             dialect,
@@ -89,19 +88,14 @@ pub fn parse(
 
 /// `NEXT i, j` closes two loops: it is read as `NEXT i : NEXT j`.
 fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
-    let reserved = |token: &Token, name: &str| {
-        matches!(
-            &token.kind,
-            TokenKind::Reserved(id) if tables::token_id(name) == Some(*id)
-        )
-    };
+    let reserved = |token: &Token, word: Kw| token.kind == TokenKind::Reserved(word);
     let mut out = Vec::with_capacity(tokens.len());
     let mut at = 0;
     while at < tokens.len() {
         let token = &tokens[at];
         out.push(token.clone());
         at += 1;
-        if reserved(token, "tkNEXT") {
+        if reserved(token, Kw::NEXT) {
             // NEXT ident , ident , …
             while let (
                 Some(name @ Token { kind: TokenKind::Identifier(_), .. }),
@@ -109,11 +103,11 @@ fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
                 Some(Token { kind: TokenKind::Identifier(_), .. }),
             ) = (tokens.get(at), tokens.get(at + 1), tokens.get(at + 2))
             {
-                if !reserved(comma, "tkComma") {
+                if !reserved(comma, Kw::Comma) {
                     break;
                 }
                 out.push(name.clone());
-                out.push(Token { kind: TokenKind::Reserved(tables::token_id("tkColon").unwrap()), span: comma.span });
+                out.push(Token { kind: TokenKind::Reserved(Kw::Colon), span: comma.span });
                 out.push(Token { kind: token.kind.clone(), span: token.span });
                 at += 2;
             }
@@ -127,20 +121,13 @@ fn next_lists(tokens: Vec<Token>) -> Vec<Token> {
 /// by line and start. `BYREF` before a parameter, the default said aloud, goes
 /// too.
 fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>) {
-    let reserved = |token: Option<&Token>, name: &str| {
-        token.is_some_and(|token| {
-            matches!(
-                &token.kind,
-                TokenKind::Reserved(id) if tables::token_id(name) == Some(*id)
-            )
-        })
-    };
+    let reserved = |token: Option<&Token>, word: Kw| token.is_some_and(|token| token.kind == TokenKind::Reserved(word));
     let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
     let mut marked = BTreeSet::new();
     for (index, token) in tokens.iter().enumerate() {
         let word = |name: &str| matches!(&token.kind, TokenKind::Identifier(word) if word == name);
         if word("BYREF")
-            && (reserved(kept.last(), "tkLParen") || reserved(kept.last(), "tkComma"))
+            && (reserved(kept.last(), Kw::LParen) || reserved(kept.last(), Kw::Comma))
             && matches!(
                 tokens.get(index + 1).map(|next| &next.kind),
                 Some(TokenKind::Identifier(_))
@@ -153,19 +140,19 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
                 matches!(next.kind, TokenKind::Identifier(_))
                     || matches!(
                         next.kind,
-                        TokenKind::Reserved(id) if ["tkNewLine", "tkColon", "tkComma", "tkRParen"] .iter() .all(|name| tables::token_id(name) != Some(id))
+                        TokenKind::Reserved(word) if ![Kw::NewLine, Kw::Colon, Kw::Comma, Kw::RParen].contains(&word)
                     )
             })
         };
-        if word("VOLATILE") && reserved(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
+        if word("VOLATILE") && reserved(kept.last(), Kw::AS) && types(tokens.get(index + 1)) {
             let mut at = kept.len() - 1;
-            if reserved(at.checked_sub(1).and_then(|one| kept.get(one)), "tkRParen") {
+            if reserved(at.checked_sub(1).and_then(|one| kept.get(one)), Kw::RParen) {
                 let mut depth = 0;
                 while at > 0 {
                     at -= 1;
-                    if reserved(kept.get(at), "tkRParen") {
+                    if reserved(kept.get(at), Kw::RParen) {
                         depth += 1;
-                    } else if reserved(kept.get(at), "tkLParen") {
+                    } else if reserved(kept.get(at), Kw::LParen) {
                         depth -= 1;
                         if depth == 0 {
                             break;
@@ -284,8 +271,8 @@ fn name_of_suffix(name: &str) -> Option<TypeName> {
 
 /// The words that stay reserved where a name stands; every other word is a name
 /// there.
-fn contextual_reserved_name(id: u16) -> Option<String> {
-    let spelling = tables::token_spelling(id)?.to_ascii_uppercase();
+fn contextual_reserved_name(word: Kw) -> Option<String> {
+    let spelling = word.spelling().to_ascii_uppercase();
     if !spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         || matches!(
             spelling.as_str(),

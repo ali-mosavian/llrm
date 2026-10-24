@@ -7,10 +7,13 @@ pub mod check;
 pub mod classes;
 pub mod explain;
 pub mod kw;
+mod kw_data;
 pub mod lexer;
+pub mod quickr;
 pub mod reserved;
 pub mod scan;
 pub mod sigs;
+pub mod token;
 pub mod tokens;
 pub mod words;
 

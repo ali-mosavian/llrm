@@ -139,8 +139,8 @@ impl Ast<'_> {
                 // Point`)
                 _ => TypeName::Named(match (self.name_at(at), &self.tokens[at].kind) {
                     (Some(name), _) => name,
-                    (None, TokenKind::Reserved(id)) if self.dialect.format_strings() => {
-                        tables::token_spelling(*id).map(str::to_ascii_uppercase).ok_or(at)?
+                    (None, TokenKind::Reserved(word)) if self.dialect.format_strings() => {
+                        word.spelling().to_ascii_uppercase()
                     }
                     _ => return Err(at),
                 }),

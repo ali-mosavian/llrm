@@ -94,7 +94,7 @@ line as a shell command and PDS stays slow). With that, one shared queue of
 ## A generated lexer
 
 `src/qb_lexer.rs` is a [logos](https://docs.rs/logos) lexer with the old lexer's
-token stream (`qbfront::generated_parser::Token`, same spans). logos dispatches on
+token stream (`qbfront::front::token::Token`, same spans). logos dispatches on
 the first byte and matches the reserved words with a DFA generated from
 `qbasbnf.prs` by `gen_words.py` (`src/qb_words.rs`, 221 words, case-insensitive);
 callbacks keep the old rules for numbers, strings, `REM`/`'` directives and the

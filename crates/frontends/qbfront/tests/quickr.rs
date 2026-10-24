@@ -1,6 +1,6 @@
 //! QuickrBASIC's use-before-definition warning.
 
-use qbfront::generated_parser::{lex, TokenKind};
+use qbfront::front::{scan::scan as lex, token::TokenKind};
 use qbfront::semantic::{compile_with_warnings, Options};
 use qbfront::{parse, Dialect};
 

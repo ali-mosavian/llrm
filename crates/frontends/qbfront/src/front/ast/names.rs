@@ -25,7 +25,7 @@ impl Ast<'_> {
     ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
             TokenKind::Identifier(name) => Some(name.clone()),
-            TokenKind::Reserved(id) => contextual_reserved_name(*id),
+            TokenKind::Reserved(word) => contextual_reserved_name(*word),
             _ => None,
         }
     }
@@ -36,11 +36,11 @@ impl Ast<'_> {
         at: usize,
     ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
-            TokenKind::Reserved(id) => {
-                if tables::T_FUNC_DISPATCH.iter().any(|(function, _)| function == id) {
-                    tables::token_spelling(*id).map(str::to_ascii_uppercase)
+            TokenKind::Reserved(word) => {
+                if word.is_function_word() {
+                    Some(word.spelling().to_ascii_uppercase())
                 } else {
-                    contextual_reserved_name(*id)
+                    contextual_reserved_name(*word)
                 }
             }
             _ => self.name_at(at),
@@ -96,8 +96,8 @@ impl Ast<'_> {
     ) -> Option<String> {
         match &self.tokens.get(at)?.kind {
             TokenKind::Identifier(name) => Some(name.clone()),
-            TokenKind::Reserved(id) => {
-                let spelling = tables::token_spelling(*id)?.to_ascii_uppercase();
+            TokenKind::Reserved(word) => {
+                let spelling = word.spelling().to_ascii_uppercase();
                 spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic).then_some(spelling)
             }
             _ => None,

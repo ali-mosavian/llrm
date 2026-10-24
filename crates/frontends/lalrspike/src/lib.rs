@@ -52,7 +52,7 @@ pub mod qb {
 type QbError = lalrpop_util::ParseError<usize, qb_tokens::Tok, qb_tokens::Failure>;
 
 /// The QB token stream parsed to a generic tree, or where it stopped.
-pub fn parse_qb(tokens: &[qbfront::generated_parser::Token]) -> Result<qb_tree::Tree, String> {
+pub fn parse_qb(tokens: &[qbfront::front::token::Token]) -> Result<qb_tree::Tree, String> {
     qb::grammar::ProgramParser::new().parse(qb_tokens::tokens(tokens)).map_err(|error| qb_error(tokens, error))
 }
 
@@ -105,7 +105,7 @@ pub fn parse_qb_kinds(kinds: &[qb_tokens::Tok]) -> Result<qb_tree::Tree, usize> 
     })
 }
 
-fn qb_error(tokens: &[qbfront::generated_parser::Token], error: QbError) -> String {
+fn qb_error(tokens: &[qbfront::front::token::Token], error: QbError) -> String {
     match error {
         lalrpop_util::ParseError::UnrecognizedToken { token: (at, ..), expected } => {
             let token = &tokens[at];
