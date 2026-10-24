@@ -2960,3 +2960,30 @@ fn the_flags_of_a_sub_are_made_again_after_another_unit_wrote_them() {
     selected(&module, "_con_draw", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
+
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = internal global i16 0
+define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  %y = add i16 %x, 1
+  invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
+next:
+  ret void
+landing:
+  %e = landingpad { ptr, i32 } catch ptr null
+  store i16 %y, ptr @g
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
+declare i32 @llrm.qb.personality(...) addrspace(1)
+";
+
+/// The runtime enters a landing pad with no register intact, so a value the
+/// entry block defined is not there. The DAG path took such a function and the
+/// verifier stopped the compile (`value is read but never defined`, qb
+/// `onerr` and `erlnum`): it is refused and the old selector takes it.
+#[test]
+fn a_landing_pad_reading_an_entry_value_is_refused() {
+    let refused = select_with_contracts(PAD_READS_THE_ENTRY).err().expect("refused");
+    assert!(refused.contains("read and not defined"), "{refused}");
+}
