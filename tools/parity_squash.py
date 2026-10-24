@@ -993,15 +993,15 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if os.environ.get("LAND_FAST_TESTS") == "1":
             changed = git("diff", "--name-only", BASE, "HEAD").split()
             if new := sorted(new_lib_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
             if new := sorted(new_scanner_failures(changed)):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
                 failed_units.update(new)
                 return False
         if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes")
+            print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
             failed_units.update(new)
             return False
         if unlinked := new_link_failures(git("diff", "--name-only", BASE, "HEAD").split()):
@@ -1048,6 +1048,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return []
         culprits = [number for number in group if merge_alone(number) and any(failing_on_checkout(package, tests) for package, tests in by_package.items())]
         why = "; ".join(f"{test}: {LAST_PANICS[test]}" for _, test in sorted(units) if test in LAST_PANICS)
+        why = "; ".join(filter(None, [why, parity_smoke_module().causes_of(failed_units).strip(" []")]))
         named.update({number: f"alone on the head it fails {', '.join(sorted(failed_units))[:160]}" + (f" [{why[:300]}]" if why else "") for number in culprits})
         return culprits
 
