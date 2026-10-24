@@ -128,6 +128,11 @@ impl TargetLoweringInfo {
         EVT::I8
     }
 
+    /// The target has the far pointer type (m16).
+    pub fn has_far_pointer(&self) -> bool {
+        self.far
+    }
+
     pub fn type_action(
         &self,
         vt: EVT,
