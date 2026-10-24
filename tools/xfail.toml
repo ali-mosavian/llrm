@@ -1,4 +1,4 @@
-# Tests expected to fail on feat/parity: id, issue, owner, date. A fix removes its entry (a listed test that passes fails the gate).
+# Tests expected to fail on feat/parity: id, issue, owner, date (the date triage is due), why (a regression, or a stale expectation). A fix removes its entry (a listed test that passes fails the gate).
 # ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
 
 [[xfail]]
@@ -36,3 +36,147 @@ id = "unit llrm-qb::test_hir_part3::test_nested_integer_division_keeps_each_divi
 issue = 2848
 owner = "unassigned"
 date = "2026-10-19"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part2::test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part2::test_on_error_registrations_follow_source_order"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_cell"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_counted_loop_reads_an_unannotated_byref_once"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_counter_stepped_before_other_work_is_tested_against_its_end"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_dividend_two_instructions_require_is_copied_into_its_register_once"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: constant divisor / dividend; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_fixed_length_argument_is_assigned_back_after_the_call"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_global_is_one_object_in_every_function"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_masked_far_subscript_compiles"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_masked_use_keeps_the_counter_and_its_end_test"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_negative_static_subscript_stays_16_bit"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_of_the_bios_data_area_leaves_invariant_globals_hoisted"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_takes_its_segment_from_the_def_seg_before_it"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_to_video_memory_leaves_a_local_arrays_descriptor_hoisted"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_to_video_memory_leaves_invariant_globals_hoisted"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_loops_count_to_zero_once_their_other_counters_are_settled"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: counted-loop strength reduction; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_text_memory_stores_leave_array_descriptors_invariant"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: descriptor/segment loads no longer hoisted out of the loop; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_the_first_dimension_is_not_rank_checked"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "red on parity, not bisected; family: other, not yet put in a family; a regression unless triage says stale (qb-reds-parity.md)"
+[[xfail]]
+id = "unit llrm-qb::test_runtime_model::flat_target_varptr_is_a_whole_address"
+issue = 2848
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "stale expectation (-m32 non-constant DEF SEG refusal); fixed on origin/spike/lalr-nib-qb-rebased a3f5e99c6"
