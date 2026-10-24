@@ -13,7 +13,8 @@
 //! shift. The sequences, with `x` the dividend and `q`, `r` the results:
 //!
 //! ```text
-//!   signed (divisor d, 1 < d < 2^31)       unsigned (3 <= d < 2^31, not 2^k)
+//!   signed (divisor d, 1 < d < 2^31,       unsigned (3 <= d < 2^31, not 2^k)
+//!   not 2^k: shifts, `power_of_two`)
 //!     m = MAGIC                              m = MAGIC
 //!     (lo,hi) = imul m, x                    (lo,hi) = mul m, x
 //!     hi += x          if MAGIC < 0          t  = x - hi        } if the
@@ -223,6 +224,50 @@ pub fn reciprocal<'a>(
     Ok(Some(parts))
 }
 
+/// `x / 2^k` by shifts, as the pin's DAGCombiner `BuildSDIVPow2` makes it: a
+/// negative dividend is biased by `2^k - 1` (its sign, shifted down to the
+/// bias) before the arithmetic shift rounds toward zero:
+///
+/// ```text
+///   s = sar x, 31;  b = shr s, 32 - k;  q = sar (add x, b), k
+///   r = sub x, (shl q, k)                        (remainder wanted)
+/// ```
+///
+/// A multiply by the magic number was the choice for a power of two (the
+/// pass `algebraic` had expanded it before isel saw it): `imul` and three
+/// fixups for what is four shifts and an add, 31% of `nbody_fixed`'s clocks.
+fn power_of_two(
+    dividend: ir::Held,
+    divisor: i64,
+    results: &[ir::Held],
+    fresh: &mut dyn FnMut() -> u32,
+    remainder: bool,
+) -> Vec<ir::Semantics> {
+    let width = dividend.width;
+    let k = i64::from(divisor.trailing_zeros());
+    let imm = |value: i64| ir::Loc::Imm(ir::Imm { value, width: 1, address: None });
+    let mut parts = Vec::new();
+    let mut emit = |name: &str, sources: Vec<ir::Loc>, into: Option<ir::Held>| -> ir::Held {
+        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
+        parts.push(ir::Semantics {
+            name: Some(name.into()),
+            dests: vec![ir::Loc::Held(into)],
+            sources,
+            ..ir::Semantics::new(ir::Operation::Binary)
+        });
+        into
+    };
+    let sign = emit("sar", vec![ir::Loc::Held(dividend), imm(i64::from(width) * 8 - 1)], None);
+    let bias = emit("shr", vec![ir::Loc::Held(sign), imm(i64::from(width) * 8 - k)], None);
+    let biased = emit("add", vec![ir::Loc::Held(dividend), ir::Loc::Held(bias)], None);
+    let quotient = emit("sar", vec![ir::Loc::Held(biased), imm(k)], Some(results[0]));
+    if remainder {
+        let product = emit("shl", vec![ir::Loc::Held(quotient), imm(k)], None);
+        emit("sub", vec![ir::Loc::Held(dividend), ir::Loc::Held(product)], Some(results[1]));
+    }
+    parts
+}
+
 fn positive_reciprocal<'a>(
     dividend: ir::Held,
     divisor: i64,
@@ -236,6 +281,9 @@ fn positive_reciprocal<'a>(
     let width = dividend.width;
     if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
         return Ok(None);
+    }
+    if divisor & (divisor - 1) == 0 {
+        return Ok(Some(power_of_two(dividend, divisor, results, fresh, remainder)));
     }
     // The magic is in the accumulator and the dividend where the early-out
     // reads: its bits set the price.
@@ -720,6 +768,50 @@ mod tests {
                             continue;
                         }
                         "imul" => args[0] * args[1],
+                        "add" => args[0] + args[1],
+                        "sub" => args[0] - args[1],
+                        "shl" => args[0] << args[1],
+                        "shr" => (args[0] & 0xffffffff) >> args[1],
+                        "sar" => args[0] >> args[1],
+                        "neg" => -args[0],
+                        other => panic!("{other}"),
+                    };
+                    values.insert(held(&part.dests[0]), signed(answer));
+                }
+                let quotient = number / divisor;
+                assert_eq!(values[&2], quotient, "{number} / {divisor}");
+                assert_eq!(values[&3], number - quotient * divisor, "{number} % {divisor}");
+            }
+        }
+    }
+
+    /// A signed division by a power of two is shifts, the pin's
+    /// `BuildSDIVPow2`, never the magic multiply: `nbody_fixed`'s `/ 512`
+    /// took `imul` and three fixups once `algebraic` no longer expanded it,
+    /// and ran 31% slower.
+    #[test]
+    fn test_a_signed_division_by_a_power_of_two_is_shifts() {
+        for divisor in [2, 4, 16, 512, 1 << 30, -2, -16, -512] {
+            let source = ir::Held { value: 1, width: 4 };
+            let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+            let mut count = 4..;
+            let mut fresh = || count.next().unwrap();
+            let parts =
+                reciprocal(source, divisor, &results, &mut fresh, "486", true, None).unwrap().expect("a sequence");
+            assert!(!parts.iter().any(|one| one.op == ir::Operation::Multiply), "{divisor}: a multiply in {parts:?}");
+            for number in [-2147483648, -513, -512, -17, -1, 0, 1, 16, 511, 512, 513, 2147483647] {
+                let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, number)]);
+                for part in &parts {
+                    let args: Vec<i64> = part
+                        .sources
+                        .iter()
+                        .map(|arg| match arg {
+                            ir::Loc::Held(held) => values[&held.value],
+                            ir::Loc::Imm(imm) => imm.value,
+                            other => panic!("{other:?}"),
+                        })
+                        .collect();
+                    let answer = match part.name.as_deref().unwrap() {
                         "add" => args[0] + args[1],
                         "sub" => args[0] - args[1],
                         "shl" => args[0] << args[1],
