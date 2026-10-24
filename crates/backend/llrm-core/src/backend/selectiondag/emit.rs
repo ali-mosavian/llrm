@@ -1939,8 +1939,11 @@ impl Emitter<'_, '_> {
                 Ok(Some(()))
             }
             "LEA32r" | "LEA16r" => {
-                let cell = self
-                    .cell(node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?, width)?;
+                // a `lea` only computes the address: a scaled index is fine
+                let cell = self.cell_unchecked(
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short lea".to_owned()))?,
+                    width,
+                )?;
                 // 16-bit addressing has no scale and the encoder no field for a
                 // symbol's displacement beside a lone index: the unscaled
                 // index is the address's base.
@@ -2192,6 +2195,23 @@ impl Emitter<'_, '_> {
 
     /// base, scale, index, displacement, segment.
     fn cell(
+        &mut self,
+        group: &[SDValue],
+        cell_width: u32,
+    ) -> Result<Mem, EmitError> {
+        let cell = self.cell_unchecked(group, cell_width)?;
+        // 16-bit addressing has no scale (SD3): a 16-bit index beside one is
+        // a cell no instruction encodes.
+        if self.ctx.address_mode == AddrMode::Real16
+            && cell.scale != 1
+            && cell.index.is_some_and(|index| index.width == 2)
+        {
+            return Err(EmitError::Unsupported("a scaled 16-bit index at m16".to_owned()));
+        }
+        Ok(cell)
+    }
+
+    fn cell_unchecked(
         &mut self,
         group: &[SDValue],
         cell_width: u32,
