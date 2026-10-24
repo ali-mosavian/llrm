@@ -62,3 +62,18 @@ Same two profiles. The pin: `MemorySSAAnalysis::run` 25 calls, 3.5 M inclusive (
 | ratio | 1.6x | 13x | 8.3x |
 
 So the count is a smaller lever than the cost of a build: the 15 extra builds are worth about 2 M at the pin's cost and about 17 M at ours; the cost of a build, 1.02 M more each over 40, is worth about 41 M. Order: S3 (what `PlainAccesses` and `Annotated` make for a build: 34 of the 46.5 M) before preserving the graph across more passes. Builds per user in ours (callers of `Analyses::get::<MemorySsa>`, 44 gets for 40 builds): LICM 11, MemCpyOpt 11, EarlyCse 22; per function (11) 3.6 against the pin's 2.3 if its 25 are over the same 11 functions. Why ours builds more is not yet known: to find by 11-06, for each build the slot it is made in and the pass that dropped the graph before (the pin keeps it through EarlyCSE, which updates it, and its other users within a loop pass manager run).
+
+## MemorySSA rows after #4194 (parity 840c8832a, dist, d_faces -O2, 1008.6 M), 10-24
+
+`MemorySsa::run` 44.5 M over 40 builds (1.11 M a build; 46.5 before `Bounded` went: #4194 moved it 2 M). The pin's build is 0.14 M, and ours, `Mssa::build` 7.2 M (0.18 M a build), is the one part with a counterpart there. Each other part, with its pin function or its DEVIATE and exit:
+
+| part of a build | M | runs | pin counterpart | exit | date |
+|---|---|---|---|---|---|
+| `PlainAccesses` (own 24.2: `Accesses::plain` 9.7, `Writes` 6.2, the `Annotated` fetch 8.2) | 37.3 inclusive of its asks | 46 | `MemorySSA::buildMemorySSA` ([L1522](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L1522)) classifies by opcode and `getModRefInfo(Call)`; no per-access location | DEVIATE AN1: S3b, `Accesses` kinds only, the build asks no analysis | 11-10 |
+| the walker's store/load defs by `MemRef` overlap (`clobbered()`, `Reach`) | in the walks | - | `instructionClobbersQuery` ([L320](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L320)) asks `AA.getModRefInfo(DefInst, UseLoc)` | S3a: the walker asks the stack for every def, not only calls (#3991, #4155 did calls and `AliasQuery`) | 11-06 |
+| `Annotated` (43.1 inclusive over 58 runs: `PointerValues` 11.1, `Counted` 10.4, `MemRef::of` 7.0 on 3,719 accesses, `value_tracking_at` 3.4) | 43.1 | 58 | none: the pin makes `MemoryLocation::get(I)` from the instruction | DEVIATE: S3c, the other readers (`licm/mod.rs` keeps it, `loopaccessinfo`, `references`, `lazyvalueinfo`) take a `MemoryLocation`; then delete `Annotated` and `Counted` | 11-17 (with funcattrs-port's lazy-Annotated plan, first to land wins) |
+| `CallFootprints` and `Writes` | 21.2 and 15.7 | 58, 47 | `getModRefInfo(Call, Loc)` per query | DEVIATE R6: the dataflow readers; design note | 11-27 |
+| `PointerValues` (`point_values` 12.9, `ExposedFrames` 6.2) | 20.7 | 58 | none (BasicAA decomposes per query) | w-5's route: MemCpyOpt first (needs S2 rest, 11-06), then the rest | 11-27, earlier if S2 rest lands |
+| `Mssa::build` | 7.2 | 40 | `buildMemorySSA` | at parity (1.3x) | - |
+
+S3a and S3b are what take a build from 1.11 M toward 0.18 M; S3c and the `PointerValues` route remove the analyses the other readers still keep alive, so those two are worth what no other reader asks for.
