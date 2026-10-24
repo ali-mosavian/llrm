@@ -479,6 +479,15 @@ impl<'a> Graph<'a> {
             NodeData::PhysReg(id) => super::dagisel_adapter::pin_register(id)?,
             _ => return None,
         };
+        // a physical register read back by `CopyFromReg` (a call's flags)
+        if self.opcode(def.node) == ISD::CopyFromReg
+            && matches!(
+                self.dag.node(self.ops(def.node)[1]).data,
+                NodeData::PhysReg(id) if super::dagisel_adapter::pin_register(id) == Some(reg)
+            )
+        {
+            return Some(reg);
+        }
         let op = self.machine(def.node)?;
         let first = self.info.num_defs(op);
         let result = usize::from(def.res);
