@@ -188,7 +188,7 @@ impl FunctionPass for CgpAddr {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
                 let promoted = exts_optimized(unit, &*lowering, &mut state);
-                ext_uses(unit, analyses, &*lowering, &mut state) | promoted
+                ext_uses(unit, &*lowering, &mut state) | promoted
             }
             None => false,
         };
@@ -285,12 +285,14 @@ fn exts_optimized(
 /// extension instead, one for each block; only where truncating is free
 /// (`TargetLowering::isTruncateFree`). Whether any was made.
 ///
-/// DEVIATE CGP2: a block that reads the source is rewritten only if the
-/// extension's block dominates it. The pin does not ask, and a source read in a
-/// block the extension does not reach would read an undefined `trunc`.
+/// MIRROR: every reader of the source outside the extension's block is
+/// rewritten, as the pin does. A reader of a value made in the extension's
+/// block is dominated by it, so the extension reaches it, unless the reader is
+/// unreachable; the pin deletes unreachable blocks before it gets here
+/// (`removeUnreachableBlocks`), and `llc -stop-after=codegenprepare` on a
+/// source read in a dead block shows it gone, so no pin input has the case.
 fn ext_uses(
     unit: &mut passes::Unit,
-    analyses: &mut Analyses,
     lowering: &dyn llrm_mir::lowering::Lowering,
     state: &mut crate::extpromotion::State,
 ) -> bool {
@@ -304,7 +306,6 @@ fn ext_uses(
             )
         })
         .collect();
-    let mut tree = None;
     let mut changed = false;
     for (home, ext) in exts {
         let inst = unit.function.instruction(ext).clone();
@@ -342,13 +343,10 @@ fn ext_uses(
         }) {
             continue;
         }
-        let tree = tree
-            .get_or_insert_with(|| analyses.get::<Dominators>(&*unit.context, unit.layout, &*unit.function))
-            .clone();
         let mut truncs: Vec<(BlockId, Operand)> = Vec::new();
         for (reader, index) in readers {
             let Some(block) = unit.function.parent(reader) else { continue };
-            if block == home || !tree.dominates(home, block) {
+            if block == home {
                 continue;
             }
             let trunc = match truncs.iter().find(|(seen, _)| *seen == block) {
