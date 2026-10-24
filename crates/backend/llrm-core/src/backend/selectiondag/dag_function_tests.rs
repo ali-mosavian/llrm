@@ -3012,3 +3012,29 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
+
+const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define i32 @f() addrspace(1) {
+entry:
+  %r = call { i16, i16 } @llrm.ia16.asm.cd1a.-.cx_dx.ax.n()
+  %hi = extractvalue { i16, i16 } %r, 0
+  %lo = extractvalue { i16, i16 } %r, 1
+  %h = zext i16 %hi to i32
+  %l = zext i16 %lo to i32
+  %s = shl i32 %h, 16
+  %v = or i32 %s, %l
+  ret i32 %v
+}
+declare { i16, i16 } @llrm.ia16.asm.cd1a.-.cx_dx.ax.n()
+";
+
+/// An inline block with two outputs (`speaker.nib`'s BIOS tick count in
+/// `cx:dx`) comes back as the fields of one aggregate; the builder refused
+/// every block with more than one output.
+#[test]
+fn an_inline_block_with_two_outputs_is_selected() {
+    let module = llrm_mir::parse::module(ASM_TWO_OUTPUTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(done.inline.values().any(|bytes| bytes[..] == [0xCD, 0x1A]), "{:?}", done.inline);
+}
