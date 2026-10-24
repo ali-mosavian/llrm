@@ -100,7 +100,7 @@ pub struct BodyFacts {
 struct State {
     insns: HashMap<InstrKey, Arc<Insn>>,
     /// The instructions of each block, in order.
-    blocks: Vec<Vec<InstrKey>>,
+    blocks: Vec<Vec<Arc<Insn>>>,
     block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
@@ -124,7 +124,7 @@ impl State {
         let live_out = self.lv.is_live_out_block(value, block);
         let sites = crate::liveness::livevariables::segment_kills(
             value,
-            self.blocks[block].iter().map(|key| &*self.insns[key]),
+            self.blocks[block].iter().map(|one| &**one),
             live_in,
             live_out,
         );
@@ -183,14 +183,14 @@ impl BodyFacts {
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
         };
         for (at, block) in body.blocks.iter().enumerate() {
-            let mut keys = Vec::with_capacity(block.insns.len());
+            let mut kept = Vec::with_capacity(block.insns.len());
             for one in block.insns.iter() {
-                keys.push(one.id());
+                kept.push(Arc::clone(one));
                 state.insns.insert(one.id(), Arc::clone(one));
                 state.block_of.insert(one.id(), at);
                 state.add_operands(one);
             }
-            state.blocks.push(keys);
+            state.blocks.push(kept);
         }
         Self { state: std::cell::RefCell::new(state) }
     }
@@ -243,8 +243,8 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&old);
         state.block_of.remove(&old);
-        let at = state.blocks[block].iter().position(|key| *key == old).expect("an instruction of the block");
-        state.blocks[block][at] = new.id();
+        let at = state.blocks[block].iter().position(|one| one.id() == old).expect("an instruction of the block");
+        state.blocks[block][at] = Arc::clone(&new);
         state.block_of.insert(new.id(), block);
         state.add_operands(&new);
         state.insns.insert(new.id(), Arc::clone(&new));
@@ -264,10 +264,11 @@ impl BodyFacts {
     ) {
         let mut state = self.state.borrow_mut();
         let order = &mut state.blocks[block];
-        let from = order.iter().position(|one| *one == key).expect("an instruction of the block");
-        order.remove(from);
-        let to = before.map_or(order.len(), |one| order.iter().position(|other| *other == one).expect("a block mate"));
-        order.insert(to, key);
+        let from = order.iter().position(|one| one.id() == key).expect("an instruction of the block");
+        let moved = order.remove(from);
+        let to =
+            before.map_or(order.len(), |one| order.iter().position(|other| other.id() == one).expect("a block mate"));
+        order.insert(to, moved);
         let moved = Arc::clone(&state.insns[&key]);
         state.refresh_named(&moved, block);
     }
@@ -289,14 +290,15 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&one.id());
         state.block_of.remove(&one.id());
-        let at = state.blocks[block].iter().position(|key| *key == one.id()).expect("an instruction of the block");
+        let at =
+            state.blocks[block].iter().position(|other| other.id() == one.id()).expect("an instruction of the block");
         for (place, new) in rest.iter().enumerate() {
-            state.blocks[block].insert(at + place, new.id());
+            state.blocks[block].insert(at + place, Arc::clone(new));
             state.block_of.insert(new.id(), block);
             state.add_operands(new);
             state.insns.insert(new.id(), Arc::clone(new));
         }
-        state.blocks[block][at + rest.len()] = last.id();
+        state.blocks[block][at + rest.len()] = Arc::clone(last);
         state.block_of.insert(last.id(), block);
         state.add_operands(last);
         state.insns.insert(last.id(), Arc::clone(last));
@@ -331,14 +333,8 @@ impl BodyFacts {
         body: &LirBody,
     ) -> LirBody {
         let state = self.state.borrow();
-        let blocks = body
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(at, block)| {
-                block.with_insns(state.blocks[at].iter().map(|key| Arc::clone(&state.insns[key])).collect())
-            })
-            .collect();
+        let blocks =
+            body.blocks.iter().enumerate().map(|(at, block)| block.with_insns(state.blocks[at].clone())).collect();
         body.with_blocks(blocks)
     }
 }

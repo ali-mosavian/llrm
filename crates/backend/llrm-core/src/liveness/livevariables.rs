@@ -121,6 +121,7 @@ pub struct LiveVariables {
     /// inside a block leave as they were.
     live_in: Vec<Bits>,
     live_out: Vec<Bits>,
+    defined: Vec<Bits>,
     /// The values the bit rows hold (one more than the largest).
     top: usize,
 }
@@ -186,6 +187,7 @@ impl LiveVariables {
             phi_var_info: vec![Vec::new(); blocks],
             live_in: Vec::new(),
             live_out: Vec::new(),
+            defined: Vec::new(),
             top: 0,
         };
         this.analyze_phi_nodes(body, &number);
@@ -226,13 +228,11 @@ impl LiveVariables {
             .map(|&value| value as usize + 1)
             .max()
             .unwrap_or(0);
-        let mut def_block: HashMap<u32, usize> = HashMap::default();
         let (mut gen_, mut def, mut forced) =
             (vec![Bits::new(top); blocks], vec![Bits::new(top); blocks], vec![Bits::new(top); blocks]);
         for (at, block) in body.blocks.iter().enumerate() {
             for phi in block.phis.iter() {
                 def[at].insert(phi.result as usize);
-                def_block.entry(phi.result).or_insert(at);
                 for &(from, value) in &phi.incoming {
                     if let Some(&pred) = number.get(&from) {
                         forced[pred].insert(value as usize);
@@ -247,29 +247,28 @@ impl LiveVariables {
                 }
                 for &value in &one.defines {
                     def[at].insert(value as usize);
-                    def_block.entry(value).or_insert(at);
                 }
             }
         }
         // `live_in = gen + (live_out - def)`, `live_out = forced + live_in of
         // the successors`.
-        let mut live_in = vec![Bits::new(top); blocks];
+        let mut live_in = gen_;
         let mut live_out = forced;
         loop {
             let mut changed = false;
             for at in (0..blocks).rev() {
-                let mut out = live_out[at].clone();
                 for &next in &cfg.succs[at] {
-                    out.union_with(&live_in[next]);
+                    // A block is its own successor in a loop: the row is read
+                    // before it grows.
+                    if next == at {
+                        let row = live_in[at].clone();
+                        changed |= live_out[at].union_changed(&row);
+                    } else {
+                        changed |= live_out[at].union_changed(&live_in[next]);
+                    }
                 }
-                let mut into = out.clone();
-                into.subtract(&def[at]);
-                into.union_with(&gen_[at]);
-                if out != live_out[at] || into != live_in[at] {
-                    changed = true;
-                    live_out[at] = out;
-                    live_in[at] = into;
-                }
+                let (out, into) = (&live_out[at], &mut live_in[at]);
+                changed |= into.union_difference(out, &def[at]);
             }
             if !changed {
                 break;
@@ -279,60 +278,63 @@ impl LiveVariables {
             cfg,
             blocks,
             info: HashMap::default(),
-            def_block,
+            def_block: HashMap::default(),
             phi_var_info: vec![Vec::new(); blocks],
             live_in: Vec::new(),
             live_out: Vec::new(),
+            defined: Vec::new(),
             top: 0,
         };
+        // The values named in a block: the last instruction naming each in the
+        // segment now open (a dense row reused for every block).
+        let mut open: Vec<Option<Site>> = vec![None; top];
+        let mut touched: Vec<u32> = Vec::new();
         for (at, block) in body.blocks.iter().enumerate() {
             // Each value's segments in the block, in order: one starts where it
             // is defined (or at the entry, if it is live in) and ends at its
             // last use before the next definition or the end of the block. A
             // segment no later instruction reads ends at its last name (a
             // definition no one reads is its own kill); the last one is no kill
-            // where the value is live out.
-            // (value, the last instruction naming it in its segment, whether a
-            // segment is open)
-            let mut open: HashMap<u32, Site> = HashMap::default();
-            for value in live_in[at].iter() {
-                // Not named yet: the entry stands for the segment.
-                open.insert(value as u32, Site::Phi(u32::MAX));
-            }
+            // where the value is live out. A segment live in and not named
+            // ends where it is redefined or leaves, with no kill.
             let mut kills: Vec<(u32, Site)> = Vec::new();
             for phi in block.phis.iter() {
-                open.insert(phi.result, Site::Phi(phi.result));
+                if open[phi.result as usize].is_none() {
+                    touched.push(phi.result);
+                }
+                open[phi.result as usize] = Some(Site::Phi(phi.result));
             }
             for one in block.insns.iter() {
-                let here = Site::Insn(one.id());
+                let here = Some(Site::Insn(one.id()));
                 for &value in &one.uses {
-                    open.insert(value, here);
+                    if open[value as usize].is_none() {
+                        touched.push(value);
+                    }
+                    open[value as usize] = here;
                 }
                 for &value in &one.defines {
-                    if let Some(&previous) = open.get(&value)
-                        && previous != Site::Phi(u32::MAX)
-                    {
-                        kills.push((value, previous));
+                    match open[value as usize] {
+                        Some(previous) => kills.push((value, previous)),
+                        None => touched.push(value),
                     }
-                    open.insert(value, here);
+                    open[value as usize] = here;
                 }
             }
-            for (value, site) in open {
-                if site != Site::Phi(u32::MAX) && !live_out[at].contains(value as usize) {
+            for value in touched.drain(..) {
+                let site = open[value as usize].take();
+                if let Some(site) = site
+                    && !live_out[at].contains(value as usize)
+                {
                     kills.push((value, site));
                 }
             }
             for (value, site) in kills {
                 this.get_var_info(value).kills.push(Kill { site, block: at });
             }
-            for value in live_in[at].iter() {
-                if live_out[at].contains(value) && !def[at].contains(value) {
-                    this.get_var_info(value as u32).alive_blocks.insert(at);
-                }
-            }
         }
         this.live_in = live_in;
         this.live_out = live_out;
+        this.defined = def;
         this.top = top;
         this
     }
@@ -347,6 +349,19 @@ impl LiveVariables {
         self.live_in.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize))
     }
 
+    /// Whether `reg` is alive through `block` (`from_dataflow`: the rows, not
+    /// `VarInfo::alive_blocks`, which it leaves empty): live in and out, and
+    /// not defined there.
+    pub fn is_alive_through(
+        &self,
+        reg: u32,
+        block: usize,
+    ) -> bool {
+        self.is_live_in_block(reg, block)
+            && self.is_live_out_block(reg, block)
+            && !self.defined.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize))
+    }
+
     /// Whether `reg` is live out of `block` (`from_dataflow`).
     pub fn is_live_out_block(
         &self,
@@ -356,19 +371,18 @@ impl LiveVariables {
         self.live_out.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize))
     }
 
-    /// What the kills and alive blocks of every value are, to compare two
-    /// `LiveVariables` of one body: `(value, alive blocks, kills by site)`,
-    /// values with neither left out.
-    pub fn shape(&self) -> Vec<(u32, Vec<usize>, Vec<(Site, usize)>)> {
-        let mut rows: Vec<(u32, Vec<usize>, Vec<(Site, usize)>)> = self
+    /// What the kills of every value are, to compare two `LiveVariables` of one
+    /// body: `(value, kills by site and block)`, values with none left out.
+    pub fn shape(&self) -> Vec<(u32, Vec<(Site, usize)>)> {
+        let mut rows: Vec<(u32, Vec<(Site, usize)>)> = self
             .info
             .iter()
             .map(|(&value, info)| {
                 let mut kills: Vec<(Site, usize)> = info.kills.iter().map(|kill| (kill.site, kill.block)).collect();
                 kills.sort_by_key(|&(site, block)| (block, format!("{site:?}")));
-                (value, info.alive_blocks.iter().collect::<Vec<usize>>(), kills)
+                (value, kills)
             })
-            .filter(|row| !row.1.is_empty() || !row.2.is_empty())
+            .filter(|row| !row.1.is_empty())
             .collect();
         rows.sort_by_key(|row| row.0);
         rows
@@ -523,7 +537,8 @@ impl LiveVariables {
         reg: u32,
         block: usize,
     ) -> bool {
-        let defined_here = self.def_block.get(&reg) == Some(&block);
+        let defined_here = self.def_block.get(&reg) == Some(&block)
+            || self.defined.get(block).is_some_and(|bits| (reg as usize) < self.top && bits.contains(reg as usize));
         let info = self.get_var_info(reg);
         if info.alive_blocks.contains(block) {
             return true;
