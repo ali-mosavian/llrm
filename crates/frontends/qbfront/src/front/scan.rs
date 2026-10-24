@@ -7,12 +7,12 @@
 //! parser's kinds are as before; a DATA keyword is followed by one `String` token holding the
 //! statement's raw text.
 
-use qbfront::generated_parser::{Token, TokenKind};
-use qbfront::syntax::{Binary, Span};
-use qbfront::{Dialect, LexError};
+use crate::generated_parser::{Token, TokenKind};
+use crate::syntax::{Binary, Span};
+use crate::{Dialect, LexError};
 
-use crate::qb_lexer::logical_lines;
-use crate::qb_words::Word;
+use crate::front::lexer::logical_lines;
+use crate::front::words::Word;
 
 fn error(line: usize, start: usize, end: usize, message: &str) -> LexError {
     LexError { span: Span { line, start, end }, message: message.into() }
@@ -22,7 +22,7 @@ fn ids() -> &'static Ids {
     static IDS: std::sync::OnceLock<Ids> = std::sync::OnceLock::new();
     IDS.get_or_init(|| {
         let id = |spelling: &str| {
-            qbfront::generated_parser::tables::TOKENS
+            crate::generated_parser::tables::TOKENS
                 .iter()
                 .find_map(|(_, candidate, id, _)| candidate.eq_ignore_ascii_case(spelling).then_some(*id))
                 .unwrap_or_else(|| panic!("{spelling} is a grammar token"))
@@ -31,10 +31,10 @@ fn ids() -> &'static Ids {
         for byte in "<>()?+-*/\\^=,#;:\n".bytes() {
             punct[usize::from(byte)] = id(&char::from(byte).to_string());
         }
-        let words = crate::qb_words::NAMES
+        let words = crate::front::words::NAMES
             .iter()
             .map(|name| {
-                let spelling = qbfront::generated_parser::tables::TOKENS
+                let spelling = crate::generated_parser::tables::TOKENS
                     .iter()
                     .find(|(candidate, ..)| candidate == name)
                     .expect("word is a token")
@@ -280,7 +280,7 @@ fn scan_line(line: &str, line_index: usize, dialect: Dialect, out: &mut Vec<Toke
 }
 
 fn extension_keyword(bare: &str) -> Option<&'static str> {
-    qbfront::generated_parser::tables::extension_keyword(&bare.to_ascii_uppercase())
+    crate::generated_parser::tables::extension_keyword(&bare.to_ascii_uppercase())
 }
 
 /// Where a DATA statement's text ends: a colon outside quotes, or the end of the line.

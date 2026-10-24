@@ -1,4 +1,4 @@
-//! A logos-generated QB lexer producing the token stream of `qbfront::generated_parser::lex`.
+//! A logos-generated QB lexer producing the token stream of `crate::generated_parser::lex`.
 //!
 //! logos dispatches on the first byte and recognises the reserved words with a
 //! generated DFA (`qb_words.rs`); the callbacks keep the old lexer's rules for
@@ -9,14 +9,14 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use logos::{FilterResult, Lexer, Logos};
-use qbfront::generated_parser::tables;
-use qbfront::generated_parser::{Token, TokenKind};
-use qbfront::syntax::{Binary, Span};
-use qbfront::{Dialect, LexError};
+use crate::generated_parser::tables;
+use crate::generated_parser::{Token, TokenKind};
+use crate::syntax::{Binary, Span};
+use crate::{Dialect, LexError};
 
-use crate::qb_kw::Kw;
-use crate::qb_tokens::{terminal, Tok};
-use crate::qb_words::Word;
+use crate::front::kw::Kw;
+use crate::front::tokens::{terminal, Tok};
+use crate::front::words::Word;
 
 pub struct Context {
     dialect: Dialect,
@@ -70,7 +70,7 @@ fn ids() -> &'static Ids {
         for byte in "<>()?+-*/\\^=,#;:\n".bytes() {
             punct[usize::from(byte)] = id(&char::from(byte).to_string()).expect("punctuation is in qbasbnf.prs");
         }
-        let words = crate::qb_words::NAMES
+        let words = crate::front::words::NAMES
             .iter()
             .map(|name| {
                 let spelling = tables::TOKENS.iter().find(|(candidate, ..)| candidate == name).expect("word is a token").1;
@@ -377,7 +377,7 @@ pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
 /// `lex`, with `type$`-style words kept as the names they spell when `suffixed_names`.
 pub fn lex_with(source: &str, dialect: Dialect, suffixed_names: bool) -> Result<Vec<Token>, LexError> {
     if dialect.format_strings() {
-        return qbfront::generated_parser::lex(source, dialect);
+        return crate::generated_parser::lex(source, dialect);
     }
     let newline = TokenKind::Reserved(ids().punct[usize::from(b'\n')]);
     let mut out = Vec::with_capacity(source.len() / 4);
@@ -503,7 +503,7 @@ impl<'s> Stream<'s> {
                     let fn_word = matches!(kind, TokenKind::Identifier(_))
                         && self.line_text[range.clone()].eq_ignore_ascii_case("FN");
                     let tok = match &kind {
-                        TokenKind::Reserved(id) if crate::qb_tokens::suffixed(*id, range.len()) => Tok::Ident,
+                        TokenKind::Reserved(id) if crate::front::tokens::suffixed(*id, range.len()) => Tok::Ident,
                         kind => terminal(kind),
                     };
                     return Some(Ok(Piece { tok, fn_word, span }));
@@ -536,7 +536,7 @@ impl<'s> Stream<'s> {
 }
 
 impl<'s> Iterator for Stream<'s> {
-    type Item = crate::qb_tokens::Spanned;
+    type Item = crate::front::tokens::Spanned;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut piece = match self.pending.take() {

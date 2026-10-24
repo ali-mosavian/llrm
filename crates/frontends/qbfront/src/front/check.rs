@@ -8,13 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use qbfront::syntax::{
+use crate::syntax::{
     Binary, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintKind, Procedure, ProcedureKind, ResumeTarget,
     Span, Statement, TypeName, Unary,
 };
-use qbfront::Dialect;
+use crate::Dialect;
 
-use crate::qb_sigs::{self, Class, Ret};
+use crate::front::sigs::{self, Class, Ret};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -133,6 +133,7 @@ struct Scope {
 
 #[derive(Clone, Debug)]
 struct Record {
+    /// name, type, and the number of dimensions of an array field
     fields: Vec<(String, Ty, Option<usize>)>,
     /// VBDOS's FORM and CONTROL: any property name goes.
     opaque: bool,
@@ -194,6 +195,8 @@ struct Checker {
     option_base: i64,
     span: Span,
     in_loop: Vec<&'static str>,
+    /// The dimensions of the array field the last `field` resolved, if it was one.
+    field_rank: Option<usize>,
 }
 
 impl Checker {
@@ -221,6 +224,7 @@ impl Checker {
             option_base: 0,
             span: Span { line: 1, start: 0, end: 0 },
             in_loop: Vec::new(),
+            field_rank: None,
         }
     }
 
@@ -340,7 +344,7 @@ impl Checker {
     fn reserved_name(&mut self, name: &str, span: Span) -> bool {
         // DATA, REM, TRON and TROFF swallow the rest of their line; a suffixed spelling is no use of the word
         let word_with_suffix = Ty::of_suffix(name).is_some() && matches!(stem(name).to_ascii_uppercase().as_str(), "DATA" | "REM" | "TRON" | "TROFF");
-        if name.contains('.') || word_with_suffix || !crate::qb_reserved::is_reserved_name(self.dialect, name) {
+        if name.contains('.') || word_with_suffix || !crate::front::reserved::is_reserved_name(self.dialect, name) {
             return false;
         }
         self.err(span, "Identifier expected");
@@ -644,7 +648,20 @@ impl Checker {
                 self.apply(&name, indices, *span)
             }
             Expr::Index { base, indices, span } => {
+                self.field_rank = None;
                 let base_typed = self.expr(base)?;
+                // an element of an array field of a record
+                if let (Expr::Field { .. }, Some(rank)) = (&**base, self.field_rank.take()) {
+                    let mut ok = true;
+                    for index in indices {
+                        ok &= self.numeric(index).is_some();
+                    }
+                    if ok && rank != indices.len() {
+                        self.err(*span, "Wrong number of dimensions");
+                        return None;
+                    }
+                    return ok.then_some(Typed { variable: true, constant: None, array: None, ..base_typed });
+                }
                 // an indexed property of a VBDOS form or control
                 if base_typed.ty == Ty::Variant {
                     for index in indices {
@@ -757,7 +774,9 @@ impl Checker {
                 return Some(Typed { ty: var.ty, variable: true, constant: None, array: None });
             }
         }
+        self.field_rank = None;
         let base_typed = self.expr(base)?;
+        self.field_rank = None;
         // a property of a property of a form: nothing here says its type
         if base_typed.ty == Ty::Variant {
             return Some(Typed { ty: Ty::Variant, variable: true, constant: None, array: None });
@@ -773,7 +792,10 @@ impl Checker {
         // a field may be named with its type character (`menu.text$`)
         let wanted = Ty::of_suffix(name);
         match record.fields.iter().find(|(field, ty, _)| stem(field).eq_ignore_ascii_case(stem(name)) && wanted.as_ref().is_none_or(|w| ty.plain() == *w)) {
-            Some((_, ty, _)) => Some(Typed { ty: ty.clone(), variable: true, constant: None, array: None }),
+            Some((_, ty, rank)) => {
+                self.field_rank = *rank;
+                Some(Typed { ty: ty.clone(), variable: true, constant: None, array: None })
+            }
             None => {
                 self.err(span, "Element not defined");
                 None
@@ -797,7 +819,7 @@ impl Checker {
             }
             return Some(constant.clone());
         }
-        if let Some(sig) = qb_sigs::function(name, self.dialect) {
+        if let Some(sig) = sigs::function(name, self.dialect) {
             if sig.parens {
                 self.err(span, "Left parenthesis missing");
                 return None;
@@ -842,7 +864,7 @@ impl Checker {
 
     fn apply(&mut self, name: &str, arguments: &[Expr], span: Span) -> Option<Typed> {
         let key = stem(name);
-        if name == crate::qb_ast::ON_SELECTOR {
+        if name == crate::front::ast::ON_SELECTOR {
             for argument in arguments {
                 self.integer(argument);
             }
@@ -868,7 +890,7 @@ impl Checker {
             }
             return ok.then_some(Typed { ty: var.ty, variable: true, constant: None, array: None });
         }
-        if let Some(sig) = qb_sigs::function(name, self.dialect) {
+        if let Some(sig) = sigs::function(name, self.dialect) {
             return self.intrinsic(sig, name, arguments, span);
         }
         // `SCREEN.ControlPanel(i)`, `frm.List(i)`: an indexed property of a VBDOS object
@@ -893,7 +915,7 @@ impl Checker {
             self.err(span, "Type mismatch");
             return None;
         }
-        if qb_sigs::function_unknown_but_named(name) {
+        if sigs::function_unknown_but_named(name) {
             self.err(span, "Syntax error");
             return None;
         }
@@ -924,7 +946,7 @@ impl Checker {
         find(&self.scope).or_else(|| find(&self.module_scope))
     }
 
-    fn intrinsic(&mut self, sig: &'static qb_sigs::FnSig, name: &str, arguments: &[Expr], span: Span) -> Option<Typed> {
+    fn intrinsic(&mut self, sig: &'static sigs::FnSig, name: &str, arguments: &[Expr], span: Span) -> Option<Typed> {
         let _ = name;
         let candidates: Vec<&Vec<(Class, bool)>> = sig
             .alternatives
@@ -1132,7 +1154,7 @@ impl Ty {
 impl Checker {
     fn unwrap_step<'a>(&self, expr: &'a Expr) -> &'a Expr {
         match expr {
-            Expr::Apply { name, arguments, .. } if name == crate::qb_ast::STEP_MARK && arguments.len() == 1 => &arguments[0],
+            Expr::Apply { name, arguments, .. } if name == crate::front::ast::STEP_MARK && arguments.len() == 1 => &arguments[0],
             other => other,
         }
     }
@@ -1268,7 +1290,7 @@ impl Checker {
             Statement::Const { name, value, span } => self.constant(name, value, *span),
             Statement::Assign { target, value, span } => self.assign(target, value, *span),
             Statement::Label(name, span) => {
-                if crate::qb_reserved::is_reserved_name(self.dialect, name) {
+                if crate::front::reserved::is_reserved_name(self.dialect, name) {
                     self.err(*span, "Statement unrecognizable");
                 }
             }
@@ -1363,7 +1385,7 @@ impl Checker {
             Statement::Select { selector, arms, otherwise, .. } => self.select(selector, arms, otherwise),
             Statement::Call { name, arguments, explicit, span } => self.call(name, arguments, *explicit, *span),
             Statement::Exit(target, span) => {
-                use qbfront::syntax::ExitTarget;
+                use crate::syntax::ExitTarget;
                 let ok = match target {
                     ExitTarget::Sub => matches!(self.procedure, Some((ProcedureKind::Sub, _))),
                     ExitTarget::Function => matches!(self.procedure, Some((ProcedureKind::Function, _))),
@@ -1740,7 +1762,7 @@ impl Checker {
         if self.procedure.is_some() {
             self.err(span, "Illegal inside SUB or FUNCTION");
         }
-        if crate::qb_reserved::is_reserved_type(self.dialect, name) {
+        if crate::front::reserved::is_reserved_type(self.dialect, name) {
             self.err(span, "Identifier expected");
             return;
         }
@@ -1781,7 +1803,7 @@ impl Checker {
                 self.err(field.span, "Invalid character");
                 continue;
             }
-            if crate::qb_reserved::is_reserved_field(self.dialect, &field.name) {
+            if crate::front::reserved::is_reserved_field(self.dialect, &field.name) {
                 self.err(field.span, "Identifier expected");
                 continue;
             }
@@ -1801,7 +1823,7 @@ impl Checker {
                     ty = Ty::Str(typed.constant.map(|c| c as usize));
                 }
             }
-            out.push((field.name.clone(), ty, None));
+            out.push((field.name.clone(), ty, field.array.then(|| field.bounds.len().max(1))));
         }
         self.records.insert(name.to_owned(), Record { fields: out, opaque: false });
     }
@@ -1997,7 +2019,7 @@ impl Checker {
             self.err(span, "Invalid character");
             return;
         }
-        if explicit && !name.contains('.') && crate::qb_reserved::is_reserved_name(self.dialect, name) {
+        if explicit && !name.contains('.') && crate::front::reserved::is_reserved_name(self.dialect, name) {
             self.err(span, "Name of subprogram illegal");
             return;
         }
@@ -2071,8 +2093,8 @@ impl Checker {
                 self.check_arguments(&procedure, arguments, span, true);
             }
             Some(_) => self.err(span, if explicit { "Name of subprogram illegal" } else { "Variable required" }),
-            None if qb_sigs::function(name, self.dialect).is_some_and(|sig| sig.statement) => {
-                if let Some(sig) = qb_sigs::function(name, self.dialect) {
+            None if sigs::function(name, self.dialect).is_some_and(|sig| sig.statement) => {
+                if let Some(sig) = sigs::function(name, self.dialect) {
                     self.intrinsic(sig, name, arguments, span);
                 }
             }

@@ -8,25 +8,25 @@
 
 use std::collections::BTreeSet;
 
-use qbfront::generated_parser::tables;
-use qbfront::generated_parser::{Token, TokenKind};
-use qbfront::syntax::{
+use crate::generated_parser::tables;
+use crate::generated_parser::{Token, TokenKind};
+use crate::syntax::{
     Binary, Bound, CaseItem, Declaration, Expr, ExitTarget, FileAccess, FileLock, FileMode, Literal, Module, Parameter, PrintItem,
     PrintKind, PrintSeparator, Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
-use qbfront::Dialect;
+use crate::Dialect;
 
-use crate::qb_classes::*;
-use crate::qb_kw::Kw;
-use crate::qb_tokens::{terminal, Tok};
+use crate::front::classes::*;
+use crate::front::kw::Kw;
+use crate::front::tokens::{terminal, Tok};
 
 /// The index of the token the parse stopped at.
 type R<T> = Result<T, usize>;
 
 /// STEP-relative coordinate pairs wrap their x in this call, as the table-driven parser does.
-pub const STEP_MARK: &str = qbfront::generated_parser::STEP_MARK;
+pub const STEP_MARK: &str = crate::generated_parser::STEP_MARK;
 /// ON n GOTO|GOSUB's selector.
-pub const ON_SELECTOR: &str = qbfront::generated_parser::ON_SELECTOR;
+pub const ON_SELECTOR: &str = crate::generated_parser::ON_SELECTOR;
 
 /// Which primary an expression may begin with: the grammar's `P`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,12 +37,12 @@ enum First {
     NoErr,
 }
 
-pub fn parse(source: &str, dialect: Dialect) -> Result<Module, qbfront::ParseError> {
-    let fail = |span, message: &str| qbfront::ParseError { span, message: message.into() };
+pub fn parse(source: &str, dialect: Dialect) -> Result<Module, crate::ParseError> {
+    let fail = |span, message: &str| crate::ParseError { span, message: message.into() };
     if dialect.format_strings() {
         return Err(fail(Span { line: 1, start: 0, end: 0 }, "QuickrBASIC extensions are not in this parser"));
     }
-    let tokens = crate::qb_scan::scan(source, dialect).map_err(qbfront::ParseError::from)?;
+    let tokens = crate::front::scan::scan(source, dialect).map_err(crate::ParseError::from)?;
     let (tokens, volatile_at) = without_volatile(next_lists(tokens));
     let mut kinds: Vec<Tok> = tokens.iter().map(|token| terminal(&token.kind)).collect();
     // `FN twice`: FN written apart from the name it prefixes
@@ -1636,7 +1636,7 @@ impl Ast<'_> {
             _ => (None, item),
         };
         if digits.as_bytes().first().is_some_and(|b| b.is_ascii_digit() || *b == b'.' || *b == b'&') {
-            if let Ok(tokens) = crate::qb_scan::scan(digits, self.dialect) {
+            if let Ok(tokens) = crate::front::scan::scan(digits, self.dialect) {
                 if let [Token { kind, .. }, Token { kind: TokenKind::Reserved(_), .. }] = tokens.as_slice() {
                     let literal = match kind {
                         TokenKind::Integer(value, suffix) => Some(Expr::Literal(

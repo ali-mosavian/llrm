@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use qbfront::Dialect;
+use crate::Dialect;
 
 /// What an argument must be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

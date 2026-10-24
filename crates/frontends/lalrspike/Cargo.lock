@@ -815,6 +815,7 @@ dependencies = [
  "llrm-driver",
  "llrm-hir",
  "llrm-qbruntime",
+ "logos",
 ]
 
 [[package]]

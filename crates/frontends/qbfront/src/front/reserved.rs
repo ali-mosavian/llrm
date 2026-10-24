@@ -19,11 +19,11 @@ const TYPES_PDS71: &[&str] = &["ABS", "ACCESS", "ALIAS", "ALL", "AND", "APPEND",
 const TYPES_VBDOS: &[&str] = &["ABS", "ACCESS", "ADDITEM", "ALIAS", "ALL", "AND", "APPEND", "AS", "ASC", "ATN", "BASE", "BEEP", "BEGINTRANS", "BINARY", "BLOAD", "BOF", "BSAVE", "BYVAL", "CALL", "CALLS", "CASE", "CCUR", "CDBL", "CDECL", "CHAIN", "CHDIR", "CHDRIVE", "CHECKPOINT", "CHR$", "CINT", "CIRCLE", "CLEAR", "CLIPBOARD", "CLNG", "CLOSE", "CLS", "COLOR", "COM", "COMMAND$", "COMMITTRANS", "COMMON", "CONST", "COS", "CREATEINDEX", "CSNG", "CSRLIN", "CURDIR$", "CVC", "CVD", "CVDMBF", "CVI", "CVL", "CVS", "CVSMBF", "DATA", "DATE$", "DATESERIAL", "DATEVALUE", "DAY", "DECLARE", "DEF", "DEFCUR", "DEFDBL", "DEFINT", "DEFLNG", "DEFSNG", "DEFSTR", "DELETE", "DELETEINDEX", "DELETETABLE", "DIM", "DIR$", "DO", "DOEVENTS", "DRAG", "DRAW", "ELSE", "ELSEIF", "END", "ENDDOC", "ENDIF", "ENVIRON", "ENVIRON$", "EOF", "EQV", "ERASE", "ERDEV", "ERDEV$", "ERL", "ERR", "ERROR", "ERROR$", "EVENT", "EXIT", "EXP", "EXPLICIT", "FIELD", "FILEATTR", "FILES", "FIX", "FOR", "FORMAT$", "FRE", "FREEFILE", "FUNCTION", "GET", "GETINDEX$", "GETTEXT", "GOSUB", "GOTO", "HEX$", "HIDE", "HOUR", "IF", "IMP", "INKEY$", "INP", "INPUT", "INPUT$", "INPUTBOX$", "INSERT", "INSTR", "INT", "IOCTL", "IOCTL$", "IS", "ISAM", "KEY", "KILL", "LBOUND", "LCASE$", "LEFT$", "LEN", "LET", "LINE", "LIST", "LOAD", "LOC", "LOCAL", "LOCATE", "LOCK", "LOF", "LOG", "LOOP", "LPOS", "LPRINT", "LSET", "LTRIM$", "MID$", "MINUTE", "MKC$", "MKD$", "MKDIR", "MKDMBF$", "MKI$", "MKL$", "MKS$", "MKSMBF$", "MOD", "MONTH", "MOVE", "MOVEFIRST", "MOVELAST", "MOVENEXT", "MOVEPREVIOUS", "MSGBOX", "NAME", "NEWPAGE", "NEXT", "NOT", "NOW", "OCT$", "OFF", "ON", "OPEN", "OPTION", "OR", "OUT", "OUTPUT", "PAINT", "PALETTE", "PCOPY", "PEEK", "PEN", "PLAY", "PMAP", "POINT", "POKE", "POS", "PRESERVE", "PRESET", "PRINT", "PRINTER", "PRINTFORM", "PSET", "PUT", "QBCOLOR", "RANDOM", "RANDOMIZE", "READ", "REDIM", "REFRESH", "REM", "REMOVEITEM", "RESET", "RESTORE", "RESUME", "RETRIEVE", "RETURN", "RGB", "RIGHT$", "RMDIR", "RND", "ROLLBACK", "RSET", "RTRIM$", "RUN", "SADD", "SAVEPOINT", "SCREEN", "SECOND", "SEEK", "SEEKEQ", "SEEKGE", "SEEKGT", "SEG", "SELECT", "SETFOCUS", "SETINDEX", "SETMEM", "SETTEXT", "SGN", "SHARED", "SHELL", "SHOW", "SIGNAL", "SIN", "SLEEP", "SOUND", "SPACE$", "SPC", "SQR", "SSEG", "SSEGADD", "STACK", "STATIC", "STEP", "STICK", "STOP", "STR$", "STRIG", "STRING$", "SUB", "SWAP", "SYSTEM", "TAB", "TAN", "TEXTCOMP", "TEXTHEIGHT", "TEXTWIDTH", "THEN", "TIME$", "TIMER", "TIMESERIAL", "TIMEVALUE", "TO", "TROFF", "TRON", "TYPE", "UBOUND", "UCASE$", "UEVENT", "UNLOAD", "UNLOCK", "UNTIL", "UPDATE", "USING", "VAL", "VARPTR", "VARPTR$", "VARSEG", "VIEW", "WAIT", "WEEKDAY", "WEND", "WHILE", "WIDTH", "WINDOW", "WRITE", "XOR", "YEAR"];
 
 
-fn family(dialect: qbfront::Dialect) -> usize {
+fn family(dialect: crate::Dialect) -> usize {
     match dialect {
-        qbfront::Dialect::QBasic11 | qbfront::Dialect::QuickBasic45 => 0,
-        qbfront::Dialect::Pds71 => 1,
-        qbfront::Dialect::VbDos | qbfront::Dialect::Quickr => 2,
+        crate::Dialect::QBasic11 | crate::Dialect::QuickBasic45 => 0,
+        crate::Dialect::Pds71 => 1,
+        crate::Dialect::VbDos | crate::Dialect::Quickr => 2,
     }
 }
 
@@ -34,19 +34,19 @@ fn spelled(name: &str) -> String {
 }
 
 /// Whether BC refuses `name` as a variable, constant, parameter or procedure name.
-pub fn is_reserved_name(dialect: qbfront::Dialect, name: &str) -> bool {
+pub fn is_reserved_name(dialect: crate::Dialect, name: &str) -> bool {
     let table = [NAMES_QB45, NAMES_PDS71, NAMES_VBDOS][family(dialect)];
     table.binary_search(&spelled(name).as_str()).is_ok()
 }
 
 /// Whether BC refuses `name` as a field of a record.
-pub fn is_reserved_field(dialect: qbfront::Dialect, name: &str) -> bool {
+pub fn is_reserved_field(dialect: crate::Dialect, name: &str) -> bool {
     let table = [FIELDS_QB45, FIELDS_PDS71, FIELDS_VBDOS][family(dialect)];
     table.binary_search(&spelled(name).as_str()).is_ok()
 }
 
 /// Whether BC refuses `name` as the name of a record type.
-pub fn is_reserved_type(dialect: qbfront::Dialect, name: &str) -> bool {
+pub fn is_reserved_type(dialect: crate::Dialect, name: &str) -> bool {
     let table = [TYPES_QB45, TYPES_PDS71, TYPES_VBDOS][family(dialect)];
     table.binary_search(&spelled(name).as_str()).is_ok()
 }
