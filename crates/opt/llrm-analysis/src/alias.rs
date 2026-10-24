@@ -3666,100 +3666,139 @@ fn signed_range_at(
     ranges::value_tracking_at(unit, tree, None, at, Operand::Value(value))
 }
 
+/// What annotating an access reads that is the same for every access of a
+/// body: the ranges of the registers, the strides of the indexes (made when
+/// an access with a variable index asks), the dominator tree.
+pub struct Annotation<'u> {
+    constants: ranges::Intervals,
+    strides: std::cell::OnceCell<Congruences>,
+    tree: Option<&'u llrm_mir::domtree::DomTree>,
+}
+
+impl<'u> Annotation<'u> {
+    pub fn new(
+        unit: &Unit<'u>,
+        known: &IndexMap<ValueId, Known>,
+    ) -> Annotation<'u> {
+        Annotation {
+            constants: ranges::intervals(known),
+            strides: std::cell::OnceCell::new(),
+            tree: None,
+        }
+        .with_tree(unit.shape.map(|shape| shape.dominance.tree(unit.function)))
+    }
+
+    fn with_tree(
+        self,
+        tree: Option<&'u llrm_mir::domtree::DomTree>,
+    ) -> Self {
+        Self { tree, ..self }
+    }
+}
+
+/// The reference of the load, store or call `inst` with the provenance alias
+/// finds for it; none where the instruction makes none.
+pub fn annotate_one(
+    unit: &Unit,
+    facts: &impl Resolves,
+    known: &IndexMap<ValueId, Known>,
+    annotation: &Annotation,
+    inst: InstId,
+) -> Option<MemRef> {
+    if !matches!(
+        unit.function.instruction(inst).opcode,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+    ) {
+        return None;
+    }
+    let reference = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst))?;
+    let (constants, tree, at) = (&annotation.constants, annotation.tree, inst);
+    // Only an access with a variable index asks: 4,185 lookups in 123 solves.
+    let strides = || annotation.strides.get_or_init(|| congruences_of(unit, known, None, None));
+    let reference = &reference;
+    let mut got = facts.reference(unit, reference);
+    let interval = reference
+        .base
+        .and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
+    if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
+        if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
+            let source = current.slices.first().expect("one slice");
+            let (modulus, residue) =
+                strides().get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
+            let modulus = if modulus > BigInt::from(1_u8) { modulus } else { BigInt::from(1_u8) };
+            let first = &interval.low + mod_floor(&(residue - &interval.low), &modulus);
+            let width = i64::from(reference.width.max(1));
+            let low = BigInt::from(reference.disp) + first * reference.scale;
+            let high = BigInt::from(reference.disp) + &interval.high * reference.scale + 1;
+            let end = &high + width - 1;
+            let stride = modulus * reference.scale;
+            let zero = BigInt::from(0_u8);
+            if low < high && source.object.extent.is_none_or(|extent| zero <= low && end <= BigInt::from(extent)) {
+                // A bound past the i64 slice model (an index spanning 2^63
+                // elements of a run-time sized object)
+                // is left as the object's whole extent.
+                if let (Ok(low), Ok(high), Ok(stride)) =
+                    (i64::try_from(&low), i64::try_from(&high), i64::try_from(&stride))
+                {
+                    got = Some(Provenance {
+                        slices: crate::memory::Sorted::from([Slice::new(
+                            source.object.clone(),
+                            low,
+                            high,
+                            stride,
+                            width,
+                        )
+                        .expect("a nonempty positive-stride slice is valid")]),
+                        restrict: current.restrict.clone(),
+                    });
+                }
+            }
+        }
+    }
+    // A far access whose selector's range lands it in foreign memory
+    // names those linear bytes, whatever its pointer's provenance.
+    if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
+        let lookup = |value: ValueId| {
+            signed_range_at(unit, tree, at, value)
+                .or_else(|| constants.get(&value).cloned())
+                .map(|one| (value, one))
+        };
+        let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
+        if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
+            got = Some(foreign);
+        }
+    }
+    // A flat access to a constant address the platform says is outside the
+    // program names those linear bytes.
+    if reference.linear {
+        if let Some(foreign) = regions::foreign_provenance(reference, &BTreeMap::new(), unit.program) {
+            got = Some(foreign);
+        }
+    }
+    // An access the language says is at a fixed address names linear
+    // memory, whatever its pointer was made from.
+    // The frontend states it only where the target says the address is
+    // outside the program; where the selector is a constant here,
+    // the target is asked again.
+    if unit.spaces().is_fixed(reference.space)
+        && (reference.selector.is_none()
+            || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some())
+    {
+        got = Some(regions::fixed_provenance());
+    }
+    Some(MemRef { provenance: got, ..reference.clone() })
+}
+
 pub fn annotated_with(
     unit: &Unit,
     facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
-    // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
-    let constants = ranges::intervals(known);
-    let tree = unit.shape.map(|shape| shape.dominance.tree(unit.function));
-
-    let tag = |reference: &MemRef, at: InstId| -> Result<MemRef, String> {
-        let mut got = facts.reference(unit, reference);
-        let interval = reference
-            .base
-            .and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
-        if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
-            if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
-                let source = current.slices.first().expect("one slice");
-                let (modulus, residue) =
-                    strides.get(&base).cloned().unwrap_or((BigInt::from(1_u8), BigInt::from(0_u8)));
-                let modulus = if modulus > BigInt::from(1_u8) { modulus } else { BigInt::from(1_u8) };
-                let first = &interval.low + mod_floor(&(residue - &interval.low), &modulus);
-                let width = i64::from(reference.width.max(1));
-                let low = BigInt::from(reference.disp) + first * reference.scale;
-                let high = BigInt::from(reference.disp) + &interval.high * reference.scale + 1;
-                let end = &high + width - 1;
-                let stride = modulus * reference.scale;
-                let zero = BigInt::from(0_u8);
-                if low < high && source.object.extent.is_none_or(|extent| zero <= low && end <= BigInt::from(extent)) {
-                    // A bound past the i64 slice model (an index spanning 2^63
-                    // elements of a run-time sized object)
-                    // is left as the object's whole extent.
-                    if let (Ok(low), Ok(high), Ok(stride)) =
-                        (i64::try_from(&low), i64::try_from(&high), i64::try_from(&stride))
-                    {
-                        got = Some(Provenance {
-                            slices: crate::memory::Sorted::from([Slice::new(
-                                source.object.clone(),
-                                low,
-                                high,
-                                stride,
-                                width,
-                            )
-                            .expect("a nonempty positive-stride slice is valid")]),
-                            restrict: current.restrict.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        // A far access whose selector's range lands it in foreign memory
-        // names those linear bytes, whatever its pointer's provenance.
-        if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
-            let lookup = |value: ValueId| {
-                signed_range_at(unit, tree, at, value)
-                    .or_else(|| constants.get(&value).cloned())
-                    .map(|one| (value, one))
-            };
-            let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
-            if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
-                got = Some(foreign);
-            }
-        }
-        // A flat access to a constant address the platform says is outside the
-        // program names those linear bytes.
-        if reference.linear {
-            if let Some(foreign) = regions::foreign_provenance(reference, &BTreeMap::new(), unit.program) {
-                got = Some(foreign);
-            }
-        }
-        // An access the language says is at a fixed address names linear
-        // memory, whatever its pointer was made from.
-        // The frontend states it only where the target says the address is
-        // outside the program; where the selector is a constant here,
-        // the target is asked again.
-        if unit.spaces().is_fixed(reference.space)
-            && (reference.selector.is_none()
-                || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some())
-        {
-            got = Some(regions::fixed_provenance());
-        }
-        Ok(MemRef { provenance: got, ..reference.clone() })
-    };
-
+    let annotation = Annotation::new(unit, known);
     let mut out = IndexMap::default();
     for (_, inst) in unit.function.walk() {
-        if !matches!(
-            unit.function.instruction(inst).opcode,
-            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
-        ) {
-            continue;
-        }
-        if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
-            out.insert(inst, tag(&reference, inst)?);
+        if let Some(reference) = annotate_one(unit, facts, known, &annotation, inst) {
+            out.insert(inst, reference);
         }
     }
     Ok(out)
