@@ -963,3 +963,45 @@ b0:
     let graph = |mssa| crate::manager::MssaGraph { mssa, accesses: std::rc::Rc::clone(&accesses) };
     assert!(graph(held) == graph(build()));
 }
+
+/// A client that holds pointers and no access names them (MemCpyOpt, made
+/// with `Accesses::resolved`, 2.7 M of `Pointers::run`) asks the stack: with no
+/// access list at all, a store is apart from another object and not from its
+/// own, a call is no better than its attributes, and two locations alias as the
+/// pin's BasicAA says.
+#[test]
+fn test_the_queries_of_a_pointer_need_no_access_lists() {
+    use super::alias::{AliasQuery, AliasResult};
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.end.p0(i64, ptr)
+
+define i16 @f() {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  store i16 1, ptr %a
+  %x = load i16, ptr %a
+  %y = load i16, ptr %b
+  call void @llvm.lifetime.end.p0(i64 2, ptr %b)
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let none = Accesses::default();
+    let aa = AliasQuery::new(&unit, &none);
+    let inst = |at: usize| unit.function.iter_block(crate::testing::block(unit.function, "b0")).nth(at).unwrap();
+    let (store, load_a, load_b, ended) = (inst(2), inst(3), inst(4), inst(5));
+    let pointer = |name: &str| llrm_mir::module::Operand::Value(crate::testing::value(unit.function, name));
+    let (at_a, at_b) = (aa.location_at(pointer("a"), 2), aa.location_at(pointer("b"), 2));
+    assert_eq!(aa.alias(&at_a, &at_b), AliasResult::No);
+    assert_eq!(aa.alias(&at_a, &aa.location_at(pointer("a"), 2)), AliasResult::Must);
+    assert!(aa.get_mod_ref_info(store, &at_a).writes, "a store writes its own cell");
+    assert!(!aa.get_mod_ref_info(store, &at_b).writes, "and not another object's");
+    assert!(!aa.get_mod_ref_info(ended, &at_a).is_mod_or_ref(), "lifetime.end of %b leaves %a alone");
+    assert!(aa.get_mod_ref_info(ended, &at_b).is_mod_or_ref());
+    assert!(aa.mod_ref_instructions(store, load_a), "the store and the load of %a");
+    assert!(!aa.mod_ref_instructions(store, load_b), "the store to %a and the load of %b");
+    assert!(!aa.mod_ref_instructions(ended, load_a) && aa.mod_ref_instructions(ended, load_b));
+    assert!(!aa.mod_set_call(store, ended), "a store to %a against a call that touches %b");
+}
