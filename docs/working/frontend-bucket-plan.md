@@ -36,3 +36,17 @@ F1 first: it is the one cost with no counterpart in the pin. F2 to F4 are attrib
 ## Not covered
 
 Other programs, m16, QCport (already under the pin); the pin's 41.8 M is the ledger's, not re-derived here.
+
+## After F1a (callgrind `--trace-children`, tip of #4187, d_faces -O2)
+
+| stage | ours M | pin counterpart | owner, date |
+|---|--:|---|---|
+| wccq parse + sema, without the stream | 10.0 | clang `-fsyntax-only` 30.8 | none: cheaper than the pin |
+| wccq stream output (`emit`, text) | 5.6 | none | w-5: with F1c below |
+| `stream::parse` | 10.4 | none | w-5, F1c 11-20: lazy lines, memchr scan, -2.5 |
+| `hir::unit` | 4.9 | none | w-5, 12-11: `canonical_type` 0.9 M and the record clones first |
+| `translate::program` | 15.7 | clang IRgen 17.2 (with the two rows below) | w-5, F3 12-11: self-cost by expression kind (`eval` 10.3 M) |
+| `hir::mir::emit_module` | 16.2 | (in the 17.2) | w-5, F2 12-04: builder kernel, 830 Ir per instruction |
+| total | 62.8 | 48.0 (30.8 + 17.2) | excess 14.8; the ledger's 13.9 is the same gap on its slot boundaries |
+
+All the excess is after the parse: 52.8 M against IRgen's 17.2 M. F2 and F3 move to a second worker if the coordinator frees one; as listed they follow the Pointers route (11-16) and PEI-2 (11-27).
