@@ -1,0 +1,34 @@
+# LiveVariables: the translation TwoAddress reads (w-1, 2026-10-24)
+
+Pin d1106deb71cc. TwoAddress's kill questions (`isPlainlyKilled`, `findKill`, `removeKill`) are answered by the pin's `LiveVariables`, built in SSA before PHIElimination, which maintains it. Ours answers them from lazy `LiveIntervals` (`BodyFacts`): 6.1 M of TwoAddress's 11.73 M Ir on d_faces -O2 (the plan in [intervals-once](intervals-once.md)). The ruling (coordinator, 2026-10-24): translate it as it is, in the pin's order; no analysis of ours beside it.
+
+## Pin functions and ours
+New module `liveness/livevariables.rs`; `VarInfo` is `AliveBlocks` (a bit per block) and `Kills` (the killing instruction's id).
+
+| Pin | Line | Ours |
+|---|---|---|
+| `getVarInfo` | [#L114](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L114) | `LiveVariables::get_var_info` |
+| `MarkVirtRegAliveInBlock` (both) | [#L120](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L120), [#L145](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L145) | same names |
+| `HandleVirtRegUse` / `HandleVirtRegDef` | [#L157](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L157), [#L208](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L208) | same names |
+| `runOnInstr`, `runOnBlock`, `analyze` (virtual registers) | [#L477](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L477), [#L540](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L540), [#L592](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L592) | `run_on_instr`, `run_on_block`, `analyze` |
+| `analyzePHINodes` | [#L760](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L760) | `analyze_phi_nodes` (a block's `phis`, not instructions) |
+| `VarInfo::isLiveIn`, `isLiveOut` | [#L772](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L772), [#L789](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L789) | same |
+| `addVirtualRegisterKilled`/`Dead`, `removeVirtualRegisterKilled`/`Dead`, `VarInfo::findKill`/`removeKill` | header | same |
+| `replaceKillInstruction`, `removeVirtualRegistersKilled`, `recomputeForSingleDefVirtReg` | [#L734](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L734), [#L742](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L742), [#L648](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L648) | same |
+| `addNewBlock` | [#L814](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveVariables.cpp#L814) | for an edge split (`edges::split`) |
+| physical-register half (`HandlePhysReg*`, `UpdatePhysRegDefs`, `HandleRegMask`) | #L217-#L476 | DEVIATE LV1: absent; LIR carries `requires`/`delivers`/`clobbers`, which TwoAddress reads off the instruction (`processCopy`) |
+
+DEVIATE LV2: a kill is an instruction id (`Insn::id`) with a block lookup, as the pin's is a pointer with `getParent`.
+
+## Who calls it
+- PHIElimination ([#L258](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L258), [#L440](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L440)-[#L489](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L489), [#L607](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L607)-[#L709](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L709)): the kills of the phi's sources move to the copies it inserts. Ours: `phielim.rs`.
+- TwoAddress ([#L956](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L956), [#L1085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1085), [#L1144](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1144), [#L1265](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1265), [#L1488](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1488)-[#L1509](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1509), [#L1740](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1740), [#L1828](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1828)-[#L1872](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L1872), [#L2107](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp#L2107)): `BodyFacts` becomes these calls; `rewrite`, `replace`, `move_before` become the kill updates above. `handleMove` stays the intervals' (the pin keeps LiveIntervals current there only if present).
+
+## Steps
+| Date | PR |
+|---|---|
+| 2026-11-06 | this note |
+| 2026-11-13 | PR1: `livevariables.rs` (analyze, the update API), a pre-phielim phase that builds it, tests against hand-made SSA bodies and the pin's own examples; no consumer yet |
+| 2026-11-20 | PR2: `phielim.rs` maintains it; TwoAddress reads it; `BodyFacts` loses `LiveIntervals` and `finish` stops handing intervals over (the coalescer builds its own until the eager build of intervals-once step 3); ledger Ir and the 568 objects, unchanged |
+
+If PR1 or PR2 cannot make 2026-11-24 by 2026-11-06: the interim is a liveness dataflow after phielim behind the same API, numbered DEVIATE LV3, exit date written then.
