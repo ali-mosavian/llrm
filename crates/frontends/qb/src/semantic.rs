@@ -3341,7 +3341,12 @@ impl Compiler {
                 | Statement::OptionBase(_, _) => {}
                 Statement::Redim(items) => {
                     for item in items {
-                        self.redim(item)?;
+                        self.redim(item, false)?;
+                    }
+                }
+                Statement::RedimPreserve(items) => {
+                    for item in items {
+                        self.redim(item, true)?;
                     }
                 }
                 Statement::Erase(items) => {
@@ -3576,7 +3581,6 @@ impl Compiler {
                 }
                 Statement::MethodCall { .. } => return self.unsupported("calling a method of a form or control"),
                 Statement::FormDeclaration(..) => return self.unsupported("a '$FORM declaration"),
-                Statement::RedimPreserve(_) => return self.unsupported("REDIM PRESERVE"),
                 Statement::OpenIsam { .. } => return self.unsupported("OPEN FOR ISAM"),
                 Statement::OpenClassic { .. } => return self.unsupported("the classic OPEN mode$, #file, path$ form"),
                 Statement::Open { access, lock, record_length, mode_written, mode, .. }
@@ -6169,9 +6173,11 @@ impl Compiler {
         self.convert(value, type_id, INTEGER)
     }
 
+    /// REDIM, or REDIM PRESERVE: PDS 7.1 BC passes B$RDMP the operands B$RDIM takes.
     fn redim(
         &mut self,
         declaration: &Declaration,
+        preserve: bool,
     ) -> Result<(), SemanticError> {
         if !declaration.array || declaration.bounds.is_empty() {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
@@ -6204,7 +6210,7 @@ impl Compiler {
         let stated = bounds.clone();
         let descriptor = self.descriptor_pointer(&variable)?;
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
-        self.emit_runtime_call("B$RDIM", Vec::new(), operands);
+        self.emit_runtime_call(if preserve { "B$RDMP" } else { "B$RDIM" }, Vec::new(), operands);
         if let Some(held) = bounds::Held::of(&variable) {
             self.holds(held, Some(stated));
         }
@@ -6656,7 +6662,7 @@ impl Compiler {
             dynamic: true,
             volatile: false,
             span,
-        })?;
+        }, false)?;
         let (_, index) = self.hidden(INTEGER)?;
         let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
         let copy = Statement::Assign {

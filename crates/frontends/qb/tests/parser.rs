@@ -2204,3 +2204,17 @@ fn on_error_resume_next_registers_a_handler_that_resumes_at_the_next_statement()
     assert_eq!(hir.matches("\"callee\":\"B$RESN\"").count(), 1, "{hir}");
     assert!(hir.contains("$QB$OERG:"), "{hir}");
 }
+
+#[test]
+fn redim_preserve_calls_b_rdmp_with_redims_operands() {
+    // REDIM PRESERVE was refused. PDS 7.1 BC calls B$RDMP with the operands B$RDIM takes.
+    let source = |statement: &str| format!("DEFINT A-Z\r\nREDIM a(5)\r\na(1) = 7\r\n{statement} a(10)\r\nPRINT a(1)\r\n");
+    let compiled = |statement: &str| {
+        let module = parse(&source(statement), Dialect::Pds71).unwrap();
+        compile(&module, "redim", Dialect::Pds71, "pds71").unwrap()
+    };
+    let plain = compiled("REDIM");
+    let kept = compiled("REDIM PRESERVE");
+    assert_eq!(kept.matches("\"callee\":\"B$RDMP\"").count(), 1, "{kept}");
+    assert_eq!(plain.matches("\"callee\":\"B$RDMP\"").count(), 0, "{plain}");
+}
