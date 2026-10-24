@@ -2243,6 +2243,10 @@ impl Ast<'_> {
             let field = self.any_word_at(at).ok_or(at)?;
             self.i += 1;
             let mut bounds = Vec::new();
+            // BC reads `a (5)` as a name and then something that is not AS
+            if self.is(Kw::LParen) && self.tokens[self.i].span.start > self.tokens[at].span.end {
+                return self.fail();
+            }
             let array = self.eat(Kw::LParen);
             if array && !self.eat(Kw::RParen) {
                 loop {

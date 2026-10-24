@@ -193,6 +193,59 @@ for jump in JUMPS[:8]:
     add("labels", f"label twice {jump!r}", "DIM x%", "a:", "a:", jump)
     add("labels", f"same label in sub and module {jump!r}", "DIM x%", "a:", "SUB p", "a:", jump, "END SUB")
 
+# ---- records with array fields, nested records, and records in arrays (appended: ids above stay) --------
+RECORDS = [
+    "TYPE Inner", "v(3) AS INTEGER", "w AS INTEGER", "END TYPE",
+    "TYPE Rec", "a(5) AS INTEGER", "b(1 TO 3, 1 TO 4) AS LONG", "s(2) AS STRING * 4", "d(2) AS DOUBLE", "n AS INTEGER", "t AS STRING * 6", "END TYPE",
+    "TYPE Outer", "i(2) AS Inner", "q AS Inner", "END TYPE",
+    "DIM r AS Rec, rr(3) AS Rec, o AS Outer, oo(2) AS Outer", "DIM x%, i%, j%, s$, d#",
+    "DECLARE SUB p (z AS INTEGER)", "DECLARE SUB q (z() AS INTEGER)", "DECLARE SUB m (z AS Rec)", "DECLARE SUB n2 (z AS Inner)",
+]
+RECORD_USES = [
+    "r.a(1) = 1", "x% = r.a(1)", "x% = r.a(i%)", "x% = r.a(i% + j%)", "r.a(1, 2) = 1", "r.b(1, 2) = 1", "r.b(1) = 1", "x% = r.b(1, 2)", "x% = r.b(1)",
+    "r.s(1) = \"x\"", "s$ = r.s(1)", "s$ = r.s(1) + r.t", "PRINT r.a(1)", "PRINT r.a(1); r.b(1, 1); r.s(1); r.d(1)", "r.a = 1", "x% = r.a", "PRINT r.a",
+    "x% = r.n(1)", "r.n(1) = 1", "rr(1).a(2) = 3", "x% = rr(i%).a(j%)", "rr(1).s(1) = \"abc\"", "s$ = rr(2).s(0)", "o.i(1).v(2) = 3", "x% = o.q.v(1)", "x% = oo(1).i(2).v(3)",
+    "oo(1).q.w = 1", "oo(1).i(2) = o.q", "o.i(1) = o.q", "o.q = o.i(2)", "CALL p(r.a(1))", "CALL p(r.a())", "CALL q(r.a())", "CALL q(r.a)", "CALL p(r.n)", "CALL p(rr(1).a(1))",
+    "CALL m(r)", "CALL m(rr(1))", "CALL n2(o.q)", "CALL n2(o.i(1))", "CALL n2(oo(1).i(2))", "CALL n2(o.q.v(1))", "x% = LBOUND(r.a)", "x% = UBOUND(r.a, 1)", "x% = UBOUND(r.b, 2)", "x% = LBOUND(r.a())",
+    "x% = LEN(r.a(1))", "x% = LEN(r.s(1))", "x% = LEN(o.i(1))", "SWAP r.a(1), r.a(2)", "SWAP r.a(1), x%", "SWAP r.s(1), r.s(2)", "SWAP r.a, r.a", "INPUT r.a(1)", "LINE INPUT r.s(1)", "READ r.a(1)", "DATA 1",
+    "FOR r.a(1) = 1 TO 2: NEXT", "FOR r.n = 1 TO 2: NEXT", "LSET r.s(1) = \"a\"", "RSET r.s(1) = \"a\"", "LSET r.t = \"a\"", "PUT #1, , r.a(1)", "GET #1, , r.a(1)", "PUT #1, , r.a", "GET #1, , r", "ERASE r.a", "REDIM r.a(3)", "DIM r.a(3)", "DIM SHARED r.a(3)",
+    "IF r.a(1) THEN x% = 1", "IF r.a(1) = r.a(2) THEN x% = 1", "SELECT CASE r.a(1)", "CASE 1", "END SELECT", "d# = r.d(1) * r.d(2) + r.a(3)", "r.d(1) = r.d(2) ^ 2", "r.d(i%) = r.a(j%) / 3",
+    "x% = r.a(r.a(1))", "r.a(r.a(1)) = r.a(r.a(2))", "x% = r.a(rr(1).a(2))", "r.a(1) = r.a(2) = r.a(3)", "r.b(r.a(1), r.a(2)) = 1", "r.a(1.5) = 1", "r.a(\"x\") = 1", "r.a(1) = \"x\"", "s$ = r.a(1)", "x% = r.s(1)",
+    "x% = ABS(r.a(1))", "s$ = LEFT$(r.s(1), 2)", "s$ = MID$(r.t, 2, 1)", "MID$(r.t, 2, 1) = \"x\"", "MID$(r.s(1), 1) = \"x\"", "s$ = STR$(r.a(1)) + CHR$(r.a(2))", "PRINT USING \"##\"; r.a(1)", "WRITE r.a(1), r.s(1)", "PRINT #1, r.a(1)",
+    "x% = VARPTR(r.a(1))", "x% = VARSEG(r.a(1))", "s$ = VARPTR$(r.a(1))", "x% = SADD(r.t)", "POKE VARPTR(r.a(1)), 1", "x% = PEEK(VARPTR(r.a(1)))", "DEF SEG = VARSEG(r.a(1))", "BLOAD \"f\", VARPTR(r.a(1))",
+    "CALL ABSOLUTE(r.a(1), 0)", "CALL INTERRUPT(1, r.a(1), r.a(2))", "x% = FRE(r.t)", "x% = r.a(1)(2)", "x% = r.a(1).b", "r.a(1).b = 1", "x% = r.a.b", "x% = r.nope(1)", "r.nope(1) = 1", "x% = r(1).a", "x% = r.n.a",
+    "x% = r.A(1)", "x% = r.a%(1)", "x% = r.a&(1)", "r.a%(1) = 1", "r.a&(1) = 1", "r.s$(1) = \"x\"", "r.d#(1) = 1", "x# = r.d#(1)", "x# = r.d!(1)", "x% = r.n%", "x& = r.n&", "x% = r.t$", "s$ = r.t$",
+    "ON r.a(1) GOTO lab", "lab:", "ON r.a(1) GOSUB lab2", "lab2: RETURN", "x% = r.a(1): r.a(2) = x%", "WHILE r.a(1): WEND", "DO WHILE r.a(1): LOOP", "DO: LOOP UNTIL r.a(1)",
+    "OPEN \"f\" FOR RANDOM AS #1 LEN = LEN(r)", "FIELD #1, 4 AS r.t", "x% = LEN(rr(1))", "x% = LEN(rr(1).a(2))", "x% = LEN(Rec)", "x% = LEN(Inner)",
+]
+for use in RECORD_USES:
+    add("records", f"use {use!r}", *RECORDS, use, "END", "SUB p (z AS INTEGER)", "END SUB", "SUB q (z() AS INTEGER)", "END SUB", "SUB m (z AS Rec)", "END SUB", "SUB n2 (z AS Inner)", "END SUB")
+# the same in a SUB, a FUNCTION and with SHARED
+for use in RECORD_USES[:60]:
+    add("records", f"in sub {use!r}", *RECORDS[:-6], "DIM SHARED r AS Rec, rr(3) AS Rec, o AS Outer, oo(2) AS Outer", "DIM x%, i%, j%, s$, d#", "SUB t", use, "END SUB")
+    add("records", f"in sub, local record {use!r}", *RECORDS[:-6], "SUB t", "DIM r AS Rec, rr(3) AS Rec, o AS Outer, oo(2) AS Outer", "DIM x%, i%, j%, s$, d#", use, "END SUB")
+    add("records", f"in static sub {use!r}", *RECORDS[:-6], "SUB t STATIC", "DIM r AS Rec, rr(3) AS Rec, o AS Outer, oo(2) AS Outer", "DIM x%, i%, j%, s$, d#", use, "END SUB")
+# type definitions with array fields
+for fields in [["a(5) AS INTEGER"], ["a(1 TO 5) AS INTEGER"], ["a(-3 TO 3) AS INTEGER"], ["a(5, 5) AS INTEGER"], ["a(1 TO 5, 2 TO 6) AS LONG"], ["a(5) AS STRING"], ["a(5) AS STRING * 3"], ["a(5) AS Inner"],
+               ["a(5) AS SINGLE", "b AS INTEGER"], ["a(5%) AS INTEGER"], ["a(n) AS INTEGER"], ["a(CONSTN) AS INTEGER"], ["a(0) AS INTEGER"], ["a(-1) AS INTEGER"], ["a(5 TO 1) AS INTEGER"], ["a(32767) AS INTEGER"], ["a(40000) AS INTEGER"],
+               ["a(1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5, 1 TO 5) AS INTEGER"], ["a(5) AS INTEGER, b(3) AS INTEGER"], ["a (5) AS INTEGER"], ["a(5)AS INTEGER"], ["a(5) INTEGER"], ["a(5)"], ["a(,) AS INTEGER"], ["a(5.5) AS INTEGER"], ["a(\"x\") AS INTEGER"], ["a(1 TO) AS INTEGER"], ["a(TO 5) AS INTEGER"]]:
+    add("records", f"array field defs {fields!r}", "CONST CONSTN = 4", "TYPE Inner", "q AS INTEGER", "END TYPE", "TYPE Rec", *fields, "END TYPE", "DIM r AS Rec", "DIM n AS INTEGER", "r.a(1) = 1")
+for opt in ["OPTION BASE 1", "OPTION BASE 0"]:
+    add("records", f"{opt} with array field", opt, *RECORDS, "r.a(0) = 1", "r.a(1) = 1", "x% = LBOUND(r.a)", "x% = r.b(0, 0)")
+add("records", "redim of record array", *RECORDS, "REDIM rr(5) AS Rec", "rr(1).a(1) = 1")
+add("records", "dynamic array of records, field array", *RECORDS[:-6], "REDIM rr(5) AS Rec", "DIM x%", "x% = rr(1).a(1)")
+add("records", "array of records passed whole", *RECORDS, "CALL zz(rr())", "END", "SUB zz (z() AS Rec)", "z(1).a(1) = 1", "END SUB")
+add("records", "record param array field", *RECORDS[:-6], "DIM r AS Rec", "CALL zz(r)", "END", "SUB zz (z AS Rec)", "z.a(1) = 1", "z.b(1, 2) = 3", "END SUB")
+add("records", "function record param array field", *RECORDS[:-6], "DECLARE FUNCTION f% (z AS Rec)", "DIM r AS Rec", "PRINT f%(r)", "END", "FUNCTION f% (z AS Rec)", "f% = z.a(1) + z.b(1, 2)", "END FUNCTION")
+add("records", "common record", "TYPE R", "a(3) AS INTEGER", "END TYPE", "COMMON SHARED r AS R", "r.a(1) = 1")
+add("records", "static record in sub", "TYPE R", "a(3) AS INTEGER", "END TYPE", "SUB s", "STATIC r AS R", "r.a(1) = 1", "END SUB")
+add("records", "shared record in sub", "TYPE R", "a(3) AS INTEGER", "END TYPE", "DIM r AS R", "SUB s", "SHARED r AS R", "r.a(1) = 1", "END SUB")
+add("records", "shared record no as", "TYPE R", "a(3) AS INTEGER", "END TYPE", "DIM r AS R", "SUB s", "SHARED r", "r.a(1) = 1", "END SUB")
+add("records", "dotted var names beside a record", "TYPE R", "a(3) AS INTEGER", "END TYPE", "DIM r AS R", "r.a(1) = 1", "r.b = 1", "r.b(1) = 1")
+add("records", "dotted array and record same stem", "TYPE R", "a AS INTEGER", "END TYPE", "DIM r(3) AS R", "r.a = 1")
+add("records", "record same name as array", "TYPE R", "a AS INTEGER", "END TYPE", "DIM r AS R", "DIM r(3) AS INTEGER")
+add("records", "def fn with field", "TYPE R", "a(3) AS INTEGER", "END TYPE", "DIM r AS R", "DEF FNa% = r.a(1)", "PRINT FNa%")
+
 
 def write():
     out = HERE / "programs"
